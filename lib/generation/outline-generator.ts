@@ -34,6 +34,7 @@ export async function generateSceneOutlinesFromRequirements(
     imageMapping?: ImageMapping;
     imageGenerationEnabled?: boolean;
     videoGenerationEnabled?: boolean;
+    researchContext?: string;
   },
 ): Promise<GenerationResult<SceneOutline[]>> {
   // Build available images description for the prompt
@@ -105,6 +106,8 @@ export async function generateSceneOutlinesFromRequirements(
     availableImages: availableImagesText,
     userProfile: userProfileText,
     mediaGenerationPolicy,
+    researchContext: options?.researchContext || (requirements.language === 'zh-CN' ? '无' : 'None'),
+    teacherContext: '',
   });
 
   if (!prompts) {

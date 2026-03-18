@@ -32,9 +32,34 @@ Request body:
 
 Only send supported content fields:
 
-- `requirement`
+- `requirement` (required)
 - optional `pdfContent`
 - optional `language`
+- optional `enableWebSearch` (boolean) — include web search context in outline generation
+- optional `enableImageGeneration` (boolean) — allow image generation metadata in outlines
+- optional `enableVideoGeneration` (boolean) — allow video generation metadata in outlines
+- optional `enableTTS` (boolean) — reserved for future server-side TTS generation
+
+All optional boolean fields default to `false` when omitted. Omitting them preserves backward compatibility.
+
+### Feature Detection
+
+Before sending optional feature flags, query `GET {url}/api/health` and check the `capabilities` object:
+
+```json
+{
+  "status": "ok",
+  "version": "...",
+  "capabilities": {
+    "webSearch": true,
+    "imageGeneration": false,
+    "videoGeneration": false,
+    "tts": false
+  }
+}
+```
+
+Only set a feature flag to `true` if the corresponding capability is `true`. If the server does not return `capabilities` (older version), do not send the new fields.
 
 Do not rely on request-time model or provider override parameters.
 

@@ -14,9 +14,15 @@ import {
 import type { AICallFn } from '@/lib/generation/pipeline-types';
 import { createLogger } from '@/lib/logger';
 import { parseModelString } from '@/lib/ai/providers';
-import { resolveApiKey } from '@/lib/server/provider-config';
+import { resolveApiKey, resolveWebSearchApiKey } from '@/lib/server/provider-config';
 import { resolveModel } from '@/lib/server/resolve-model';
+import { searchWithTavily, formatSearchResultsAsContext } from '@/lib/web-search/tavily';
 import { persistClassroom } from '@/lib/server/classroom-storage';
+import {
+  generateMediaForClassroom,
+  replaceMediaPlaceholders,
+  generateTTSForClassroom,
+} from '@/lib/server/classroom-media-generation';
 import type { UserRequirements } from '@/lib/types/generation';
 import type { Scene, Stage } from '@/lib/types/stage';
 
@@ -26,12 +32,18 @@ export interface GenerateClassroomInput {
   requirement: string;
   pdfContent?: { text: string; images: string[] };
   language?: string;
+  enableWebSearch?: boolean;
+  enableImageGeneration?: boolean;
+  enableVideoGeneration?: boolean;
+  enableTTS?: boolean;
 }
 
 export type ClassroomGenerationStep =
   | 'initializing'
   | 'generating_outlines'
   | 'generating_scenes'
+  | 'generating_media'
+  | 'generating_tts'
   | 'persisting'
   | 'completed';
 
@@ -136,6 +148,33 @@ export async function generateClassroom(
 
   await options.onProgress?.({
     step: 'generating_outlines',
+    progress: 10,
+    message: 'Generating scene outlines',
+    scenesGenerated: 0,
+  });
+
+  // Web search (optional, graceful degradation)
+  let researchContext: string | undefined;
+  if (input.enableWebSearch) {
+    const tavilyKey = resolveWebSearchApiKey();
+    if (tavilyKey) {
+      try {
+        log.info('Running web search for requirement context...');
+        const searchResult = await searchWithTavily({ query: requirement, apiKey: tavilyKey });
+        researchContext = formatSearchResultsAsContext(searchResult);
+        if (researchContext) {
+          log.info(`Web search returned ${searchResult.sources.length} sources`);
+        }
+      } catch (e) {
+        log.warn('Web search failed, continuing without search context:', e);
+      }
+    } else {
+      log.warn('enableWebSearch is true but no Tavily API key configured, skipping web search');
+    }
+  }
+
+  await options.onProgress?.({
+    step: 'generating_outlines',
     progress: 15,
     message: 'Generating scene outlines',
     scenesGenerated: 0,
@@ -146,6 +185,12 @@ export async function generateClassroom(
     pdfText,
     undefined,
     aiCall,
+    undefined,
+    {
+      imageGenerationEnabled: input.enableImageGeneration,
+      videoGenerationEnabled: input.enableVideoGeneration,
+      researchContext,
+    },
   );
 
   if (!outlinesResult.success || !outlinesResult.data) {
@@ -226,9 +271,46 @@ export async function generateClassroom(
     throw new Error('No scenes were generated');
   }
 
+  // Phase: Media generation (after all scenes generated)
+  if (input.enableImageGeneration || input.enableVideoGeneration) {
+    await options.onProgress?.({
+      step: 'generating_media',
+      progress: 90,
+      message: 'Generating media files',
+      scenesGenerated: scenes.length,
+      totalScenes: outlines.length,
+    });
+
+    try {
+      const mediaMap = await generateMediaForClassroom(outlines, stageId, options.baseUrl);
+      replaceMediaPlaceholders(scenes, mediaMap);
+      log.info(`Media generation complete: ${Object.keys(mediaMap).length} files`);
+    } catch (err) {
+      log.warn('Media generation phase failed, continuing:', err);
+    }
+  }
+
+  // Phase: TTS generation
+  if (input.enableTTS) {
+    await options.onProgress?.({
+      step: 'generating_tts',
+      progress: 94,
+      message: 'Generating TTS audio',
+      scenesGenerated: scenes.length,
+      totalScenes: outlines.length,
+    });
+
+    try {
+      await generateTTSForClassroom(scenes, stageId, options.baseUrl);
+      log.info('TTS generation complete');
+    } catch (err) {
+      log.warn('TTS generation phase failed, continuing:', err);
+    }
+  }
+
   await options.onProgress?.({
     step: 'persisting',
-    progress: 95,
+    progress: 98,
     message: 'Persisting classroom data',
     scenesGenerated: scenes.length,
     totalScenes: outlines.length,
