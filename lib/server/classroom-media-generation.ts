@@ -29,7 +29,7 @@ import {
 } from '@/lib/server/provider-config';
 import type { SceneOutline } from '@/lib/types/generation';
 import type { Scene } from '@/lib/types/stage';
-import type { SpeechAction } from '@/lib/types/action';
+import type { SpeechAction, Action } from '@/lib/types/action';
 import type { ImageProviderId } from '@/lib/media/types';
 import type { VideoProviderId } from '@/lib/media/types';
 import type { TTSProviderId } from '@/lib/audio/types';
@@ -235,6 +235,33 @@ export function replaceMediaPlaceholders(scenes: Scene[], mediaMap: Record<strin
 // TTS generation
 // ---------------------------------------------------------------------------
 
+/**
+ * Split a single long speech action into multiple shorter actions,
+ * mirroring the client-side splitLongSpeechActions strategy.
+ * Each sub-action gets its own TTS call and audio file — no byte concatenation needed.
+ */
+function splitLongSpeechActions(actions: Action[], maxLen: number | undefined): Action[] {
+  if (!maxLen) return actions;
+
+  return actions.flatMap((action) => {
+    if (action.type !== 'speech' || !(action as SpeechAction).text) return [action];
+    const speechAction = action as SpeechAction;
+    if (speechAction.text.length <= maxLen) return [action];
+
+    const chunks = splitTextForTTS(speechAction.text, maxLen);
+    if (chunks.length <= 1) return [action];
+
+    log.info(
+      `Split speech action ${action.id}: len=${speechAction.text.length}, chunks=${chunks.length}`,
+    );
+    return chunks.map((chunk, i) => ({
+      ...action,
+      id: `${action.id}_tts_${i + 1}`,
+      text: chunk,
+    }));
+  });
+}
+
 export async function generateTTSForClassroom(
   scenes: Scene[],
   classroomId: string,
@@ -265,55 +292,28 @@ export async function generateTTSForClassroom(
 
   for (const scene of scenes) {
     if (!scene.actions) continue;
+
+    // Split long speech actions into multiple shorter ones before TTS generation,
+    // mirroring the client-side approach. Each sub-action gets its own audio file.
+    scene.actions = splitLongSpeechActions(scene.actions, maxLen);
+
     for (const action of scene.actions) {
       if (action.type !== 'speech' || !(action as SpeechAction).text) continue;
       const speechAction = action as SpeechAction;
       const audioId = `tts_${action.id}`;
 
       try {
-        // MP3 is frame-based so raw byte concatenation of independent chunks works.
-        // Other formats (WAV/OGG/AAC) have container headers that break on naive
-        // concatenation, so we send the full text as a single request. If the text
-        // exceeds the provider limit for a non-concatenable format, truncate with a warning.
-        const canConcatenate = format === 'mp3';
-        let textChunks: string[];
-        if (maxLen && canConcatenate) {
-          textChunks = splitTextForTTS(speechAction.text, maxLen);
-        } else if (maxLen && speechAction.text.length > maxLen) {
-          log.warn(
-            `TTS text for action ${action.id} exceeds provider limit (${speechAction.text.length}/${maxLen}) ` +
-              `but format "${format}" does not support chunk concatenation; truncating`,
-          );
-          textChunks = [speechAction.text.slice(0, maxLen)];
-        } else {
-          textChunks = [speechAction.text];
-        }
-
-        const audioParts: Uint8Array[] = [];
-        for (const chunk of textChunks) {
-          const result = await generateTTS(
-            { providerId, apiKey, baseUrl: ttsBaseUrl, voice, speed: speechAction.speed },
-            chunk,
-          );
-          audioParts.push(result.audio);
-        }
-
-        // Concatenate all parts
-        const totalLen = audioParts.reduce((sum, p) => sum + p.length, 0);
-        const combined = new Uint8Array(totalLen);
-        let offset = 0;
-        for (const part of audioParts) {
-          combined.set(part, offset);
-          offset += part.length;
-        }
+        const result = await generateTTS(
+          { providerId, apiKey, baseUrl: ttsBaseUrl, voice, speed: speechAction.speed },
+          speechAction.text,
+        );
 
         const filename = `${audioId}.${format}`;
-        await fs.writeFile(path.join(audioDir, filename), combined);
+        await fs.writeFile(path.join(audioDir, filename), result.audio);
 
-        // Set audioUrl on the action for playback
         speechAction.audioId = audioId;
         speechAction.audioUrl = mediaServingUrl(baseUrl, classroomId, `audio/${filename}`);
-        log.info(`Generated TTS: ${filename} (${combined.length} bytes)`);
+        log.info(`Generated TTS: ${filename} (${result.audio.length} bytes)`);
       } catch (err) {
         log.warn(`TTS generation failed for action ${action.id}:`, err);
       }
