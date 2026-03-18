@@ -12,6 +12,9 @@ import {
   generateSceneContent,
 } from '@/lib/generation/scene-generator';
 import type { AICallFn } from '@/lib/generation/pipeline-types';
+import type { AgentInfo } from '@/lib/generation/pipeline-types';
+import { formatTeacherPersonaForPrompt } from '@/lib/generation/prompt-formatters';
+import { getDefaultAgents } from '@/lib/orchestration/registry/store';
 import { createLogger } from '@/lib/logger';
 import { parseModelString } from '@/lib/ai/providers';
 import { resolveApiKey, resolveWebSearchApiKey } from '@/lib/server/provider-config';
@@ -36,6 +39,7 @@ export interface GenerateClassroomInput {
   enableImageGeneration?: boolean;
   enableVideoGeneration?: boolean;
   enableTTS?: boolean;
+  agentMode?: 'default' | 'generate';
 }
 
 export type ClassroomGenerationStep =
@@ -95,6 +99,63 @@ function normalizeLanguage(language?: string): 'zh-CN' | 'en-US' {
   return language === 'en-US' ? 'en-US' : 'zh-CN';
 }
 
+function stripCodeFences(text: string): string {
+  let cleaned = text.trim();
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+  }
+  return cleaned.trim();
+}
+
+async function generateAgentProfiles(
+  requirement: string,
+  language: string,
+  aiCall: AICallFn,
+): Promise<AgentInfo[]> {
+  const systemPrompt =
+    'You are an expert instructional designer. Generate agent profiles for a multi-agent classroom simulation. Return ONLY valid JSON, no markdown or explanation.';
+
+  const userPrompt = `Generate agent profiles for a course with this requirement:
+${requirement}
+
+Requirements:
+- Decide the appropriate number of agents based on the course content (typically 3-5)
+- Exactly 1 agent must have role "teacher", the rest can be "assistant" or "student"
+- Each agent needs: name, role, persona (2-3 sentences describing personality and teaching/learning style)
+- Names and personas must be in language: ${language}
+
+Return a JSON object with this exact structure:
+{
+  "agents": [
+    {
+      "name": "string",
+      "role": "teacher" | "assistant" | "student",
+      "persona": "string (2-3 sentences)"
+    }
+  ]
+}`;
+
+  const response = await aiCall(systemPrompt, userPrompt);
+  const rawText = stripCodeFences(response);
+  const parsed = JSON.parse(rawText) as { agents: Array<{ name: string; role: string; persona: string }> };
+
+  if (!parsed.agents || !Array.isArray(parsed.agents) || parsed.agents.length < 2) {
+    throw new Error(`Expected at least 2 agents, got ${parsed.agents?.length ?? 0}`);
+  }
+
+  const teacherCount = parsed.agents.filter((a) => a.role === 'teacher').length;
+  if (teacherCount !== 1) {
+    throw new Error(`Expected exactly 1 teacher, got ${teacherCount}`);
+  }
+
+  return parsed.agents.map((a, i) => ({
+    id: `gen-server-${i}`,
+    name: a.name,
+    role: a.role,
+    persona: a.persona,
+  }));
+}
+
 export async function generateClassroom(
   input: GenerateClassroomInput,
   options: {
@@ -146,6 +207,23 @@ export async function generateClassroom(
   };
   const pdfText = pdfContent?.text || undefined;
 
+  // Resolve agents based on agentMode
+  let agents: AgentInfo[];
+  const agentMode = input.agentMode || 'default';
+  if (agentMode === 'generate') {
+    log.info('Generating custom agent profiles via LLM...');
+    try {
+      agents = await generateAgentProfiles(requirement, lang, aiCall);
+      log.info(`Generated ${agents.length} agent profiles`);
+    } catch (e) {
+      log.warn('Agent profile generation failed, falling back to defaults:', e);
+      agents = getDefaultAgents();
+    }
+  } else {
+    agents = getDefaultAgents();
+  }
+  const teacherContext = formatTeacherPersonaForPrompt(agents);
+
   await options.onProgress?.({
     step: 'generating_outlines',
     progress: 10,
@@ -190,6 +268,7 @@ export async function generateClassroom(
       imageGenerationEnabled: input.enableImageGeneration,
       videoGenerationEnabled: input.enableVideoGeneration,
       researchContext,
+      teacherContext,
     },
   );
 
@@ -238,13 +317,13 @@ export async function generateClassroom(
       totalScenes: outlines.length,
     });
 
-    const content = await generateSceneContent(safeOutline, aiCall);
+    const content = await generateSceneContent(safeOutline, aiCall, undefined, undefined, undefined, undefined, undefined, agents);
     if (!content) {
       log.warn(`Skipping scene "${safeOutline.title}" — content generation failed`);
       continue;
     }
 
-    const actions = await generateSceneActions(safeOutline, content, aiCall);
+    const actions = await generateSceneActions(safeOutline, content, aiCall, undefined, agents);
     log.info(`Scene "${safeOutline.title}": ${actions.length} actions`);
 
     const sceneId = createSceneWithActions(safeOutline, content, actions, api);

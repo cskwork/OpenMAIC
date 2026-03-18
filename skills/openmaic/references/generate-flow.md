@@ -39,6 +39,9 @@ Only send supported content fields:
 - optional `enableImageGeneration` (boolean) — allow image generation metadata in outlines
 - optional `enableVideoGeneration` (boolean) — allow video generation metadata in outlines
 - optional `enableTTS` (boolean) — reserved for future server-side TTS generation
+- optional `agentMode` (`"default"` | `"generate"`) — controls agent profile strategy:
+  - `"default"` (or omitted): uses built-in default agents
+  - `"generate"`: uses LLM to generate custom agent profiles tailored to the course content
 
 All optional boolean fields default to `false` when omitted. Omitting them preserves backward compatibility.
 
