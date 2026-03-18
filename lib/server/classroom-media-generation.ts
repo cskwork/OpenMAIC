@@ -44,9 +44,16 @@ async function ensureDir(dir: string) {
   await fs.mkdir(dir, { recursive: true });
 }
 
+const DOWNLOAD_TIMEOUT_MS = 120_000; // 2 minutes
+const DOWNLOAD_MAX_SIZE = 100 * 1024 * 1024; // 100 MB
+
 async function downloadToBuffer(url: string): Promise<Buffer> {
-  const resp = await fetch(url);
+  const resp = await fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
   if (!resp.ok) throw new Error(`Download failed: ${resp.status} ${resp.statusText}`);
+  const contentLength = Number(resp.headers.get('content-length') || 0);
+  if (contentLength > DOWNLOAD_MAX_SIZE) {
+    throw new Error(`File too large: ${contentLength} bytes (max ${DOWNLOAD_MAX_SIZE})`);
+  }
   return Buffer.from(await resp.arrayBuffer());
 }
 
@@ -111,9 +118,14 @@ export async function generateMediaForClassroom(
 
   const mediaMap: Record<string, string> = {};
 
-  for (const req of requests) {
-    try {
-      if (req.type === 'image' && imageProviderIds.length > 0) {
+  // Separate image and video requests, generate each type sequentially
+  // but run the two types in parallel (providers often have limited concurrency).
+  const imageRequests = requests.filter((r) => r.type === 'image' && imageProviderIds.length > 0);
+  const videoRequests = requests.filter((r) => r.type === 'video' && videoProviderIds.length > 0);
+
+  const generateImages = async () => {
+    for (const req of imageRequests) {
+      try {
         const providerId = imageProviderIds[0] as ImageProviderId;
         const apiKey = resolveImageApiKey(providerId);
         if (!apiKey) {
@@ -135,7 +147,6 @@ export async function generateMediaForClassroom(
           ext = 'png';
         } else if (result.url) {
           buf = await downloadToBuffer(result.url);
-          // Infer extension from URL or default
           const urlExt = path.extname(new URL(result.url).pathname).replace('.', '');
           ext = ['png', 'jpg', 'jpeg', 'webp'].includes(urlExt) ? urlExt : 'png';
         } else {
@@ -147,7 +158,15 @@ export async function generateMediaForClassroom(
         await fs.writeFile(path.join(mediaDir, filename), buf);
         mediaMap[req.elementId] = mediaServingUrl(baseUrl, classroomId, `media/${filename}`);
         log.info(`Generated image: ${filename}`);
-      } else if (req.type === 'video' && videoProviderIds.length > 0) {
+      } catch (err) {
+        log.warn(`Image generation failed for ${req.elementId}:`, err);
+      }
+    }
+  };
+
+  const generateVideos = async () => {
+    for (const req of videoRequests) {
+      try {
         const providerId = videoProviderIds[0] as VideoProviderId;
         const apiKey = resolveVideoApiKey(providerId);
         if (!apiKey) {
@@ -172,11 +191,13 @@ export async function generateMediaForClassroom(
         await fs.writeFile(path.join(mediaDir, filename), buf);
         mediaMap[req.elementId] = mediaServingUrl(baseUrl, classroomId, `media/${filename}`);
         log.info(`Generated video: ${filename}`);
+      } catch (err) {
+        log.warn(`Video generation failed for ${req.elementId}:`, err);
       }
-    } catch (err) {
-      log.warn(`Media generation failed for ${req.elementId}:`, err);
     }
-  }
+  };
+
+  await Promise.all([generateImages(), generateVideos()]);
 
   return mediaMap;
 }
@@ -250,11 +271,12 @@ export async function generateTTSForClassroom(
       const audioId = `tts_${action.id}`;
 
       try {
-        const textChunks = maxLen
-          ? splitTextForTTS(speechAction.text, maxLen)
-          : [speechAction.text];
+        // Only split for frame-based formats (MP3) where raw byte concatenation is valid.
+        // WAV/OGG/AAC have container headers that break on naive concatenation.
+        const canConcatenate = format === 'mp3';
+        const textChunks =
+          maxLen && canConcatenate ? splitTextForTTS(speechAction.text, maxLen) : [speechAction.text];
 
-        // Generate and concatenate chunks
         const audioParts: Uint8Array[] = [];
         for (const chunk of textChunks) {
           const result = await generateTTS(
@@ -278,7 +300,7 @@ export async function generateTTSForClassroom(
 
         // Set audioUrl on the action for playback
         speechAction.audioId = audioId;
-        (speechAction as SpeechAction & { audioUrl?: string }).audioUrl = mediaServingUrl(
+        speechAction.audioUrl = mediaServingUrl(
           baseUrl,
           classroomId,
           `audio/${filename}`,
