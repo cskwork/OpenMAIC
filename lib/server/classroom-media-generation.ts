@@ -29,10 +29,11 @@ import {
 } from '@/lib/server/provider-config';
 import type { SceneOutline } from '@/lib/types/generation';
 import type { Scene } from '@/lib/types/stage';
-import type { SpeechAction, Action } from '@/lib/types/action';
+import type { SpeechAction } from '@/lib/types/action';
 import type { ImageProviderId } from '@/lib/media/types';
 import type { VideoProviderId } from '@/lib/media/types';
 import type { TTSProviderId } from '@/lib/audio/types';
+import { TTS_MAX_TEXT_LENGTH, splitLongSpeechActions } from '@/lib/audio/tts-utils';
 
 const log = createLogger('ClassroomMedia');
 
@@ -59,41 +60,6 @@ async function downloadToBuffer(url: string): Promise<Buffer> {
 
 function mediaServingUrl(baseUrl: string, classroomId: string, subPath: string): string {
   return `${baseUrl}/api/classroom-media/${classroomId}/${subPath}`;
-}
-
-// ---------------------------------------------------------------------------
-// TTS text splitting (server-side version)
-// ---------------------------------------------------------------------------
-
-const TTS_MAX_TEXT_LENGTH: Partial<Record<TTSProviderId, number>> = {
-  'glm-tts': 1024,
-};
-
-function splitTextForTTS(text: string, maxLength: number): string[] {
-  if (text.length <= maxLength) return [text];
-
-  const chunks: string[] = [];
-  let remaining = text;
-
-  while (remaining.length > 0) {
-    if (remaining.length <= maxLength) {
-      chunks.push(remaining);
-      break;
-    }
-    // Try to split at sentence boundary
-    let splitAt = -1;
-    for (const sep of ['。', '！', '？', '；', '. ', '! ', '? ', '; ', '\n']) {
-      const idx = remaining.lastIndexOf(sep, maxLength);
-      if (idx > 0) {
-        splitAt = idx + sep.length;
-        break;
-      }
-    }
-    if (splitAt <= 0) splitAt = maxLength;
-    chunks.push(remaining.slice(0, splitAt));
-    remaining = remaining.slice(splitAt);
-  }
-  return chunks;
 }
 
 // ---------------------------------------------------------------------------
@@ -235,33 +201,6 @@ export function replaceMediaPlaceholders(scenes: Scene[], mediaMap: Record<strin
 // TTS generation
 // ---------------------------------------------------------------------------
 
-/**
- * Split a single long speech action into multiple shorter actions,
- * mirroring the client-side splitLongSpeechActions strategy.
- * Each sub-action gets its own TTS call and audio file — no byte concatenation needed.
- */
-function splitLongSpeechActions(actions: Action[], maxLen: number | undefined): Action[] {
-  if (!maxLen) return actions;
-
-  return actions.flatMap((action) => {
-    if (action.type !== 'speech' || !(action as SpeechAction).text) return [action];
-    const speechAction = action as SpeechAction;
-    if (speechAction.text.length <= maxLen) return [action];
-
-    const chunks = splitTextForTTS(speechAction.text, maxLen);
-    if (chunks.length <= 1) return [action];
-
-    log.info(
-      `Split speech action ${action.id}: len=${speechAction.text.length}, chunks=${chunks.length}`,
-    );
-    return chunks.map((chunk, i) => ({
-      ...action,
-      id: `${action.id}_tts_${i + 1}`,
-      text: chunk,
-    }));
-  });
-}
-
 export async function generateTTSForClassroom(
   scenes: Scene[],
   classroomId: string,
@@ -287,7 +226,6 @@ export async function generateTTSForClassroom(
   }
   const ttsBaseUrl = resolveTTSBaseUrl(providerId) || TTS_PROVIDERS[providerId]?.defaultBaseUrl;
   const voice = DEFAULT_TTS_VOICES[providerId] || 'default';
-  const maxLen = TTS_MAX_TEXT_LENGTH[providerId];
   const format = TTS_PROVIDERS[providerId]?.supportedFormats?.[0] || 'mp3';
 
   for (const scene of scenes) {
@@ -295,7 +233,7 @@ export async function generateTTSForClassroom(
 
     // Split long speech actions into multiple shorter ones before TTS generation,
     // mirroring the client-side approach. Each sub-action gets its own audio file.
-    scene.actions = splitLongSpeechActions(scene.actions, maxLen);
+    scene.actions = splitLongSpeechActions(scene.actions, providerId);
 
     for (const action of scene.actions) {
       if (action.type !== 'speech' || !(action as SpeechAction).text) continue;
