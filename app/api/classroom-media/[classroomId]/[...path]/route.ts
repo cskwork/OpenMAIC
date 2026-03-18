@@ -1,4 +1,4 @@
-import { promises as fs } from 'fs';
+import { promises as fs, createReadStream } from 'fs';
 import path from 'path';
 import { NextRequest, NextResponse } from 'next/server';
 import { CLASSROOMS_DIR, isValidClassroomId } from '@/lib/server/classroom-storage';
@@ -41,22 +41,41 @@ export async function GET(
   }
 
   const filePath = path.join(CLASSROOMS_DIR, classroomId, ...pathSegments);
+  const resolvedBase = path.resolve(CLASSROOMS_DIR, classroomId);
 
   try {
-    const stat = await fs.stat(filePath);
+    // Resolve symlinks and verify the real path stays within the classroom dir
+    const realPath = await fs.realpath(filePath);
+    if (!realPath.startsWith(resolvedBase + path.sep) && realPath !== resolvedBase) {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    }
+
+    const stat = await fs.stat(realPath);
     if (!stat.isFile()) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
 
-    const ext = path.extname(filePath).toLowerCase();
+    const ext = path.extname(realPath).toLowerCase();
     const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-    const data = await fs.readFile(filePath);
 
-    return new NextResponse(data, {
+    // Stream the file to avoid loading large videos into memory
+    const stream = createReadStream(realPath);
+    const webStream = new ReadableStream({
+      start(controller) {
+        stream.on('data', (chunk: Buffer | string) => controller.enqueue(chunk));
+        stream.on('end', () => controller.close());
+        stream.on('error', (err) => controller.error(err));
+      },
+      cancel() {
+        stream.destroy();
+      },
+    });
+
+    return new NextResponse(webStream, {
       status: 200,
       headers: {
         'Content-Type': contentType,
-        'Content-Length': String(data.length),
+        'Content-Length': String(stat.size),
         'Cache-Control': 'public, max-age=86400, immutable',
       },
     });

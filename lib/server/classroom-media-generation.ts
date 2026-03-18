@@ -271,13 +271,23 @@ export async function generateTTSForClassroom(
       const audioId = `tts_${action.id}`;
 
       try {
-        // Only split for frame-based formats (MP3) where raw byte concatenation is valid.
-        // WAV/OGG/AAC have container headers that break on naive concatenation.
+        // MP3 is frame-based so raw byte concatenation of independent chunks works.
+        // Other formats (WAV/OGG/AAC) have container headers that break on naive
+        // concatenation, so we send the full text as a single request. If the text
+        // exceeds the provider limit for a non-concatenable format, truncate with a warning.
         const canConcatenate = format === 'mp3';
-        const textChunks =
-          maxLen && canConcatenate
-            ? splitTextForTTS(speechAction.text, maxLen)
-            : [speechAction.text];
+        let textChunks: string[];
+        if (maxLen && canConcatenate) {
+          textChunks = splitTextForTTS(speechAction.text, maxLen);
+        } else if (maxLen && speechAction.text.length > maxLen) {
+          log.warn(
+            `TTS text for action ${action.id} exceeds provider limit (${speechAction.text.length}/${maxLen}) ` +
+              `but format "${format}" does not support chunk concatenation; truncating`,
+          );
+          textChunks = [speechAction.text.slice(0, maxLen)];
+        } else {
+          textChunks = [speechAction.text];
+        }
 
         const audioParts: Uint8Array[] = [];
         for (const chunk of textChunks) {

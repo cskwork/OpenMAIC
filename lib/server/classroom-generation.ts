@@ -44,6 +44,7 @@ export interface GenerateClassroomInput {
 
 export type ClassroomGenerationStep =
   | 'initializing'
+  | 'researching'
   | 'generating_outlines'
   | 'generating_scenes'
   | 'generating_media'
@@ -227,9 +228,9 @@ export async function generateClassroom(
   const teacherContext = formatTeacherPersonaForPrompt(agents);
 
   await options.onProgress?.({
-    step: 'generating_outlines',
+    step: 'researching',
     progress: 10,
-    message: 'Generating scene outlines',
+    message: 'Researching topic',
     scenesGenerated: 0,
   });
 
