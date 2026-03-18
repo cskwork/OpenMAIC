@@ -16,8 +16,12 @@ export async function POST(req: NextRequest) {
       ...(rawBody.pdfContent ? { pdfContent: rawBody.pdfContent } : {}),
       ...(rawBody.language ? { language: rawBody.language } : {}),
       ...(rawBody.enableWebSearch != null ? { enableWebSearch: rawBody.enableWebSearch } : {}),
-      ...(rawBody.enableImageGeneration != null ? { enableImageGeneration: rawBody.enableImageGeneration } : {}),
-      ...(rawBody.enableVideoGeneration != null ? { enableVideoGeneration: rawBody.enableVideoGeneration } : {}),
+      ...(rawBody.enableImageGeneration != null
+        ? { enableImageGeneration: rawBody.enableImageGeneration }
+        : {}),
+      ...(rawBody.enableVideoGeneration != null
+        ? { enableVideoGeneration: rawBody.enableVideoGeneration }
+        : {}),
       ...(rawBody.enableTTS != null ? { enableTTS: rawBody.enableTTS } : {}),
     };
     const { requirement } = body;

@@ -190,8 +190,11 @@ export function replaceMediaPlaceholders(scenes: Scene[], mediaMap: Record<strin
 
   for (const scene of scenes) {
     if (scene.type !== 'slide') continue;
-    const canvas = (scene.content as { canvas?: { elements?: Array<{ id: string; src?: string; type?: string }> } })
-      ?.canvas;
+    const canvas = (
+      scene.content as {
+        canvas?: { elements?: Array<{ id: string; src?: string; type?: string }> };
+      }
+    )?.canvas;
     if (!canvas?.elements) continue;
 
     for (const el of canvas.elements) {

@@ -106,7 +106,8 @@ export async function generateSceneOutlinesFromRequirements(
     availableImages: availableImagesText,
     userProfile: userProfileText,
     mediaGenerationPolicy,
-    researchContext: options?.researchContext || (requirements.language === 'zh-CN' ? '无' : 'None'),
+    researchContext:
+      options?.researchContext || (requirements.language === 'zh-CN' ? '无' : 'None'),
     teacherContext: '',
   });
 
