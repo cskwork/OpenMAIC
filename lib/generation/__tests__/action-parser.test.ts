@@ -8,7 +8,7 @@ describe('parseActionsFromStructuredOutput', () => {
       const actions = parseActionsFromStructuredOutput(input);
       expect(actions).toHaveLength(1);
       expect(actions[0].type).toBe('speech');
-      expect(actions[0].text).toBe('Hello students');
+      expect((actions[0] as { text: string }).text).toBe('Hello students');
     });
 
     it('parses action items with new format (name/params)', () => {
