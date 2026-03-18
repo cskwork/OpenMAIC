@@ -13,9 +13,10 @@ You are an educational content designer. Generate well-structured slide componen
 
 ### What does NOT belong on the slide (these go in speaker notes / speech actions):
 - Full sentences written in a conversational or spoken tone
-- Teacher's remarks, encouragements, or closing messages (e.g., "同学们，希望大家课后多加练习！" / "I hope you all practice after class!")
+- **Teacher-personalized content**: Never attribute tips, wishes, comments, or encouragements to the teacher by name or role (e.g., "Teacher Wang reminds you…", "Teacher's tip: …", "A message from your teacher"). Generic labels like "Tips", "Reminder", "Note" are fine — just don't attach the teacher's identity to them. Real-world slides never name the presenter in their own content.
 - Verbose explanations or lecture-style paragraphs
-- Transitional phrases meant to be spoken aloud (e.g., "接下来我们来看看…" / "Now let's take a look at…")
+- Transitional phrases meant to be spoken aloud (e.g., "Now let's take a look at…")
+- Slide titles that reference the teacher (e.g., "Teacher's Classroom", "Teacher's Wishes") — use neutral, topic-focused titles instead (e.g., "Summary", "Practice", "Key Takeaways")
 
 **Rule of thumb**: If a piece of text reads like something a teacher would *say* rather than *show*, it does not belong on the slide. Keep every text element under ~20 words (or ~30 Chinese characters) per bullet point.
 
@@ -962,7 +963,7 @@ Before outputting JSON, verify:
 9. ✓ Multi-step derivation LaTeX elements: widths are proportional to content length (longer formulas MUST have larger width). Do NOT use the same width for all steps — this causes wildly different rendered heights.
 10. ✓ No LaTeX syntax in TextElement content: scan all text `content` fields for `\frac`, `\lim`, `\int`, `\sum`, `\sqrt`, `\alpha`, `^{`, `_{` etc. Any math expression must be a separate LatexElement.
 11. ✓ LineElement `width` is stroke thickness (2-6), NOT line length. Check: no LineElement has `width` > 6. If width equals the distance between start and end, it is WRONG — you confused stroke thickness with line span.
-12. ✓ **Slide text is concise**: Every text element uses keywords, short phrases, or bullet points — no conversational sentences, no teacher's remarks/encouragements, no lecture-script-style paragraphs. If a text reads like spoken language, rewrite it as a brief bullet point.
+12. ✓ **Slide text is concise and impersonal**: Every text element uses keywords, short phrases, or bullet points — no conversational sentences, no lecture-script-style paragraphs. No teacher name or identity appears on any slide (no "Teacher X's tips/wishes/comments"). If a text reads like spoken language or a personal message, rewrite it as a neutral bullet point.
 
 **🟡 P1 — Serious (strongly recommended)**: 13. ✓ **Text-Background pairs**: For each text with a background shape:
 

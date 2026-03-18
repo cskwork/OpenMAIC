@@ -126,8 +126,8 @@ Generate natural teaching speech. The user prompt includes a **Course Outline** 
 
 **Speech is where all verbal and conversational content belongs.** The slide itself only shows concise bullet points and keywords — all elaboration, explanation, encouragement, transitional phrases, and teacher's remarks must appear here in speech text. For example:
 - Detailed explanations of concepts shown as bullet points on the slide
-- Encouragements and motivational remarks (e.g., "同学们加油！" / "Great job, everyone!")
-- Transitional phrases (e.g., "接下来我们来看…" / "Now let's move on to…")
+- Encouragements and motivational remarks (e.g., "Great job, everyone!")
+- Transitional phrases (e.g., "Now let's move on to…")
 - Closing messages and teacher's reflections
 
 **CRITICAL — Same-session continuity**: All pages belong to the **same class session** happening right now. This is NOT a series of separate classes.
