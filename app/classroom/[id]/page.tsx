@@ -54,9 +54,8 @@ export default function ClassroomDetailPage() {
 
               // Register server-persisted agents into the agent registry
               if (agents && agents.length > 0) {
-                const { registerPersistedAgents } = await import(
-                  '@/lib/orchestration/registry/store'
-                );
+                const { registerPersistedAgents } =
+                  await import('@/lib/orchestration/registry/store');
                 const agentIds = registerPersistedAgents(classroomId, agents);
                 if (agentIds.length > 0) {
                   const { useSettingsStore } = await import('@/lib/store/settings');
