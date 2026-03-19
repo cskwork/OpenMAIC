@@ -200,6 +200,27 @@ export function getDefaultAgents(): AgentInfo[] {
   }));
 }
 
+/** Return default agents with full display data for server-side persistence. */
+export function getDefaultAgentsForPersistence(): Array<{
+  id: string;
+  name: string;
+  role: string;
+  persona: string;
+  avatar: string;
+  color: string;
+  priority: number;
+}> {
+  return Object.values(DEFAULT_AGENTS).map((a) => ({
+    id: a.id,
+    name: a.name,
+    role: a.role,
+    persona: a.persona,
+    avatar: a.avatar,
+    color: a.color,
+    priority: a.priority,
+  }));
+}
+
 export const useAgentRegistry = create<AgentRegistryState>()(
   persist(
     (set, get) => ({

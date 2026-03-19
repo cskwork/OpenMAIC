@@ -15,7 +15,10 @@ import type { AICallFn } from '@/lib/generation/pipeline-types';
 import type { AgentInfo } from '@/lib/generation/pipeline-types';
 import type { PersistedAgent } from '@/lib/server/classroom-storage';
 import { formatTeacherPersonaForPrompt } from '@/lib/generation/prompt-formatters';
-import { getDefaultAgents } from '@/lib/orchestration/registry/store';
+import {
+  getDefaultAgents,
+  getDefaultAgentsForPersistence,
+} from '@/lib/orchestration/registry/store';
 import { createLogger } from '@/lib/logger';
 import { parseModelString } from '@/lib/ai/providers';
 import { resolveApiKey, resolveWebSearchApiKey } from '@/lib/server/provider-config';
@@ -269,9 +272,11 @@ export async function generateClassroom(
     } catch (e) {
       log.warn('Agent profile generation failed, falling back to defaults:', e);
       agents = getDefaultAgents();
+      persistedAgents = getDefaultAgentsForPersistence();
     }
   } else {
     agents = getDefaultAgents();
+    persistedAgents = getDefaultAgentsForPersistence();
   }
   const teacherContext = formatTeacherPersonaForPrompt(agents);
 
