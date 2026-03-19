@@ -364,6 +364,47 @@ export async function loadGeneratedAgentsForStage(stageId: string): Promise<stri
 }
 
 /**
+ * Register agents from server-side persisted data (no IndexedDB involved).
+ * Used when loading API-generated classrooms that include agent profiles.
+ */
+export function registerPersistedAgents(
+  stageId: string,
+  agents: Array<{
+    id: string;
+    name: string;
+    role: string;
+    persona: string;
+    avatar: string;
+    color: string;
+    priority: number;
+  }>,
+): string[] {
+  const registry = useAgentRegistry.getState();
+
+  // Clear previously loaded generated agents
+  for (const agent of registry.listAgents()) {
+    if (agent.isGenerated) registry.deleteAgent(agent.id);
+  }
+
+  const ids: string[] = [];
+  const now = new Date();
+  for (const agent of agents) {
+    registry.addAgent({
+      ...agent,
+      allowedActions: getActionsForRole(agent.role),
+      isDefault: false,
+      isGenerated: true,
+      boundStageId: stageId,
+      createdAt: now,
+      updatedAt: now,
+    });
+    ids.push(agent.id);
+  }
+
+  return ids;
+}
+
+/**
  * Save generated agents to IndexedDB and registry.
  * Clears old generated agents for this stage first.
  */
