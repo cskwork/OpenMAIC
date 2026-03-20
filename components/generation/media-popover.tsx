@@ -567,7 +567,12 @@ function GroupedSelect({
   onSelect: (groupId: string, itemId: string) => void;
 }) {
   const composite = `${selectedGroupId}::${selectedItemId}`;
-  const selectedGroup = groups.find((g) => g.groupId === selectedGroupId);
+  // When multiple groups share the same groupId (e.g. browser-native-tts split by language),
+  // find the sub-group that actually contains the selected item.
+  const selectedGroup =
+    groups.find(
+      (g) => g.groupId === selectedGroupId && g.items.some((item) => item.id === selectedItemId),
+    ) || groups.find((g) => g.groupId === selectedGroupId);
 
   return (
     <Select
