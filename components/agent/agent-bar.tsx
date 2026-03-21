@@ -4,6 +4,13 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { useSettingsStore } from '@/lib/store/settings';
@@ -23,6 +30,7 @@ export function AgentBar() {
   const agentMode = useSettingsStore((s) => s.agentMode);
   const setAgentMode = useSettingsStore((s) => s.setAgentMode);
   const ttsProviderId = useSettingsStore((s) => s.ttsProviderId);
+  const ttsMuted = useSettingsStore((s) => s.ttsMuted);
   const updateAgent = useAgentRegistry((s) => s.updateAgent);
 
   const [open, setOpen] = useState(false);
@@ -39,6 +47,7 @@ export function AgentBar() {
   const providerVoices = TTS_PROVIDERS[ttsProviderId]?.voices ?? [];
   const getVoiceDisplayName = (voiceId: string) =>
     providerVoices.find((v) => v.id === voiceId)?.name ?? voiceId;
+  const showVoice = voiceList.length > 0 && !ttsMuted;
 
   // Click-outside to collapse
   useEffect(() => {
@@ -251,30 +260,33 @@ export function AgentBar() {
                           </span>
                         </div>
                       </div>
-                      {voiceList.length > 0 ? (
-                        <div className="relative shrink-0">
-                          <select
-                            value={resolveVoice(teacherAgent, ttsProviderId, 0, voiceList)}
-                            onChange={(e) => {
-                              updateAgent(teacherAgent.id, {
-                                voiceOverrides: {
-                                  ...teacherAgent.voiceOverrides,
-                                  [ttsProviderId]: e.target.value,
-                                },
-                              });
-                            }}
+                      {showVoice && (
+                        <Select
+                          value={resolveVoice(teacherAgent, ttsProviderId, 0, voiceList)}
+                          onValueChange={(value) => {
+                            updateAgent(teacherAgent.id, {
+                              voiceOverrides: {
+                                ...teacherAgent.voiceOverrides,
+                                [ttsProviderId]: value,
+                              },
+                            });
+                          }}
+                        >
+                          <SelectTrigger
+                            className="h-5 w-auto min-w-0 max-w-[80px] shrink-0 rounded-full border-0 bg-muted/60 px-2 text-[10px] text-muted-foreground/70 hover:bg-muted hover:text-muted-foreground shadow-none focus:ring-0 [&>svg]:size-2.5 [&>svg]:text-muted-foreground/40"
                             onClick={(e) => e.stopPropagation()}
-                            className="appearance-none h-5 text-[10px] rounded-full bg-muted/60 hover:bg-muted pl-2 pr-5 text-muted-foreground/70 hover:text-muted-foreground shrink-0 max-w-[80px] truncate cursor-pointer focus:outline-none transition-colors border-0"
                           >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
                             {voiceList.map((voiceId) => (
-                              <option key={voiceId} value={voiceId}>
+                              <SelectItem key={voiceId} value={voiceId} className="text-xs">
                                 {getVoiceDisplayName(voiceId)}
-                              </option>
+                              </SelectItem>
                             ))}
-                          </select>
-                          <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 size-2.5 text-muted-foreground/40" />
-                        </div>
-                      ) : null}
+                          </SelectContent>
+                        </Select>
+                      )}
                     </div>
                   )}
 
@@ -324,30 +336,33 @@ export function AgentBar() {
                               ) : null;
                             })()}
                           </div>
-                          {voiceList.length > 0 ? (
-                            <div className="relative shrink-0">
-                              <select
-                                value={resolveVoice(agent, ttsProviderId, agentIndex, voiceList)}
-                                onChange={(e) => {
-                                  updateAgent(agent.id, {
-                                    voiceOverrides: {
-                                      ...agent.voiceOverrides,
-                                      [ttsProviderId]: e.target.value,
-                                    },
-                                  });
-                                }}
+                          {showVoice && (
+                            <Select
+                              value={resolveVoice(agent, ttsProviderId, agentIndex, voiceList)}
+                              onValueChange={(value) => {
+                                updateAgent(agent.id, {
+                                  voiceOverrides: {
+                                    ...agent.voiceOverrides,
+                                    [ttsProviderId]: value,
+                                  },
+                                });
+                              }}
+                            >
+                              <SelectTrigger
+                                className="h-5 w-auto min-w-0 max-w-[80px] shrink-0 rounded-full border-0 bg-muted/60 px-2 text-[10px] text-muted-foreground/70 hover:bg-muted hover:text-muted-foreground shadow-none focus:ring-0 [&>svg]:size-2.5 [&>svg]:text-muted-foreground/40"
                                 onClick={(e) => e.stopPropagation()}
-                                className="appearance-none h-5 text-[10px] rounded-full bg-muted/60 hover:bg-muted pl-2 pr-5 text-muted-foreground/70 hover:text-muted-foreground shrink-0 max-w-[80px] truncate cursor-pointer focus:outline-none transition-colors border-0"
                               >
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
                                 {voiceList.map((voiceId) => (
-                                  <option key={voiceId} value={voiceId}>
+                                  <SelectItem key={voiceId} value={voiceId} className="text-xs">
                                     {getVoiceDisplayName(voiceId)}
-                                  </option>
+                                  </SelectItem>
                                 ))}
-                              </select>
-                              <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 size-2.5 text-muted-foreground/40" />
-                            </div>
-                          ) : null}
+                              </SelectContent>
+                            </Select>
+                          )}
                         </div>
                       );
                     })}
