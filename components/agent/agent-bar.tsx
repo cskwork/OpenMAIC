@@ -241,12 +241,12 @@ export function AgentBar() {
                   {teacherAgent && (
                     <div
                       className={cn(
-                        'w-full flex items-center gap-3 px-3 py-2 text-left transition-colors rounded-lg bg-primary/5',
+                        'w-full flex items-start gap-3 px-3 py-2 text-left transition-colors rounded-lg bg-primary/5',
                       )}
                     >
-                      <Checkbox checked disabled className="pointer-events-none opacity-50" />
+                      <Checkbox checked disabled className="pointer-events-none opacity-50 mt-1" />
                       <div
-                        className="size-8 rounded-full overflow-hidden shrink-0 ring-1 ring-border/40"
+                        className="size-8 rounded-full overflow-hidden shrink-0 ring-1 ring-border/40 mt-0.5"
                         style={{ boxShadow: `0 0 0 2px ${teacherAgent.color}30` }}
                       >
                         <img
@@ -262,39 +262,42 @@ export function AgentBar() {
                             {getAgentRole(teacherAgent)}
                           </span>
                         </div>
-                      </div>
-                      {showVoice && (
-                        <Select
-                          value={resolveVoice(teacherAgent, ttsProviderId, 0, voiceList)}
-                          onValueChange={(value) => {
-                            updateAgent(teacherAgent.id, {
-                              voiceOverrides: {
-                                ...teacherAgent.voiceOverrides,
-                                [ttsProviderId]: value,
-                              },
-                            });
-                          }}
-                        >
-                          <SelectTrigger
-                            className="h-5 w-auto min-w-0 shrink-0 rounded-full border-0 bg-muted/60 px-2 text-[10px] text-muted-foreground/70 hover:bg-muted hover:text-muted-foreground shadow-none focus:ring-0 [&>svg]:size-2.5 [&>svg]:text-muted-foreground/40"
+                        {showVoice && (
+                          <div
+                            className="mt-1"
                             onClick={(e) => e.stopPropagation()}
+                            onPointerDown={(e) => e.stopPropagation()}
                           >
-                            <span className="truncate">
-                              {t('agentBar.voiceLabel')}:{' '}
-                              {getVoiceDisplayName(
-                                resolveVoice(teacherAgent, ttsProviderId, 0, voiceList),
-                              )}
-                            </span>
-                          </SelectTrigger>
-                          <SelectContent>
-                            {voiceList.map((voiceId) => (
-                              <SelectItem key={voiceId} value={voiceId} className="text-xs">
-                                {getVoiceDisplayName(voiceId)}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      )}
+                            <Select
+                              value={resolveVoice(teacherAgent, ttsProviderId, 0, voiceList)}
+                              onValueChange={(value) => {
+                                updateAgent(teacherAgent.id, {
+                                  voiceOverrides: {
+                                    ...teacherAgent.voiceOverrides,
+                                    [ttsProviderId]: value,
+                                  },
+                                });
+                              }}
+                            >
+                              <SelectTrigger className="h-5 w-auto min-w-0 inline-flex rounded-full border-0 bg-muted/60 px-2 text-[10px] text-muted-foreground/70 hover:bg-muted hover:text-muted-foreground shadow-none focus:ring-0 [&>svg]:size-2.5 [&>svg]:text-muted-foreground/40">
+                                <span className="truncate">
+                                  {t('agentBar.voiceLabel')}:{' '}
+                                  {getVoiceDisplayName(
+                                    resolveVoice(teacherAgent, ttsProviderId, 0, voiceList),
+                                  )}
+                                </span>
+                              </SelectTrigger>
+                              <SelectContent>
+                                {voiceList.map((voiceId) => (
+                                  <SelectItem key={voiceId} value={voiceId} className="text-xs">
+                                    {getVoiceDisplayName(voiceId)}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
 
@@ -303,20 +306,19 @@ export function AgentBar() {
                     .filter((a) => a.role !== 'teacher')
                     .map((agent, idx) => {
                       const isSelected = selectedAgentIds.includes(agent.id);
-                      // agentIndex: teacher=0, then non-teachers start at 1
                       const agentIndex = idx + 1;
                       return (
                         <div
                           key={agent.id}
                           onClick={() => toggleAgent(agent.id)}
                           className={cn(
-                            'w-full flex items-center gap-3 px-3 py-2 text-left transition-colors cursor-pointer rounded-lg',
+                            'w-full flex items-start gap-3 px-3 py-2 text-left transition-colors cursor-pointer rounded-lg',
                             isSelected ? 'bg-primary/5' : 'hover:bg-muted/50',
                           )}
                         >
-                          <Checkbox checked={isSelected} className="pointer-events-none" />
+                          <Checkbox checked={isSelected} className="pointer-events-none mt-1" />
                           <div
-                            className="size-8 rounded-full overflow-hidden shrink-0 ring-1 ring-border/40"
+                            className="size-8 rounded-full overflow-hidden shrink-0 ring-1 ring-border/40 mt-0.5"
                             style={{
                               boxShadow: isSelected ? `0 0 0 2px ${agent.color}30` : undefined,
                             }}
@@ -338,44 +340,47 @@ export function AgentBar() {
                               const descKey = `settings.agentDescriptions.${agent.id}`;
                               const desc = t(descKey);
                               return desc !== descKey ? (
-                                <p className="text-xs text-muted-foreground/60 mt-0.5 leading-relaxed">
+                                <p className="text-xs text-muted-foreground/60 mt-0.5 leading-relaxed line-clamp-1">
                                   {desc}
                                 </p>
                               ) : null;
                             })()}
-                          </div>
-                          {showVoice && (
-                            <Select
-                              value={resolveVoice(agent, ttsProviderId, agentIndex, voiceList)}
-                              onValueChange={(value) => {
-                                updateAgent(agent.id, {
-                                  voiceOverrides: {
-                                    ...agent.voiceOverrides,
-                                    [ttsProviderId]: value,
-                                  },
-                                });
-                              }}
-                            >
-                              <SelectTrigger
-                                className="h-5 w-auto min-w-0 shrink-0 rounded-full border-0 bg-muted/60 px-2 text-[10px] text-muted-foreground/70 hover:bg-muted hover:text-muted-foreground shadow-none focus:ring-0 [&>svg]:size-2.5 [&>svg]:text-muted-foreground/40"
+                            {showVoice && (
+                              <div
+                                className="mt-1"
                                 onClick={(e) => e.stopPropagation()}
+                                onPointerDown={(e) => e.stopPropagation()}
                               >
-                                <span className="truncate">
-                                  {t('agentBar.voiceLabel')}:{' '}
-                                  {getVoiceDisplayName(
-                                    resolveVoice(agent, ttsProviderId, agentIndex, voiceList),
-                                  )}
-                                </span>
-                              </SelectTrigger>
-                              <SelectContent>
-                                {voiceList.map((voiceId) => (
-                                  <SelectItem key={voiceId} value={voiceId} className="text-xs">
-                                    {getVoiceDisplayName(voiceId)}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          )}
+                                <Select
+                                  value={resolveVoice(agent, ttsProviderId, agentIndex, voiceList)}
+                                  onValueChange={(value) => {
+                                    updateAgent(agent.id, {
+                                      voiceOverrides: {
+                                        ...agent.voiceOverrides,
+                                        [ttsProviderId]: value,
+                                      },
+                                    });
+                                  }}
+                                >
+                                  <SelectTrigger className="h-5 w-auto min-w-0 inline-flex rounded-full border-0 bg-muted/60 px-2 text-[10px] text-muted-foreground/70 hover:bg-muted hover:text-muted-foreground shadow-none focus:ring-0 [&>svg]:size-2.5 [&>svg]:text-muted-foreground/40">
+                                    <span className="truncate">
+                                      {t('agentBar.voiceLabel')}:{' '}
+                                      {getVoiceDisplayName(
+                                        resolveVoice(agent, ttsProviderId, agentIndex, voiceList),
+                                      )}
+                                    </span>
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {voiceList.map((voiceId) => (
+                                      <SelectItem key={voiceId} value={voiceId} className="text-xs">
+                                        {getVoiceDisplayName(voiceId)}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       );
                     })}
