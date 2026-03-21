@@ -44,6 +44,7 @@ vi.mock('@/lib/ai/providers', () => ({
 }));
 
 vi.mock('@/lib/audio/constants', () => ({
+  ASR_PROVIDERS: {},
   DEFAULT_TTS_VOICES: {},
 }));
 
