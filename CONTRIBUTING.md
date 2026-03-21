@@ -89,7 +89,7 @@ If you have not completed local verification, keep your PR in **Draft** status. 
 
 ### PR Guidelines
 
-- **Link related issues** — use `Closes #123` or `Fixes #456` in the PR description
+- **Every PR must link to an issue** — use `Closes #123` or `Fixes #456` in the PR description. If no issue exists yet, create one first. PRs without a linked issue will not be reviewed.
 - **Keep PRs focused** — one concern per PR; do not mix unrelated changes
 - **Describe what and why** — fill out the [PR template](.github/pull_request_template.md)
 - **Include screenshots** — for UI changes, show before/after
