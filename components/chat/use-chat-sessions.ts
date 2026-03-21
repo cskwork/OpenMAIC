@@ -36,6 +36,12 @@ interface UseChatSessionsOptions {
   onActiveBubble?: (messageId: string | null) => void;
   /** Called when a QA/Discussion session completes naturally (director end). */
   onStopSession?: () => void;
+  onSegmentSealed?: (
+    messageId: string,
+    partId: string,
+    fullText: string,
+    agentId: string | null,
+  ) => void;
 }
 
 export function useChatSessions(options: UseChatSessionsOptions = {}) {
@@ -45,6 +51,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   const onCueUserRef = useRef(options.onCueUser);
   const onActiveBubbleRef = useRef(options.onActiveBubble);
   const onStopSessionRef = useRef(options.onStopSession);
+  const onSegmentSealedRef = useRef(options.onSegmentSealed);
   useEffect(() => {
     onLiveSpeechRef.current = options.onLiveSpeech;
     onSpeechProgressRef.current = options.onSpeechProgress;
@@ -52,6 +59,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     onCueUserRef.current = options.onCueUser;
     onActiveBubbleRef.current = options.onActiveBubble;
     onStopSessionRef.current = options.onStopSession;
+    onSegmentSealedRef.current = options.onSegmentSealed;
   }, [
     options.onLiveSpeech,
     options.onSpeechProgress,
@@ -59,6 +67,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     options.onCueUser,
     options.onActiveBubble,
     options.onStopSession,
+    options.onSegmentSealed,
   ]);
   const { t } = useI18n();
 
@@ -316,6 +325,15 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
 
           onError(message: string) {
             log.error('[Buffer] Stream error:', message);
+          },
+
+          onSegmentSealed(
+            messageId: string,
+            partId: string,
+            fullText: string,
+            agentId: string | null,
+          ) {
+            onSegmentSealedRef.current?.(messageId, partId, fullText, agentId);
           },
         },
         pacingOptions,
