@@ -124,6 +124,12 @@ export interface StreamBufferCallbacks {
     directorState?: DirectorState;
   }): void;
   onError(message: string): void;
+  onSegmentSealed?: (
+    messageId: string,
+    partId: string,
+    fullText: string,
+    agentId: string | null,
+  ) => void;
 }
 
 // ─── Options ─────────────────────────────────────────────────────────
@@ -403,6 +409,7 @@ export class StreamBuffer {
       const item = this.items[i];
       if (item.kind === 'text' && !item.sealed) {
         item.sealed = true;
+        this.cb.onSegmentSealed?.(item.messageId, item.partId, item.text, this.currentAgentId);
         break;
       }
       // Stop searching once we hit a non-text item
