@@ -7,40 +7,46 @@ import { Input } from '@/components/ui/input';
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
-  SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
-import { resolveVoice, getServerVoiceList } from '@/lib/audio/voice-resolver';
-import { TTS_PROVIDERS } from '@/lib/audio/constants';
+import { resolveAgentVoice, getAvailableProvidersWithVoices } from '@/lib/audio/voice-resolver';
 import { Sparkles, ChevronDown, ChevronUp, Shuffle, Volume2 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
+import type { TTSProviderId } from '@/lib/audio/types';
 
 function AgentVoicePill({
   agent,
   agentIndex,
-  voiceList,
-  ttsProviderId,
-  getVoiceDisplayName,
+  availableProviders,
+  globalProviderId,
 }: {
   agent: AgentConfig;
   agentIndex: number;
-  voiceList: string[];
-  ttsProviderId: string;
-  getVoiceDisplayName: (id: string) => string;
+  availableProviders: ReturnType<typeof getAvailableProvidersWithVoices>;
+  globalProviderId: TTSProviderId;
 }) {
   const updateAgent = useAgentRegistry((s) => s.updateAgent);
-  const currentVoice = resolveVoice(
-    agent,
-    ttsProviderId as Parameters<typeof resolveVoice>[1],
-    agentIndex,
-    voiceList,
-  );
+  const resolved = resolveAgentVoice(agent, globalProviderId, agentIndex);
+
+  // Encode as "providerId::voiceId" for the Select value
+  const currentValue = `${resolved.providerId}::${resolved.voiceId}`;
+
+  // Find display name for current voice
+  const currentVoiceName = (() => {
+    for (const p of availableProviders) {
+      const v = p.voices.find((voice) => voice.id === resolved.voiceId);
+      if (v) return v.name;
+    }
+    return resolved.voiceId;
+  })();
 
   return (
     <div
@@ -49,25 +55,34 @@ function AgentVoicePill({
       className="shrink-0"
     >
       <Select
-        value={currentVoice}
+        value={currentValue}
         onValueChange={(value) => {
+          const [providerId, voiceId] = value.split('::');
           updateAgent(agent.id, {
-            voiceOverrides: {
-              ...agent.voiceOverrides,
-              [ttsProviderId]: value,
-            },
+            voiceConfig: { providerId: providerId as TTSProviderId, voiceId },
           });
         }}
       >
         <SelectTrigger className="h-5 w-auto rounded-full border-0 bg-muted/60 px-2 text-[10px] text-muted-foreground/70 hover:bg-muted hover:text-muted-foreground shadow-none focus:ring-0 [&>svg]:size-2.5 [&>svg]:text-muted-foreground/40 gap-0.5">
           <Volume2 className="size-2.5 shrink-0" />
-          <span className="truncate max-w-[56px]">{getVoiceDisplayName(currentVoice)}</span>
+          <span className="truncate max-w-[56px]">{currentVoiceName}</span>
         </SelectTrigger>
         <SelectContent>
-          {voiceList.map((voiceId) => (
-            <SelectItem key={voiceId} value={voiceId} className="text-xs">
-              {getVoiceDisplayName(voiceId)}
-            </SelectItem>
+          {availableProviders.map((provider) => (
+            <SelectGroup key={provider.providerId}>
+              <SelectLabel className="text-[10px] text-muted-foreground/60 px-2 py-1">
+                {provider.providerName}
+              </SelectLabel>
+              {provider.voices.map((voice) => (
+                <SelectItem
+                  key={`${provider.providerId}::${voice.id}`}
+                  value={`${provider.providerId}::${voice.id}`}
+                  className="text-xs"
+                >
+                  {voice.name}
+                </SelectItem>
+              ))}
+            </SelectGroup>
           ))}
         </SelectContent>
       </Select>
@@ -85,6 +100,7 @@ export function AgentBar() {
   const agentMode = useSettingsStore((s) => s.agentMode);
   const setAgentMode = useSettingsStore((s) => s.setAgentMode);
   const ttsProviderId = useSettingsStore((s) => s.ttsProviderId);
+  const ttsProvidersConfig = useSettingsStore((s) => s.ttsProvidersConfig);
   const ttsMuted = useSettingsStore((s) => s.ttsMuted);
 
   const [open, setOpen] = useState(false);
@@ -96,11 +112,8 @@ export function AgentBar() {
   const selectedAgents = agents.filter((a) => selectedAgentIds.includes(a.id));
   const nonTeacherSelected = selectedAgents.filter((a) => a.role !== 'teacher');
 
-  const voiceList = getServerVoiceList(ttsProviderId);
-  const providerVoices = TTS_PROVIDERS[ttsProviderId]?.voices ?? [];
-  const getVoiceDisplayName = (voiceId: string) =>
-    providerVoices.find((v) => v.id === voiceId)?.name ?? voiceId;
-  const showVoice = voiceList.length > 0;
+  const availableProviders = getAvailableProvidersWithVoices(ttsProvidersConfig);
+  const showVoice = availableProviders.length > 0;
 
   useEffect(() => {
     if (!open) return;
@@ -219,7 +232,7 @@ export function AgentBar() {
             )}
             onClick={() => setOpen(!open)}
           >
-            <span className="text-xs text-muted-foreground/60 group-hover:text-muted-foreground transition-colors hidden sm:block font-medium flex-1 text-left">
+            <span className="text-xs text-muted-foreground/60 group-hover:text-muted-foreground transition-colors hidden sm:block font-medium flex-1 text-left truncate">
               {open ? t('agentBar.expandedTitle') : t('agentBar.readyToLearn')}
             </span>
             {avatarRow}
@@ -300,9 +313,8 @@ export function AgentBar() {
                         <AgentVoicePill
                           agent={teacherAgent}
                           agentIndex={0}
-                          voiceList={voiceList}
-                          ttsProviderId={ttsProviderId}
-                          getVoiceDisplayName={getVoiceDisplayName}
+                          availableProviders={availableProviders}
+                          globalProviderId={ttsProviderId}
                         />
                       )}
                     </div>
@@ -346,9 +358,8 @@ export function AgentBar() {
                             <AgentVoicePill
                               agent={agent}
                               agentIndex={agentIndex}
-                              voiceList={voiceList}
-                              ttsProviderId={ttsProviderId}
-                              getVoiceDisplayName={getVoiceDisplayName}
+                              availableProviders={availableProviders}
+                              globalProviderId={ttsProviderId}
                             />
                           )}
                         </div>
