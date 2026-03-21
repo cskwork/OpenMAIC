@@ -27,6 +27,12 @@ interface ChatAreaProps {
   onThinking?: (state: { stage: string; agentId?: string } | null) => void;
   onCueUser?: (fromAgentId?: string, prompt?: string) => void;
   onStopSession?: () => void;
+  onSegmentSealed?: (
+    messageId: string,
+    partId: string,
+    fullText: string,
+    agentId: string | null,
+  ) => void;
   currentSceneId?: string | null;
 }
 
@@ -67,6 +73,7 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       onThinking,
       onCueUser,
       onStopSession,
+      onSegmentSealed,
       currentSceneId,
     },
     ref,
@@ -98,6 +105,7 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       onCueUser,
       onActiveBubble,
       onStopSession,
+      onSegmentSealed,
     });
 
     const [activeTab, setActiveTab] = useState<'lecture' | 'chat'>('lecture');
