@@ -24,7 +24,6 @@ interface QueueItem {
 }
 
 export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: DiscussionTTSOptions) {
-  const ttsProviderId = useSettingsStore((s) => s.ttsProviderId);
   const ttsProvidersConfig = useSettingsStore((s) => s.ttsProvidersConfig);
   const ttsSpeed = useSettingsStore((s) => s.ttsSpeed);
   const ttsMuted = useSettingsStore((s) => s.ttsMuted);
@@ -64,14 +63,30 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
 
   const resolveVoiceForAgent = useCallback(
     (agentId: string | null): { providerId: TTSProviderId; voiceId: string } => {
-      if (!agentId) return { providerId: ttsProviderId, voiceId: 'default' };
-      const agent = agents.find((a) => a.id === agentId);
-      if (!agent) return { providerId: ttsProviderId, voiceId: 'default' };
-      const index = agentIndexMap.current.get(agentId) ?? 0;
       const providers = getAvailableProvidersWithVoices(ttsProvidersConfig);
-      return resolveAgentVoice(agent, ttsProviderId, index, providers);
+      if (!agentId) {
+        if (providers.length > 0) {
+          return {
+            providerId: providers[0].providerId,
+            voiceId: providers[0].voices[0]?.id ?? 'default',
+          };
+        }
+        return { providerId: 'browser-native-tts', voiceId: 'default' };
+      }
+      const agent = agents.find((a) => a.id === agentId);
+      if (!agent) {
+        if (providers.length > 0) {
+          return {
+            providerId: providers[0].providerId,
+            voiceId: providers[0].voices[0]?.id ?? 'default',
+          };
+        }
+        return { providerId: 'browser-native-tts', voiceId: 'default' };
+      }
+      const index = agentIndexMap.current.get(agentId) ?? 0;
+      return resolveAgentVoice(agent, index, providers);
     },
-    [agents, ttsProviderId, ttsProvidersConfig],
+    [agents, ttsProvidersConfig],
   );
 
   const processQueue = useCallback(async () => {

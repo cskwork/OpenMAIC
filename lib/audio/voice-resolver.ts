@@ -10,16 +10,14 @@ export interface ResolvedVoice {
 /**
  * Resolve the TTS provider + voice for an agent.
  * 1. If agent has voiceConfig and the voice is still valid, use it
- * 2. Otherwise, use globalProviderId if it has voices available
- * 3. Otherwise, use the first available provider from the list
+ * 2. Otherwise, use the first available provider + deterministic voice by index
  */
 export function resolveAgentVoice(
   agent: AgentConfig,
-  globalProviderId: TTSProviderId,
   agentIndex: number,
-  availableProviders?: ProviderWithVoices[],
+  availableProviders: ProviderWithVoices[],
 ): ResolvedVoice {
-  // 1. Agent-specific config
+  // Agent-specific config
   if (agent.voiceConfig) {
     const list = getServerVoiceList(agent.voiceConfig.providerId);
     if (list.includes(agent.voiceConfig.voiceId)) {
@@ -27,14 +25,8 @@ export function resolveAgentVoice(
     }
   }
 
-  // 2. Try global provider
-  const globalList = getServerVoiceList(globalProviderId);
-  if (globalList.length > 0) {
-    return { providerId: globalProviderId, voiceId: globalList[agentIndex % globalList.length] };
-  }
-
-  // 3. Fallback to first available provider with voices
-  if (availableProviders && availableProviders.length > 0) {
+  // Fallback: first available provider, deterministic voice
+  if (availableProviders.length > 0) {
     const first = availableProviders[0];
     return {
       providerId: first.providerId,
@@ -42,7 +34,7 @@ export function resolveAgentVoice(
     };
   }
 
-  return { providerId: globalProviderId, voiceId: 'default' };
+  return { providerId: 'browser-native-tts', voiceId: 'default' };
 }
 
 /**

@@ -17,22 +17,19 @@ import {
 import { Sparkles, ChevronDown, ChevronUp, Shuffle, Volume2 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
-import type { TTSProviderId } from '@/lib/audio/types';
 import type { ProviderWithVoices } from '@/lib/audio/voice-resolver';
 
 function AgentVoicePill({
   agent,
   agentIndex,
   availableProviders,
-  globalProviderId,
 }: {
   agent: AgentConfig;
   agentIndex: number;
   availableProviders: ProviderWithVoices[];
-  globalProviderId: TTSProviderId;
 }) {
   const updateAgent = useAgentRegistry((s) => s.updateAgent);
-  const resolved = resolveAgentVoice(agent, globalProviderId, agentIndex, availableProviders);
+  const resolved = resolveAgentVoice(agent, agentIndex, availableProviders);
   const displayName = findVoiceDisplayName(resolved.providerId, resolved.voiceId);
 
   return (
@@ -101,7 +98,6 @@ export function AgentBar() {
   const setMaxTurns = useSettingsStore((s) => s.setMaxTurns);
   const agentMode = useSettingsStore((s) => s.agentMode);
   const setAgentMode = useSettingsStore((s) => s.setAgentMode);
-  const ttsProviderId = useSettingsStore((s) => s.ttsProviderId);
   const ttsProvidersConfig = useSettingsStore((s) => s.ttsProvidersConfig);
 
   const [open, setOpen] = useState(false);
@@ -259,7 +255,6 @@ export function AgentBar() {
             agent={agent}
             agentIndex={agentIndex}
             availableProviders={availableProviders}
-            globalProviderId={ttsProviderId}
           />
         )}
       </div>
