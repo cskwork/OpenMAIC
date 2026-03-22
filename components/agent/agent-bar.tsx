@@ -306,19 +306,17 @@ export function AgentBar() {
                       <span className="text-sm font-medium truncate min-w-0 flex-1">
                         {getAgentName(teacherAgent)}
                       </span>
-                      <div className="flex items-center gap-2 shrink-0 w-[9.5rem] justify-end">
-                        <span className="text-[10px] text-muted-foreground/50">
-                          {getAgentRole(teacherAgent)}
-                        </span>
-                        {showVoice && (
-                          <AgentVoicePill
-                            agent={teacherAgent}
-                            agentIndex={0}
-                            availableProviders={availableProviders}
-                            globalProviderId={ttsProviderId}
-                          />
-                        )}
-                      </div>
+                      <span className="text-[10px] text-muted-foreground/50 shrink-0 min-w-[52px] text-right">
+                        {getAgentRole(teacherAgent)}
+                      </span>
+                      {showVoice && (
+                        <AgentVoicePill
+                          agent={teacherAgent}
+                          agentIndex={0}
+                          availableProviders={availableProviders}
+                          globalProviderId={ttsProviderId}
+                        />
+                      )}
                     </div>
                   )}
 
@@ -353,19 +351,17 @@ export function AgentBar() {
                           <span className="text-sm font-medium truncate min-w-0 flex-1">
                             {getAgentName(agent)}
                           </span>
-                          <div className="flex items-center gap-2 shrink-0 w-[9.5rem] justify-end">
-                            <span className="text-[10px] text-muted-foreground/50">
-                              {getAgentRole(agent)}
-                            </span>
-                            {showVoice && (
-                              <AgentVoicePill
-                                agent={agent}
-                                agentIndex={agentIndex}
-                                availableProviders={availableProviders}
-                                globalProviderId={ttsProviderId}
-                              />
-                            )}
-                          </div>
+                          <span className="text-[10px] text-muted-foreground/50 shrink-0 min-w-[52px] text-right">
+                            {getAgentRole(agent)}
+                          </span>
+                          {showVoice && (
+                            <AgentVoicePill
+                              agent={agent}
+                              agentIndex={agentIndex}
+                              availableProviders={availableProviders}
+                              globalProviderId={ttsProviderId}
+                            />
+                          )}
                         </div>
                       );
                     })}
