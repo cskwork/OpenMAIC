@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/hooks/use-i18n';
@@ -11,7 +10,18 @@ import { useSettingsStore } from '@/lib/store/settings';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
 import { resolveAgentVoice, getAvailableProvidersWithVoices } from '@/lib/audio/voice-resolver';
 import { playBrowserTTSPreview } from '@/lib/audio/browser-tts-preview';
-import { Sparkles, ChevronDown, ChevronUp, Shuffle, Volume2, VolumeX, Loader2 } from 'lucide-react';
+import {
+  Sparkles,
+  ChevronDown,
+  ChevronUp,
+  Shuffle,
+  Volume2,
+  VolumeX,
+  Loader2,
+  MessageSquare,
+  Minus,
+  Plus,
+} from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import type { TTSProviderId } from '@/lib/audio/types';
@@ -452,7 +462,7 @@ export function AgentBar() {
             className="absolute right-0 top-full mt-1 z-50 w-96"
           >
             <div className="rounded-2xl bg-white/95 dark:bg-slate-800/95 backdrop-blur-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06] shadow-[0_1px_8px_-2px_rgba(0,0,0,0.06)] dark:shadow-[0_1px_8px_-2px_rgba(0,0,0,0.3)] px-2.5 py-2">
-              {/* Teacher + max turns — always visible */}
+              {/* Teacher — always visible */}
               {teacherAgent && (
                 <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-primary/5 mb-2">
                   <div
@@ -476,18 +486,6 @@ export function AgentBar() {
                       disabled={!ttsEnabled}
                     />
                   )}
-                  <span className="text-[10px] text-muted-foreground/50 shrink-0">
-                    {t('settings.maxTurns')}
-                  </span>
-                  <Input
-                    type="number"
-                    min="1"
-                    max="20"
-                    value={maxTurns}
-                    onChange={(e) => setMaxTurns(e.target.value)}
-                    onClick={(e) => e.stopPropagation()}
-                    className="w-12 h-5 text-[11px] text-center px-1 shrink-0"
-                  />
                 </div>
               )}
 
@@ -530,6 +528,41 @@ export function AgentBar() {
                   <span className="flex-1">{t('settings.agentModeAutoDesc')}</span>
                 </div>
               )}
+
+              {/* Max turns — compact stepper */}
+              <div className="flex items-center gap-1.5 px-2.5 py-1.5 mt-1 border-t border-border/30">
+                <MessageSquare className="size-3 text-muted-foreground/40 shrink-0" />
+                <span className="text-[11px] text-muted-foreground/50 flex-1">
+                  {t('settings.maxTurns')}
+                </span>
+                <div className="flex items-center rounded-full bg-muted/50 h-5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const v = Math.max(1, parseInt(maxTurns || '1') - 1);
+                      setMaxTurns(String(v));
+                    }}
+                    className="size-5 flex items-center justify-center text-muted-foreground/60 hover:text-foreground transition-colors rounded-full hover:bg-muted"
+                  >
+                    <Minus className="size-2.5" />
+                  </button>
+                  <span className="text-[11px] font-medium tabular-nums w-5 text-center">
+                    {maxTurns}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const v = Math.min(20, parseInt(maxTurns || '1') + 1);
+                      setMaxTurns(String(v));
+                    }}
+                    className="size-5 flex items-center justify-center text-muted-foreground/60 hover:text-foreground transition-colors rounded-full hover:bg-muted"
+                  >
+                    <Plus className="size-2.5" />
+                  </button>
+                </div>
+              </div>
             </div>
           </motion.div>
         )}
