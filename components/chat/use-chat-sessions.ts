@@ -42,6 +42,7 @@ interface UseChatSessionsOptions {
     fullText: string,
     agentId: string | null,
   ) => void;
+  waitForTTSDrain?: () => Promise<void>;
 }
 
 export function useChatSessions(options: UseChatSessionsOptions = {}) {
@@ -52,6 +53,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   const onActiveBubbleRef = useRef(options.onActiveBubble);
   const onStopSessionRef = useRef(options.onStopSession);
   const onSegmentSealedRef = useRef(options.onSegmentSealed);
+  const waitForTTSDrainRef = useRef(options.waitForTTSDrain);
   useEffect(() => {
     onLiveSpeechRef.current = options.onLiveSpeech;
     onSpeechProgressRef.current = options.onSpeechProgress;
@@ -60,6 +62,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     onActiveBubbleRef.current = options.onActiveBubble;
     onStopSessionRef.current = options.onStopSession;
     onSegmentSealedRef.current = options.onSegmentSealed;
+    waitForTTSDrainRef.current = options.waitForTTSDrain;
   }, [
     options.onLiveSpeech,
     options.onSpeechProgress,
@@ -68,6 +71,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     options.onActiveBubble,
     options.onStopSession,
     options.onSegmentSealed,
+    options.waitForTTSDrain,
   ]);
   const { t } = useI18n();
 
@@ -441,6 +445,15 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         } catch {
           // Buffer was disposed/shutdown (abort or session end) — exit loop
           break;
+        }
+
+        // Wait for TTS audio to finish before next turn
+        if (waitForTTSDrainRef.current) {
+          try {
+            await waitForTTSDrainRef.current();
+          } catch {
+            break;
+          }
         }
 
         if (controller.signal.aborted) break;

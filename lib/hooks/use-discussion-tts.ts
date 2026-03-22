@@ -34,6 +34,17 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const onAudioStateChangeRef = useRef(onAudioStateChange);
   onAudioStateChangeRef.current = onAudioStateChange;
+  const drainResolversRef = useRef<Array<() => void>>([]);
+
+  // Resolve all drain waiters when queue is empty and nothing is playing
+  const checkDrain = useCallback(() => {
+    if (queueRef.current.length === 0 && !isPlayingRef.current) {
+      const resolvers = drainResolversRef.current;
+      drainResolversRef.current = [];
+      resolvers.forEach((r) => r());
+    }
+  }, []);
+
   const processQueueRef = useRef<() => void>(() => {});
 
   const {
@@ -90,7 +101,10 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
   );
 
   const processQueue = useCallback(async () => {
-    if (isPlayingRef.current || queueRef.current.length === 0) return;
+    if (isPlayingRef.current || queueRef.current.length === 0) {
+      checkDrain();
+      return;
+    }
     if (!enabled || ttsMuted) {
       queueRef.current = [];
       return;
@@ -156,7 +170,7 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       onAudioStateChangeRef.current?.(item.agentId, 'idle');
       processQueueRef.current();
     }
-  }, [enabled, ttsMuted, ttsProvidersConfig, ttsSpeed]);
+  }, [enabled, ttsMuted, ttsProvidersConfig, ttsSpeed, checkDrain]);
 
   processQueueRef.current = processQueue;
 
@@ -192,8 +206,23 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
 
   useEffect(() => cleanup, [cleanup]);
 
+  /**
+   * Returns a promise that resolves when the audio queue is empty
+   * and nothing is playing. Used by the agent loop to wait for
+   * TTS to finish before requesting the next agent turn.
+   */
+  const waitForDrain = useCallback((): Promise<void> => {
+    if (queueRef.current.length === 0 && !isPlayingRef.current) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      drainResolversRef.current.push(resolve);
+    });
+  }, []);
+
   return {
     handleSegmentSealed,
+    waitForDrain,
     cleanup,
   };
 }

@@ -33,6 +33,7 @@ interface ChatAreaProps {
     fullText: string,
     agentId: string | null,
   ) => void;
+  waitForTTSDrain?: () => Promise<void>;
   currentSceneId?: string | null;
 }
 
@@ -74,6 +75,7 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       onCueUser,
       onStopSession,
       onSegmentSealed,
+      waitForTTSDrain,
       currentSceneId,
     },
     ref,
@@ -106,6 +108,7 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       onActiveBubble,
       onStopSession,
       onSegmentSealed,
+      waitForTTSDrain,
     });
 
     const [activeTab, setActiveTab] = useState<'lecture' | 'chat'>('lecture');

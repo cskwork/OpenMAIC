@@ -912,6 +912,7 @@ export function Stage({
         }}
         onStopSession={doSessionCleanup}
         onSegmentSealed={discussionTTS.handleSegmentSealed}
+        waitForTTSDrain={discussionTTS.waitForDrain}
       />
 
       {/* Scene switch confirmation dialog */}
