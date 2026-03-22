@@ -50,17 +50,16 @@ export interface ProviderWithVoices {
 
 /**
  * Get all available providers and their voices for the voice picker UI.
- * Includes providers that have API keys, are server-configured, or are the current global provider.
+ * A provider is available if it has an API key or is server-configured.
+ * Browser-native-tts is excluded (no static voice list).
  */
 export function getAvailableProvidersWithVoices(
   ttsProvidersConfig: Record<
     string,
     { apiKey?: string; enabled?: boolean; isServerConfigured?: boolean }
   >,
-  globalProviderId?: TTSProviderId,
 ): ProviderWithVoices[] {
   const result: ProviderWithVoices[] = [];
-  const addedIds = new Set<TTSProviderId>();
 
   for (const [id, config] of Object.entries(TTS_PROVIDERS)) {
     const providerId = id as TTSProviderId;
@@ -68,18 +67,15 @@ export function getAvailableProvidersWithVoices(
     if (config.voices.length === 0) continue;
 
     const providerConfig = ttsProvidersConfig[providerId];
-    const isAvailable =
-      providerConfig?.apiKey ||
-      providerConfig?.isServerConfigured ||
-      providerId === globalProviderId;
+    const hasApiKey = providerConfig?.apiKey && providerConfig.apiKey.trim().length > 0;
+    const isServerConfigured = providerConfig?.isServerConfigured === true;
 
-    if (isAvailable) {
+    if (hasApiKey || isServerConfigured) {
       result.push({
         providerId,
         providerName: config.name,
         voices: config.voices.map((v) => ({ id: v.id, name: v.name })),
       });
-      addedIds.add(providerId);
     }
   }
 

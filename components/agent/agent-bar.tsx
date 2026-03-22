@@ -113,7 +113,7 @@ export function AgentBar() {
   const selectedAgents = agents.filter((a) => selectedAgentIds.includes(a.id));
   const nonTeacherSelected = selectedAgents.filter((a) => a.role !== 'teacher');
 
-  const availableProviders = getAvailableProvidersWithVoices(ttsProvidersConfig, ttsProviderId);
+  const availableProviders = getAvailableProvidersWithVoices(ttsProvidersConfig);
   const showVoice = availableProviders.length > 0;
 
   useEffect(() => {
