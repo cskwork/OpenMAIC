@@ -120,8 +120,9 @@ export function Stage({
 
   // Discussion TTS: audio indicator state
   const [audioIndicatorState, setAudioIndicatorState] = useState<AudioIndicatorState>('idle');
-  const audioIndicatorStateRef = useRef<AudioIndicatorState>('idle');
   const [audioAgentId, setAudioAgentId] = useState<string | null>(null);
+  // When TTS is playing and done signal arrives, hold the bubble until audio finishes
+  const pendingDoneClearRef = useRef(false);
 
   const discussionTTS = useDiscussionTTS({
     enabled: !ttsMuted,
@@ -129,10 +130,14 @@ export function Stage({
     onAudioStateChange: (agentId, state) => {
       setAudioAgentId(agentId);
       setAudioIndicatorState(state);
-      audioIndicatorStateRef.current = state;
-      // When audio finishes (idle), clear the bubble if buffer already drained
-      if (state === 'idle') {
+    },
+    onAllAudioEnd: () => {
+      // If we were holding a done signal, now release it
+      if (pendingDoneClearRef.current) {
+        pendingDoneClearRef.current = false;
         setLiveSpeech(null);
+        setSpeakingAgentId(null);
+        setChatIsStreaming(false);
       }
     },
   });
@@ -249,6 +254,7 @@ export function Stage({
 
     // Stop any in-flight discussion TTS audio
     discussionTTS.cleanup();
+    pendingDoneClearRef.current = false;
 
     resetLiveState();
   }, [chatSessionType, resetLiveState, discussionTTS]);
@@ -883,20 +889,23 @@ export function Stage({
           // Use queueMicrotask to let any pending scene-switch reset settle first
           queueMicrotask(() => {
             if (sceneEpochRef.current !== epoch) return; // stale — scene changed
+
+            // Guard: if this is a "done" signal but TTS is still playing, hold the bubble
+            if (text === null && agentId === null && discussionTTS.isPlaying()) {
+              pendingDoneClearRef.current = true;
+              // Don't clear state yet — onAllAudioEnd will handle it
+              return;
+            }
+
+            setLiveSpeech(text);
             if (agentId !== undefined) {
               setSpeakingAgentId(agentId);
-            }
-            // When buffer clears speech (text=null) but TTS audio is still
-            // playing, keep the bubble visible by not clearing liveSpeech.
-            if (text === null && audioIndicatorStateRef.current !== 'idle') {
-              // Don't clear — audio still playing
-            } else {
-              setLiveSpeech(text);
             }
             if (text !== null || agentId) {
               setChatIsStreaming(true);
               setChatSessionType(chatAreaRef.current?.getActiveSessionType?.() ?? null);
               setIsTopicPending(false);
+              pendingDoneClearRef.current = false;
             } else if (text === null && agentId === null) {
               setChatIsStreaming(false);
               // Don't clear chatSessionType here — it's needed by the stop
@@ -924,7 +933,6 @@ export function Stage({
         }}
         onStopSession={doSessionCleanup}
         onSegmentSealed={discussionTTS.handleSegmentSealed}
-        waitForTTSDrain={discussionTTS.waitForDrain}
       />
 
       {/* Scene switch confirmation dialog */}
