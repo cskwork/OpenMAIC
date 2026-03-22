@@ -28,7 +28,6 @@ function AgentVoicePill({
   availableProviders: ProviderWithVoices[];
   disabled?: boolean;
 }) {
-  const { t } = useI18n();
   const updateAgent = useAgentRegistry((s) => s.updateAgent);
   const ttsProvidersConfig = useSettingsStore((s) => s.ttsProvidersConfig);
   const resolved = resolveAgentVoice(agent, agentIndex, availableProviders);
@@ -67,7 +66,10 @@ function AgentVoicePill({
       stopPreview();
       setPreviewingId(key);
 
-      const previewText = t('agentBar.voicePreviewText');
+      const courseLanguage =
+        (typeof localStorage !== 'undefined' && localStorage.getItem('generationLanguage')) ||
+        'zh-CN';
+      const previewText = courseLanguage === 'en-US' ? 'Welcome to AI Classroom' : '欢迎来到AI课堂';
 
       if (providerId === 'browser-native-tts') {
         const { promise, cancel } = playBrowserTTSPreview({ text: previewText, voice: voiceId });
@@ -110,7 +112,7 @@ function AgentVoicePill({
         setPreviewingId(null);
       }
     },
-    [previewingId, stopPreview, t, ttsProvidersConfig],
+    [previewingId, stopPreview, ttsProvidersConfig],
   );
 
   // Cleanup on unmount

@@ -58,7 +58,6 @@ export const chatZhCN = {
     voiceLabel: '音色',
     voiceLoading: '加载中...',
     voiceAutoAssign: '音色将自动分配',
-    voicePreviewText: '欢迎来到AI课堂',
   },
   proactiveCard: {
     discussion: '讨论',
@@ -133,7 +132,6 @@ export const chatEnUS = {
     voiceLabel: 'Voice',
     voiceLoading: 'Loading...',
     voiceAutoAssign: 'Voices will be auto-assigned',
-    voicePreviewText: 'Welcome to AI Classroom',
   },
   proactiveCard: {
     discussion: 'Discussion',
