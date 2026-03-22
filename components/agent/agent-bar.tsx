@@ -531,7 +531,7 @@ export function AgentBar() {
                     .map((agent, idx) => renderAgentRow(agent, idx + 1, false))}
                 </div>
               ) : (
-                <div className="flex flex-col items-center pt-6 pb-6 gap-4">
+                <div className="flex flex-col items-center pt-6 pb-3 gap-4">
                   <div className="relative flex items-center justify-center">
                     <div className="absolute size-10 rounded-full bg-violet-400/10 dark:bg-violet-400/15 animate-ping [animation-duration:3s]" />
                     <div className="absolute size-12 rounded-full bg-violet-400/5 dark:bg-violet-400/10 animate-pulse [animation-duration:2.5s]" />
