@@ -118,9 +118,12 @@ export function AgentBar() {
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const target = e.target as Node;
+      // Don't close if clicking inside the AgentBar
+      if (containerRef.current && containerRef.current.contains(target)) return;
+      // Don't close if clicking inside a Radix Select portal
+      if ((target as Element).closest?.('[data-radix-popper-content-wrapper]')) return;
+      setOpen(false);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
