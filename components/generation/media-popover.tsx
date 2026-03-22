@@ -412,7 +412,11 @@ export function MediaPopover({ onSettingsOpen }: MediaPopoverProps) {
               label={t('media.ttsCapability')}
               enabled={ttsEnabled}
               onToggle={setTTSEnabled}
-            />
+            >
+              <p className="text-[11px] text-muted-foreground/60">
+                {t('settings.ttsVoiceConfigHint')}
+              </p>
+            </TabPanel>
           )}
 
           {activeTab === 'asr' && (
