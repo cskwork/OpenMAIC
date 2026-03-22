@@ -452,8 +452,38 @@ export function AgentBar() {
             className="absolute right-0 top-full mt-1 z-50 w-96"
           >
             <div className="rounded-2xl bg-white/95 dark:bg-slate-800/95 backdrop-blur-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06] shadow-[0_1px_8px_-2px_rgba(0,0,0,0.06)] dark:shadow-[0_1px_8px_-2px_rgba(0,0,0,0.3)] px-2.5 py-2">
+              {/* Teacher — always visible */}
+              {teacherAgent && (
+                <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-primary/5 mb-2">
+                  <div
+                    className="size-7 rounded-full overflow-hidden shrink-0 ring-1 ring-border/40"
+                    style={{ boxShadow: `0 0 0 2px ${teacherAgent.color}30` }}
+                  >
+                    <img
+                      src={teacherAgent.avatar}
+                      alt={getAgentName(teacherAgent)}
+                      className="size-full object-cover"
+                    />
+                  </div>
+                  <span className="text-[13px] font-medium truncate min-w-0 flex-1">
+                    {getAgentName(teacherAgent)}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground/50 shrink-0">
+                    {getAgentRole(teacherAgent)}
+                  </span>
+                  {showVoice && (
+                    <AgentVoicePill
+                      agent={teacherAgent}
+                      agentIndex={0}
+                      availableProviders={availableProviders}
+                      disabled={!ttsEnabled}
+                    />
+                  )}
+                </div>
+              )}
+
               {/* Mode tabs */}
-              <div className="flex rounded-lg border bg-muted/30 p-0.5 mb-2.5">
+              <div className="flex rounded-lg border bg-muted/30 p-0.5 mb-2">
                 <button
                   onClick={() => handleModeChange('preset')}
                   className={cn(
@@ -480,31 +510,21 @@ export function AgentBar() {
               </div>
 
               {agentMode === 'preset' ? (
-                <div className="max-h-72 overflow-y-auto -mx-0.5">
-                  {teacherAgent && renderAgentRow(teacherAgent, 0, true)}
+                <div className="max-h-56 overflow-y-auto -mx-0.5">
                   {agents
                     .filter((a) => a.role !== 'teacher')
                     .map((agent, idx) => renderAgentRow(agent, idx + 1, false))}
                 </div>
               ) : (
-                <div className="flex flex-col items-center pt-6 pb-2 gap-8">
-                  <div className="relative flex items-center justify-center">
-                    <div className="absolute size-12 rounded-full bg-violet-400/10 dark:bg-violet-400/15 animate-ping [animation-duration:3s]" />
-                    <div className="absolute size-14 rounded-full bg-violet-400/5 dark:bg-violet-400/10 animate-pulse [animation-duration:2.5s]" />
-                    <Shuffle className="relative size-7 text-violet-400 dark:text-violet-500" />
-                  </div>
-                  <p className="text-xs text-muted-foreground text-center">
-                    {t('settings.agentModeAutoDesc')}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground/50 text-center -mt-4">
-                    {t('agentBar.voiceAutoAssign')}
-                  </p>
+                <div className="flex items-center gap-2 px-2.5 py-2 text-xs text-muted-foreground">
+                  <Shuffle className="size-4 text-violet-400 dark:text-violet-500 shrink-0" />
+                  <span className="flex-1">{t('settings.agentModeAutoDesc')}</span>
                 </div>
               )}
 
-              {/* Max turns */}
-              <div className="pt-2.5 mt-2.5 border-t flex items-center gap-3">
-                <span className="text-xs text-muted-foreground shrink-0">
+              {/* Max turns — compact inline */}
+              <div className="flex items-center gap-2 mt-2 pt-2 border-t border-border/40 px-1">
+                <span className="text-[11px] text-muted-foreground/60 flex-1">
                   {t('settings.maxTurns')}
                 </span>
                 <Input
@@ -513,7 +533,7 @@ export function AgentBar() {
                   max="20"
                   value={maxTurns}
                   onChange={(e) => setMaxTurns(e.target.value)}
-                  className="w-16 h-7 text-xs"
+                  className="w-14 h-6 text-xs text-center"
                 />
               </div>
             </div>
