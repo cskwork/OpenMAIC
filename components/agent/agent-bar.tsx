@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -10,7 +10,8 @@ import { useI18n } from '@/lib/hooks/use-i18n';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
 import { resolveAgentVoice, getAvailableProvidersWithVoices } from '@/lib/audio/voice-resolver';
-import { Sparkles, ChevronDown, ChevronUp, Shuffle, Volume2, VolumeX } from 'lucide-react';
+import { playBrowserTTSPreview } from '@/lib/audio/browser-tts-preview';
+import { Sparkles, ChevronDown, ChevronUp, Shuffle, Volume2, VolumeX, Loader2 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import type { TTSProviderId } from '@/lib/audio/types';
@@ -27,9 +28,14 @@ function AgentVoicePill({
   availableProviders: ProviderWithVoices[];
   disabled?: boolean;
 }) {
+  const { t } = useI18n();
   const updateAgent = useAgentRegistry((s) => s.updateAgent);
+  const ttsProvidersConfig = useSettingsStore((s) => s.ttsProvidersConfig);
   const resolved = resolveAgentVoice(agent, agentIndex, availableProviders);
-  // findVoiceDisplayName only knows static providers; check availableProviders for browser voices
+  const [previewingId, setPreviewingId] = useState<string | null>(null);
+  const previewCancelRef = useRef<(() => void) | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+
   const displayName = (() => {
     for (const p of availableProviders) {
       if (p.providerId === resolved.providerId) {
@@ -39,6 +45,76 @@ function AgentVoicePill({
     }
     return resolved.voiceId;
   })();
+
+  const stopPreview = useCallback(() => {
+    previewCancelRef.current?.();
+    previewCancelRef.current = null;
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current.src = '';
+      previewAudioRef.current = null;
+    }
+    setPreviewingId(null);
+  }, []);
+
+  const handlePreview = useCallback(
+    async (providerId: TTSProviderId, voiceId: string) => {
+      const key = `${providerId}::${voiceId}`;
+      if (previewingId === key) {
+        stopPreview();
+        return;
+      }
+      stopPreview();
+      setPreviewingId(key);
+
+      const previewText = t('agentBar.voicePreviewText');
+
+      if (providerId === 'browser-native-tts') {
+        const { promise, cancel } = playBrowserTTSPreview({ text: previewText, voice: voiceId });
+        previewCancelRef.current = cancel;
+        try {
+          await promise;
+        } catch {
+          // ignore abort
+        }
+        setPreviewingId(null);
+        return;
+      }
+
+      // Server TTS
+      try {
+        const providerConfig = ttsProvidersConfig[providerId];
+        const res = await fetch('/api/generate/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: previewText,
+            audioId: 'voice-preview',
+            ttsProviderId: providerId,
+            ttsVoice: voiceId,
+            ttsSpeed: 1,
+            ttsApiKey: providerConfig?.apiKey,
+            ttsBaseUrl: providerConfig?.serverBaseUrl || providerConfig?.baseUrl,
+          }),
+        });
+        if (!res.ok) throw new Error('TTS error');
+        const data = await res.json();
+        if (!data.base64) throw new Error('No audio');
+
+        const audio = new Audio(`data:audio/${data.format || 'mp3'};base64,${data.base64}`);
+        previewAudioRef.current = audio;
+        audio.addEventListener('ended', () => setPreviewingId(null));
+        audio.addEventListener('error', () => setPreviewingId(null));
+        await audio.play();
+      } catch {
+        setPreviewingId(null);
+      }
+    },
+    [previewingId, stopPreview, t, ttsProvidersConfig],
+  );
+
+  // Cleanup on unmount
+  useEffect(() => () => stopPreview(), [stopPreview]);
 
   if (disabled) {
     return (
@@ -54,7 +130,7 @@ function AgentVoicePill({
   }
 
   return (
-    <Popover>
+    <Popover onOpenChange={(open) => !open && stopPreview()}>
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -71,7 +147,7 @@ function AgentVoicePill({
         side="bottom"
         align="end"
         sideOffset={4}
-        className="w-48 p-1 max-h-64 overflow-y-auto"
+        className="w-52 p-1 max-h-64 overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
         onPointerDown={(e) => e.stopPropagation()}
       >
@@ -83,24 +159,50 @@ function AgentVoicePill({
             {provider.voices.map((voice) => {
               const isActive =
                 resolved.providerId === provider.providerId && resolved.voiceId === voice.id;
+              const previewKey = `${provider.providerId}::${voice.id}`;
+              const isPreviewing = previewingId === previewKey;
               return (
-                <button
-                  key={`${provider.providerId}::${voice.id}`}
-                  type="button"
-                  onClick={() => {
-                    updateAgent(agent.id, {
-                      voiceConfig: { providerId: provider.providerId, voiceId: voice.id },
-                    });
-                  }}
+                <div
+                  key={previewKey}
                   className={cn(
-                    'w-full text-left text-xs px-2 py-1 rounded-sm transition-colors',
-                    isActive
-                      ? 'bg-primary/10 text-primary font-medium'
-                      : 'hover:bg-muted text-foreground',
+                    'flex items-center gap-1 rounded-sm transition-colors',
+                    isActive ? 'bg-primary/10' : 'hover:bg-muted',
                   )}
                 >
-                  {voice.name}
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      updateAgent(agent.id, {
+                        voiceConfig: { providerId: provider.providerId, voiceId: voice.id },
+                      });
+                    }}
+                    className={cn(
+                      'flex-1 text-left text-xs px-2 py-1 min-w-0 truncate',
+                      isActive ? 'text-primary font-medium' : 'text-foreground',
+                    )}
+                  >
+                    {voice.name}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handlePreview(provider.providerId, voice.id);
+                    }}
+                    className={cn(
+                      'shrink-0 size-5 flex items-center justify-center rounded-sm transition-colors',
+                      isPreviewing
+                        ? 'text-primary'
+                        : 'text-muted-foreground/40 hover:text-muted-foreground',
+                    )}
+                  >
+                    {isPreviewing ? (
+                      <Loader2 className="size-3 animate-spin" />
+                    ) : (
+                      <Volume2 className="size-3" />
+                    )}
+                  </button>
+                </div>
               );
             })}
           </div>
