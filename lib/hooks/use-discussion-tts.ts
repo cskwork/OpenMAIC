@@ -199,6 +199,13 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
     onAudioStateChangeRef.current?.(null, 'idle');
   }, []);
 
+  // Sync playbackSpeed to currently playing audio in real-time
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.playbackRate = playbackSpeed;
+    }
+  }, [playbackSpeed]);
+
   useEffect(() => cleanup, [cleanup]);
 
   /** Returns true when TTS audio is still playing or queued — used by StreamBuffer hold logic. */
