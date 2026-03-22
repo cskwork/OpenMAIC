@@ -461,7 +461,7 @@ export function AgentBar() {
             transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
             className="absolute right-0 top-full mt-1 z-50 w-96"
           >
-            <div className="rounded-2xl bg-white/95 dark:bg-slate-800/95 backdrop-blur-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06] shadow-[0_1px_8px_-2px_rgba(0,0,0,0.06)] dark:shadow-[0_1px_8px_-2px_rgba(0,0,0,0.3)] px-2.5 py-2">
+            <div className="rounded-2xl bg-white/95 dark:bg-slate-800/95 backdrop-blur-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06] shadow-[0_1px_8px_-2px_rgba(0,0,0,0.06)] dark:shadow-[0_1px_8px_-2px_rgba(0,0,0,0.3)] px-2 py-1.5">
               {/* Teacher — always visible */}
               {teacherAgent && (
                 <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-primary/5 mb-2">
@@ -530,7 +530,7 @@ export function AgentBar() {
               )}
 
               {/* Max turns — compact stepper */}
-              <div className="flex items-center gap-1.5 px-2.5 py-1.5 mt-1 border-t border-border/30">
+              <div className="flex items-center gap-1.5 px-2 py-1 mt-1 border-t border-border/30">
                 <MessageSquare className="size-3 text-muted-foreground/40 shrink-0" />
                 <span className="text-[11px] text-muted-foreground/50 flex-1">
                   {t('settings.maxTurns')}
@@ -547,9 +547,25 @@ export function AgentBar() {
                   >
                     <Minus className="size-2.5" />
                   </button>
-                  <span className="text-[11px] font-medium tabular-nums w-5 text-center">
-                    {maxTurns}
-                  </span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={maxTurns}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(/\D/g, '');
+                      if (!raw) {
+                        setMaxTurns('');
+                        return;
+                      }
+                      const v = Math.min(20, Math.max(1, parseInt(raw)));
+                      setMaxTurns(String(v));
+                    }}
+                    onBlur={() => {
+                      if (!maxTurns || parseInt(maxTurns) < 1) setMaxTurns('1');
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-5 h-5 text-[11px] font-medium tabular-nums text-center bg-transparent outline-none border-none"
+                  />
                   <button
                     type="button"
                     onClick={(e) => {
