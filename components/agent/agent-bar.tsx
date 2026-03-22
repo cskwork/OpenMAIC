@@ -452,7 +452,7 @@ export function AgentBar() {
             className="absolute right-0 top-full mt-1 z-50 w-96"
           >
             <div className="rounded-2xl bg-white/95 dark:bg-slate-800/95 backdrop-blur-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06] shadow-[0_1px_8px_-2px_rgba(0,0,0,0.06)] dark:shadow-[0_1px_8px_-2px_rgba(0,0,0,0.3)] px-2.5 py-2">
-              {/* Teacher — always visible */}
+              {/* Teacher + max turns — always visible */}
               {teacherAgent && (
                 <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-primary/5 mb-2">
                   <div
@@ -468,9 +468,6 @@ export function AgentBar() {
                   <span className="text-[13px] font-medium truncate min-w-0 flex-1">
                     {getAgentName(teacherAgent)}
                   </span>
-                  <span className="text-[10px] text-muted-foreground/50 shrink-0">
-                    {getAgentRole(teacherAgent)}
-                  </span>
                   {showVoice && (
                     <AgentVoicePill
                       agent={teacherAgent}
@@ -479,6 +476,18 @@ export function AgentBar() {
                       disabled={!ttsEnabled}
                     />
                   )}
+                  <span className="text-[10px] text-muted-foreground/50 shrink-0">
+                    {t('settings.maxTurns')}
+                  </span>
+                  <Input
+                    type="number"
+                    min="1"
+                    max="20"
+                    value={maxTurns}
+                    onChange={(e) => setMaxTurns(e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-12 h-5 text-[11px] text-center px-1 shrink-0"
+                  />
                 </div>
               )}
 
@@ -521,21 +530,6 @@ export function AgentBar() {
                   <span className="flex-1">{t('settings.agentModeAutoDesc')}</span>
                 </div>
               )}
-
-              {/* Max turns — compact inline */}
-              <div className="flex items-center gap-2 mt-2 pt-2 border-t border-border/40 px-1">
-                <span className="text-[11px] text-muted-foreground/60 flex-1">
-                  {t('settings.maxTurns')}
-                </span>
-                <Input
-                  type="number"
-                  min="1"
-                  max="20"
-                  value={maxTurns}
-                  onChange={(e) => setMaxTurns(e.target.value)}
-                  className="w-14 h-6 text-xs text-center"
-                />
-              </div>
             </div>
           </motion.div>
         )}
