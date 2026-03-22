@@ -523,15 +523,20 @@ export function AgentBar() {
                     .map((agent, idx) => renderAgentRow(agent, idx + 1, false))}
                 </div>
               ) : (
-                <div className="flex flex-col items-center py-4 gap-3">
+                <div className="flex flex-col items-center py-4 gap-4">
                   <div className="relative flex items-center justify-center">
                     <div className="absolute size-10 rounded-full bg-violet-400/10 dark:bg-violet-400/15 animate-ping [animation-duration:3s]" />
                     <div className="absolute size-12 rounded-full bg-violet-400/5 dark:bg-violet-400/10 animate-pulse [animation-duration:2.5s]" />
                     <Shuffle className="relative size-5 text-violet-400 dark:text-violet-500" />
                   </div>
-                  <p className="text-[11px] text-muted-foreground/60 text-center">
-                    {t('settings.agentModeAutoDesc')}
-                  </p>
+                  <div className="text-center space-y-1">
+                    <p className="text-[11px] text-muted-foreground/60">
+                      {t('settings.agentModeAutoDesc')}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground/40">
+                      {t('agentBar.voiceAutoAssign')}
+                    </p>
+                  </div>
                 </div>
               )}
 
