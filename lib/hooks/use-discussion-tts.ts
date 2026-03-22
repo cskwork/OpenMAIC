@@ -12,8 +12,6 @@ interface DiscussionTTSOptions {
   enabled: boolean;
   agents: AgentConfig[];
   onAudioStateChange?: (agentId: string | null, state: AudioIndicatorState) => void;
-  /** Called when all queued audio has finished playing (queue empty + nothing playing) */
-  onAllAudioEnd?: () => void;
 }
 
 interface QueueItem {
@@ -25,15 +23,11 @@ interface QueueItem {
   voiceId: string;
 }
 
-export function useDiscussionTTS({
-  enabled,
-  agents,
-  onAudioStateChange,
-  onAllAudioEnd,
-}: DiscussionTTSOptions) {
+export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: DiscussionTTSOptions) {
   const ttsProvidersConfig = useSettingsStore((s) => s.ttsProvidersConfig);
   const ttsSpeed = useSettingsStore((s) => s.ttsSpeed);
   const ttsMuted = useSettingsStore((s) => s.ttsMuted);
+  const playbackSpeed = useSettingsStore((s) => s.playbackSpeed);
 
   const queueRef = useRef<QueueItem[]>([]);
   const isPlayingRef = useRef(false);
@@ -41,8 +35,6 @@ export function useDiscussionTTS({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const onAudioStateChangeRef = useRef(onAudioStateChange);
   onAudioStateChangeRef.current = onAudioStateChange;
-  const onAllAudioEndRef = useRef(onAllAudioEnd);
-  onAllAudioEndRef.current = onAllAudioEnd;
   const processQueueRef = useRef<() => void>(() => {});
 
   const {
@@ -99,15 +91,9 @@ export function useDiscussionTTS({
   );
 
   const processQueue = useCallback(async () => {
-    if (isPlayingRef.current) return;
-    if (queueRef.current.length === 0) {
-      // Queue empty + not playing = all audio done
-      onAllAudioEndRef.current?.();
-      return;
-    }
+    if (isPlayingRef.current || queueRef.current.length === 0) return;
     if (!enabled || ttsMuted) {
       queueRef.current = [];
-      onAllAudioEndRef.current?.();
       return;
     }
 
@@ -151,6 +137,7 @@ export function useDiscussionTTS({
       onAudioStateChangeRef.current?.(item.agentId, 'playing');
       const audioUrl = `data:audio/${data.format || 'mp3'};base64,${data.base64}`;
       const audio = new Audio(audioUrl);
+      audio.playbackRate = playbackSpeed;
       audioRef.current = audio;
       audio.addEventListener('ended', () => {
         isPlayingRef.current = false;
@@ -171,7 +158,7 @@ export function useDiscussionTTS({
       onAudioStateChangeRef.current?.(item.agentId, 'idle');
       processQueueRef.current();
     }
-  }, [enabled, ttsMuted, ttsProvidersConfig, ttsSpeed]);
+  }, [enabled, ttsMuted, ttsProvidersConfig, ttsSpeed, playbackSpeed]);
 
   processQueueRef.current = processQueue;
 
@@ -207,9 +194,12 @@ export function useDiscussionTTS({
 
   useEffect(() => cleanup, [cleanup]);
 
+  /** Returns true when TTS audio is still playing or queued — used by StreamBuffer hold logic. */
+  const shouldHold = useCallback(() => isPlayingRef.current, []);
+
   return {
     handleSegmentSealed,
     cleanup,
-    isPlaying: () => isPlayingRef.current || queueRef.current.length > 0,
+    shouldHold,
   };
 }

@@ -121,9 +121,6 @@ export function Stage({
   // Discussion TTS: audio indicator state
   const [audioIndicatorState, setAudioIndicatorState] = useState<AudioIndicatorState>('idle');
   const [audioAgentId, setAudioAgentId] = useState<string | null>(null);
-  // When TTS is playing and session ends naturally, hold the bubble until audio finishes
-  const pendingDoneClearRef = useRef(false);
-  const doSessionCleanupRef = useRef<() => void>(() => {});
 
   const discussionTTS = useDiscussionTTS({
     enabled: !ttsMuted,
@@ -131,12 +128,6 @@ export function Stage({
     onAudioStateChange: (agentId, state) => {
       setAudioAgentId(agentId);
       setAudioIndicatorState(state);
-    },
-    onAllAudioEnd: () => {
-      if (pendingDoneClearRef.current) {
-        pendingDoneClearRef.current = false;
-        doSessionCleanupRef.current();
-      }
     },
   });
 
@@ -252,11 +243,9 @@ export function Stage({
 
     // Stop any in-flight discussion TTS audio
     discussionTTS.cleanup();
-    pendingDoneClearRef.current = false;
 
     resetLiveState();
   }, [chatSessionType, resetLiveState, discussionTTS]);
-  doSessionCleanupRef.current = doSessionCleanup;
 
   // Shared stop-discussion handler (used by both Roundtable and Canvas toolbar)
   const handleStopDiscussion = useCallback(async () => {
@@ -888,13 +877,6 @@ export function Stage({
           // Use queueMicrotask to let any pending scene-switch reset settle first
           queueMicrotask(() => {
             if (sceneEpochRef.current !== epoch) return; // stale — scene changed
-
-            // Guard: if done signal arrives but TTS is still playing, hold the bubble
-            if (text === null && agentId === null && discussionTTS.isPlaying()) {
-              pendingDoneClearRef.current = true;
-              return;
-            }
-
             setLiveSpeech(text);
             if (agentId !== undefined) {
               setSpeakingAgentId(agentId);
@@ -928,17 +910,9 @@ export function Stage({
         onCueUser={(_fromAgentId, _prompt) => {
           setIsCueUser(true);
         }}
-        onStopSession={() => {
-          // Agent loop finished naturally.
-          // If TTS is still playing, defer cleanup until audio ends.
-          if (discussionTTS.isPlaying()) {
-            pendingDoneClearRef.current = true;
-            // onAllAudioEnd will fire doSessionCleanup
-            return;
-          }
-          doSessionCleanup();
-        }}
+        onStopSession={doSessionCleanup}
         onSegmentSealed={discussionTTS.handleSegmentSealed}
+        shouldHoldAfterReveal={discussionTTS.shouldHold}
       />
 
       {/* Scene switch confirmation dialog */}

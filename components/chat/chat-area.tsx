@@ -33,7 +33,8 @@ interface ChatAreaProps {
     fullText: string,
     agentId: string | null,
   ) => void;
-  waitForTTSDrain?: () => Promise<void>;
+  /** When provided and returns true, StreamBuffer holds on the current text item after reveal. */
+  shouldHoldAfterReveal?: () => boolean;
   currentSceneId?: string | null;
 }
 
@@ -75,7 +76,7 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       onCueUser,
       onStopSession,
       onSegmentSealed,
-      waitForTTSDrain,
+      shouldHoldAfterReveal,
       currentSceneId,
     },
     ref,
@@ -108,7 +109,7 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       onActiveBubble,
       onStopSession,
       onSegmentSealed,
-      waitForTTSDrain,
+      shouldHoldAfterReveal,
     });
 
     const [activeTab, setActiveTab] = useState<'lecture' | 'chat'>('lecture');
