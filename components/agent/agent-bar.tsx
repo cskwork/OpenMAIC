@@ -32,7 +32,7 @@ function AgentVoicePill({
   globalProviderId: TTSProviderId;
 }) {
   const updateAgent = useAgentRegistry((s) => s.updateAgent);
-  const resolved = resolveAgentVoice(agent, globalProviderId, agentIndex);
+  const resolved = resolveAgentVoice(agent, globalProviderId, agentIndex, availableProviders);
   const displayName = findVoiceDisplayName(resolved.providerId, resolved.voiceId);
 
   return (

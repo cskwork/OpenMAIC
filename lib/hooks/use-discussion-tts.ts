@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useBrowserTTS } from '@/lib/hooks/use-browser-tts';
-import { resolveAgentVoice } from '@/lib/audio/voice-resolver';
+import { resolveAgentVoice, getAvailableProvidersWithVoices } from '@/lib/audio/voice-resolver';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import type { TTSProviderId } from '@/lib/audio/types';
 import type { AudioIndicatorState } from '@/components/roundtable/audio-indicator';
@@ -68,9 +68,10 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       const agent = agents.find((a) => a.id === agentId);
       if (!agent) return { providerId: ttsProviderId, voiceId: 'default' };
       const index = agentIndexMap.current.get(agentId) ?? 0;
-      return resolveAgentVoice(agent, ttsProviderId, index);
+      const providers = getAvailableProvidersWithVoices(ttsProvidersConfig);
+      return resolveAgentVoice(agent, ttsProviderId, index, providers);
     },
-    [agents, ttsProviderId],
+    [agents, ttsProviderId, ttsProvidersConfig],
   );
 
   const processQueue = useCallback(async () => {
