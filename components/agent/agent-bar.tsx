@@ -63,7 +63,7 @@ function AgentVoicePill({
           });
         }}
       >
-        <SelectTrigger className="h-5 w-auto rounded-full border-0 bg-muted/60 px-2 text-[10px] text-muted-foreground/70 hover:bg-muted hover:text-muted-foreground shadow-none focus:ring-0 [&>svg]:size-2.5 [&>svg]:text-muted-foreground/40 gap-0.5">
+        <SelectTrigger className="h-5 w-[88px] rounded-full border-0 bg-muted/60 px-2 text-[10px] text-muted-foreground/70 hover:bg-muted hover:text-muted-foreground shadow-none focus:ring-0 [&>svg]:size-2.5 [&>svg]:text-muted-foreground/40 gap-0.5">
           <Volume2 className="size-2.5 shrink-0" />
           <span className="truncate max-w-[56px]">{currentVoiceName}</span>
         </SelectTrigger>
