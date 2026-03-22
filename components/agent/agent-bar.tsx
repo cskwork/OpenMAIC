@@ -4,23 +4,21 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-} from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
-import { resolveAgentVoice, getAvailableProvidersWithVoices } from '@/lib/audio/voice-resolver';
+import {
+  resolveAgentVoice,
+  getAvailableProvidersWithVoices,
+  findVoiceDisplayName,
+} from '@/lib/audio/voice-resolver';
 import { Sparkles, ChevronDown, ChevronUp, Shuffle, Volume2 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import type { TTSProviderId } from '@/lib/audio/types';
+import type { ProviderWithVoices } from '@/lib/audio/voice-resolver';
 
 function AgentVoicePill({
   agent,
@@ -30,63 +28,67 @@ function AgentVoicePill({
 }: {
   agent: AgentConfig;
   agentIndex: number;
-  availableProviders: ReturnType<typeof getAvailableProvidersWithVoices>;
+  availableProviders: ProviderWithVoices[];
   globalProviderId: TTSProviderId;
 }) {
   const updateAgent = useAgentRegistry((s) => s.updateAgent);
   const resolved = resolveAgentVoice(agent, globalProviderId, agentIndex);
-
-  // Encode as "providerId::voiceId" for the Select value
-  const currentValue = `${resolved.providerId}::${resolved.voiceId}`;
-
-  // Find display name for current voice
-  const currentVoiceName = (() => {
-    for (const p of availableProviders) {
-      const v = p.voices.find((voice) => voice.id === resolved.voiceId);
-      if (v) return v.name;
-    }
-    return resolved.voiceId;
-  })();
+  const displayName = findVoiceDisplayName(resolved.providerId, resolved.voiceId);
 
   return (
-    <div
-      onClick={(e) => e.stopPropagation()}
-      onPointerDown={(e) => e.stopPropagation()}
-      className="shrink-0"
-    >
-      <Select
-        value={currentValue}
-        onValueChange={(value) => {
-          const [providerId, voiceId] = value.split('::');
-          updateAgent(agent.id, {
-            voiceConfig: { providerId: providerId as TTSProviderId, voiceId },
-          });
-        }}
-      >
-        <SelectTrigger className="h-5 w-[88px] rounded-full border-0 bg-muted/60 px-2 text-[10px] text-muted-foreground/70 hover:bg-muted hover:text-muted-foreground shadow-none focus:ring-0 [&>svg]:size-2.5 [&>svg]:text-muted-foreground/40 gap-0.5">
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="flex items-center gap-1 h-5 w-[88px] rounded-full bg-primary/8 hover:bg-primary/15 dark:bg-primary/10 dark:hover:bg-primary/20 px-2 text-[10px] text-primary/70 hover:text-primary transition-colors shrink-0 cursor-pointer"
+        >
           <Volume2 className="size-2.5 shrink-0" />
-          <span className="truncate max-w-[56px]">{currentVoiceName}</span>
-        </SelectTrigger>
-        <SelectContent>
-          {availableProviders.map((provider) => (
-            <SelectGroup key={provider.providerId}>
-              <SelectLabel className="text-[10px] text-muted-foreground/60 px-2 py-1">
-                {provider.providerName}
-              </SelectLabel>
-              {provider.voices.map((voice) => (
-                <SelectItem
+          <span className="truncate flex-1 text-left">{displayName}</span>
+          <ChevronDown className="size-2.5 shrink-0 opacity-50" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        side="bottom"
+        align="end"
+        sideOffset={4}
+        className="w-48 p-1 max-h-64 overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        {availableProviders.map((provider) => (
+          <div key={provider.providerId}>
+            <div className="text-[10px] text-muted-foreground/60 font-medium px-2 py-1 sticky top-0 bg-popover">
+              {provider.providerName}
+            </div>
+            {provider.voices.map((voice) => {
+              const isActive =
+                resolved.providerId === provider.providerId && resolved.voiceId === voice.id;
+              return (
+                <button
                   key={`${provider.providerId}::${voice.id}`}
-                  value={`${provider.providerId}::${voice.id}`}
-                  className="text-xs"
+                  type="button"
+                  onClick={() => {
+                    updateAgent(agent.id, {
+                      voiceConfig: { providerId: provider.providerId, voiceId: voice.id },
+                    });
+                  }}
+                  className={cn(
+                    'w-full text-left text-xs px-2 py-1 rounded-sm transition-colors',
+                    isActive
+                      ? 'bg-primary/10 text-primary font-medium'
+                      : 'hover:bg-muted text-foreground',
+                  )}
                 >
                   {voice.name}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -101,7 +103,6 @@ export function AgentBar() {
   const setAgentMode = useSettingsStore((s) => s.setAgentMode);
   const ttsProviderId = useSettingsStore((s) => s.ttsProviderId);
   const ttsProvidersConfig = useSettingsStore((s) => s.ttsProvidersConfig);
-  const ttsMuted = useSettingsStore((s) => s.ttsMuted);
 
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -112,16 +113,15 @@ export function AgentBar() {
   const selectedAgents = agents.filter((a) => selectedAgentIds.includes(a.id));
   const nonTeacherSelected = selectedAgents.filter((a) => a.role !== 'teacher');
 
-  const availableProviders = getAvailableProvidersWithVoices(ttsProvidersConfig);
+  const availableProviders = getAvailableProvidersWithVoices(ttsProvidersConfig, ttsProviderId);
   const showVoice = availableProviders.length > 0;
 
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
       const target = e.target as Node;
-      // Don't close if clicking inside the AgentBar
       if (containerRef.current && containerRef.current.contains(target)) return;
-      // Don't close if clicking inside a Radix Select portal
+      // Don't close if clicking inside a Radix portal (Popover, Select, etc.)
       if ((target as Element).closest?.('[data-radix-popper-content-wrapper]')) return;
       setOpen(false);
     };
@@ -224,8 +224,50 @@ export function AgentBar() {
     </div>
   );
 
+  const renderAgentRow = (agent: AgentConfig, agentIndex: number, isTeacher: boolean) => {
+    const isSelected = isTeacher || selectedAgentIds.includes(agent.id);
+    return (
+      <div
+        key={agent.id}
+        onClick={isTeacher ? undefined : () => toggleAgent(agent.id)}
+        className={cn(
+          'w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg transition-colors',
+          isTeacher ? 'bg-primary/5' : 'cursor-pointer',
+          !isTeacher && isSelected && 'bg-primary/5',
+          !isTeacher && !isSelected && 'hover:bg-muted/50',
+        )}
+      >
+        <Checkbox
+          checked={isSelected}
+          disabled={isTeacher}
+          className={cn('pointer-events-none', isTeacher && 'opacity-50')}
+        />
+        <div
+          className="size-7 rounded-full overflow-hidden shrink-0 ring-1 ring-border/40"
+          style={{ boxShadow: isSelected ? `0 0 0 2px ${agent.color}30` : undefined }}
+        >
+          <img src={agent.avatar} alt={getAgentName(agent)} className="size-full object-cover" />
+        </div>
+        <span className="text-[13px] font-medium truncate min-w-0 flex-1">
+          {getAgentName(agent)}
+        </span>
+        <span className="text-[10px] text-muted-foreground/50 shrink-0 w-[52px] text-right">
+          {getAgentRole(agent)}
+        </span>
+        {showVoice && (
+          <AgentVoicePill
+            agent={agent}
+            agentIndex={agentIndex}
+            availableProviders={availableProviders}
+            globalProviderId={ttsProviderId}
+          />
+        )}
+      </div>
+    );
+  };
+
   return (
-    <div ref={containerRef} className="relative w-80">
+    <div ref={containerRef} className="relative w-96">
       <Tooltip>
         <TooltipTrigger asChild>
           <button
@@ -260,7 +302,7 @@ export function AgentBar() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -4, scale: 0.97 }}
             transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
-            className="absolute right-0 top-full mt-1 z-50 w-80"
+            className="absolute right-0 top-full mt-1 z-50 w-96"
           >
             <div className="rounded-2xl bg-white/95 dark:bg-slate-800/95 backdrop-blur-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06] shadow-[0_1px_8px_-2px_rgba(0,0,0,0.06)] dark:shadow-[0_1px_8px_-2px_rgba(0,0,0,0.3)] px-2.5 py-2">
               {/* Mode tabs */}
@@ -291,83 +333,11 @@ export function AgentBar() {
               </div>
 
               {agentMode === 'preset' ? (
-                <div className="max-h-72 overflow-y-auto -mx-1">
-                  {/* Teacher row */}
-                  {teacherAgent && (
-                    <div className="w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg bg-primary/5">
-                      <Checkbox checked disabled className="pointer-events-none opacity-50" />
-                      <div
-                        className="size-7 rounded-full overflow-hidden shrink-0 ring-1 ring-border/40"
-                        style={{ boxShadow: `0 0 0 2px ${teacherAgent.color}30` }}
-                      >
-                        <img
-                          src={teacherAgent.avatar}
-                          alt={getAgentName(teacherAgent)}
-                          className="size-full object-cover"
-                        />
-                      </div>
-                      <span className="text-sm font-medium truncate min-w-0 flex-1">
-                        {getAgentName(teacherAgent)}
-                      </span>
-                      <span className="text-[10px] text-muted-foreground/50 shrink-0 w-[60px] text-right">
-                        {getAgentRole(teacherAgent)}
-                      </span>
-                      {showVoice && (
-                        <AgentVoicePill
-                          agent={teacherAgent}
-                          agentIndex={0}
-                          availableProviders={availableProviders}
-                          globalProviderId={ttsProviderId}
-                        />
-                      )}
-                    </div>
-                  )}
-
-                  {/* Non-teacher agents */}
+                <div className="max-h-72 overflow-y-auto -mx-0.5">
+                  {teacherAgent && renderAgentRow(teacherAgent, 0, true)}
                   {agents
                     .filter((a) => a.role !== 'teacher')
-                    .map((agent, idx) => {
-                      const isSelected = selectedAgentIds.includes(agent.id);
-                      const agentIndex = idx + 1;
-                      return (
-                        <div
-                          key={agent.id}
-                          onClick={() => toggleAgent(agent.id)}
-                          className={cn(
-                            'w-full flex items-center gap-2.5 px-3 py-1.5 cursor-pointer rounded-lg transition-colors',
-                            isSelected ? 'bg-primary/5' : 'hover:bg-muted/50',
-                          )}
-                        >
-                          <Checkbox checked={isSelected} className="pointer-events-none" />
-                          <div
-                            className="size-7 rounded-full overflow-hidden shrink-0 ring-1 ring-border/40"
-                            style={{
-                              boxShadow: isSelected ? `0 0 0 2px ${agent.color}30` : undefined,
-                            }}
-                          >
-                            <img
-                              src={agent.avatar}
-                              alt={getAgentName(agent)}
-                              className="size-full object-cover"
-                            />
-                          </div>
-                          <span className="text-sm font-medium truncate min-w-0 flex-1">
-                            {getAgentName(agent)}
-                          </span>
-                          <span className="text-[10px] text-muted-foreground/50 shrink-0 w-[60px] text-right">
-                            {getAgentRole(agent)}
-                          </span>
-                          {showVoice && (
-                            <AgentVoicePill
-                              agent={agent}
-                              agentIndex={agentIndex}
-                              availableProviders={availableProviders}
-                              globalProviderId={ttsProviderId}
-                            />
-                          )}
-                        </div>
-                      );
-                    })}
+                    .map((agent, idx) => renderAgentRow(agent, idx + 1, false))}
                 </div>
               ) : (
                 <div className="flex flex-col items-center pt-6 pb-2 gap-8">

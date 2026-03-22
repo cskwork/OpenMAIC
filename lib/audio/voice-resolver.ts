@@ -17,7 +17,6 @@ export function resolveAgentVoice(
   globalProviderId: TTSProviderId,
   agentIndex: number,
 ): ResolvedVoice {
-  // Check agent-specific config
   if (agent.voiceConfig) {
     const list = getServerVoiceList(agent.voiceConfig.providerId);
     if (list.includes(agent.voiceConfig.voiceId)) {
@@ -25,7 +24,6 @@ export function resolveAgentVoice(
     }
   }
 
-  // Fallback: global provider + deterministic voice
   const list = getServerVoiceList(globalProviderId);
   if (list.length === 0) {
     return { providerId: globalProviderId, voiceId: 'default' };
@@ -44,37 +42,56 @@ export function getServerVoiceList(providerId: TTSProviderId): string[] {
   return provider.voices.map((v) => v.id);
 }
 
-/**
- * Get all configured providers and their voices for the voice picker UI.
- * Returns providers that have API keys configured or are browser-native.
- */
-export function getAvailableProvidersWithVoices(
-  ttsProvidersConfig: Record<string, { apiKey?: string; enabled?: boolean }>,
-): Array<{
+export interface ProviderWithVoices {
   providerId: TTSProviderId;
   providerName: string;
   voices: Array<{ id: string; name: string }>;
-}> {
-  const result: Array<{
-    providerId: TTSProviderId;
-    providerName: string;
-    voices: Array<{ id: string; name: string }>;
-  }> = [];
+}
+
+/**
+ * Get all available providers and their voices for the voice picker UI.
+ * Includes providers that have API keys, are server-configured, or are the current global provider.
+ */
+export function getAvailableProvidersWithVoices(
+  ttsProvidersConfig: Record<
+    string,
+    { apiKey?: string; enabled?: boolean; isServerConfigured?: boolean }
+  >,
+  globalProviderId?: TTSProviderId,
+): ProviderWithVoices[] {
+  const result: ProviderWithVoices[] = [];
+  const addedIds = new Set<TTSProviderId>();
 
   for (const [id, config] of Object.entries(TTS_PROVIDERS)) {
     const providerId = id as TTSProviderId;
     if (providerId === 'browser-native-tts') continue;
+    if (config.voices.length === 0) continue;
 
     const providerConfig = ttsProvidersConfig[providerId];
-    // Show provider if it has an API key or is server-configured
-    if (providerConfig?.apiKey || (providerConfig as Record<string, unknown>)?.isServerConfigured) {
+    const isAvailable =
+      providerConfig?.apiKey ||
+      providerConfig?.isServerConfigured ||
+      providerId === globalProviderId;
+
+    if (isAvailable) {
       result.push({
         providerId,
         providerName: config.name,
         voices: config.voices.map((v) => ({ id: v.id, name: v.name })),
       });
+      addedIds.add(providerId);
     }
   }
 
   return result;
+}
+
+/**
+ * Find a voice display name across all providers.
+ */
+export function findVoiceDisplayName(providerId: TTSProviderId, voiceId: string): string {
+  const provider = TTS_PROVIDERS[providerId];
+  if (!provider) return voiceId;
+  const voice = provider.voices.find((v) => v.id === voiceId);
+  return voice?.name ?? voiceId;
 }
