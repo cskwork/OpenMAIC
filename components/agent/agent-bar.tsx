@@ -148,7 +148,7 @@ function AgentVoicePill({
           type="button"
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
-          className="flex items-center gap-1 h-5 w-[88px] rounded-full bg-primary/8 hover:bg-primary/15 dark:bg-primary/10 dark:hover:bg-primary/20 px-2 text-[10px] text-primary/70 hover:text-primary transition-colors shrink-0 cursor-pointer"
+          className="flex items-center gap-1 h-5 w-[88px] rounded-full bg-primary/10 hover:bg-primary/20 dark:bg-primary/25 dark:hover:bg-primary/35 px-2 text-[10px] text-primary/80 hover:text-primary dark:text-primary/90 transition-colors shrink-0 cursor-pointer"
         >
           <Volume2 className="size-2.5 shrink-0" />
           <span className="truncate flex-1 text-left">{displayName}</span>
