@@ -41,6 +41,7 @@ function AgentVoicePill({
   const updateAgent = useAgentRegistry((s) => s.updateAgent);
   const ttsProvidersConfig = useSettingsStore((s) => s.ttsProvidersConfig);
   const resolved = resolveAgentVoice(agent, agentIndex, availableProviders);
+  const [popoverOpen, setPopoverOpen] = useState(false);
   const [previewingId, setPreviewingId] = useState<string | null>(null);
   const previewCancelRef = useRef<(() => void) | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -142,7 +143,13 @@ function AgentVoicePill({
   }
 
   return (
-    <Popover onOpenChange={(open) => !open && stopPreview()}>
+    <Popover
+      open={popoverOpen}
+      onOpenChange={(open) => {
+        setPopoverOpen(open);
+        if (!open) stopPreview();
+      }}
+    >
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -187,6 +194,7 @@ function AgentVoicePill({
                       updateAgent(agent.id, {
                         voiceConfig: { providerId: provider.providerId, voiceId: voice.id },
                       });
+                      setPopoverOpen(false);
                     }}
                     className={cn(
                       'flex-1 text-left text-xs px-2 py-1 min-w-0 truncate',
