@@ -9,14 +9,11 @@ import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
-import {
-  resolveAgentVoice,
-  getAvailableProvidersWithVoices,
-  findVoiceDisplayName,
-} from '@/lib/audio/voice-resolver';
+import { resolveAgentVoice, getAvailableProvidersWithVoices } from '@/lib/audio/voice-resolver';
 import { Sparkles, ChevronDown, ChevronUp, Shuffle, Volume2 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
+import type { TTSProviderId } from '@/lib/audio/types';
 import type { ProviderWithVoices } from '@/lib/audio/voice-resolver';
 
 function AgentVoicePill({
@@ -30,7 +27,16 @@ function AgentVoicePill({
 }) {
   const updateAgent = useAgentRegistry((s) => s.updateAgent);
   const resolved = resolveAgentVoice(agent, agentIndex, availableProviders);
-  const displayName = findVoiceDisplayName(resolved.providerId, resolved.voiceId);
+  // findVoiceDisplayName only knows static providers; check availableProviders for browser voices
+  const displayName = (() => {
+    for (const p of availableProviders) {
+      if (p.providerId === resolved.providerId) {
+        const v = p.voices.find((voice) => voice.id === resolved.voiceId);
+        if (v) return v.name;
+      }
+    }
+    return resolved.voiceId;
+  })();
 
   return (
     <Popover>
@@ -101,7 +107,17 @@ export function AgentBar() {
   const ttsProvidersConfig = useSettingsStore((s) => s.ttsProvidersConfig);
 
   const [open, setOpen] = useState(false);
+  const [browserVoices, setBrowserVoices] = useState<SpeechSynthesisVoice[]>([]);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Load browser native TTS voices
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    const loadVoices = () => setBrowserVoices(speechSynthesis.getVoices());
+    loadVoices();
+    speechSynthesis.addEventListener('voiceschanged', loadVoices);
+    return () => speechSynthesis.removeEventListener('voiceschanged', loadVoices);
+  }, []);
 
   const allAgents = listAgents();
   const agents = allAgents.filter((a) => !a.isGenerated);
@@ -109,7 +125,19 @@ export function AgentBar() {
   const selectedAgents = agents.filter((a) => selectedAgentIds.includes(a.id));
   const nonTeacherSelected = selectedAgents.filter((a) => a.role !== 'teacher');
 
-  const availableProviders = getAvailableProvidersWithVoices(ttsProvidersConfig);
+  const serverProviders = getAvailableProvidersWithVoices(ttsProvidersConfig);
+  const availableProviders: ProviderWithVoices[] = [
+    ...serverProviders,
+    ...(browserVoices.length > 0
+      ? [
+          {
+            providerId: 'browser-native-tts' as TTSProviderId,
+            providerName: 'Browser Native',
+            voices: browserVoices.map((v) => ({ id: v.voiceURI, name: v.name })),
+          },
+        ]
+      : []),
+  ];
   const showVoice = availableProviders.length > 0;
 
   useEffect(() => {
