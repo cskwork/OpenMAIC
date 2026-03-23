@@ -238,6 +238,214 @@ function AgentVoicePill({
   );
 }
 
+/**
+ * Teacher voice pill — reads/writes global ttsProviderId + ttsVoice (single source of truth).
+ * This ensures lecture and discussion use the same voice for the teacher.
+ */
+function TeacherVoicePill({
+  availableProviders,
+  disabled,
+}: {
+  availableProviders: ProviderWithVoices[];
+  disabled?: boolean;
+}) {
+  const ttsProviderId = useSettingsStore((s) => s.ttsProviderId);
+  const ttsVoice = useSettingsStore((s) => s.ttsVoice);
+  const setTTSProvider = useSettingsStore((s) => s.setTTSProvider);
+  const setTTSVoice = useSettingsStore((s) => s.setTTSVoice);
+  const ttsProvidersConfig = useSettingsStore((s) => s.ttsProvidersConfig);
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const [previewingId, setPreviewingId] = useState<string | null>(null);
+  const previewCancelRef = useRef<(() => void) | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewAbortRef = useRef<AbortController | null>(null);
+
+  const displayName = (() => {
+    for (const p of availableProviders) {
+      if (p.providerId === ttsProviderId) {
+        const v = p.voices.find((voice) => voice.id === ttsVoice);
+        if (v) return v.name;
+      }
+    }
+    return ttsVoice || 'default';
+  })();
+
+  const stopPreview = useCallback(() => {
+    previewCancelRef.current?.();
+    previewCancelRef.current = null;
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = null;
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current.src = '';
+      previewAudioRef.current = null;
+    }
+    setPreviewingId(null);
+  }, []);
+
+  const handlePreview = useCallback(
+    async (providerId: TTSProviderId, voiceId: string) => {
+      const key = `${providerId}::${voiceId}`;
+      if (previewingId === key) {
+        stopPreview();
+        return;
+      }
+      stopPreview();
+      setPreviewingId(key);
+
+      const courseLanguage =
+        (typeof localStorage !== 'undefined' && localStorage.getItem('generationLanguage')) ||
+        'zh-CN';
+      const previewText = courseLanguage === 'en-US' ? 'Welcome to AI Classroom' : '欢迎来到AI课堂';
+
+      if (providerId === 'browser-native-tts') {
+        const { promise, cancel } = playBrowserTTSPreview({ text: previewText, voice: voiceId });
+        previewCancelRef.current = cancel;
+        try {
+          await promise;
+        } catch {
+          // ignore abort
+        }
+        setPreviewingId(null);
+        return;
+      }
+
+      try {
+        const controller = new AbortController();
+        previewAbortRef.current = controller;
+        const providerConfig = ttsProvidersConfig[providerId];
+        const res = await fetch('/api/generate/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: previewText,
+            audioId: 'voice-preview',
+            ttsProviderId: providerId,
+            ttsVoice: voiceId,
+            ttsSpeed: 1,
+            ttsApiKey: providerConfig?.apiKey,
+            ttsBaseUrl: providerConfig?.serverBaseUrl || providerConfig?.baseUrl,
+          }),
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error('TTS error');
+        const data = await res.json();
+        if (!data.base64) throw new Error('No audio');
+        const audio = new Audio(`data:audio/${data.format || 'mp3'};base64,${data.base64}`);
+        previewAudioRef.current = audio;
+        audio.addEventListener('ended', () => setPreviewingId(null));
+        audio.addEventListener('error', () => setPreviewingId(null));
+        await audio.play();
+      } catch {
+        setPreviewingId(null);
+      }
+    },
+    [previewingId, stopPreview, ttsProvidersConfig],
+  );
+
+  useEffect(() => () => stopPreview(), [stopPreview]);
+
+  if (disabled) {
+    return (
+      <div
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        className="flex items-center gap-1 h-5 w-[88px] rounded-full bg-muted/40 px-2 text-[10px] text-muted-foreground/30 shrink-0 cursor-not-allowed"
+      >
+        <VolumeX className="size-2.5 shrink-0" />
+        <span className="truncate flex-1 text-left">{displayName}</span>
+      </div>
+    );
+  }
+
+  return (
+    <Popover
+      open={popoverOpen}
+      onOpenChange={(open) => {
+        setPopoverOpen(open);
+        if (!open) stopPreview();
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="flex items-center gap-1 h-5 w-[88px] rounded-full bg-primary/10 hover:bg-primary/20 dark:bg-primary/25 dark:hover:bg-primary/35 px-2 text-[10px] text-primary/80 hover:text-primary dark:text-primary/90 transition-colors shrink-0 cursor-pointer"
+        >
+          <Volume2 className="size-2.5 shrink-0" />
+          <span className="truncate flex-1 text-left">{displayName}</span>
+          <ChevronDown className="size-2.5 shrink-0 opacity-50" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        side="bottom"
+        align="end"
+        sideOffset={4}
+        className="w-52 px-1 pb-1 pt-0 max-h-64 overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        {availableProviders.map((provider) => (
+          <div key={provider.providerId}>
+            <div className="text-[10px] text-muted-foreground/60 font-medium px-2 py-1 sticky top-0 bg-popover">
+              {provider.providerName}
+            </div>
+            {provider.voices.map((voice) => {
+              const isActive = ttsProviderId === provider.providerId && ttsVoice === voice.id;
+              const previewKey = `${provider.providerId}::${voice.id}`;
+              const isPreviewing = previewingId === previewKey;
+              return (
+                <div
+                  key={previewKey}
+                  className={cn(
+                    'flex items-center gap-1 rounded-sm transition-colors',
+                    isActive ? 'bg-primary/10' : 'hover:bg-muted',
+                  )}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTTSProvider(provider.providerId);
+                      setTTSVoice(voice.id);
+                      setPopoverOpen(false);
+                    }}
+                    className={cn(
+                      'flex-1 text-left text-xs px-2 py-1 min-w-0 truncate',
+                      isActive ? 'text-primary font-medium' : 'text-foreground',
+                    )}
+                  >
+                    {voice.name}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handlePreview(provider.providerId, voice.id);
+                    }}
+                    className={cn(
+                      'shrink-0 size-5 flex items-center justify-center rounded-sm transition-colors',
+                      isPreviewing
+                        ? 'text-primary'
+                        : 'text-muted-foreground/40 hover:text-muted-foreground',
+                    )}
+                  >
+                    {isPreviewing ? (
+                      <Loader2 className="size-3 animate-spin" />
+                    ) : (
+                      <Volume2 className="size-3" />
+                    )}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export function AgentBar() {
   const { t } = useI18n();
   const { listAgents } = useAgentRegistry();
@@ -493,9 +701,7 @@ export function AgentBar() {
                     {getAgentName(teacherAgent)}
                   </span>
                   {showVoice && (
-                    <AgentVoicePill
-                      agent={teacherAgent}
-                      agentIndex={0}
+                    <TeacherVoicePill
                       availableProviders={availableProviders}
                       disabled={!ttsEnabled}
                     />

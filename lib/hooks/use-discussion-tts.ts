@@ -84,11 +84,8 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
         }
         return { providerId: 'browser-native-tts', voiceId: 'default' };
       }
-      // Teacher: use voiceConfig if explicitly set, otherwise fall back to global lecture voice
+      // Teacher: always use global lecture voice (single source of truth with settings)
       if (agent.role === 'teacher') {
-        if (agent.voiceConfig) {
-          return agent.voiceConfig;
-        }
         return { providerId: globalTtsProviderId, voiceId: globalTtsVoice };
       }
       const index = agentIndexMap.current.get(agentId) ?? 0;
