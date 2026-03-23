@@ -45,6 +45,7 @@ function AgentVoicePill({
   const [previewingId, setPreviewingId] = useState<string | null>(null);
   const previewCancelRef = useRef<(() => void) | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewAbortRef = useRef<AbortController | null>(null);
 
   const displayName = (() => {
     for (const p of availableProviders) {
@@ -59,6 +60,8 @@ function AgentVoicePill({
   const stopPreview = useCallback(() => {
     previewCancelRef.current?.();
     previewCancelRef.current = null;
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = null;
     if (previewAudioRef.current) {
       previewAudioRef.current.pause();
       previewAudioRef.current.src = '';
@@ -96,6 +99,8 @@ function AgentVoicePill({
 
       // Server TTS
       try {
+        const controller = new AbortController();
+        previewAbortRef.current = controller;
         const providerConfig = ttsProvidersConfig[providerId];
         const res = await fetch('/api/generate/tts', {
           method: 'POST',
@@ -109,6 +114,7 @@ function AgentVoicePill({
             ttsApiKey: providerConfig?.apiKey,
             ttsBaseUrl: providerConfig?.serverBaseUrl || providerConfig?.baseUrl,
           }),
+          signal: controller.signal,
         });
         if (!res.ok) throw new Error('TTS error');
         const data = await res.json();

@@ -145,12 +145,12 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       audio.addEventListener('ended', () => {
         isPlayingRef.current = false;
         onAudioStateChangeRef.current?.(item.agentId, 'idle');
-        processQueueRef.current();
+        queueMicrotask(() => processQueueRef.current());
       });
       audio.addEventListener('error', () => {
         isPlayingRef.current = false;
         onAudioStateChangeRef.current?.(item.agentId, 'idle');
-        processQueueRef.current();
+        queueMicrotask(() => processQueueRef.current());
       });
       await audio.play();
     } catch (err) {
@@ -159,7 +159,7 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       }
       isPlayingRef.current = false;
       onAudioStateChangeRef.current?.(item.agentId, 'idle');
-      processQueueRef.current();
+      queueMicrotask(() => processQueueRef.current());
     }
   }, [enabled, ttsMuted, ttsProvidersConfig, ttsSpeed, playbackSpeed]);
 
