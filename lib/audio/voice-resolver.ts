@@ -19,6 +19,10 @@ export function resolveAgentVoice(
 ): ResolvedVoice {
   // Agent-specific config
   if (agent.voiceConfig) {
+    // Browser-native voices are dynamic (not in static registry), so skip validation
+    if (agent.voiceConfig.providerId === 'browser-native-tts') {
+      return agent.voiceConfig;
+    }
     const list = getServerVoiceList(agent.voiceConfig.providerId);
     if (list.includes(agent.voiceConfig.voiceId)) {
       return agent.voiceConfig;
