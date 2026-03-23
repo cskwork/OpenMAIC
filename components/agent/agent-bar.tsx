@@ -172,7 +172,7 @@ function AgentVoicePill({
         side="bottom"
         align="end"
         sideOffset={4}
-        className="w-52 p-1 max-h-64 overflow-y-auto"
+        className="w-52 px-1 pb-1 pt-0 max-h-64 overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
         onPointerDown={(e) => e.stopPropagation()}
       >
