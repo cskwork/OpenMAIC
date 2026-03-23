@@ -161,6 +161,8 @@ export function Stage({
   const sceneEpochRef = useRef(0);
   // When true, the next engine init will auto-start playback (for auto-play scene advance)
   const autoStartRef = useRef(false);
+  // Discussion buffer-level pause state (distinct from soft-pause which aborts SSE)
+  const [isDiscussionPaused, setIsDiscussionPaused] = useState(false);
 
   /**
    * Soft-pause: interrupt current agent stream but keep the session active.
@@ -180,6 +182,7 @@ export function Stage({
     setThinkingState(null);
     setChatIsStreaming(false);
     setIsTopicPending(true);
+    setIsDiscussionPaused(false);
     // Don't clear chatSessionType, speakingAgentId, or liveSpeech
     // Don't show end flash
     // Don't call handleEndDiscussion — engine stays in current state
@@ -210,6 +213,7 @@ export function Stage({
     setIsTopicPending(false);
     setChatIsStreaming(false);
     setChatSessionType(null);
+    setIsDiscussionPaused(false);
   }, []);
 
   /** Full scene reset (scene switch) — resetLiveState + lecture/visual state */
@@ -843,9 +847,17 @@ export function Stage({
                 engineRef.current.pause();
               }
             }}
-            onSoftPause={doSoftPause}
             onResumeTopic={doResumeTopic}
             onPlayPause={handlePlayPause}
+            isDiscussionPaused={isDiscussionPaused}
+            onDiscussionPause={() => {
+              chatAreaRef.current?.pauseActiveLiveBuffer();
+              setIsDiscussionPaused(true);
+            }}
+            onDiscussionResume={() => {
+              chatAreaRef.current?.resumeActiveLiveBuffer();
+              setIsDiscussionPaused(false);
+            }}
             totalActions={totalActions}
             currentActionIndex={0}
             currentSceneIndex={currentSceneIndex}

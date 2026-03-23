@@ -133,6 +133,10 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   // StreamBuffer instances per session (SSE + lecture share the same buffer model)
   const buffersRef = useRef<Map<string, StreamBuffer>>(new Map());
 
+  // Session-scoped "paused intent" — survives buffer recreation across turns.
+  // When true, newly created discussion/QA buffers are immediately paused.
+  const livePausedRef = useRef(false);
+
   // Tracks the single message ID per lecture session
   const lectureMessageIds = useRef<Map<string, string>>(new Map());
 
@@ -350,6 +354,13 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
 
       buffersRef.current.set(sessionId, buffer);
       buffer.start();
+
+      // Inherit paused intent for discussion/QA sessions so new-turn buffers
+      // don't start revealing text while the user has paused reading.
+      if (type !== 'lecture' && livePausedRef.current) {
+        buffer.pause();
+      }
+
       return buffer;
     },
     [],
@@ -380,6 +391,8 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         apiKey: string;
         baseUrl?: string;
         model?: string;
+        providerType?: string;
+        requiresApiKey?: boolean;
       },
       controller: AbortController,
       sessionType: SessionType,
@@ -568,6 +581,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   const endSession = useCallback(
     async (sessionId: string): Promise<void> => {
       log.info(`[ChatArea] Ending session: ${sessionId}`);
+      livePausedRef.current = false;
 
       const session = sessionsRef.current.find((s) => s.id === sessionId);
       const isLiveSession = session && (session.type === 'qa' || session.type === 'discussion');
@@ -666,6 +680,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
    * so the user can continue speaking in the same topic.
    */
   const softPauseSession = useCallback(async (sessionId: string): Promise<void> => {
+    livePausedRef.current = false;
     const session = sessionsRef.current.find((s) => s.id === sessionId);
     if (!session) return;
     const isLiveSession = session.type === 'qa' || session.type === 'discussion';
@@ -798,6 +813,8 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             apiKey: mc.apiKey,
             baseUrl: mc.baseUrl,
             model: mc.modelString,
+            providerType: mc.providerType,
+            requiresApiKey: mc.requiresApiKey,
           },
           controller,
           session.type,
@@ -1033,6 +1050,8 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             apiKey: mc.apiKey,
             baseUrl: mc.baseUrl,
             model: mc.modelString,
+            providerType: mc.providerType,
+            requiresApiKey: mc.requiresApiKey,
           },
           controller,
           sessionType,
@@ -1093,6 +1112,9 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   const startDiscussion = useCallback(
     async (request: DiscussionRequest): Promise<void> => {
       log.info(`[ChatArea] Starting discussion: "${request.topic}"`);
+      // Explicitly clear buffer-pause intent (also cleared transitively via endSession,
+      // but being explicit guards against future refactors)
+      livePausedRef.current = false;
 
       // Validate model configuration before starting discussion
       const modelConfig = getCurrentModelConfig();
@@ -1189,6 +1211,8 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             apiKey: mc.apiKey,
             baseUrl: mc.baseUrl,
             model: mc.modelString,
+            providerType: mc.providerType,
+            requiresApiKey: mc.requiresApiKey,
           },
           controller,
           'discussion',
@@ -1428,6 +1452,30 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     if (buf) buf.resume();
   }, []);
 
+  /** Pause the active live (QA/Discussion) buffer and set sticky intent. */
+  const pauseActiveLiveBuffer = useCallback(() => {
+    const active = sessionsRef.current.find(
+      (s) => (s.type === 'qa' || s.type === 'discussion') && s.status === 'active',
+    );
+    if (!active) return;
+    livePausedRef.current = true;
+    const buf = buffersRef.current.get(active.id);
+    if (buf) buf.pause();
+    log.info('[ChatArea] Buffer-paused discussion:', active.id);
+  }, []);
+
+  /** Resume the active live (QA/Discussion) buffer and clear sticky intent. */
+  const resumeActiveLiveBuffer = useCallback(() => {
+    const active = sessionsRef.current.find(
+      (s) => (s.type === 'qa' || s.type === 'discussion') && s.status === 'active',
+    );
+    if (!active) return;
+    livePausedRef.current = false;
+    const buf = buffersRef.current.get(active.id);
+    if (buf) buf.resume();
+    log.info('[ChatArea] Buffer-resumed discussion:', active.id);
+  }, []);
+
   return {
     sessions,
     activeSessionId,
@@ -1448,5 +1496,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     getLectureMessageId,
     pauseBuffer,
     resumeBuffer,
+    pauseActiveLiveBuffer,
+    resumeActiveLiveBuffer,
   };
 }
