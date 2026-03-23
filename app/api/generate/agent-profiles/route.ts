@@ -36,6 +36,7 @@ interface RequestBody {
   sceneOutlines?: { title: string; description?: string }[];
   language: string;
   availableAvatars: string[];
+  avatarDescriptions?: Array<{ path: string; desc: string }>;
   availableVoices?: Array<{ providerId: string; voiceId: string; voiceName: string }>;
 }
 
@@ -51,7 +52,14 @@ function stripCodeFences(text: string): string {
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as RequestBody;
-    const { stageInfo, sceneOutlines, language, availableAvatars, availableVoices } = body;
+    const {
+      stageInfo,
+      sceneOutlines,
+      language,
+      availableAvatars,
+      avatarDescriptions,
+      availableVoices,
+    } = body;
 
     // ── Validate required fields ──
     if (!stageInfo?.name) {
@@ -112,8 +120,10 @@ Requirements:
 - Priority values: teacher=10 (highest), assistant=7, student=4-6
 - Each agent needs: name, role, persona (2-3 sentences describing personality and teaching/learning style)
 - Names and personas must be in language: ${language}
-- Each agent must be assigned one avatar from this list: ${JSON.stringify(availableAvatars)}
+- Each agent must be assigned one avatar from this list: ${JSON.stringify(avatarDescriptions && avatarDescriptions.length > 0 ? avatarDescriptions.map((a) => ({ path: a.path, description: a.desc })) : availableAvatars)}
+  - Pick an avatar that visually matches the agent's personality and role
   - Try to use different avatars for each agent
+  - Use the "path" value as the avatar field in the output
 - Each agent must be assigned one color from this list: ${JSON.stringify(COLOR_PALETTE)}
   - Each agent must have a different color
 ${voicePrompt}
