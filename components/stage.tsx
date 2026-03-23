@@ -112,11 +112,11 @@ export function Stage({
   );
 
   // Resolved AgentConfig array for hooks that need full agent objects
-  // Subscribe reactively so voiceConfig changes in AgentBar trigger re-resolution
-  const allAgents = useAgentRegistry((s) => s.listAgents());
+  // Subscribe to the agents record so voiceConfig changes trigger re-resolution
+  const agentsRecord = useAgentRegistry((s) => s.agents);
   const selectedAgents = useMemo(
-    () => allAgents.filter((a) => selectedAgentIds.includes(a.id)),
-    [allAgents, selectedAgentIds],
+    () => selectedAgentIds.map((id) => agentsRecord[id]).filter((a): a is AgentConfig => a != null),
+    [agentsRecord, selectedAgentIds],
   );
 
   // Discussion TTS: audio indicator state
