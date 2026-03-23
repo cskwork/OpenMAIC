@@ -16,6 +16,8 @@ import {
   Loader2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { AudioIndicator } from './audio-indicator';
+import type { AudioIndicatorState } from './audio-indicator';
 import { CanvasToolbar } from '@/components/canvas/canvas-toolbar';
 import { useAudioRecorder } from '@/lib/hooks/use-audio-recorder';
 import { useI18n } from '@/lib/hooks/use-i18n';
@@ -47,6 +49,8 @@ interface RoundtableProps {
   readonly isStreaming?: boolean;
   readonly sessionType?: 'qa' | 'discussion';
   readonly speakingAgentId?: string | null;
+  readonly audioIndicatorState?: AudioIndicatorState;
+  readonly audioAgentId?: string | null;
   readonly speechProgress?: number | null; // StreamBuffer reveal progress (0–1) for auto-scroll
   readonly showEndFlash?: boolean;
   readonly endFlashSessionType?: 'qa' | 'discussion';
@@ -58,9 +62,12 @@ interface RoundtableProps {
   readonly onDiscussionSkip?: () => void;
   readonly onStopDiscussion?: () => void;
   readonly onInputActivate?: () => void;
-  readonly onSoftPause?: () => void;
+
   readonly onResumeTopic?: () => void;
   readonly onPlayPause?: () => void;
+  readonly isDiscussionPaused?: boolean;
+  readonly onDiscussionPause?: () => void;
+  readonly onDiscussionResume?: () => void;
   readonly totalActions?: number;
   readonly currentActionIndex?: number;
   // Toolbar props (merged from CanvasArea)
@@ -107,6 +114,8 @@ export function Roundtable({
   isStreaming,
   sessionType,
   speakingAgentId,
+  audioIndicatorState,
+  audioAgentId,
   speechProgress: _speechProgress,
   showEndFlash,
   endFlashSessionType = 'discussion',
@@ -118,9 +127,12 @@ export function Roundtable({
   onDiscussionSkip,
   onStopDiscussion,
   onInputActivate,
-  onSoftPause,
+
   onResumeTopic,
   onPlayPause,
+  isDiscussionPaused,
+  onDiscussionPause,
+  onDiscussionResume,
   currentSceneIndex = 0,
   scenesCount = 1,
   whiteboardOpen = false,
@@ -233,6 +245,41 @@ export function Roundtable({
     }
     prevStreamingRef.current = !!isStreaming;
   }, [isStreaming, isSendCooldown]);
+
+  // Spacebar shortcut: toggle discussion buffer-level pause/resume
+  // Much easier than clicking the small bubble during fast text streaming
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Skip when user is typing in an input, textarea, or contentEditable
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement).isContentEditable) {
+        return;
+      }
+      if (e.code !== 'Space') return;
+
+      // Only handle during live flow (QA/Discussion)
+      if (!isInLiveFlow) return;
+
+      e.preventDefault(); // Prevent page scroll
+
+      if (isDiscussionPaused) {
+        onDiscussionResume?.();
+      } else if (!thinkingState && currentSpeech) {
+        // Same guard as bubble click: don't pause during thinking or before text arrives
+        onDiscussionPause?.();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    isInLiveFlow,
+    isDiscussionPaused,
+    thinkingState,
+    currentSpeech,
+    onDiscussionPause,
+    onDiscussionResume,
+  ]);
 
   // Separate participants by role (teacherParticipant & studentParticipants declared earlier for effect)
   const userParticipant = initialParticipants.find((p) => p.role === 'user');
@@ -415,7 +462,10 @@ export function Roundtable({
         ttsEnabled={ttsEnabled}
         ttsMuted={ttsMuted}
         ttsVolume={ttsVolume}
-        onToggleMute={() => ttsEnabled && setTTSMuted(!ttsMuted)}
+        onToggleMute={() => {
+          if (!ttsEnabled) return;
+          setTTSMuted(!ttsMuted);
+        }}
         onVolumeChange={(v) => setTTSVolume(v)}
         autoPlayLecture={autoPlayLecture}
         onToggleAutoPlay={() => setAutoPlayLecture(!autoPlayLecture)}
@@ -919,9 +969,14 @@ export function Roundtable({
                           onResumeTopic?.();
                           return;
                         }
-                        // QA/Discussion: soft pause (interrupt agent but keep session active)
+                        // QA/Discussion: buffer-level pause/resume (freeze text reveal, SSE continues)
                         if (isInLiveFlow) {
-                          onSoftPause?.();
+                          if (isDiscussionPaused) {
+                            onDiscussionResume?.();
+                          } else if (!thinkingState && currentSpeech) {
+                            // Don't allow pause during thinking or before text arrives
+                            onDiscussionPause?.();
+                          }
                           return;
                         }
                         // Lecture playback: toggle play/pause
@@ -974,6 +1029,29 @@ export function Roundtable({
                         })()}
 
                       <div ref={bubbleScrollRef} className="overflow-y-auto scrollbar-hide">
+                        {/* Agent name + audio indicator header */}
+                        {bubbleRole !== 'user' && bubbleName && (
+                          <div className="flex items-center gap-1 mb-0.5">
+                            <span className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 truncate">
+                              {bubbleName}
+                            </span>
+                            <AudioIndicator
+                              state={
+                                speakingAgentId === audioAgentId
+                                  ? (audioIndicatorState ?? 'idle')
+                                  : 'idle'
+                              }
+                              agentColor={
+                                bubbleRole === 'agent'
+                                  ? (useAgentRegistry.getState().getAgent(speakingAgentId || '')
+                                      ?.color ?? undefined)
+                                  : (useAgentRegistry
+                                      .getState()
+                                      .getAgent(teacherParticipant?.id || '')?.color ?? undefined)
+                              }
+                            />
+                          </div>
+                        )}
                         {isBubbleLoading ? (
                           <div className="flex gap-1 items-center py-1">
                             <motion.div
@@ -1058,35 +1136,42 @@ export function Roundtable({
                           // btnState === 'bars'
                           return (
                             <div className="absolute right-2.5 bottom-2.5 p-1.5 rounded-full bg-gray-50/80 dark:bg-gray-700/80 group-hover/bubble:bg-purple-100 dark:group-hover/bubble:bg-purple-900/50 transition-all duration-300">
-                              {/* Breathing bars — visible by default, hidden on hover */}
-                              <div className="flex gap-0.5 items-end justify-center h-3.5 w-3.5 group-hover/bubble:hidden">
-                                <motion.div
-                                  animate={{ height: ['20%', '100%', '20%'] }}
-                                  transition={{
-                                    repeat: Infinity,
-                                    duration: 0.6,
-                                  }}
-                                  className={cn('w-1 rounded-full', barsColor)}
-                                />
-                                <motion.div
-                                  animate={{ height: ['40%', '100%', '40%'] }}
-                                  transition={{
-                                    repeat: Infinity,
-                                    duration: 0.4,
-                                  }}
-                                  className={cn('w-1 rounded-full', barsColor)}
-                                />
-                                <motion.div
-                                  animate={{ height: ['20%', '80%', '20%'] }}
-                                  transition={{
-                                    repeat: Infinity,
-                                    duration: 0.5,
-                                  }}
-                                  className={cn('w-1 rounded-full', barsColor)}
-                                />
-                              </div>
-                              {/* Pause icon on hover */}
-                              <Pause className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400 hidden group-hover/bubble:block" />
+                              {isDiscussionPaused ? (
+                                /* Paused: static Play icon */
+                                <Play className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 group-hover/bubble:text-purple-600 dark:group-hover/bubble:text-purple-400 ml-0.5" />
+                              ) : (
+                                <>
+                                  {/* Breathing bars — visible by default, hidden on hover */}
+                                  <div className="flex gap-0.5 items-end justify-center h-3.5 w-3.5 group-hover/bubble:hidden">
+                                    <motion.div
+                                      animate={{ height: ['20%', '100%', '20%'] }}
+                                      transition={{
+                                        repeat: Infinity,
+                                        duration: 0.6,
+                                      }}
+                                      className={cn('w-1 rounded-full', barsColor)}
+                                    />
+                                    <motion.div
+                                      animate={{ height: ['40%', '100%', '40%'] }}
+                                      transition={{
+                                        repeat: Infinity,
+                                        duration: 0.4,
+                                      }}
+                                      className={cn('w-1 rounded-full', barsColor)}
+                                    />
+                                    <motion.div
+                                      animate={{ height: ['20%', '80%', '20%'] }}
+                                      transition={{
+                                        repeat: Infinity,
+                                        duration: 0.5,
+                                      }}
+                                      className={cn('w-1 rounded-full', barsColor)}
+                                    />
+                                  </div>
+                                  {/* Pause icon on hover */}
+                                  <Pause className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400 hidden group-hover/bubble:block" />
+                                </>
+                              )}
                             </div>
                           );
                         })()}
