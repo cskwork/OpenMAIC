@@ -14,8 +14,7 @@
     "lint": "eslint",
     "check": "prettier . --check",
     "format": "prettier . --write",
-    "test": "vitest run",
-    "release": "npm version --no-git-tag-version"
+    "test": "vitest run"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.23",

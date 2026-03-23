@@ -1,17 +1,26 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-// Mock fs to prevent YAML file loading
+// Mock fs — only intercept server-providers.yml; delegate everything else to real fs.
+// This prevents YAML config from leaking host-machine state into tests while keeping
+// the mock scoped to what provider-config actually reads.
+let yamlOverride: string | null = null;
+
 vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('fs')>();
+  const isYaml = (p: unknown) => typeof p === 'string' && p.endsWith('server-providers.yml');
   return {
     ...actual,
     default: {
       ...actual,
-      existsSync: () => false,
-      readFileSync: () => '',
+      existsSync: (p: string) => (isYaml(p) ? yamlOverride !== null : actual.existsSync(p)),
+      readFileSync: (p: string, ...args: unknown[]) =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        isYaml(p) ? (yamlOverride ?? '') : (actual.readFileSync as any)(p, ...args),
     },
-    existsSync: () => false,
-    readFileSync: () => '',
+    existsSync: (p: string) => (isYaml(p) ? yamlOverride !== null : actual.existsSync(p)),
+    readFileSync: (p: string, ...args: unknown[]) =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      isYaml(p) ? (yamlOverride ?? '') : (actual.readFileSync as any)(p, ...args),
   };
 });
 
@@ -19,6 +28,7 @@ describe('provider-config', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.unstubAllEnvs();
+    yamlOverride = null;
   });
 
   describe('resolveApiKey', () => {
@@ -79,6 +89,17 @@ describe('provider-config', () => {
     it('returns undefined when no proxy configured', async () => {
       const { resolveProxy } = await import('@/lib/server/provider-config');
       expect(resolveProxy('openai')).toBeUndefined();
+    });
+
+    it('returns proxy URL from YAML config', async () => {
+      yamlOverride = `
+providers:
+  openai:
+    apiKey: sk-yaml
+    proxy: http://proxy.internal:8080
+`;
+      const { resolveProxy } = await import('@/lib/server/provider-config');
+      expect(resolveProxy('openai')).toBe('http://proxy.internal:8080');
     });
   });
 

@@ -329,4 +329,31 @@ describe('fetchServerProviders — provider availability sync', () => {
     expect(store.getState().providerId).toBe('openai');
     expect(store.getState().modelId).toBe('gpt-4o');
   });
+
+  // ---- Error handling ----
+
+  it('does not modify state when fetch returns non-ok response', async () => {
+    const store = await getStore();
+
+    // First, set up a known state
+    mockServerProviders({ openai: { models: ['gpt-4o'] } });
+    await store.getState().fetchServerProviders();
+    expect(store.getState().providersConfig.openai.isServerConfigured).toBe(true);
+
+    // Now fetch returns an error
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+    await store.getState().fetchServerProviders();
+
+    // State should be unchanged — the failed fetch should not wipe existing config
+    expect(store.getState().providersConfig.openai.isServerConfigured).toBe(true);
+  });
+
+  it('does not throw when fetch rejects (network error)', async () => {
+    const store = await getStore();
+
+    mockFetch.mockRejectedValueOnce(new Error('Network error'));
+
+    // Should not throw — server providers are optional
+    await expect(store.getState().fetchServerProviders()).resolves.not.toThrow();
+  });
 });
