@@ -27,6 +27,7 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
   const ttsProvidersConfig = useSettingsStore((s) => s.ttsProvidersConfig);
   const ttsSpeed = useSettingsStore((s) => s.ttsSpeed);
   const ttsMuted = useSettingsStore((s) => s.ttsMuted);
+  const ttsVolume = useSettingsStore((s) => s.ttsVolume);
   const playbackSpeed = useSettingsStore((s) => s.playbackSpeed);
   // Global lecture voice — used as fallback for teacher agent
   const globalTtsProviderId = useSettingsStore((s) => s.ttsProviderId);
@@ -144,6 +145,7 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       const audioUrl = `data:audio/${data.format || 'mp3'};base64,${data.base64}`;
       const audio = new Audio(audioUrl);
       audio.playbackRate = playbackSpeed;
+      audio.volume = ttsMuted ? 0 : ttsVolume;
       audioRef.current = audio;
       audio.addEventListener('ended', () => {
         isPlayingRef.current = false;
@@ -164,7 +166,7 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       onAudioStateChangeRef.current?.(item.agentId, 'idle');
       queueMicrotask(() => processQueueRef.current());
     }
-  }, [enabled, ttsMuted, ttsProvidersConfig, ttsSpeed, playbackSpeed]);
+  }, [enabled, ttsMuted, ttsVolume, ttsProvidersConfig, ttsSpeed, playbackSpeed]);
 
   processQueueRef.current = processQueue;
 
@@ -204,6 +206,13 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       audioRef.current.playbackRate = playbackSpeed;
     }
   }, [playbackSpeed]);
+
+  // Sync volume and mute to currently playing audio in real-time
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.volume = ttsMuted ? 0 : ttsVolume;
+    }
+  }, [ttsVolume, ttsMuted]);
 
   useEffect(() => cleanup, [cleanup]);
 
