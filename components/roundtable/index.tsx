@@ -211,6 +211,7 @@ export function Roundtable({
   // Stable ref object for the current discussion agent's avatar
   const discussionAnchorRef = useRef<HTMLDivElement>(null);
   const presentationActionAnchorRef = useRef<HTMLDivElement>(null);
+  const presentationAgentAvatarRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!discussionRequest) {
       discussionAnchorRef.current = null;
@@ -863,6 +864,7 @@ export function Roundtable({
                     {((activeRole === 'agent' && speakingStudent) ||
                       presentationDiscussionParticipant) && (
                       <motion.div
+                        ref={presentationAgentAvatarRef}
                         key={`dock-agent-${(speakingStudent || presentationDiscussionParticipant)?.id}`}
                         initial={{ opacity: 0, scale: 0.8, width: 0 }}
                         animate={{ opacity: 1, scale: 1, width: 'auto' }}
@@ -986,7 +988,11 @@ export function Roundtable({
                     <ProactiveCard
                       action={discussionRequest}
                       mode={engineMode === 'paused' ? 'paused' : 'playback'}
-                      anchorRef={presentationActionAnchorRef}
+                      anchorRef={
+                        presentationAgentAvatarRef.current
+                          ? presentationAgentAvatarRef
+                          : presentationActionAnchorRef
+                      }
                       portalContainer={fullscreenContainerRef?.current}
                       align="left"
                       agentName={
