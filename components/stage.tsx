@@ -572,6 +572,8 @@ export function Stage({
       if (discussionAbortRef.current) {
         discussionAbortRef.current.abort();
       }
+      discussionTTS.cleanup();
+      chatAreaRef.current?.endActiveSession();
       clearPresentationIdleTimer();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- unmount-only cleanup, clearPresentationIdleTimer is stable

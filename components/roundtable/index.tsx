@@ -992,11 +992,7 @@ export function Roundtable({
                     <ProactiveCard
                       action={discussionRequest}
                       mode={engineMode === 'paused' ? 'paused' : 'playback'}
-                      anchorRef={
-                        presentationAgentAvatarRef.current
-                          ? presentationAgentAvatarRef
-                          : presentationActionAnchorRef
-                      }
+                      anchorRef={presentationAgentAvatarRef}
                       portalContainer={fullscreenContainerRef?.current}
                       align="left"
                       agentName={
