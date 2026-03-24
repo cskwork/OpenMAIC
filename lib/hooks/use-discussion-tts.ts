@@ -202,6 +202,18 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
     onAudioStateChangeRef.current?.(null, 'idle');
   }, []);
 
+  const pause = useCallback(() => {
+    if (audioRef.current && !audioRef.current.paused) {
+      audioRef.current.pause();
+    }
+  }, []);
+
+  const resume = useCallback(() => {
+    if (audioRef.current && audioRef.current.paused && audioRef.current.src) {
+      audioRef.current.play().catch(() => {});
+    }
+  }, []);
+
   // Sync playbackSpeed to currently playing audio in real-time
   useEffect(() => {
     if (audioRef.current) {
@@ -233,6 +245,8 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
   return {
     handleSegmentSealed,
     cleanup,
+    pause,
+    resume,
     shouldHold,
   };
 }

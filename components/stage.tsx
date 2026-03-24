@@ -1046,10 +1046,12 @@ export function Stage({
               isDiscussionPaused={isDiscussionPaused}
               onDiscussionPause={() => {
                 chatAreaRef.current?.pauseActiveLiveBuffer();
+                discussionTTS.pause();
                 setIsDiscussionPaused(true);
               }}
               onDiscussionResume={() => {
                 chatAreaRef.current?.resumeActiveLiveBuffer();
+                discussionTTS.resume();
                 setIsDiscussionPaused(false);
               }}
               totalActions={totalActions}
