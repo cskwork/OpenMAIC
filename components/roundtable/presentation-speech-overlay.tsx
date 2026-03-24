@@ -187,7 +187,12 @@ export function PresentationBubbleCard({
               <Loader2 className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 animate-spin" />
             )}
             {audioIndicatorState === 'playing' && (
-              <Volume2 className="w-3.5 h-3.5 text-gray-500 dark:text-gray-400" />
+              <motion.div
+                animate={{ opacity: [0.45, 1, 0.45] }}
+                transition={{ repeat: Infinity, duration: 1.8, ease: 'easeInOut' }}
+              >
+                <Volume2 className="w-3.5 h-3.5 text-gray-500 dark:text-gray-400" />
+              </motion.div>
             )}
           </div>
         </div>

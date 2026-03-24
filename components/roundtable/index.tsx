@@ -1595,7 +1595,16 @@ export function Roundtable({
                                 );
                               if (aiState === 'playing')
                                 return (
-                                  <Volume2 className="w-3 h-3 text-gray-400 dark:text-gray-500" />
+                                  <motion.div
+                                    animate={{ opacity: [0.45, 1, 0.45] }}
+                                    transition={{
+                                      repeat: Infinity,
+                                      duration: 1.8,
+                                      ease: 'easeInOut',
+                                    }}
+                                  >
+                                    <Volume2 className="w-3 h-3 text-gray-400 dark:text-gray-500" />
+                                  </motion.div>
                                 );
                               return null;
                             })()}
