@@ -509,16 +509,23 @@ export class StreamBuffer {
       }
 
       // Non-text items are processed immediately
-      case 'agent_start':
+      case 'agent_start': {
+        const isSameAgent = this.currentAgentId === item.agentId;
         this.currentAgentId = item.agentId;
         this.currentSegmentText = '';
         this.cb.onThinking(null); // Agent selected — clear thinking indicator
         this.cb.onAgentStart(item);
-        this.cb.onLiveSpeech(null, item.agentId);
+        // Only clear the bubble when switching to a different agent.
+        // Same-agent continuation keeps the previous text visible until
+        // the next segment starts revealing, avoiding a blank flash.
+        if (!isSameAgent) {
+          this.cb.onLiveSpeech(null, item.agentId);
+        }
         this.readIndex++;
         this.charCursor = 0;
         this.advanceNonText();
         break;
+      }
 
       case 'agent_end':
         this.cb.onAgentEnd(item);
