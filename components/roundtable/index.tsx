@@ -180,6 +180,7 @@ export function Roundtable({
   const setTTSMuted = useSettingsStore((s) => s.setTTSMuted);
   const ttsEnabled = useSettingsStore((state) => state.ttsEnabled);
   const asrEnabled = useSettingsStore((state) => state.asrEnabled);
+  const chatAreaWidth = useSettingsStore((s) => s.chatAreaWidth);
   const ttsVolume = useSettingsStore((s) => s.ttsVolume);
   const setTTSVolume = useSettingsStore((s) => s.setTTSVolume);
   const autoPlayLecture = useSettingsStore((s) => s.autoPlayLecture);
@@ -824,7 +825,10 @@ export function Roundtable({
         </div>
 
         {/* ── Right-side stack: bubble + dock — flex column, no hardcoded px ── */}
-        <div className="fixed right-5 bottom-5 z-[48] flex flex-col items-end gap-3 pointer-events-none">
+        <div
+          className="fixed bottom-5 z-[48] flex flex-col items-end gap-3 pointer-events-none transition-[right] duration-300"
+          style={{ right: chatCollapsed ? 20 : 20 + (chatAreaWidth ?? 320) }}
+        >
           {/* Right-side speech bubble (flows above dock via flex) */}
           <PresentationSpeechOverlay
             playbackView={enrichedPlaybackView}
@@ -988,11 +992,7 @@ export function Roundtable({
                     <ProactiveCard
                       action={discussionRequest}
                       mode={engineMode === 'paused' ? 'paused' : 'playback'}
-                      anchorRef={
-                        presentationAgentAvatarRef.current
-                          ? presentationAgentAvatarRef
-                          : presentationActionAnchorRef
-                      }
+                      anchorRef={presentationAgentAvatarRef}
                       portalContainer={fullscreenContainerRef?.current}
                       align="left"
                       agentName={

@@ -279,7 +279,10 @@ export function PresentationSpeechOverlay({
               animate={{ opacity: 1, x: 0, y: 0 }}
               exit={{ opacity: 0, y: 8 }}
               transition={{ duration: 0.22, ease: [0.21, 1, 0.36, 1] }}
-              className={cn('absolute bottom-6 left-6 z-30', PRESENTATION_BUBBLE_WIDTH)}
+              className={cn(
+                'absolute bottom-6 left-6 z-30 pointer-events-auto',
+                PRESENTATION_BUBBLE_WIDTH,
+              )}
             >
               <PresentationBubbleCard
                 bubble={bubble}
@@ -306,7 +309,7 @@ export function PresentationSpeechOverlay({
           animate={{ opacity: 1, x: 0, y: 0 }}
           exit={{ opacity: 0, y: 8 }}
           transition={{ duration: 0.22, ease: [0.21, 1, 0.36, 1] }}
-          className={PRESENTATION_BUBBLE_WIDTH}
+          className={cn(PRESENTATION_BUBBLE_WIDTH, 'pointer-events-auto')}
         >
           <PresentationBubbleCard
             bubble={bubble}
