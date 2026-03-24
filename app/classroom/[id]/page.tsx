@@ -63,9 +63,16 @@ export default function ClassroomDetailPage() {
       // Restore generated agents for this stage
       const { loadGeneratedAgentsForStage } = await import('@/lib/orchestration/registry/store');
       const agentIds = await loadGeneratedAgentsForStage(classroomId);
+      const { useSettingsStore } = await import('@/lib/store/settings');
       if (agentIds.length > 0) {
-        const { useSettingsStore } = await import('@/lib/store/settings');
+        useSettingsStore.getState().setAgentMode('auto');
         useSettingsStore.getState().setSelectedAgentIds(agentIds);
+      } else {
+        // No generated agents — this is a preset classroom.
+        // Restore the user's saved preset selection.
+        const settings = useSettingsStore.getState();
+        settings.setAgentMode('preset');
+        settings.setSelectedAgentIds(settings.presetSelectedAgentIds);
       }
     } catch (error) {
       log.error('Failed to load classroom:', error);
