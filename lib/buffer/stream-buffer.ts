@@ -450,8 +450,14 @@ export class StreamBuffer {
     if (this._holdingForTTS) {
       const result = this.cb.shouldHoldAfterReveal?.();
       if (result) {
-        // Object form with segment counter: release when a segment finishes
         if (typeof result === 'object') {
+          if (!result.holding) {
+            // TTS queue empty — release
+            this._holdingForTTS = false;
+            this._holdSegmentSnapshot = -1;
+            this.advanceNonText();
+            return;
+          }
           if (result.segmentDone !== this._holdSegmentSnapshot) {
             // A segment just finished — release even if next segment is starting
             this._holdingForTTS = false;
