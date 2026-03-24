@@ -77,9 +77,7 @@ export function WhiteboardHistory({ isOpen, onClose }: WhiteboardHistoryProps) {
     // Save current content before overwriting so the user can undo the restore
     const currentElements = wbResult.data.elements ?? [];
     if (currentElements.length > 0) {
-      useWhiteboardHistoryStore
-        .getState()
-        .pushSnapshot(currentElements);
+      useWhiteboardHistoryStore.getState().pushSnapshot(currentElements);
     }
 
     // Transactional restore: replace all elements in one update() call

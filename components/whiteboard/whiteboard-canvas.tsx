@@ -26,7 +26,6 @@ type ElementBounds = {
 
 export type WhiteboardCanvasHandle = {
   resetView: () => void;
-  isViewModified: boolean;
 };
 
 type InteractiveWhiteboardCanvasProps = {
@@ -37,6 +36,8 @@ type InteractiveWhiteboardCanvasProps = {
   };
   canvasHeight: number;
   canvasWidth: number;
+  containerWidth: number;
+  containerHeight: number;
   containerScale: number;
   elements: PPTElement[];
   isClearing: boolean;
@@ -163,6 +164,8 @@ const InteractiveWhiteboardCanvas = forwardRef<
     autoFitTransform,
     canvasHeight,
     canvasWidth,
+    containerWidth,
+    containerHeight,
     containerScale,
     elements,
     isClearing,
@@ -184,16 +187,18 @@ const InteractiveWhiteboardCanvas = forwardRef<
 
   const isViewModified = viewZoom !== 1 || panX !== 0 || panY !== 0;
 
-  // Pan boundary: limit to half the canvas size in each direction
-  const maxPanX = canvasWidth / 2;
-  const maxPanY = canvasHeight / 2;
-
+  // Zoom-aware pan boundary: ensure at least an edge of the canvas stays visible
   const clampPan = useCallback(
-    (x: number, y: number) => ({
-      x: Math.max(-maxPanX, Math.min(maxPanX, x)),
-      y: Math.max(-maxPanY, Math.min(maxPanY, y)),
-    }),
-    [maxPanX, maxPanY],
+    (x: number, y: number, zoom: number) => {
+      const totalScale = containerScale * zoom;
+      const maxPanX = canvasWidth / 2 + containerWidth / (2 * totalScale);
+      const maxPanY = canvasHeight / 2 + containerHeight / (2 * totalScale);
+      return {
+        x: Math.max(-maxPanX, Math.min(maxPanX, x)),
+        y: Math.max(-maxPanY, Math.min(maxPanY, y)),
+      };
+    },
+    [canvasWidth, canvasHeight, containerWidth, containerHeight, containerScale],
   );
 
   const resetView = useCallback((animate: boolean) => {
@@ -222,11 +227,8 @@ const InteractiveWhiteboardCanvas = forwardRef<
     ref,
     () => ({
       resetView: () => resetView(true),
-      get isViewModified() {
-        return isViewModified;
-      },
     }),
-    [resetView, isViewModified],
+    [resetView],
   );
 
   // Notify parent when view modified state changes
@@ -257,15 +259,16 @@ const InteractiveWhiteboardCanvas = forwardRef<
 
       const dx = e.clientX - panStartRef.current.x;
       const dy = e.clientY - panStartRef.current.y;
-      const effectiveScale = Math.max(containerScale, 0.001);
+      // Convert screen-space drag to canvas-space (accounts for both container scale and zoom)
+      const effectiveScale = Math.max(containerScale * viewZoom, 0.001);
 
       const newPanX = panStartRef.current.panX + dx / effectiveScale;
       const newPanY = panStartRef.current.panY + dy / effectiveScale;
-      const clamped = clampPan(newPanX, newPanY);
+      const clamped = clampPan(newPanX, newPanY, viewZoom);
       setPanX(clamped.x);
       setPanY(clamped.y);
     },
-    [containerScale, isPanning, clampPan],
+    [containerScale, viewZoom, isPanning, clampPan],
   );
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
@@ -276,6 +279,7 @@ const InteractiveWhiteboardCanvas = forwardRef<
     setIsPanning(false);
   }, []);
 
+  // Zoom toward cursor
   useEffect(() => {
     const el = viewportRef.current;
     if (!el) {
@@ -289,12 +293,38 @@ const InteractiveWhiteboardCanvas = forwardRef<
       }
 
       const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-      setViewZoom((prev) => Math.min(5, Math.max(0.2, prev * zoomFactor)));
+
+      setViewZoom((prevZoom) => {
+        const newZoom = Math.min(5, Math.max(0.2, prevZoom * zoomFactor));
+
+        // Adjust pan to keep the point under the cursor stationary
+        const rect = el.getBoundingClientRect();
+        const cursorX = e.clientX - rect.left;
+        const cursorY = e.clientY - rect.top;
+
+        const oldScale = containerScale * prevZoom;
+        const newScale = containerScale * newZoom;
+        const scaleDiff = 1 / newScale - 1 / oldScale;
+
+        setPanX((prevPanX) => {
+          const newPanX = prevPanX + (cursorX - containerWidth / 2) * scaleDiff;
+          const maxPX = canvasWidth / 2 + containerWidth / (2 * newScale);
+          return Math.max(-maxPX, Math.min(maxPX, newPanX));
+        });
+
+        setPanY((prevPanY) => {
+          const newPanY = prevPanY + (cursorY - containerHeight / 2) * scaleDiff;
+          const maxPY = canvasHeight / 2 + containerHeight / (2 * newScale);
+          return Math.max(-maxPY, Math.min(maxPY, newPanY));
+        });
+
+        return newZoom;
+      });
     };
 
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  }, [elements.length]);
+  }, [elements.length, containerScale, containerWidth, containerHeight, canvasWidth, canvasHeight]);
 
   useEffect(() => {
     return () => {
@@ -336,29 +366,24 @@ const InteractiveWhiteboardCanvas = forwardRef<
   );
 
   // Content-only transform (autoFit inside the canvas)
-  const contentTransform = useMemo(() => {
-    const scale = autoFitTransform.scale;
-    const tx = autoFitTransform.tx;
-    const ty = autoFitTransform.ty;
-    return `translate(${tx}px, ${ty}px) scale(${scale})`;
-  }, [autoFitTransform]);
-
-  // Canvas-level transform: pan + zoom (moves the entire white canvas)
-  const canvasTransform = useMemo(
-    () => `translate(${panX}px, ${panY}px) scale(${viewZoom})`,
-    [panX, panY, viewZoom],
+  const contentTransform = useMemo(
+    () =>
+      `translate(${autoFitTransform.tx}px, ${autoFitTransform.ty}px) scale(${autoFitTransform.scale})`,
+    [autoFitTransform],
   );
 
+  // Canvas position: centered in workspace, offset by pan, scaled by containerScale * viewZoom
+  const totalScale = containerScale * viewZoom;
+  const canvasScreenX = (containerWidth - canvasWidth * totalScale) / 2 + panX * totalScale;
+  const canvasScreenY = (containerHeight - canvasHeight * totalScale) / 2 + panY * totalScale;
+  const canvasTransform = `translate(${canvasScreenX}px, ${canvasScreenY}px) scale(${totalScale})`;
+
   return (
-    /* Viewport — transparent, handles pointer events */
+    /* Viewport — fills workspace, handles pointer events, no clipping */
     <div
       ref={viewportRef}
-      className="relative overflow-hidden select-none rounded-lg"
+      className="w-full h-full relative select-none"
       style={{
-        width: canvasWidth,
-        height: canvasHeight,
-        transform: `scale(${containerScale})`,
-        transformOrigin: 'top left',
         cursor: isPanning ? 'grabbing' : 'grab',
       }}
       onPointerDown={handlePointerDown}
@@ -367,14 +392,16 @@ const InteractiveWhiteboardCanvas = forwardRef<
       onPointerCancel={handlePointerUp}
       onDoubleClick={handleDoubleClick}
     >
-      {/* Bounded canvas — white background, moves with pan/zoom */}
+      {/* Bounded canvas — white background, positioned and scaled */}
       <div
         className="absolute bg-white shadow-2xl rounded-lg overflow-hidden border border-gray-200 dark:border-gray-600"
         style={{
           width: canvasWidth,
           height: canvasHeight,
+          left: 0,
+          top: 0,
           transform: canvasTransform,
-          transformOrigin: 'center center',
+          transformOrigin: '0 0',
           transition: isResetting ? 'transform 0.25s ease-out' : undefined,
         }}
       >
@@ -437,7 +464,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasHandle, WhiteboardCan
     const stage = useStageStore.use.stage();
     const isClearing = useCanvasStore.use.whiteboardClearing();
     const containerRef = useRef<HTMLDivElement>(null);
-    const [containerScale, setContainerScale] = useState(1);
+    const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
     const whiteboard = stage?.whiteboard?.[0];
     const rawElements = whiteboard?.elements;
@@ -447,17 +474,10 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasHandle, WhiteboardCan
     const canvasHeight = 562.5;
     const padding = 24;
 
-    const updateContainerScale = useCallback(() => {
-      const container = containerRef.current;
-      if (!container) {
-        return;
-      }
-
-      const { clientWidth, clientHeight } = container;
-      const scaleX = clientWidth / canvasWidth;
-      const scaleY = clientHeight / canvasHeight;
-      setContainerScale(Math.min(scaleX, scaleY));
-    }, [canvasWidth, canvasHeight]);
+    const containerScale = useMemo(() => {
+      if (containerSize.width === 0 || containerSize.height === 0) return 1;
+      return Math.min(containerSize.width / canvasWidth, containerSize.height / canvasHeight);
+    }, [containerSize.width, containerSize.height, canvasWidth, canvasHeight]);
 
     useEffect(() => {
       const container = containerRef.current;
@@ -465,12 +485,22 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasHandle, WhiteboardCan
         return;
       }
 
-      const observer = new ResizeObserver(updateContainerScale);
+      const observer = new ResizeObserver((entries) => {
+        const entry = entries[0];
+        if (entry) {
+          setContainerSize({
+            width: entry.contentRect.width,
+            height: entry.contentRect.height,
+          });
+        }
+      });
       observer.observe(container);
-      updateContainerScale();
+
+      // Initial measurement
+      setContainerSize({ width: container.clientWidth, height: container.clientHeight });
 
       return () => observer.disconnect();
-    }, [updateContainerScale]);
+    }, []);
 
     const autoFitTransform = useMemo(() => {
       if (elements.length === 0) {
@@ -513,24 +543,21 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasHandle, WhiteboardCan
     }, [canvasHeight, canvasWidth, elements, padding]);
 
     return (
-      <div
-        ref={containerRef}
-        className="w-full h-full flex items-center justify-center overflow-hidden"
-      >
-        <div style={{ width: canvasWidth * containerScale, height: canvasHeight * containerScale }}>
-          <InteractiveWhiteboardCanvas
-            ref={ref}
-            autoFitTransform={autoFitTransform}
-            canvasHeight={canvasHeight}
-            canvasWidth={canvasWidth}
-            containerScale={containerScale}
-            elements={elements}
-            isClearing={isClearing}
-            onViewModifiedChange={onViewModifiedChange}
-            readyHintText={t('whiteboard.readyHint')}
-            readyText={t('whiteboard.ready')}
-          />
-        </div>
+      <div ref={containerRef} className="w-full h-full overflow-hidden">
+        <InteractiveWhiteboardCanvas
+          ref={ref}
+          autoFitTransform={autoFitTransform}
+          canvasHeight={canvasHeight}
+          canvasWidth={canvasWidth}
+          containerWidth={containerSize.width}
+          containerHeight={containerSize.height}
+          containerScale={containerScale}
+          elements={elements}
+          isClearing={isClearing}
+          onViewModifiedChange={onViewModifiedChange}
+          readyHintText={t('whiteboard.readyHint')}
+          readyText={t('whiteboard.ready')}
+        />
       </div>
     );
   },
