@@ -542,6 +542,32 @@ export function Roundtable({
   const presentationDiscussionAgentConfig = discussionRequest
     ? getAgentConfig(discussionRequest.agentId || '')
     : null;
+
+  const handlePresentationBubbleClick = useCallback(() => {
+    if (isTopicPending) {
+      onResumeTopic?.();
+      return;
+    }
+    if (isInLiveFlow) {
+      if (isDiscussionPaused) {
+        onDiscussionResume?.();
+      } else if (!thinkingState && currentSpeech) {
+        onDiscussionPause?.();
+      }
+      return;
+    }
+    onPlayPause?.();
+  }, [
+    isTopicPending,
+    isInLiveFlow,
+    isDiscussionPaused,
+    thinkingState,
+    currentSpeech,
+    onResumeTopic,
+    onDiscussionResume,
+    onDiscussionPause,
+    onPlayPause,
+  ]);
   const showPresentationDock =
     !!controlsVisible ||
     !!discussionRequest ||
@@ -598,6 +624,14 @@ export function Roundtable({
           speakingAgentId={speakingAgentId ?? null}
           isTopicPending={!!isTopicPending}
           side="left"
+          onBubbleClick={handlePresentationBubbleClick}
+          audioIndicatorState={audioIndicatorState ?? 'idle'}
+          audioAgentColor={
+            getAgentConfig(speakingAgentId || '')?.color ??
+            getAgentConfig(teacherParticipant?.id || '')?.color
+          }
+          buttonState={enrichedPlaybackView?.buttonState}
+          isPaused={isDiscussionPaused}
         />
 
         {/* Click-outside backdrop to dismiss input/voice */}
@@ -798,6 +832,14 @@ export function Roundtable({
             isTopicPending={!!isTopicPending}
             userAvatar={userAvatar}
             side="right"
+            onBubbleClick={handlePresentationBubbleClick}
+            audioIndicatorState={audioIndicatorState ?? 'idle'}
+            audioAgentColor={
+              getAgentConfig(speakingAgentId || '')?.color ??
+              getAgentConfig(teacherParticipant?.id || '')?.color
+            }
+            buttonState={enrichedPlaybackView?.buttonState}
+            isPaused={isDiscussionPaused}
           />
 
           {/* Dock */}
