@@ -44,7 +44,7 @@ interface UseChatSessionsOptions {
     agentId: string | null,
   ) => void;
   /** When provided and returns true, StreamBuffer holds on the current text item after reveal. */
-  shouldHoldAfterReveal?: () => boolean;
+  shouldHoldAfterReveal?: () => { holding: boolean; segmentDone: number } | boolean;
 }
 
 export function useChatSessions(options: UseChatSessionsOptions = {}) {
@@ -394,7 +394,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
           },
 
           shouldHoldAfterReveal() {
-            return shouldHoldAfterRevealRef.current?.() ?? false;
+            return shouldHoldAfterRevealRef.current?.() ?? (false as const);
           },
         },
         pacingOptions,
