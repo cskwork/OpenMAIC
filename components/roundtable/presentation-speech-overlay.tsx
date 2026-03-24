@@ -1,10 +1,9 @@
 'use client';
 
 import { AnimatePresence, motion } from 'motion/react';
-import { Play, Pause, Repeat } from 'lucide-react';
+import { Play, Pause, Repeat, Loader2, Volume2 } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { AvatarDisplay } from '@/components/ui/avatar-display';
-import { AudioIndicator } from '@/components/roundtable/audio-indicator';
 import type { AudioIndicatorState } from '@/components/roundtable/audio-indicator';
 import type { PlaybackView } from '@/lib/playback';
 import type { Participant } from '@/lib/types/roundtable';
@@ -184,8 +183,11 @@ export function PresentationBubbleCard({
             <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
               {bubble.name}
             </div>
-            {audioIndicatorState && audioIndicatorState !== 'idle' && (
-              <AudioIndicator state={audioIndicatorState} agentColor={audioAgentColor} />
+            {audioIndicatorState === 'generating' && (
+              <Loader2 className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 animate-spin" />
+            )}
+            {audioIndicatorState === 'playing' && (
+              <Volume2 className="w-3.5 h-3.5 text-gray-500 dark:text-gray-400" />
             )}
           </div>
         </div>
