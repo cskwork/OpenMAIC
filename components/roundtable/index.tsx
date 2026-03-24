@@ -14,9 +14,9 @@ import {
   Repeat,
   BookOpen,
   Loader2,
+  Volume2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { AudioIndicator } from './audio-indicator';
 import type { AudioIndicatorState } from './audio-indicator';
 import { CanvasToolbar } from '@/components/canvas/canvas-toolbar';
 import { useAudioRecorder } from '@/lib/hooks/use-audio-recorder';
@@ -1584,21 +1584,21 @@ export function Roundtable({
                             <span className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 truncate">
                               {bubbleName}
                             </span>
-                            <AudioIndicator
-                              state={
+                            {(() => {
+                              const aiState =
                                 speakingAgentId === audioAgentId
                                   ? (audioIndicatorState ?? 'idle')
-                                  : 'idle'
-                              }
-                              agentColor={
-                                bubbleRole === 'agent'
-                                  ? (useAgentRegistry.getState().getAgent(speakingAgentId || '')
-                                      ?.color ?? undefined)
-                                  : (useAgentRegistry
-                                      .getState()
-                                      .getAgent(teacherParticipant?.id || '')?.color ?? undefined)
-                              }
-                            />
+                                  : 'idle';
+                              if (aiState === 'generating')
+                                return (
+                                  <Loader2 className="w-3 h-3 text-amber-500 dark:text-amber-400 animate-spin" />
+                                );
+                              if (aiState === 'playing')
+                                return (
+                                  <Volume2 className="w-3 h-3 text-gray-400 dark:text-gray-500" />
+                                );
+                              return null;
+                            })()}
                           </div>
                         )}
                         {isBubbleLoading ? (
