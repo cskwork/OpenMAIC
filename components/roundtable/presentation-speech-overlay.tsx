@@ -193,7 +193,7 @@ export function PresentationBubbleCard({
         </div>
       </div>
 
-      <div className="px-4 pb-3 pr-10 max-h-[120px] overflow-hidden">
+      <div className="px-4 pb-3 pr-10 max-h-[120px] overflow-y-auto scrollbar-hide">
         {bubble.isLoading ? (
           <div className="flex gap-1 items-center py-1">
             {[0, 0.2, 0.4].map((delay) => (
