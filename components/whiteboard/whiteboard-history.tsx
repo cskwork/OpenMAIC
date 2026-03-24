@@ -79,7 +79,7 @@ export function WhiteboardHistory({ isOpen, onClose }: WhiteboardHistoryProps) {
     if (currentElements.length > 0) {
       useWhiteboardHistoryStore
         .getState()
-        .pushSnapshot(currentElements, t('whiteboard.beforeRestore'));
+        .pushSnapshot(currentElements);
     }
 
     // Transactional restore: replace all elements in one update() call
@@ -140,7 +140,7 @@ export function WhiteboardHistory({ isOpen, onClose }: WhiteboardHistoryProps) {
                     >
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium text-gray-700 dark:text-gray-200 truncate">
-                          {snap.label || `#${realIdx + 1}`}
+                          {`#${realIdx + 1}`}
                         </div>
                         <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
                           {formatTime(snap.timestamp)} ·{' '}

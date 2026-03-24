@@ -17,8 +17,6 @@ export interface WhiteboardSnapshot {
   elements: PPTElement[];
   /** Timestamp when the snapshot was taken */
   timestamp: number;
-  /** Human-readable label shown in the history panel */
-  label?: string;
   /** Cached fingerprint used for deduplication and no-op restore checks */
   fingerprint: string;
 }
@@ -30,7 +28,7 @@ interface WhiteboardHistoryState {
   maxSnapshots: number;
   // Actions
   /** Save a snapshot of the current whiteboard elements */
-  pushSnapshot: (elements: PPTElement[], label?: string) => void;
+  pushSnapshot: (elements: PPTElement[]) => void;
   /** Get a snapshot by index */
   getSnapshot: (index: number) => WhiteboardSnapshot | null;
   /** Clear all history */
@@ -41,7 +39,7 @@ export const useWhiteboardHistoryStore = create<WhiteboardHistoryState>((set, ge
   snapshots: [],
   maxSnapshots: 20,
 
-  pushSnapshot: (elements, label) => {
+  pushSnapshot: (elements) => {
     // Don't save empty snapshots
     if (!elements || elements.length === 0) return;
 
@@ -54,7 +52,6 @@ export const useWhiteboardHistoryStore = create<WhiteboardHistoryState>((set, ge
     const snapshot: WhiteboardSnapshot = {
       elements: JSON.parse(JSON.stringify(elements)), // Deep copy
       timestamp: Date.now(),
-      label,
       fingerprint: newFingerprint,
     };
 

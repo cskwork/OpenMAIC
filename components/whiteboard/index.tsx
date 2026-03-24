@@ -45,7 +45,7 @@ export function Whiteboard({ isOpen, onClose }: WhiteboardProps) {
     if (whiteboard.elements && whiteboard.elements.length > 0) {
       useWhiteboardHistoryStore
         .getState()
-        .pushSnapshot(whiteboard.elements, t('whiteboard.beforeClear'));
+        .pushSnapshot(whiteboard.elements);
     }
 
     // Trigger cascade exit animation
