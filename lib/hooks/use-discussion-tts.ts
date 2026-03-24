@@ -46,7 +46,7 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
     onEnd: () => {
       isPlayingRef.current = false;
       onAudioStateChangeRef.current?.(null, 'idle');
-      processQueueRef.current();
+      setTimeout(() => processQueueRef.current(), 0);
     },
   });
   const browserCancelRef = useRef(browserCancel);
@@ -147,12 +147,15 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       audio.addEventListener('ended', () => {
         isPlayingRef.current = false;
         onAudioStateChangeRef.current?.(item.agentId, 'idle');
-        queueMicrotask(() => processQueueRef.current());
+        // Use setTimeout instead of queueMicrotask so the StreamBuffer's
+        // 30ms tick interval has a chance to observe isPlaying=false and
+        // release its TTS hold before processQueue sets isPlaying=true again.
+        setTimeout(() => processQueueRef.current(), 0);
       });
       audio.addEventListener('error', () => {
         isPlayingRef.current = false;
         onAudioStateChangeRef.current?.(item.agentId, 'idle');
-        queueMicrotask(() => processQueueRef.current());
+        setTimeout(() => processQueueRef.current(), 0);
       });
       await audio.play();
     } catch (err) {
@@ -161,7 +164,7 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       }
       isPlayingRef.current = false;
       onAudioStateChangeRef.current?.(item.agentId, 'idle');
-      queueMicrotask(() => processQueueRef.current());
+      setTimeout(() => processQueueRef.current(), 0);
     }
   }, [enabled, ttsMuted, ttsVolume, ttsProvidersConfig, ttsSpeed, playbackSpeed]);
 
@@ -213,8 +216,11 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
 
   useEffect(() => cleanup, [cleanup]);
 
-  /** Returns true when TTS audio is still playing or queued — used by StreamBuffer hold logic. */
-  const shouldHold = useCallback(() => isPlayingRef.current || queueRef.current.length > 0, []);
+  /** Returns true when TTS audio is actively playing — used by StreamBuffer hold logic.
+   *  Only checks isPlaying, not queue length — the buffer should advance to the next
+   *  text segment as soon as the current segment's audio finishes, even if more TTS
+   *  items are queued for future segments. */
+  const shouldHold = useCallback(() => isPlayingRef.current, []);
 
   return {
     handleSegmentSealed,
