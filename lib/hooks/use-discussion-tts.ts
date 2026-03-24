@@ -35,6 +35,7 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
 
   const queueRef = useRef<QueueItem[]>([]);
   const isPlayingRef = useRef(false);
+  const pausedRef = useRef(false);
   const segmentDoneCounterRef = useRef(0);
   const abortControllerRef = useRef<AbortController | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -140,7 +141,6 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       const data = await res.json();
       if (!data.base64) throw new Error('No audio in response');
 
-      onAudioStateChangeRef.current?.(item.agentId, 'playing');
       const audioUrl = `data:audio/${data.format || 'mp3'};base64,${data.base64}`;
       const audio = new Audio(audioUrl);
       audio.playbackRate = playbackSpeed;
@@ -158,6 +158,15 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
         onAudioStateChangeRef.current?.(item.agentId, 'idle');
         queueMicrotask(() => processQueueRef.current());
       });
+
+      // If paused during TTS generation, keep audio ready but don't play
+      if (pausedRef.current) {
+        onAudioStateChangeRef.current?.(item.agentId, 'playing');
+        audio.pause();
+        return;
+      }
+
+      onAudioStateChangeRef.current?.(item.agentId, 'playing');
       await audio.play();
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {
@@ -203,12 +212,14 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
   }, []);
 
   const pause = useCallback(() => {
+    pausedRef.current = true;
     if (audioRef.current && !audioRef.current.paused) {
       audioRef.current.pause();
     }
   }, []);
 
   const resume = useCallback(() => {
+    pausedRef.current = false;
     if (audioRef.current && audioRef.current.paused && audioRef.current.src) {
       audioRef.current.play().catch(() => {});
     }
