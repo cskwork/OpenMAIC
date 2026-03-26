@@ -11,6 +11,10 @@ import type { ASRProviderId } from '@/lib/audio/types';
 import { Mic, MicOff, CheckCircle2, XCircle, Eye, EyeOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { createLogger } from '@/lib/logger';
+import {
+  getSupportedAudioMimeType,
+  getAudioFileExtension,
+} from '@/lib/audio/media-recorder-utils';
 
 const log = createLogger('ASRSettings');
 
@@ -92,7 +96,8 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
           const stream = await navigator.mediaDevices.getUserMedia({
             audio: true,
           });
-          const mediaRecorder = new MediaRecorder(stream);
+          const mimeType = getSupportedAudioMimeType();
+          const mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
           mediaRecorderRef.current = mediaRecorder;
           const audioChunks: Blob[] = [];
           mediaRecorder.ondataavailable = (event) => {
@@ -100,9 +105,9 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
           };
           mediaRecorder.onstop = async () => {
             stream.getTracks().forEach((track) => track.stop());
-            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+            const audioBlob = new Blob(audioChunks, { type: mimeType || 'audio/webm' });
             const formData = new FormData();
-            formData.append('audio', audioBlob, 'recording.webm');
+            formData.append('audio', audioBlob, `recording.${getAudioFileExtension(audioBlob.type)}`);
             formData.append('providerId', selectedProviderId);
             formData.append('language', asrLanguage);
             const apiKeyValue = asrProvidersConfig[selectedProviderId]?.apiKey;
