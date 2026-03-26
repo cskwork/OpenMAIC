@@ -664,7 +664,7 @@ export function Roundtable({
           onBubbleClick={handlePresentationBubbleClick}
           audioIndicatorState={audioIndicatorState ?? 'idle'}
           buttonState={enrichedPlaybackView?.buttonState}
-          isPaused={isDiscussionPaused}
+          isPaused={isDiscussionPaused || engineMode === 'paused'}
         />
 
         {/* Click-outside backdrop to dismiss input/voice */}
@@ -878,7 +878,7 @@ export function Roundtable({
             onBubbleClick={handlePresentationBubbleClick}
             audioIndicatorState={audioIndicatorState ?? 'idle'}
             buttonState={enrichedPlaybackView?.buttonState}
-            isPaused={isDiscussionPaused}
+            isPaused={isDiscussionPaused || engineMode === 'paused'}
           />
 
           {/* Dock */}
