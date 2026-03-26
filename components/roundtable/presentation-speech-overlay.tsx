@@ -1,7 +1,8 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Play, Pause, Repeat, Loader2, Volume2 } from 'lucide-react';
+import { Play, Pause, Repeat, Loader2, Volume2, ChevronDown, ChevronUp } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { AvatarDisplay } from '@/components/ui/avatar-display';
 import type { AudioIndicatorState } from '@/components/roundtable/audio-indicator';
@@ -117,16 +118,81 @@ export function buildPresentationBubbleModel({
   };
 }
 
+/** Collapsed pill — shows avatar + name, click to expand */
+function CollapsedBubblePill({
+  bubble,
+  onExpand,
+  onResume,
+}: {
+  readonly bubble: PresentationBubbleModel;
+  readonly onExpand: () => void;
+  readonly onResume?: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2" onClick={onExpand}>
+      <div
+        className={cn(
+          'flex items-center gap-2 px-3 py-1.5 rounded-full border backdrop-blur-xl shadow-md cursor-pointer transition-all duration-200',
+          'hover:shadow-lg hover:scale-[1.02] active:scale-[0.98]',
+          bubble.role === 'user'
+            ? 'bg-violet-50/80 dark:bg-violet-950/70 border-violet-200/70 dark:border-violet-800/60'
+            : bubble.role === 'agent'
+              ? 'bg-blue-50/80 dark:bg-blue-950/70 border-blue-200/70 dark:border-blue-800/60'
+              : 'bg-white/80 dark:bg-gray-900/85 border-gray-200/70 dark:border-gray-700/70',
+        )}
+      >
+        <div
+          className={cn(
+            'w-6 h-6 rounded-full overflow-hidden border shrink-0',
+            bubble.role === 'user'
+              ? 'border-violet-300 dark:border-violet-600'
+              : bubble.role === 'agent'
+                ? 'border-blue-300 dark:border-blue-600'
+                : 'border-purple-200 dark:border-purple-700',
+          )}
+        >
+          <AvatarDisplay src={bubble.avatar} alt={bubble.name} />
+        </div>
+        <span className="text-xs font-medium text-gray-700 dark:text-gray-200 truncate max-w-[120px]">
+          {bubble.name}
+        </span>
+        <ChevronUp className="w-3 h-3 text-gray-400 dark:text-gray-500 shrink-0" />
+      </div>
+      {onResume && (
+        <div
+          onClick={(e) => {
+            e.stopPropagation();
+            onResume();
+          }}
+          className={cn(
+            'p-2 rounded-full border backdrop-blur-xl shadow-md cursor-pointer transition-all duration-200',
+            'hover:shadow-lg hover:scale-[1.02] active:scale-[0.98]',
+            bubble.role === 'user'
+              ? 'bg-violet-50/80 dark:bg-violet-950/70 border-violet-200/70 dark:border-violet-800/60 hover:bg-violet-100 dark:hover:bg-violet-900/70'
+              : bubble.role === 'agent'
+                ? 'bg-blue-50/80 dark:bg-blue-950/70 border-blue-200/70 dark:border-blue-800/60 hover:bg-blue-100 dark:hover:bg-blue-900/70'
+                : 'bg-white/80 dark:bg-gray-900/85 border-gray-200/70 dark:border-gray-700/70 hover:bg-gray-100 dark:hover:bg-gray-800/70',
+          )}
+        >
+          <Play className="w-3.5 h-3.5 text-gray-500 dark:text-gray-400 ml-0.5" />
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Reusable bubble card — renders the speech bubble content (avatar, name, text) */
 export function PresentationBubbleCard({
   bubble,
   onClick,
+  onCollapse,
   audioIndicatorState,
   buttonState,
   isPaused,
 }: {
   readonly bubble: PresentationBubbleModel;
   readonly onClick?: () => void;
+  readonly onCollapse?: () => void;
   readonly audioIndicatorState?: AudioIndicatorState;
   readonly buttonState?: 'play' | 'bars' | 'restart' | 'none';
   readonly isPaused?: boolean;
@@ -188,9 +254,20 @@ export function PresentationBubbleCard({
             )}
           </div>
         </div>
+        {isPaused && onCollapse && (
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              onCollapse();
+            }}
+            className="absolute top-2 right-2 p-1.5 rounded-full text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100/80 dark:hover:bg-gray-800/80 transition-colors duration-200 cursor-pointer z-10"
+          >
+            <ChevronDown className="w-4 h-4" />
+          </div>
+        )}
       </div>
 
-      <div className="px-4 pb-4 pr-10 max-h-[140px] overflow-y-auto scrollbar-hide">
+      <div className="mx-4 mr-10 mb-4 max-h-[140px] overflow-y-auto scrollbar-hide">
         {bubble.isLoading ? (
           <div className="flex gap-1 items-center py-1">
             {[0, 0.2, 0.4].map((delay) => (
@@ -291,6 +368,8 @@ export function PresentationSpeechOverlay({
   isPaused,
 }: PresentationSpeechOverlayProps) {
   const { t } = useI18n();
+  const [isCollapsed, setIsCollapsed] = useState(false);
+
   const bubble = buildPresentationBubbleModel({
     playbackView,
     participants,
@@ -302,7 +381,50 @@ export function PresentationSpeechOverlay({
     userAvatar,
   });
 
+  // Auto-expand when playback resumes
+  useEffect(() => {
+    if (!isPaused) setIsCollapsed(false);
+  }, [isPaused]);
+
   const matchesSide = !!(bubble && bubble.side === side);
+
+  const renderContent = (b: PresentationBubbleModel) => (
+    <AnimatePresence mode="wait" initial={false}>
+      {isCollapsed ? (
+        <motion.div
+          key="collapsed"
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.9 }}
+          transition={{ duration: 0.18 }}
+        >
+          <CollapsedBubblePill
+            bubble={b}
+            onExpand={() => setIsCollapsed(false)}
+            onResume={onBubbleClick}
+          />
+        </motion.div>
+      ) : (
+        <motion.div
+          key="expanded"
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.95 }}
+          transition={{ duration: 0.18 }}
+          className={PRESENTATION_BUBBLE_WIDTH}
+        >
+          <PresentationBubbleCard
+            bubble={b}
+            onClick={onBubbleClick}
+            onCollapse={isPaused ? () => setIsCollapsed(true) : undefined}
+            audioIndicatorState={audioIndicatorState}
+            buttonState={buttonState}
+            isPaused={isPaused}
+          />
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
 
   /* ── Left-side overlay: absolute covers stage, renders left bubble + cue ── */
   if (side === 'left') {
@@ -316,18 +438,9 @@ export function PresentationSpeechOverlay({
               animate={{ opacity: 1, x: 0, y: 0 }}
               exit={{ opacity: 0, y: 8 }}
               transition={{ duration: 0.22, ease: [0.21, 1, 0.36, 1] }}
-              className={cn(
-                'absolute bottom-6 left-6 z-30 pointer-events-auto',
-                PRESENTATION_BUBBLE_WIDTH,
-              )}
+              className="absolute bottom-6 left-6 z-30 pointer-events-auto"
             >
-              <PresentationBubbleCard
-                bubble={bubble}
-                onClick={onBubbleClick}
-                audioIndicatorState={audioIndicatorState}
-                buttonState={buttonState}
-                isPaused={isPaused}
-              />
+              {renderContent(bubble)}
             </motion.div>
           )}
         </AnimatePresence>
@@ -345,15 +458,9 @@ export function PresentationSpeechOverlay({
           animate={{ opacity: 1, x: 0, y: 0 }}
           exit={{ opacity: 0, y: 8 }}
           transition={{ duration: 0.22, ease: [0.21, 1, 0.36, 1] }}
-          className={cn(PRESENTATION_BUBBLE_WIDTH, 'pointer-events-auto')}
+          className="pointer-events-auto"
         >
-          <PresentationBubbleCard
-            bubble={bubble}
-            onClick={onBubbleClick}
-            audioIndicatorState={audioIndicatorState}
-            buttonState={buttonState}
-            isPaused={isPaused}
-          />
+          {renderContent(bubble)}
         </motion.div>
       )}
     </AnimatePresence>

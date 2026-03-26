@@ -682,14 +682,14 @@ export function Roundtable({
         {/* ── Toolbar — pinned to bottom of screen ── */}
         <div
           className={cn(
-            'fixed bottom-0 left-0 z-[40] pointer-events-auto flex items-center justify-center transition-all duration-300',
+            'fixed bottom-0 left-0 z-[40] pointer-events-none flex items-center justify-center transition-all duration-300',
             controlsVisible
               ? 'opacity-100 translate-y-0'
-              : 'opacity-0 translate-y-2 pointer-events-none',
+              : 'opacity-0 translate-y-2',
           )}
           style={{ right: chatCollapsed === false ? (chatAreaWidth ?? 320) : 0 }}
         >
-          <div className="mb-3 px-2 py-1 rounded-full bg-white/70 dark:bg-black/60 backdrop-blur-xl border border-gray-200/60 dark:border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.08)] dark:shadow-[0_8px_32px_rgba(0,0,0,0.4)]">
+          <div className="mb-3 px-2 py-1 rounded-full bg-white/70 dark:bg-black/60 backdrop-blur-xl border border-gray-200/60 dark:border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.08)] dark:shadow-[0_8px_32px_rgba(0,0,0,0.4)] pointer-events-auto">
             {toolbar}
           </div>
         </div>
