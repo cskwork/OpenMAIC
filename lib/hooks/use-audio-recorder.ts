@@ -1,5 +1,9 @@
 import { useState, useRef, useCallback } from 'react';
 import { createLogger } from '@/lib/logger';
+import {
+  getSupportedAudioMimeType,
+  getAudioFileExtension,
+} from '@/lib/audio/media-recorder-utils';
 
 const log = createLogger('AudioRecorder');
 
@@ -40,7 +44,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
 
       try {
         const formData = new FormData();
-        formData.append('audio', audioBlob, 'recording.webm');
+        formData.append('audio', audioBlob, `recording.${getAudioFileExtension(audioBlob.type)}`);
 
         // Get current ASR configuration from settings store
         // Note: This requires importing useSettingsStore in browser context
@@ -190,10 +194,9 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
       // Request microphone permission
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      // Create MediaRecorder
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm',
-      });
+      // Create MediaRecorder — Safari doesn't support audio/webm, fall back to mp4
+      const mimeType = getSupportedAudioMimeType();
+      const mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
 
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
@@ -210,7 +213,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
 
         // Merge audio chunks
         const audioBlob = new Blob(audioChunksRef.current, {
-          type: 'audio/webm',
+          type: mimeType || 'audio/webm',
         });
 
         // Send to server for transcription
