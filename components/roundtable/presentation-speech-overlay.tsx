@@ -267,7 +267,7 @@ export function PresentationBubbleCard({
         )}
       </div>
 
-      <div className="mx-4 mr-10 mb-4 max-h-[140px] overflow-y-auto scrollbar-hide">
+      <div className="ml-4 mr-10 mb-4 max-h-[140px] overflow-y-auto scrollbar-hide">
         {bubble.isLoading ? (
           <div className="flex gap-1 items-center py-1">
             {[0, 0.2, 0.4].map((delay) => (
@@ -385,6 +385,11 @@ export function PresentationSpeechOverlay({
   useEffect(() => {
     if (!isPaused) setIsCollapsed(false);
   }, [isPaused]);
+
+  // Reset collapse state when speaker changes
+  useEffect(() => {
+    setIsCollapsed(false);
+  }, [bubble?.key]);
 
   const matchesSide = !!(bubble && bubble.side === side);
 
