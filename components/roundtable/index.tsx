@@ -683,9 +683,7 @@ export function Roundtable({
         <div
           className={cn(
             'fixed bottom-0 left-0 z-[40] pointer-events-none flex items-center justify-center transition-all duration-300',
-            controlsVisible
-              ? 'opacity-100 translate-y-0'
-              : 'opacity-0 translate-y-2',
+            controlsVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2',
           )}
           style={{ right: chatCollapsed === false ? (chatAreaWidth ?? 320) : 0 }}
         >
