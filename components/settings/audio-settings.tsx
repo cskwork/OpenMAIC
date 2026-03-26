@@ -25,10 +25,7 @@ import { Volume2, Mic, MicOff, CheckCircle2, XCircle, Eye, EyeOff } from 'lucide
 import { cn } from '@/lib/utils';
 import azureVoicesData from '@/lib/audio/azure.json';
 import { createLogger } from '@/lib/logger';
-import {
-  getSupportedAudioMimeType,
-  getAudioFileExtension,
-} from '@/lib/audio/media-recorder-utils';
+import { getSupportedAudioMimeType, getAudioFileExtension } from '@/lib/audio/media-recorder-utils';
 
 const log = createLogger('AudioSettings');
 
@@ -320,7 +317,11 @@ export function AudioSettings({ onSave }: AudioSettingsProps = {}) {
 
             const audioBlob = new Blob(audioChunks, { type: mimeType || 'audio/webm' });
             const formData = new FormData();
-            formData.append('audio', audioBlob, `recording.${getAudioFileExtension(audioBlob.type)}`);
+            formData.append(
+              'audio',
+              audioBlob,
+              `recording.${getAudioFileExtension(audioBlob.type)}`,
+            );
             formData.append('providerId', asrProviderId);
             formData.append('language', asrLanguage);
 

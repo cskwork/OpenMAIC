@@ -1,9 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import { createLogger } from '@/lib/logger';
-import {
-  getSupportedAudioMimeType,
-  getAudioFileExtension,
-} from '@/lib/audio/media-recorder-utils';
+import { getSupportedAudioMimeType, getAudioFileExtension } from '@/lib/audio/media-recorder-utils';
 
 const log = createLogger('AudioRecorder');
 
