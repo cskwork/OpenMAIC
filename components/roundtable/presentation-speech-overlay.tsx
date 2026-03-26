@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Play, Pause, Repeat, Loader2, Volume2, ChevronDown, ChevronUp } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
@@ -368,7 +368,6 @@ export function PresentationSpeechOverlay({
   isPaused,
 }: PresentationSpeechOverlayProps) {
   const { t } = useI18n();
-  const [isCollapsed, setIsCollapsed] = useState(false);
 
   const bubble = buildPresentationBubbleModel({
     playbackView,
@@ -381,15 +380,10 @@ export function PresentationSpeechOverlay({
     userAvatar,
   });
 
-  // Auto-expand when playback resumes
-  useEffect(() => {
-    if (!isPaused) setIsCollapsed(false);
-  }, [isPaused]);
-
-  // Reset collapse state when speaker changes
-  useEffect(() => {
-    setIsCollapsed(false);
-  }, [bubble?.key]);
+  // Track which speaker the user collapsed — derived state avoids effects/refs.
+  // isCollapsed is true only when the user explicitly collapsed THIS speaker while paused.
+  const [collapsedForKey, setCollapsedForKey] = useState<string | null>(null);
+  const isCollapsed = isPaused && collapsedForKey === bubble?.key;
 
   const matchesSide = !!(bubble && bubble.side === side);
 
@@ -405,7 +399,7 @@ export function PresentationSpeechOverlay({
         >
           <CollapsedBubblePill
             bubble={b}
-            onExpand={() => setIsCollapsed(false)}
+            onExpand={() => setCollapsedForKey(null)}
             onResume={onBubbleClick}
           />
         </motion.div>
@@ -421,7 +415,7 @@ export function PresentationSpeechOverlay({
           <PresentationBubbleCard
             bubble={b}
             onClick={onBubbleClick}
-            onCollapse={isPaused ? () => setIsCollapsed(true) : undefined}
+            onCollapse={isPaused ? () => setCollapsedForKey(b.key) : undefined}
             audioIndicatorState={audioIndicatorState}
             buttonState={buttonState}
             isPaused={isPaused}
