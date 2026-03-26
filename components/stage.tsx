@@ -1047,7 +1047,16 @@ export function Stage({
               thinkingState={thinkingState}
               isCueUser={isCueUser}
               isTopicPending={isTopicPending}
-              onMessageSend={(msg) => {
+              onMessageSend={async (msg) => {
+                // If discussion was Level-1 paused (input box opened), upgrade
+                // to a full soft-pause so the SSE stream is interrupted and the
+                // old bubble / speaking state is cleaned up before sending.
+                if (isDiscussionPaused && chatIsStreaming) {
+                  await doSoftPause();
+                }
+                // Flush any buffered / in-flight TTS audio from the previous
+                // agent turn so it doesn't leak into the next round.
+                discussionTTS.cleanup();
                 // Clear soft-paused state — user is continuing the topic
                 if (isTopicPending) {
                   setIsTopicPending(false);
@@ -1088,10 +1097,17 @@ export function Stage({
                 engineRef.current?.skipDiscussion();
               }}
               onStopDiscussion={handleStopDiscussion}
-              onInputActivate={async () => {
-                // Soft-pause QA/Discussion if streaming (opening input = implicit pause)
-                if (chatIsStreaming) {
-                  await doSoftPause();
+              onInputActivate={() => {
+                // Level-1 pause: freeze buffer tick + TTS audio while SSE keeps buffering.
+                // User resumes manually via Space / pause button after closing the input.
+                if (
+                  chatIsStreaming &&
+                  !isDiscussionPaused &&
+                  (chatSessionType === 'qa' || chatSessionType === 'discussion')
+                ) {
+                  chatAreaRef.current?.pauseActiveLiveBuffer();
+                  discussionTTS.pause();
+                  setIsDiscussionPaused(true);
                 }
                 // Also pause playback engine
                 if (engineRef.current && (engineMode === 'playing' || engineMode === 'live')) {
