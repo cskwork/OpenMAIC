@@ -59,9 +59,7 @@ export function ModelEditDialog({
   };
 
   const handleTestModel = useCallback(async () => {
-    if (!editingModel || !apiKey) {
-      setTestStatus('error');
-      setTestMessage(t('settings.apiKeyRequired') || 'API Key is required');
+    if (!editingModel) {
       return;
     }
 
