@@ -187,7 +187,9 @@ function AgentVoicePill({
               </div>
               {group.voices.map((voice) => {
                 const isActive =
-                  resolved.providerId === provider.providerId && resolved.voiceId === voice.id;
+                  resolved.providerId === provider.providerId &&
+                  resolved.voiceId === voice.id &&
+                  (resolved.modelId || '') === (group.modelId || '');
                 const previewKey = `${provider.providerId}::${voice.id}`;
                 const isPreviewing = previewingId === previewKey;
                 return (
@@ -406,7 +408,11 @@ function TeacherVoicePill({
                   : provider.providerName}
               </div>
               {group.voices.map((voice) => {
-                const isActive = ttsProviderId === provider.providerId && ttsVoice === voice.id;
+                const currentModelId = ttsProvidersConfig[ttsProviderId]?.modelId || '';
+                const isActive =
+                  ttsProviderId === provider.providerId &&
+                  ttsVoice === voice.id &&
+                  currentModelId === (group.modelId || '');
                 const previewKey = `${provider.providerId}::${voice.id}`;
                 const isPreviewing = previewingId === previewKey;
                 return (
