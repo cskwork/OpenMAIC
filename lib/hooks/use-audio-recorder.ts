@@ -46,11 +46,10 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
         // Note: This requires importing useSettingsStore in browser context
         if (typeof window !== 'undefined') {
           const { useSettingsStore } = await import('@/lib/store/settings');
-          const { asrProviderId, asrModelId, asrLanguage, asrProvidersConfig } =
-            useSettingsStore.getState();
+          const { asrProviderId, asrLanguage, asrProvidersConfig } = useSettingsStore.getState();
 
           formData.append('providerId', asrProviderId);
-          formData.append('modelId', asrModelId);
+          formData.append('modelId', asrProvidersConfig?.[asrProviderId]?.modelId || '');
           formData.append('language', asrLanguage);
 
           // Append API key and base URL if configured
