@@ -42,12 +42,12 @@ import type {
  * Keep in sync with TTSProviderId type definition.
  */
 export const MINIMAX_TTS_MODELS = [
-  { id: 'speech-2.6-turbo', name: 'Speech 2.6 Turbo' },
+  { id: 'speech-2.8-hd', name: 'Speech 2.8 HD' },
+  { id: 'speech-2.8-turbo', name: 'Speech 2.8 Turbo' },
   { id: 'speech-2.6-hd', name: 'Speech 2.6 HD' },
-  { id: 'speech-02-turbo', name: 'Speech 02 Turbo' },
+  { id: 'speech-2.6-turbo', name: 'Speech 2.6 Turbo' },
   { id: 'speech-02-hd', name: 'Speech 02 HD' },
-  { id: 'speech-01-turbo', name: 'Speech 01 Turbo' },
-  { id: 'speech-01-hd', name: 'Speech 01 HD' },
+  { id: 'speech-02-turbo', name: 'Speech 02 Turbo' },
 ] as const;
 
 export const TTS_PROVIDERS: Record<TTSProviderId, TTSProviderConfig> = {
@@ -642,7 +642,7 @@ export const TTS_PROVIDERS: Record<TTSProviderId, TTSProviderConfig> = {
     defaultBaseUrl: 'https://api.minimaxi.com',
     icon: '/logos/minimax.svg',
     models: MINIMAX_TTS_MODELS.map((m) => ({ id: m.id, name: m.name })),
-    defaultModelId: 'speech-02-turbo',
+    defaultModelId: 'speech-2.8-hd',
     voices: [
       {
         id: 'Chinese (Mandarin)_Warm_Girl',
@@ -1103,7 +1103,7 @@ export const DEFAULT_TTS_MODELS: Record<TTSProviderId, string> = {
   'qwen-tts': 'qwen3-tts-flash',
   'doubao-tts': '',
   'elevenlabs-tts': 'eleven_multilingual_v2',
-  'minimax-tts': 'speech-02-turbo',
+  'minimax-tts': 'speech-2.8-hd',
   'browser-native-tts': '',
 };
 

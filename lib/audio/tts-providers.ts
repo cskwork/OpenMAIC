@@ -361,7 +361,7 @@ async function generateMiniMaxTTS(
       'Content-Type': 'application/json; charset=utf-8',
     },
     body: JSON.stringify({
-      model: config.modelId || 'speech-02-turbo',
+      model: config.modelId || 'speech-2.8-hd',
       text,
       stream: false,
       output_format: 'hex',
