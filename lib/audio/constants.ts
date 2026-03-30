@@ -644,35 +644,68 @@ export const TTS_PROVIDERS: Record<TTSProviderId, TTSProviderConfig> = {
     models: MINIMAX_TTS_MODELS.map((m) => ({ id: m.id, name: m.name })),
     defaultModelId: 'speech-2.8-hd',
     voices: [
+      // MiniMax 推荐音色
       {
-        id: 'Chinese (Mandarin)_Warm_Girl',
-        name: '普通话 - Warm Girl',
+        id: 'mm_cimo_ivc_v2',
+        name: 'Cimo (播客/语音助手)',
         language: 'zh-CN',
         gender: 'female',
       },
       {
-        id: 'Chinese (Mandarin)_Radio_Host',
-        name: '普通话 - Radio Host',
-        language: 'zh-CN',
-        gender: 'female',
-      },
-      {
-        id: 'Chinese (Mandarin)_Gentleman',
-        name: '普通话 - Gentleman',
-        language: 'zh-CN',
-        gender: 'male',
-      },
-      {
-        id: 'Chinese (Mandarin)_Male_Announcer',
-        name: '普通话 - Male Announcer',
+        id: 'mm_Max_voice_agent_ivc_v1',
+        name: 'Max (语音助手)',
         language: 'zh-CN',
         gender: 'male',
       },
       {
         id: 'English_expressive_narrator',
-        name: 'English - Expressive Narrator',
+        name: 'Expressive Narrator (有声书)',
         language: 'en-US',
         gender: 'neutral',
+      },
+      // 中文常用
+      {
+        id: 'female-yujie',
+        name: '御姐音色',
+        language: 'zh-CN',
+        gender: 'female',
+      },
+      {
+        id: 'male-qn-jingying',
+        name: '精英青年',
+        language: 'zh-CN',
+        gender: 'male',
+      },
+      {
+        id: 'female-shaonv',
+        name: '少女音色',
+        language: 'zh-CN',
+        gender: 'female',
+      },
+      {
+        id: 'Chinese (Mandarin)_Gentleman',
+        name: '温润男声',
+        language: 'zh-CN',
+        gender: 'male',
+      },
+      {
+        id: 'Chinese (Mandarin)_News_Anchor',
+        name: '新闻女声',
+        language: 'zh-CN',
+        gender: 'female',
+      },
+      // 英文
+      {
+        id: 'English_Trustworthy_Man',
+        name: 'Trustworthy Man',
+        language: 'en-US',
+        gender: 'male',
+      },
+      {
+        id: 'English_Graceful_Lady',
+        name: 'Graceful Lady',
+        language: 'en-US',
+        gender: 'female',
       },
     ],
     supportedFormats: ['mp3', 'wav', 'flac', 'pcm'],
@@ -1092,7 +1125,7 @@ export const DEFAULT_TTS_VOICES: Record<TTSProviderId, string> = {
   'qwen-tts': 'Cherry',
   'doubao-tts': 'zh_female_vv_uranus_bigtts',
   'elevenlabs-tts': 'EXAVITQu4vr4xnSDxMaL',
-  'minimax-tts': 'Chinese (Mandarin)_Warm_Girl',
+  'minimax-tts': 'mm_cimo_ivc_v2',
   'browser-native-tts': 'default',
 };
 
