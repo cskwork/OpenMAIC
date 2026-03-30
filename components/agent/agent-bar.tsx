@@ -71,7 +71,7 @@ function AgentVoicePill({
   }, []);
 
   const handlePreview = useCallback(
-    async (providerId: TTSProviderId, voiceId: string) => {
+    async (providerId: TTSProviderId, voiceId: string, modelId?: string) => {
       const key = `${providerId}::${voiceId}`;
       if (previewingId === key) {
         stopPreview();
@@ -109,6 +109,7 @@ function AgentVoicePill({
             text: previewText,
             audioId: 'voice-preview',
             ttsProviderId: providerId,
+            ttsModelId: modelId || providerConfig?.modelId,
             ttsVoice: voiceId,
             ttsSpeed: 1,
             ttsApiKey: providerConfig?.apiKey,
@@ -220,7 +221,7 @@ function AgentVoicePill({
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        handlePreview(provider.providerId, voice.id);
+                        handlePreview(provider.providerId, voice.id, group.modelId);
                       }}
                       className={cn(
                         'shrink-0 size-6 flex items-center justify-center rounded-sm transition-colors',
@@ -293,7 +294,7 @@ function TeacherVoicePill({
   }, []);
 
   const handlePreview = useCallback(
-    async (providerId: TTSProviderId, voiceId: string) => {
+    async (providerId: TTSProviderId, voiceId: string, modelId?: string) => {
       const key = `${providerId}::${voiceId}`;
       if (previewingId === key) {
         stopPreview();
@@ -330,6 +331,7 @@ function TeacherVoicePill({
             text: previewText,
             audioId: 'voice-preview',
             ttsProviderId: providerId,
+            ttsModelId: modelId || providerConfig?.modelId,
             ttsVoice: voiceId,
             ttsSpeed: 1,
             ttsApiKey: providerConfig?.apiKey,
@@ -436,7 +438,7 @@ function TeacherVoicePill({
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        handlePreview(provider.providerId, voice.id);
+                        handlePreview(provider.providerId, voice.id, group.modelId);
                       }}
                       className={cn(
                         'shrink-0 size-6 flex items-center justify-center rounded-sm transition-colors',
