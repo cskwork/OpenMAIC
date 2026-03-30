@@ -9,6 +9,7 @@
  * - Azure TTS (https://learn.microsoft.com/en-us/azure/ai-services/speech-service/text-to-speech)
  * - GLM TTS (https://docs.bigmodel.cn/cn/guide/models/sound-and-video/glm-tts)
  * - Qwen TTS (https://bailian.console.aliyun.com/)
+ * - Doubao TTS (https://www.volcengine.com/docs/6561/1257543)
  * - Browser Native TTS (Web Speech API, client-side only)
  *
  * Currently Supported ASR Providers:
@@ -82,7 +83,9 @@ export type TTSProviderId =
   | 'azure-tts'
   | 'glm-tts'
   | 'qwen-tts'
+  | 'doubao-tts'
   | 'elevenlabs-tts'
+  | 'minimax-tts'
   | 'browser-native-tts';
 // Add new TTS providers below (uncomment and modify):
 // | 'fish-audio-tts'
@@ -110,6 +113,9 @@ export interface TTSProviderConfig {
   requiresApiKey: boolean;
   defaultBaseUrl?: string;
   icon?: string;
+  supportsModelSelection: boolean;
+  // Use an empty array when the provider does not expose a selectable model concept.
+  models: Array<{ id: string; name: string }>;
   voices: TTSVoiceInfo[];
   supportedFormats: string[]; // ['mp3', 'wav', 'opus', etc.]
   speedRange?: {
@@ -124,8 +130,10 @@ export interface TTSProviderConfig {
  */
 export interface TTSModelConfig {
   providerId: TTSProviderId;
+  modelId?: string;
   apiKey?: string;
   baseUrl?: string;
+  model?: string;
   voice: string;
   speed?: number;
   format?: string;
@@ -157,6 +165,9 @@ export interface ASRProviderConfig {
   requiresApiKey: boolean;
   defaultBaseUrl?: string;
   icon?: string;
+  supportsModelSelection: boolean;
+  // Use an empty array when the provider does not expose a selectable model concept.
+  models: Array<{ id: string; name: string }>;
   supportedLanguages: string[];
   supportedFormats: string[];
 }
@@ -166,6 +177,7 @@ export interface ASRProviderConfig {
  */
 export interface ASRModelConfig {
   providerId: ASRProviderId;
+  modelId?: string;
   apiKey?: string;
   baseUrl?: string;
   language?: string;
