@@ -1,7 +1,9 @@
 'use client';
 
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Locale, translate, defaultLocale } from '@/lib/i18n';
+import { createContext, useContext, ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
+import { type Locale, defaultLocale } from '@/lib/i18n';
+import '@/lib/i18n/config';
 
 type I18nContextType = {
   locale: Locale;
@@ -9,38 +11,16 @@ type I18nContextType = {
   t: (key: string) => string;
 };
 
-const LOCALE_STORAGE_KEY = 'locale';
-const VALID_LOCALES: Locale[] = ['zh-CN', 'en-US'];
-
 const I18nContext = createContext<I18nContextType | undefined>(undefined);
 
 export function I18nProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(defaultLocale);
+  const { t, i18n } = useTranslation();
 
-  // Hydrate from localStorage after mount (avoids SSR mismatch)
-  /* eslint-disable react-hooks/set-state-in-effect -- Hydration from localStorage must happen in effect */
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(LOCALE_STORAGE_KEY);
-      if (stored && VALID_LOCALES.includes(stored as Locale)) {
-        setLocaleState(stored as Locale);
-        return;
-      }
-      const detected = navigator.language?.startsWith('zh') ? 'zh-CN' : 'en-US';
-      localStorage.setItem(LOCALE_STORAGE_KEY, detected);
-      setLocaleState(detected);
-    } catch {
-      // localStorage unavailable, keep default
-    }
-  }, []);
-  /* eslint-enable react-hooks/set-state-in-effect */
+  const locale = (i18n.language as Locale) || defaultLocale;
 
   const setLocale = (newLocale: Locale) => {
-    setLocaleState(newLocale);
-    localStorage.setItem(LOCALE_STORAGE_KEY, newLocale);
+    i18n.changeLanguage(newLocale);
   };
-
-  const t = (key: string): string => translate(locale, key);
 
   return <I18nContext.Provider value={{ locale, setLocale, t }}>{children}</I18nContext.Provider>;
 }
