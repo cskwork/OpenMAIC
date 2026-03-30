@@ -46,7 +46,6 @@ import { toast } from 'sonner';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useDraftCache } from '@/lib/hooks/use-draft-cache';
 import { SpeechButton } from '@/components/audio/speech-button';
-import { findClosestCourseLanguage } from '@/lib/i18n/course-languages';
 
 const log = createLogger('Home');
 
@@ -57,7 +56,7 @@ const RECENT_OPEN_STORAGE_KEY = 'recentClassroomsOpen';
 interface FormState {
   pdfFile: File | null;
   requirement: string;
-  language: string;
+  language: 'zh-CN' | 'en-US';
   webSearch: boolean;
 }
 
@@ -100,12 +99,11 @@ function HomePage() {
       const savedLanguage = localStorage.getItem(LANGUAGE_STORAGE_KEY);
       const updates: Partial<FormState> = {};
       if (savedWebSearch === 'true') updates.webSearch = true;
-      if (savedLanguage) {
-        // User previously made an explicit choice — respect it
+      if (savedLanguage === 'zh-CN' || savedLanguage === 'en-US') {
         updates.language = savedLanguage;
       } else {
-        // First visit: derive course language from UI locale
-        updates.language = findClosestCourseLanguage(locale);
+        const detected = navigator.language?.startsWith('zh') ? 'zh-CN' : 'en-US';
+        updates.language = detected;
       }
       if (Object.keys(updates).length > 0) {
         setForm((prev) => ({ ...prev, ...updates }));

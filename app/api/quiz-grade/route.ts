@@ -10,7 +10,6 @@ import { callLLM } from '@/lib/ai/llm';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { resolveModelFromHeaders } from '@/lib/server/resolve-model';
-import { getCourseLanguagePromptName } from '@/lib/i18n/course-languages';
 const log = createLogger('Quiz Grade');
 
 interface GradeRequest {
@@ -39,19 +38,14 @@ export async function POST(req: NextRequest) {
     const { model: languageModel } = resolveModelFromHeaders(req);
 
     const isZh = language === 'zh-CN';
-    const langName = getCourseLanguagePromptName(language || 'en-US');
-    const langSuffix = !isZh
-      ? `\nCRITICAL: The "comment" field MUST be written in ${langName}, regardless of what language the student used in their answer.`
-      : '';
 
     const systemPrompt = isZh
       ? `你是一位专业的教育评估专家。请根据题目和学生答案进行评分并给出简短评语。
-无论学生用什么语言作答，你的评语必须使用中文。
 必须以如下 JSON 格式回复（不要包含其他内容）：
-{"score": <0到${points}的整数>, "comment": "<一两句中文评语>"}`
+{"score": <0到${points}的整数>, "comment": "<一两句评语>"}`
       : `You are a professional educational assessor. Grade the student's answer and provide brief feedback.
 You must reply in the following JSON format only (no other content):
-{"score": <integer from 0 to ${points}>, "comment": "<one or two sentences of feedback>"}${langSuffix}`;
+{"score": <integer from 0 to ${points}>, "comment": "<one or two sentences of feedback>"}`;
 
     const userPrompt = isZh
       ? `题目：${question}
