@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/hooks/use-i18n';
+import { useStageStore } from '@/lib/store';
 import { getCurrentModelConfig } from '@/lib/utils/model-config';
 import { createLogger } from '@/lib/logger';
 
@@ -687,6 +688,7 @@ function ScoreBanner({
 
 export function QuizView({ questions, sceneId }: QuizViewProps) {
   const { t, locale } = useI18n();
+  const courseLanguage = useStageStore((s) => s.stage?.language) || locale;
   const [phase, setPhase] = useState<Phase>('not_started');
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
   const [results, setResults] = useState<QuestionResult[]>([]);
@@ -753,7 +755,7 @@ export function QuizView({ questions, sceneId }: QuizViewProps) {
       const shortAnswerQs = questions.filter(isShortAnswer);
       const aiResults = await Promise.all(
         shortAnswerQs.map((q) =>
-          gradeShortAnswerQuestion(q, (answers[q.id] as string) ?? '', locale),
+          gradeShortAnswerQuestion(q, (answers[q.id] as string) ?? '', courseLanguage),
         ),
       );
 
@@ -774,7 +776,7 @@ export function QuizView({ questions, sceneId }: QuizViewProps) {
     return () => {
       cancelled = true;
     };
-  }, [phase, questions, answers, locale]);
+  }, [phase, questions, answers, courseLanguage]);
 
   const handleRetry = useCallback(() => {
     setPhase('not_started');
