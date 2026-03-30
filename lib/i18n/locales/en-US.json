@@ -7,7 +7,8 @@
   },
   "home": {
     "slogan": "Generative Learning in Multi-Agent Interactive Classroom",
-    "greeting": "Hi, "
+    "greetingWithName": "Hi, {{name}}",
+    "greetingDefault": "Hi there"
   },
   "toolbar": {
     "languageHint": "Course will be generated in this language",

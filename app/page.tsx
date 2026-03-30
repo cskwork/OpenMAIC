@@ -785,13 +785,10 @@ function GreetingBar() {
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="leading-none select-none flex items-center gap-1">
-                  <span>
-                    <span className="text-xs text-muted-foreground/60 group-hover:text-muted-foreground transition-colors">
-                      {t('home.greeting')}
-                    </span>
-                    <span className="text-[13px] font-semibold text-foreground/85 group-hover:text-foreground transition-colors">
-                      {displayName}
-                    </span>
+                  <span className="text-[13px] font-semibold text-foreground/85 group-hover:text-foreground transition-colors">
+                    {nickname
+                      ? t('home.greetingWithName', { name: nickname })
+                      : t('home.greetingDefault')}
                   </span>
                   <ChevronDown className="size-3 text-muted-foreground/30 group-hover:text-muted-foreground/60 transition-colors shrink-0" />
                 </span>

@@ -7,7 +7,8 @@ export const commonZhCN = {
   },
   home: {
     slogan: 'Generative Learning in Multi-Agent Interactive Classroom',
-    greeting: '嗨，',
+    greetingWithName: '嗨，{name}',
+    greetingDefault: '嗨，同学',
   },
   toolbar: {
     languageHint: '课程将以此语言生成',
@@ -48,7 +49,8 @@ export const commonEnUS = {
   },
   home: {
     slogan: 'Generative Learning in Multi-Agent Interactive Classroom',
-    greeting: 'Hi, ',
+    greetingWithName: 'Hi, {name}',
+    greetingDefault: 'Hi there',
   },
   toolbar: {
     languageHint: 'Course will be generated in this language',
