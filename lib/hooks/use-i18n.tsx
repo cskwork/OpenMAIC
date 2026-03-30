@@ -6,7 +6,6 @@ import { type Locale, defaultLocale } from '@/lib/i18n';
 import '@/lib/i18n/config';
 
 const LOCALE_STORAGE_KEY = 'locale';
-const VALID_LOCALES: Locale[] = ['zh-CN', 'en-US'];
 
 type I18nContextType = {
   locale: Locale;
@@ -19,19 +18,16 @@ const I18nContext = createContext<I18nContextType | undefined>(undefined);
 export function I18nProvider({ children }: { children: ReactNode }) {
   const { t, i18n } = useTranslation();
 
-  const locale = (i18n.language as Locale) || defaultLocale;
+  const locale = i18n.language || defaultLocale;
 
-  // Detect language after hydration to avoid SSR mismatch
+  // Detect language after hydration to avoid SSR mismatch.
+  // i18next handles fallback automatically: if the detected language
+  // has no matching JSON file, it falls back to fallbackLng.
   useEffect(() => {
     try {
       const stored = localStorage.getItem(LOCALE_STORAGE_KEY);
-      if (stored && VALID_LOCALES.includes(stored as Locale)) {
-        if (stored !== i18n.language) i18n.changeLanguage(stored);
-        return;
-      }
-      const detected = navigator.language?.startsWith('zh') ? 'zh-CN' : 'en-US';
-      localStorage.setItem(LOCALE_STORAGE_KEY, detected);
-      if (detected !== i18n.language) i18n.changeLanguage(detected);
+      const target = stored || navigator.language || defaultLocale;
+      if (target !== i18n.language) i18n.changeLanguage(target);
     } catch {
       // localStorage unavailable, keep default
     }
