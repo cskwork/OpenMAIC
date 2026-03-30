@@ -4,13 +4,6 @@ import { useState, useEffect } from 'react';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { useSettingsStore } from '@/lib/store/settings';
 import { TTS_PROVIDERS, DEFAULT_TTS_VOICES } from '@/lib/audio/constants';
@@ -319,25 +312,24 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
         </div>
       )}
 
-      {/* Model Selection */}
+      {/* Available Models */}
       {ttsProvider.models.length > 0 && (
         <div className="space-y-2">
-          <Label className="text-sm">{t('settings.ttsModel')}</Label>
-          <Select
-            value={ttsProvidersConfig[selectedProviderId]?.modelId || ttsProvider.defaultModelId}
-            onValueChange={(value) => setTTSProviderConfig(selectedProviderId, { modelId: value })}
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {ttsProvider.models.map((model) => (
-                <SelectItem key={model.id} value={model.id}>
-                  {model.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Label className="text-sm text-muted-foreground">{t('settings.availableModels')}</Label>
+          <div className="flex flex-wrap gap-2">
+            {ttsProvider.models.map((model) => (
+              <div
+                key={model.id}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-muted/50 border border-border/40 text-xs font-mono text-muted-foreground"
+              >
+                <span className="size-1.5 rounded-full bg-emerald-500/70" />
+                {model.name}
+              </div>
+            ))}
+          </div>
+          <p className="text-[11px] text-muted-foreground/60">
+            {t('settings.modelSelectedViaVoice')}
+          </p>
         </div>
       )}
     </div>

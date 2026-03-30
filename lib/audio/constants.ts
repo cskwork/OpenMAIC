@@ -69,6 +69,7 @@ export const TTS_PROVIDERS: Record<TTSProviderId, TTSProviderConfig> = {
         language: 'en',
         gender: 'neutral',
         description: 'voiceMarin',
+        compatibleModels: ['gpt-4o-mini-tts'],
       },
       {
         id: 'cedar',
@@ -76,6 +77,7 @@ export const TTS_PROVIDERS: Record<TTSProviderId, TTSProviderConfig> = {
         language: 'en',
         gender: 'neutral',
         description: 'voiceCedar',
+        compatibleModels: ['gpt-4o-mini-tts'],
       },
       // Standard voices (alphabetical)
       {
