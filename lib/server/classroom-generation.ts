@@ -29,6 +29,7 @@ import {
 } from '@/lib/server/classroom-media-generation';
 import type { UserRequirements } from '@/lib/types/generation';
 import type { Scene, Stage } from '@/lib/types/stage';
+import { AGENT_COLOR_PALETTE, AGENT_DEFAULT_AVATARS } from '@/lib/constants/agent-defaults';
 
 const log = createLogger('Classroom');
 
@@ -327,6 +328,17 @@ export async function generateClassroom(
     style: 'interactive',
     createdAt: Date.now(),
     updatedAt: Date.now(),
+    // Embed agent configs so API-generated classrooms can hydrate
+    // the client-side agent registry without IndexedDB
+    generatedAgentConfigs: agents.map((a, i) => ({
+      id: a.id,
+      name: a.name,
+      role: a.role,
+      persona: a.persona || '',
+      avatar: AGENT_DEFAULT_AVATARS[i % AGENT_DEFAULT_AVATARS.length],
+      color: AGENT_COLOR_PALETTE[i % AGENT_COLOR_PALETTE.length],
+      priority: a.role === 'teacher' ? 10 : a.role === 'assistant' ? 7 : 5,
+    })),
   };
 
   const store = createInMemoryStore(stage);
