@@ -7,7 +7,7 @@
   },
   "home": {
     "slogan": "Generative Learning in Multi-Agent Interactive Classroom",
-    "greetingWithName": "Hi, {name}",
+    "greetingWithName": "Hi, {{name}}",
     "greetingDefault": "Hi there"
   },
   "toolbar": {
@@ -54,7 +54,7 @@
     "lectureNotes": {
       "empty": "Notes will appear here after lecture playback",
       "emptyHint": "Press play to start the lecture",
-      "pageLabel": "Page {n}",
+      "pageLabel": "Page {{n}}",
       "currentPage": "Current"
     },
     "badge": {
@@ -135,7 +135,7 @@
     "restore": "Restore",
     "noHistory": "No history yet",
     "restored": "Whiteboard restored",
-    "elementCount": "{count} elements"
+    "elementCount": "{{count}} elements"
   },
   "quiz": {
     "title": "Quiz",
@@ -213,8 +213,8 @@
       "mentionHint": "Use @question to ask, @judge to submit for review",
       "placeholder": "Type a message...",
       "send": "Send",
-      "welcomeMessage": "Hello! I'm your Question Agent for this issue: \"{title}\"\n\nTo help guide your work, I've prepared some questions for you:\n\n{questions}\n\nFeel free to @question me anytime if you need help or clarification!",
-      "issueCompleteMessage": "Issue \"{completed}\" completed! Moving to next issue: \"{next}\"",
+      "welcomeMessage": "Hello! I'm your Question Agent for this issue: \"{{title}}\"\n\nTo help guide your work, I've prepared some questions for you:\n\n{{questions}}\n\nFeel free to @question me anytime if you need help or clarification!",
+      "issueCompleteMessage": "Issue \"{{completed}}\" completed! Moving to next issue: \"{{next}}\"",
       "allCompleteMessage": "🎉 All issues completed! Great work on the project!"
     },
     "guide": {
@@ -302,8 +302,8 @@
     "goBackAndRetry": "Go Back and Retry",
     "classroomReady": "Your personalized AI learning environment has been generated successfully.",
     "aiWorking": "AI Agents Working...",
-    "textTruncated": "Document text is long, using first {n} characters for generation",
-    "imageTruncated": "{total} images found, exceeding the {max} image limit. Extra images will use text descriptions only",
+    "textTruncated": "Document text is long, using first {{n}} characters for generation",
+    "imageTruncated": "{{total}} images found, exceeding the {{max}} image limit. Extra images will use text descriptions only",
     "agentGeneration": "Generating Classroom Roles",
     "agentGenerationDesc": "Generating roles based on course content...",
     "agentRevealTitle": "Your Classroom Roles",
@@ -361,12 +361,12 @@
     "directAnswer": "Direct Answer",
     "multiAgentMode": "Multi-Agent Mode",
     "agentsCollaborating": "Collaborative Discussion",
-    "agentsCollaboratingCount": "{count} agents selected for collaborative discussion",
+    "agentsCollaboratingCount": "{{count}} agents selected for collaborative discussion",
     "maxTurns": "Max Discussion Turns",
     "maxTurnsDesc": "The maximum number of discussion turns between agents (each agent completes actions and reply counts as one turn)",
     "priority": "Priority",
     "actions": "Actions",
-    "actionCount": "{count} actions",
+    "actionCount": "{{count}} actions",
     "selectedAgent": "Selected Agent",
     "selectedAgents": "Selected Agents",
     "required": "Required",

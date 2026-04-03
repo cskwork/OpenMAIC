@@ -7,7 +7,7 @@
   },
   "home": {
     "slogan": "Generative Learning in Multi-Agent Interactive Classroom",
-    "greetingWithName": "嗨，{name}",
+    "greetingWithName": "嗨，{{name}}",
     "greetingDefault": "嗨，同学"
   },
   "toolbar": {
@@ -54,7 +54,7 @@
     "lectureNotes": {
       "empty": "播放课程后，笔记将在此显示",
       "emptyHint": "点击播放按钮开始授课",
-      "pageLabel": "第 {n} 页",
+      "pageLabel": "第 {{n}} 页",
       "currentPage": "当前页"
     },
     "badge": {
@@ -135,7 +135,7 @@
     "restore": "恢复",
     "noHistory": "暂无历史记录",
     "restored": "已恢复白板内容",
-    "elementCount": "{count} 个元素"
+    "elementCount": "{{count}} 个元素"
   },
   "quiz": {
     "title": "随堂测验",
@@ -213,8 +213,8 @@
       "mentionHint": "使用 @question 提问，@judge 提交评审",
       "placeholder": "输入消息...",
       "send": "发送",
-      "welcomeMessage": "你好！我是本任务的提问助手，当前任务：「{title}」\n\n为了帮助你开展工作，我准备了一些引导问题：\n\n{questions}\n\n随时可以 @question 向我提问！",
-      "issueCompleteMessage": "任务「{completed}」已完成！进入下一个任务：「{next}」",
+      "welcomeMessage": "你好！我是本任务的提问助手，当前任务：「{{title}}」\n\n为了帮助你开展工作，我准备了一些引导问题：\n\n{{questions}}\n\n随时可以 @question 向我提问！",
+      "issueCompleteMessage": "任务「{{completed}}」已完成！进入下一个任务：「{{next}}」",
       "allCompleteMessage": "🎉 所有任务都已完成！项目做得很棒！"
     },
     "guide": {
@@ -302,8 +302,8 @@
     "goBackAndRetry": "返回重试",
     "classroomReady": "你的个性化AI学习环境已成功生成。",
     "aiWorking": "AI智能体工作中...",
-    "textTruncated": "文档文本较长，已截取前 {n} 字符用于生成",
-    "imageTruncated": "文档含 {total} 张图片，超出上限 {max} 张，多余图片将仅以文字描述传递",
+    "textTruncated": "文档文本较长，已截取前 {{n}} 字符用于生成",
+    "imageTruncated": "文档含 {{total}} 张图片，超出上限 {{max}} 张，多余图片将仅以文字描述传递",
     "agentGeneration": "生成课堂角色",
     "agentGenerationDesc": "正在根据课程内容生成角色...",
     "agentRevealTitle": "你的课堂角色",
@@ -361,12 +361,12 @@
     "directAnswer": "直接回答",
     "multiAgentMode": "多智能体模式",
     "agentsCollaborating": "协作讨论",
-    "agentsCollaboratingCount": "已选择 {count} 个智能体协作讨论",
+    "agentsCollaboratingCount": "已选择 {{count}} 个智能体协作讨论",
     "maxTurns": "最大讨论轮数",
     "maxTurnsDesc": "智能体之间最多讨论多少轮（每个智能体完成动作并回复算一轮）",
     "priority": "优先级",
     "actions": "动作",
-    "actionCount": "{count} 个动作",
+    "actionCount": "{{count}} 个动作",
     "selectedAgent": "选中的智能体",
     "selectedAgents": "选中的智能体",
     "required": "必选",
