@@ -2,10 +2,21 @@
 
 import { createContext, useContext, useEffect, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { type Locale, defaultLocale } from '@/lib/i18n';
+import { type Locale, defaultLocale, supportedLocales } from '@/lib/i18n';
 import '@/lib/i18n/config';
 
 const LOCALE_STORAGE_KEY = 'locale';
+
+/** Match a browser language code (e.g. 'en', 'zh-TW') to a supported locale */
+function resolveLocale(lang: string): Locale {
+  // Exact match
+  const exact = supportedLocales.find((l) => l.code === lang);
+  if (exact) return exact.code;
+  // Prefix match: 'en' → 'en-US', 'zh' → 'zh-CN'
+  const prefix = lang.split('-')[0].toLowerCase();
+  const match = supportedLocales.find((l) => l.code.toLowerCase().startsWith(prefix));
+  return match?.code ?? defaultLocale;
+}
 
 type I18nContextType = {
   locale: Locale;
@@ -18,7 +29,7 @@ const I18nContext = createContext<I18nContextType | undefined>(undefined);
 export function I18nProvider({ children }: { children: ReactNode }) {
   const { t, i18n } = useTranslation();
 
-  const locale = i18n.language || defaultLocale;
+  const locale = (i18n.language || defaultLocale) as Locale;
 
   // Detect language after hydration to avoid SSR mismatch.
   // i18next handles fallback automatically: if the detected language
@@ -26,7 +37,8 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     try {
       const stored = localStorage.getItem(LOCALE_STORAGE_KEY);
-      const target = stored || navigator.language || defaultLocale;
+      const raw = stored || navigator.language || defaultLocale;
+      const target = resolveLocale(raw);
       if (target !== i18n.language) i18n.changeLanguage(target);
     } catch {
       // localStorage unavailable, keep default
