@@ -262,7 +262,10 @@
     "slides": "页",
     "nameCopied": "课堂名称已复制",
     "deleteConfirmTitle": "删除课堂",
-    "delete": "删除"
+    "delete": "删除",
+    "rename": "重命名",
+    "renamePlaceholder": "输入课堂名称",
+    "renameFailed": "重命名失败"
   },
   "upload": {
     "pdfSizeLimit": "支持最大50MB的PDF文件",
