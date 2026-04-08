@@ -873,9 +873,5 @@
     "voice": "Voice",
     "speed": "Speed",
     "language": "Language"
-  },
-  "code": {
-    "untitled": "Untitled",
-    "lines": "lines"
   }
 }
