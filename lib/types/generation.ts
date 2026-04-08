@@ -101,8 +101,6 @@ export interface SceneOutline {
   estimatedDuration?: number; // seconds
   order: number;
   language?: 'zh-CN' | 'en-US'; // Legacy language code (fallback for image descriptions etc.)
-  /** LLM-inferred language directive — takes precedence over `language` when present */
-  languageDirective?: string;
   // Suggested image IDs (from PDF-extracted images)
   suggestedImageIds?: string[]; // e.g., ["img_1", "img_3"]
   // AI-generated media requests (when PDF images are insufficient)

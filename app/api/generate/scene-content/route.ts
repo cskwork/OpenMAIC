@@ -67,12 +67,9 @@ export async function POST(req: NextRequest) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'stageId is required');
     }
 
-    // Ensure outline has languageDirective from stageInfo
-    const outline: SceneOutline = {
-      ...rawOutline,
-      languageDirective: rawOutline.languageDirective || stageInfo?.languageDirective,
-      language: rawOutline.language || (stageInfo?.language as 'zh-CN' | 'en-US') || undefined,
-    };
+    // Use outline as-is, languageDirective comes from stageInfo
+    const outline: SceneOutline = { ...rawOutline };
+    const langDirective = stageInfo?.languageDirective;
 
     // ── Model resolution from request headers ──
     const { model: languageModel, modelInfo, modelString } = resolveModelFromHeaders(req);
@@ -151,6 +148,7 @@ export async function POST(req: NextRequest) {
       hasVision,
       generatedMediaMapping,
       agents,
+      langDirective,
     );
 
     if (!content) {
