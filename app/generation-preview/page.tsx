@@ -387,8 +387,8 @@ function GenerationPreviewContent() {
         });
         if (ldResp.ok) {
           const ldData = await ldResp.json();
-          if (ldData.success && ldData.data?.directive) {
-            languageDirective = ldData.data.directive;
+          if (ldData.success && ldData.directive) {
+            languageDirective = ldData.directive;
             stage.languageDirective = languageDirective;
             log.debug(`Language directive: "${languageDirective}"`);
           }
