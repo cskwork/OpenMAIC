@@ -84,6 +84,7 @@ async function gradeShortAnswerQuestion(
   q: QuizQuestion,
   userAnswer: string,
   language: string,
+  languageDirective?: string,
 ): Promise<QuestionResult> {
   const pts = q.points ?? 1;
   try {
@@ -106,6 +107,7 @@ async function gradeShortAnswerQuestion(
         points: pts,
         commentPrompt: q.commentPrompt,
         language,
+        ...(languageDirective ? { languageDirective } : {}),
       }),
     });
 

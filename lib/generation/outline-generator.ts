@@ -52,11 +52,9 @@ export async function generateSceneOutlinesFromRequirements(
       const textOnlySlice = allWithSrc.slice(MAX_VISION_IMAGES);
       const noSrcImages = pdfImages.filter((img) => !options.imageMapping![img.id]);
 
-      const visionDescriptions = visionSlice.map((img) =>
-        formatImagePlaceholder(img, requirements.language),
-      );
+      const visionDescriptions = visionSlice.map((img) => formatImagePlaceholder(img));
       const textDescriptions = [...textOnlySlice, ...noSrcImages].map((img) =>
-        formatImageDescription(img, requirements.language),
+        formatImageDescription(img),
       );
       availableImagesText = [...visionDescriptions, ...textDescriptions].join('\n');
 
@@ -67,9 +65,7 @@ export async function generateSceneOutlinesFromRequirements(
         height: img.height,
       }));
     } else {
-      availableImagesText = pdfImages
-        .map((img) => formatImageDescription(img, requirements.language))
-        .join('\n');
+      availableImagesText = pdfImages.map((img) => formatImageDescription(img)).join('\n');
     }
   }
 
@@ -94,10 +90,12 @@ export async function generateSceneOutlinesFromRequirements(
       '**IMPORTANT: Do NOT include any video mediaGenerations (type: "video") in the outlines. Video generation is disabled. Image generation is allowed.**';
   }
 
-  // Build language directive for prompt injection
-  const languageDirectiveText = options?.languageDirective
-    ? options.languageDirective
-    : `Language: ${requirements.language}`;
+  // Language directive is required — no silent fallback to avoid wrong language
+  if (!options?.languageDirective) {
+    log.warn('No languageDirective provided, outlines may use wrong language');
+  }
+  const languageDirectiveText =
+    options?.languageDirective || 'Infer the teaching language from the user requirement text.';
 
   const prompts = buildPrompt(PROMPT_IDS.REQUIREMENTS_TO_OUTLINES, {
     requirement: requirements.requirement,
@@ -133,12 +131,11 @@ export async function generateSceneOutlinesFromRequirements(
         error: 'Failed to parse scene outlines response',
       };
     }
-    // Ensure IDs, order, language, and propagate languageDirective
+    // Ensure IDs, order, and propagate languageDirective
     const enriched = outlines.map((outline, index) => ({
       ...outline,
       id: outline.id || nanoid(),
       order: index + 1,
-      language: requirements.language,
       ...(options?.languageDirective ? { languageDirective: options.languageDirective } : {}),
     }));
 

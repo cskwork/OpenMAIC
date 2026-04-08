@@ -365,7 +365,7 @@ function GenerationPreviewContent() {
         id: stageId,
         name: extractTopicFromRequirement(currentSession.requirements.requirement),
         description: '',
-        language: currentSession.requirements.language || 'zh-CN',
+        language: undefined, // set after language directive inference
         style: 'professional',
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -666,6 +666,7 @@ function GenerationPreviewContent() {
         name: stage.name,
         description: stage.description,
         language: stage.language,
+        languageDirective: stage.languageDirective,
         style: stage.style,
       };
 

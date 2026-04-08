@@ -9,6 +9,10 @@
 
 {{teacherContext}}
 
+## Language
+
+{{languageDirective}}
+
 ## Available Resources
 
 - **Available Images**: {{assignedImages}}

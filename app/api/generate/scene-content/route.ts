@@ -45,6 +45,7 @@ export async function POST(req: NextRequest) {
         name: string;
         description?: string;
         language?: string;
+        languageDirective?: string;
         style?: string;
       };
       stageId: string;
@@ -66,10 +67,11 @@ export async function POST(req: NextRequest) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'stageId is required');
     }
 
-    // Ensure outline has language from stageInfo (fallback for older outlines)
+    // Ensure outline has languageDirective from stageInfo
     const outline: SceneOutline = {
       ...rawOutline,
-      language: rawOutline.language || (stageInfo?.language as 'zh-CN' | 'en-US') || 'zh-CN',
+      languageDirective: rawOutline.languageDirective || stageInfo?.languageDirective,
+      language: rawOutline.language || (stageInfo?.language as 'zh-CN' | 'en-US') || undefined,
     };
 
     // ── Model resolution from request headers ──

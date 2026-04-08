@@ -45,6 +45,7 @@ export interface StageRecord {
   createdAt: number; // timestamp
   updatedAt: number; // timestamp
   language?: string;
+  languageDirective?: string;
   style?: string;
   currentSceneId?: string;
   agentIds?: string[]; // Agent IDs selected at creation time
