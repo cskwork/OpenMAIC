@@ -128,7 +128,7 @@ function AgentVoicePill({
         setPreviewingId(null);
       }
     },
-    [previewingId, stopPreview, ttsProvidersConfig],
+    [previewingId, stopPreview, ttsProvidersConfig, locale],
   );
 
   // Cleanup on unmount
@@ -349,7 +349,7 @@ function TeacherVoicePill({
         setPreviewingId(null);
       }
     },
-    [previewingId, stopPreview, ttsProvidersConfig],
+    [previewingId, stopPreview, ttsProvidersConfig, locale],
   );
 
   useEffect(() => () => stopPreview(), [stopPreview]);
@@ -467,7 +467,7 @@ function TeacherVoicePill({
 }
 
 export function AgentBar() {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const { listAgents } = useAgentRegistry();
   const selectedAgentIds = useSettingsStore((s) => s.selectedAgentIds);
   const setSelectedAgentIds = useSettingsStore((s) => s.setSelectedAgentIds);
