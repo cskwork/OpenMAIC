@@ -407,7 +407,6 @@ export function BaseCodeElement({ elementInfo, animate }: BaseCodeElementProps) 
 
     const t = setTimeout(() => setAnimStates(states), 0);
     return () => clearTimeout(t);
-     
   }, [lines, animate]);
 
   useEffect(() => {
