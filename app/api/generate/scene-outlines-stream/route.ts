@@ -272,11 +272,12 @@ export async function POST(req: NextRequest) {
                 // Try to extract new outlines from the accumulated text
                 const newOutlines = extractNewOutlines(fullText, parsedOutlines.length);
                 for (const outline of newOutlines) {
-                  // Ensure ID and order
+                  // Ensure ID, order, and propagate languageDirective
                   const enriched = {
                     ...outline,
                     id: outline.id || nanoid(),
                     order: parsedOutlines.length + 1,
+                    ...(languageDirective ? { languageDirective } : {}),
                   };
                   parsedOutlines.push(enriched);
 

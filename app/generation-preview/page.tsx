@@ -604,7 +604,14 @@ function GenerationPreviewContent() {
                           setStreamingOutlines([]);
                           setStatusMessage(t('generation.outlineRetrying'));
                         } else if (evt.type === 'done') {
-                          resolve(evt.outlines || collected);
+                          // Ensure languageDirective is on every outline
+                          const finalOutlines = (evt.outlines || collected).map(
+                            (o: SceneOutline) => ({
+                              ...o,
+                              languageDirective: o.languageDirective || languageDirective,
+                            }),
+                          );
+                          resolve(finalOutlines);
                           return;
                         } else if (evt.type === 'error') {
                           reject(new Error(evt.error));
