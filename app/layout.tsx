@@ -37,9 +37,7 @@ export default function RootLayout({
         <ThemeProvider>
           <I18nProvider>
             <ServerProvidersInit />
-            <AccessCodeGuard>
-              {children}
-            </AccessCodeGuard>
+            <AccessCodeGuard>{children}</AccessCodeGuard>
             <Toaster position="top-center" />
           </I18nProvider>
         </ThemeProvider>

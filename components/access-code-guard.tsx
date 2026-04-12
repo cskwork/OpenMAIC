@@ -10,18 +10,23 @@ export function AccessCodeGuard({ children }: { children: ReactNode }) {
     loading: boolean;
   }>({ enabled: false, authenticated: false, loading: true });
 
-  async function checkStatus() {
-    try {
-      const res = await fetch('/api/access-code/status');
-      const data = await res.json();
-      setStatus({ enabled: data.enabled, authenticated: data.authenticated, loading: false });
-    } catch {
-      setStatus({ enabled: false, authenticated: false, loading: false });
-    }
-  }
-
   useEffect(() => {
-    checkStatus();
+    let cancelled = false;
+    fetch('/api/access-code/status')
+      .then((res) => res.json())
+      .then((data) => {
+        if (!cancelled) {
+          setStatus({ enabled: data.enabled, authenticated: data.authenticated, loading: false });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setStatus({ enabled: false, authenticated: false, loading: false });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   if (status.loading) {

@@ -21,10 +21,7 @@ export function middleware(request: NextRequest) {
 
   // API requests without cookie → 401
   if (pathname.startsWith('/api/')) {
-    return NextResponse.json(
-      { success: false, error: 'Access code required' },
-      { status: 401 },
-    );
+    return NextResponse.json({ success: false, error: 'Access code required' }, { status: 401 });
   }
 
   // Page requests → let through, frontend shows modal
