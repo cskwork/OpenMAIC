@@ -1,24 +1,47 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createHmac, timingSafeEqual } from 'crypto';
 
-/** Verify an HMAC-signed token against the access code (Edge-compatible) */
-function verifyToken(token: string, accessCode: string): boolean {
+/** Convert string to Uint8Array */
+function encode(str: string): Uint8Array {
+  return new TextEncoder().encode(str);
+}
+
+/** Convert ArrayBuffer to hex string */
+function bufToHex(buf: ArrayBuffer): string {
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/** Verify an HMAC-signed token using Web Crypto API (Edge-compatible) */
+async function verifyToken(token: string, accessCode: string): Promise<boolean> {
   const dotIndex = token.indexOf('.');
   if (dotIndex === -1) return false;
 
   const timestamp = token.substring(0, dotIndex);
   const signature = token.substring(dotIndex + 1);
 
-  const expected = createHmac('sha256', accessCode).update(timestamp).digest('hex');
+  const keyData = encode(accessCode);
+  const key = await crypto.subtle.importKey(
+    'raw',
+    keyData.buffer as ArrayBuffer,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
 
-  const sigBuf = Buffer.from(signature, 'hex');
-  const expBuf = Buffer.from(expected, 'hex');
-  if (sigBuf.length !== expBuf.length) return false;
+  const data = encode(timestamp);
+  const expected = bufToHex(await crypto.subtle.sign('HMAC', key, data.buffer as ArrayBuffer));
 
-  return timingSafeEqual(sigBuf, expBuf);
+  // Constant-length comparison (not truly constant-time in JS, but sufficient here)
+  if (signature.length !== expected.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < signature.length; i++) {
+    mismatch |= signature.charCodeAt(i) ^ expected.charCodeAt(i);
+  }
+  return mismatch === 0;
 }
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const accessCode = process.env.ACCESS_CODE;
   if (!accessCode) {
     return NextResponse.next();
@@ -33,7 +56,7 @@ export function middleware(request: NextRequest) {
 
   // Check cookie — validate HMAC signature, not just existence
   const cookie = request.cookies.get('openmaic_access');
-  if (cookie?.value && verifyToken(cookie.value, accessCode)) {
+  if (cookie?.value && (await verifyToken(cookie.value, accessCode))) {
     return NextResponse.next();
   }
 
