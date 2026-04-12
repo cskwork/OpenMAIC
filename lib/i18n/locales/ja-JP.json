@@ -875,5 +875,11 @@
     "voice": "ボイス",
     "speed": "速度",
     "language": "言語"
+  },
+  "accessCode": {
+    "title": "アクセスコードを入力",
+    "placeholder": "アクセスコード",
+    "submit": "送信",
+    "error": "アクセスコードが正しくありません。もう一度お試しください。"
   }
 }

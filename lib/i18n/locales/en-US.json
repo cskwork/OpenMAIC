@@ -875,5 +875,11 @@
     "voice": "Voice",
     "speed": "Speed",
     "language": "Language"
+  },
+  "accessCode": {
+    "title": "Enter Access Code",
+    "placeholder": "Access code",
+    "submit": "Enter",
+    "error": "Invalid access code. Please try again."
   }
 }
