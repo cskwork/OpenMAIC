@@ -1,5 +1,6 @@
 import { cookies } from 'next/headers';
-import { NextResponse } from 'next/server';
+import { apiSuccess } from '@/lib/server/api-response';
+import { verifyAccessToken } from '@/app/api/access-code/verify/route';
 
 export async function GET() {
   const accessCode = process.env.ACCESS_CODE;
@@ -8,8 +9,9 @@ export async function GET() {
   let authenticated = false;
   if (enabled) {
     const cookieStore = await cookies();
-    authenticated = cookieStore.has('openmaic_access');
+    const token = cookieStore.get('openmaic_access')?.value;
+    authenticated = !!token && verifyAccessToken(token, accessCode);
   }
 
-  return NextResponse.json({ enabled, authenticated });
+  return apiSuccess({ enabled, authenticated });
 }

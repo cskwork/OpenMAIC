@@ -879,7 +879,6 @@
   "accessCode": {
     "title": "请输入访问码",
     "placeholder": "访问码",
-    "submit": "确认",
     "error": "访问码错误，请重试。"
   }
 }

@@ -16,12 +16,17 @@ export function AccessCodeGuard({ children }: { children: ReactNode }) {
       .then((res) => res.json())
       .then((data) => {
         if (!cancelled) {
-          setStatus({ enabled: data.enabled, authenticated: data.authenticated, loading: false });
+          setStatus({
+            enabled: data.enabled,
+            authenticated: data.authenticated,
+            loading: false,
+          });
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setStatus({ enabled: false, authenticated: false, loading: false });
+          // Default to requiring auth on error — safer than silently disabling
+          setStatus({ enabled: true, authenticated: false, loading: false });
         }
       });
     return () => {
@@ -29,11 +34,7 @@ export function AccessCodeGuard({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  if (status.loading) {
-    return null;
-  }
-
-  const needsAuth = status.enabled && !status.authenticated;
+  const needsAuth = !status.loading && status.enabled && !status.authenticated;
 
   return (
     <>
@@ -43,7 +44,7 @@ export function AccessCodeGuard({ children }: { children: ReactNode }) {
           onSuccess={() => setStatus((s) => ({ ...s, authenticated: true }))}
         />
       )}
-      {!needsAuth && children}
+      {children}
     </>
   );
 }
