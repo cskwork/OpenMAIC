@@ -161,7 +161,7 @@ export function useImportClassroom(onSuccess?: () => void) {
           id: newStageId,
           name: manifest.stage.name || 'Imported Classroom',
           description: manifest.stage.description,
-          language: manifest.stage.language,
+          languageDirective: manifest.stage.language,
           style: manifest.stage.style,
           createdAt: manifest.stage.createdAt || now,
           updatedAt: now,

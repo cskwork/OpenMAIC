@@ -55,7 +55,7 @@ export function useExportClassroom() {
       const manifestStage: ManifestStage = {
         name: stage.name,
         description: stage.description,
-        language: stage.language,
+        language: stage.languageDirective,
         style: stage.style,
         createdAt: stage.createdAt,
         updatedAt: stage.updatedAt,
