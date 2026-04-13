@@ -125,12 +125,6 @@ function HomePage() {
   const toolbarRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const { importing, fileInputRef, triggerFileSelect, handleFileChange } = useImportClassroom(
-    () => {
-      loadClassrooms();
-    },
-  );
-
   // Close dropdowns when clicking outside
   useEffect(() => {
     if (!themeOpen) return;
@@ -156,6 +150,12 @@ function HomePage() {
       log.error('Failed to load classrooms:', err);
     }
   };
+
+  const { importing, fileInputRef, triggerFileSelect, handleFileChange } = useImportClassroom(
+    () => {
+      loadClassrooms();
+    },
+  );
 
   useEffect(() => {
     // Clear stale media store to prevent cross-course thumbnail contamination.
