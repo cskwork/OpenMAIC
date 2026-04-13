@@ -10,7 +10,6 @@
     "greetingWithName": "嗨，{{name}}"
   },
   "toolbar": {
-    "languageHint": "课程将以此语言生成",
     "pdfParser": "解析器",
     "pdfUpload": "上传 PDF",
     "removePdf": "移除文件",
@@ -212,7 +211,6 @@
       "mentionHint": "使用 @question 提问，@judge 提交评审",
       "placeholder": "输入消息...",
       "send": "发送",
-      "welcomeMessage": "你好！我是本任务的提问助手，当前任务：「{{title}}」\n\n为了帮助你开展工作，我准备了一些引导问题：\n\n{{questions}}\n\n随时可以 @question 向我提问！",
       "issueCompleteMessage": "任务「{{completed}}」已完成！进入下一个任务：「{{next}}」",
       "allCompleteMessage": "🎉 所有任务都已完成！项目做得很棒！"
     },

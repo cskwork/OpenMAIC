@@ -45,13 +45,12 @@ export const maxDuration = 300;
  */
 function extractLanguageDirective(buffer: string): string | null {
   const match = buffer.match(/"languageDirective"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-  if (match)
-    return match[1]
-      .replace(/\\n/g, '\n')
-      .replace(/\\t/g, '\t')
-      .replace(/\\"/g, '"')
-      .replace(/\\\\/g, '\\');
-  return null;
+  if (!match) return null;
+  try {
+    return JSON.parse(`"${match[1]}"`);
+  } catch {
+    return match[1];
+  }
 }
 
 /**

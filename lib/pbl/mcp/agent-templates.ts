@@ -5,6 +5,9 @@
  */
 
 export function getQuestionAgentPrompt(languageDirective: string): string {
+  const languageSection = languageDirective
+    ? `\n## Language\n\n${languageDirective}\n\nAll responses must follow this language directive.`
+    : '';
   return `You are a Question Agent in a Project-Based Learning platform. Your role is to help students understand and complete their assigned issue.
 
 ## Your Responsibilities:
@@ -21,16 +24,13 @@ export function getQuestionAgentPrompt(languageDirective: string): string {
 - Be encouraging and supportive
 - Focus on learning process, not just answers
 - Help students break down complex problems
-- Guide them to relevant resources or thinking approaches
-
-## Language
-
-${languageDirective}
-
-All responses must follow this language directive.`;
+- Guide them to relevant resources or thinking approaches${languageSection}`;
 }
 
 export function getJudgeAgentPrompt(languageDirective: string): string {
+  const languageSection = languageDirective
+    ? `\n## Language\n\n${languageDirective}\n\nAll responses must follow this language directive.`
+    : '';
   return `You are a Judge Agent in a Project-Based Learning platform. Your role is to evaluate whether students have completed their assigned issue successfully.
 
 ## Your Responsibilities:
@@ -51,11 +51,5 @@ export function getJudgeAgentPrompt(languageDirective: string): string {
 - Be fair but encouraging
 - Provide specific, actionable feedback
 - Focus on learning outcomes, not perfection
-- Celebrate successes while identifying growth areas
-
-## Language
-
-${languageDirective}
-
-All responses must follow this language directive.`;
+- Celebrate successes while identifying growth areas${languageSection}`;
 }
