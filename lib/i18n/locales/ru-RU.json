@@ -10,7 +10,6 @@
     "greetingWithName": "Привет, {{name}}"
   },
   "toolbar": {
-    "languageHint": "Курс будет сгенерирован на этом языке",
     "pdfParser": "Парсер",
     "pdfUpload": "Загрузить PDF",
     "removePdf": "Удалить файл",
@@ -212,7 +211,6 @@
       "mentionHint": "Используйте @question для вопроса, @judge для проверки",
       "placeholder": "Введите сообщение...",
       "send": "Отправить",
-      "welcomeMessage": "Привет! Я ваш помощник по задаче: \"{{title}}\"\n\nЧтобы помочь вам, я подготовил несколько вопросов:\n\n{{questions}}\n\nОбращайтесь через @question, если нужна помощь!",
       "issueCompleteMessage": "Задача \"{{completed}}\" выполнена! Переход к следующей: \"{{next}}\"",
       "allCompleteMessage": "🎉 Все задачи выполнены! Отличная работа над проектом!"
     },
