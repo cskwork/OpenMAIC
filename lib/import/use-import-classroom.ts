@@ -5,11 +5,7 @@ import { nanoid } from 'nanoid';
 import { toast } from 'sonner';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { db, mediaFileKey } from '@/lib/utils/database';
-import type {
-  AudioFileRecord,
-  MediaFileRecord,
-  GeneratedAgentRecord,
-} from '@/lib/utils/database';
+import type { AudioFileRecord, MediaFileRecord, GeneratedAgentRecord } from '@/lib/utils/database';
 import type { ClassroomManifest, ManifestScene } from '@/lib/export/classroom-zip-types';
 import { rewriteAudioRefsToIds } from '@/lib/export/classroom-zip-utils';
 import { createLogger } from '@/lib/logger';
