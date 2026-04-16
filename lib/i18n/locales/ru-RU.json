@@ -10,7 +10,6 @@
     "greetingWithName": "Привет, {{name}}"
   },
   "toolbar": {
-    "languageHint": "Курс будет сгенерирован на этом языке",
     "pdfParser": "Парсер",
     "pdfUpload": "Загрузить PDF",
     "removePdf": "Удалить файл",
@@ -35,7 +34,23 @@
     "resourcePackDesc": "PPTX + интерактивные страницы",
     "exporting": "Экспорт...",
     "exportSuccess": "Экспорт успешен",
-    "exportFailed": "Ошибка экспорта"
+    "exportFailed": "Ошибка экспорта",
+    "classroomZip": "Экспорт ZIP класса",
+    "classroomZipDesc": "Структура курса + медиафайлы"
+  },
+  "import": {
+    "classroom": "Импорт класса",
+    "parsing": "Анализ ZIP...",
+    "validating": "Проверка данных...",
+    "writingMedia": "Запись медиафайлов...",
+    "writingCourse": "Запись данных курса...",
+    "success": "Класс успешно импортирован",
+    "error": {
+      "invalidZip": "Недопустимый файл. Выберите корректный файл .maic.zip.",
+      "invalidManifest": "Недопустимый файл класса: manifest.json отсутствует или повреждён.",
+      "missingData": "Недопустимый файл класса: отсутствуют необходимые данные курса.",
+      "storageFull": "Импорт не удался: хранилище браузера заполнено. Удалите старые классы."
+    }
   },
   "chat": {
     "lecture": "Лекция",
@@ -212,7 +227,6 @@
       "mentionHint": "Используйте @question для вопроса, @judge для проверки",
       "placeholder": "Введите сообщение...",
       "send": "Отправить",
-      "welcomeMessage": "Привет! Я ваш помощник по задаче: \"{{title}}\"\n\nЧтобы помочь вам, я подготовил несколько вопросов:\n\n{{questions}}\n\nОбращайтесь через @question, если нужна помощь!",
       "issueCompleteMessage": "Задача \"{{completed}}\" выполнена! Переход к следующей: \"{{next}}\"",
       "allCompleteMessage": "🎉 Все задачи выполнены! Отличная работа над проектом!"
     },
@@ -403,7 +417,9 @@
       "kimi": "Kimi",
       "minimax": "MiniMax",
       "glm": "GLM",
-      "siliconflow": "SiliconFlow"
+      "siliconflow": "SiliconFlow",
+      "doubao": "Doubao",
+      "ollama": "Ollama (Локальный)"
     },
     "providerTypes": {
       "openai": "Протокол OpenAI",
@@ -454,6 +470,20 @@
     "requiresApiKey": "Требуется API-ключ",
     "deleteProvider": "Удалить провайдера",
     "deleteProviderConfirm": "Вы уверены, что хотите удалить этого провайдера?",
+    "addCustomTTSProvider": "Добавить TTS-провайдер",
+    "addCustomASRProvider": "Добавить ASR-провайдер",
+    "addCustomAudioProviderDescription": "Добавить OpenAI-совместимый аудио-провайдер",
+    "customVoices": "Голоса",
+    "voiceIdPlaceholder": "ID голоса (напр. alloy)",
+    "voiceNamePlaceholder": "Отображаемое имя",
+    "addVoice": "Добавить",
+    "modelNamePlaceholder": "Отображаемое имя",
+    "addModel": "Добавить",
+    "defaultModelHint": "Имя модели в API-запросах (напр. kokoro, tts-1)",
+    "noVoicesAdded": "Голоса ещё не добавлены. Добавьте ниже для выбора в агентах.",
+    "noModelsAdded": "Модели ещё не добавлены. Добавьте ниже для выбора модели.",
+    "noModelsWarning": "Добавьте хотя бы одну модель ниже перед использованием этого провайдера.",
+    "asrNoTranscription": "Транскрипция не получена. Попробуйте говорить громче или дольше.",
     "cannotDeleteBuiltIn": "Нельзя удалить встроенного провайдера",
     "resetToDefault": "Сбросить на стандартные",
     "resetToDefaultDescription": "Восстановить список моделей по умолчанию (API-ключ и Base URL будут сохранены)",
@@ -539,6 +569,7 @@
     "providerQwenASR": "Qwen ASR (Alibaba Cloud Bailian)",
     "providerUnpdf": "unpdf (встроенный)",
     "providerMinerU": "MinerU",
+    "providerMinerUCloud": "MinerU (Облако)",
     "browserNativeTTSNote": "Встроенный TTS браузера не требует настройки и полностью бесплатен, использует системные голоса",
     "testTTS": "Тест TTS",
     "testASR": "Тест ASR",
@@ -549,6 +580,7 @@
     "ttsTestFailed": "TTS-тест не пройден",
     "asrTestSuccess": "Распознавание речи успешно",
     "asrTestFailed": "Распознавание речи не удалось",
+    "asrProcessing": "Обработка...",
     "asrResult": "Результат распознавания",
     "asrNotSupported": "Браузер не поддерживает Speech Recognition API",
     "browserTTSNotSupported": "Браузер не поддерживает Speech Synthesis API",
@@ -688,7 +720,6 @@
     "lang_fa": "فارسی",
     "lang_pl": "Polski",
     "lang_ro": "Română",
-    "lang_ru": "Русский",
     "lang_sr": "Српски",
     "lang_sk": "Slovenčina",
     "lang_sl": "Slovenščina",
@@ -767,6 +798,7 @@
     "mineruLocalDescription": "MinerU поддерживает локальное развёртывание с расширенной обработкой PDF (таблицы, формулы, анализ макета). Требуется предварительное развёртывание сервиса MinerU.",
     "mineruServerAddress": "Адрес локального сервера MinerU (напр., http://localhost:8080)",
     "mineruApiKeyOptional": "Требуется только если на сервере включена аутентификация",
+    "mineruCloudApiKeyPlaceholder": "Введите API ключ MinerU Cloud",
     "optionalApiKey": "Необязательный API-ключ",
     "featureText": "Извлечение текста",
     "featureImages": "Извлечение изображений",
@@ -874,5 +906,10 @@
     "voice": "Голос",
     "speed": "Скорость",
     "language": "Язык"
+  },
+  "accessCode": {
+    "title": "Введите код доступа",
+    "placeholder": "Код доступа",
+    "error": "Неверный код доступа. Попробуйте ещё раз."
   }
 }

@@ -52,13 +52,13 @@ export default function ClassroomDetailPage() {
               });
               log.info('Loaded from server-side storage:', classroomId);
 
-              // Hydrate server-generated agents into IndexedDB + registry
+              // Hydrate server-generated agents into IndexedDB + registry.
+              // Don't set selectedAgentIds here — the general agent
+              // restoration logic below (Path 2) handles it uniformly.
               if (stage.generatedAgentConfigs?.length) {
                 const { saveGeneratedAgents } = await import('@/lib/orchestration/registry/store');
-                const { useSettingsStore } = await import('@/lib/store/settings');
-                const agentIds = await saveGeneratedAgents(stage.id, stage.generatedAgentConfigs);
-                useSettingsStore.getState().setSelectedAgentIds(agentIds);
-                log.info('Hydrated server-generated agents:', agentIds);
+                await saveGeneratedAgents(stage.id, stage.generatedAgentConfigs);
+                log.info('Hydrated server-generated agents for stage:', stage.id);
               }
             }
           }
@@ -159,11 +159,11 @@ export default function ClassroomDetailPage() {
           stageInfo: {
             name: stage.name || '',
             description: stage.description,
-            language: stage.language,
             style: stage.style,
           },
           agents: params.agents,
           userProfile: params.userProfile,
+          languageDirective: params.languageDirective || stage.languageDirective,
         });
       });
     } else if (outlines.length > 0 && stage) {

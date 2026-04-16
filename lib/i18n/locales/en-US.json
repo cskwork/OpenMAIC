@@ -10,7 +10,6 @@
     "greetingWithName": "Hi, {{name}}"
   },
   "toolbar": {
-    "languageHint": "Course will be generated in this language",
     "pdfParser": "Parser",
     "pdfUpload": "Upload PDF",
     "removePdf": "Remove file",
@@ -35,7 +34,23 @@
     "resourcePackDesc": "PPTX + interactive pages",
     "exporting": "Exporting...",
     "exportSuccess": "Export successful",
-    "exportFailed": "Export failed"
+    "exportFailed": "Export failed",
+    "classroomZip": "Export Classroom ZIP",
+    "classroomZipDesc": "Course structure + media files"
+  },
+  "import": {
+    "classroom": "Import Classroom",
+    "parsing": "Parsing ZIP...",
+    "validating": "Validating data...",
+    "writingMedia": "Writing media files...",
+    "writingCourse": "Writing course data...",
+    "success": "Classroom imported successfully",
+    "error": {
+      "invalidZip": "Invalid file. Please select a valid .maic.zip file.",
+      "invalidManifest": "Invalid classroom file: manifest.json is missing or corrupted.",
+      "missingData": "Invalid classroom file: missing required course data.",
+      "storageFull": "Import failed: browser storage is full. Try clearing old classrooms."
+    }
   },
   "chat": {
     "lecture": "Lecture",
@@ -212,7 +227,6 @@
       "mentionHint": "Use @question to ask, @judge to submit for review",
       "placeholder": "Type a message...",
       "send": "Send",
-      "welcomeMessage": "Hello! I'm your Question Agent for this issue: \"{{title}}\"\n\nTo help guide your work, I've prepared some questions for you:\n\n{{questions}}\n\nFeel free to @question me anytime if you need help or clarification!",
       "issueCompleteMessage": "Issue \"{{completed}}\" completed! Moving to next issue: \"{{next}}\"",
       "allCompleteMessage": "🎉 All issues completed! Great work on the project!"
     },
@@ -403,7 +417,9 @@
       "kimi": "Kimi",
       "minimax": "MiniMax",
       "glm": "GLM",
-      "siliconflow": "SiliconFlow"
+      "siliconflow": "SiliconFlow",
+      "doubao": "Doubao",
+      "ollama": "Ollama (Local)"
     },
     "providerTypes": {
       "openai": "OpenAI Protocol",
@@ -454,6 +470,20 @@
     "requiresApiKey": "Requires API Key",
     "deleteProvider": "Delete Provider",
     "deleteProviderConfirm": "Are you sure you want to delete this provider?",
+    "addCustomTTSProvider": "Add Custom TTS Provider",
+    "addCustomASRProvider": "Add Custom ASR Provider",
+    "addCustomAudioProviderDescription": "Add a custom OpenAI-compatible audio provider",
+    "customVoices": "Voices",
+    "voiceIdPlaceholder": "Voice ID (e.g. alloy)",
+    "voiceNamePlaceholder": "Display Name",
+    "addVoice": "Add",
+    "modelNamePlaceholder": "Display Name",
+    "addModel": "Add",
+    "defaultModelHint": "Model name sent in API requests (e.g. kokoro, tts-1)",
+    "noVoicesAdded": "No voices added yet. Add voices below for per-agent selection.",
+    "noModelsAdded": "No models added yet. Add models below to enable model selection.",
+    "noModelsWarning": "Please add at least one model below before using this provider.",
+    "asrNoTranscription": "No transcription generated. Try speaking louder or longer.",
     "cannotDeleteBuiltIn": "Cannot delete built-in provider",
     "resetToDefault": "Reset to Default",
     "resetToDefaultDescription": "Restore model list to default configuration (API key and Base URL will be preserved)",
@@ -539,6 +569,7 @@
     "providerQwenASR": "Qwen ASR (Alibaba Cloud Bailian)",
     "providerUnpdf": "unpdf (Built-in)",
     "providerMinerU": "MinerU",
+    "providerMinerUCloud": "MinerU (Cloud)",
     "browserNativeTTSNote": "Browser Native TTS requires no configuration and is completely free, using system built-in voices",
     "testTTS": "Test TTS",
     "testASR": "Test ASR",
@@ -549,6 +580,7 @@
     "ttsTestFailed": "TTS test failed",
     "asrTestSuccess": "Speech recognition successful",
     "asrTestFailed": "Speech recognition failed",
+    "asrProcessing": "Processing...",
     "asrResult": "Recognition Result",
     "asrNotSupported": "Browser does not support Speech Recognition API",
     "browserTTSNotSupported": "Browser does not support Speech Synthesis API",
@@ -766,6 +798,7 @@
     "mineruLocalDescription": "MinerU supports local deployment with advanced PDF parsing (tables, formulas, layout analysis). Requires deploying MinerU service first.",
     "mineruServerAddress": "Local MinerU server address (e.g., http://localhost:8080)",
     "mineruApiKeyOptional": "Only required if server has authentication enabled",
+    "mineruCloudApiKeyPlaceholder": "Enter MinerU Cloud API Key",
     "optionalApiKey": "Optional API Key",
     "featureText": "Text Extraction",
     "featureImages": "Image Extraction",
@@ -873,5 +906,10 @@
     "voice": "Voice",
     "speed": "Speed",
     "language": "Language"
+  },
+  "accessCode": {
+    "title": "Enter Access Code",
+    "placeholder": "Access code",
+    "error": "Invalid access code. Please try again."
   }
 }

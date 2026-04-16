@@ -10,7 +10,6 @@
     "greetingWithName": "こんにちは、{{name}}さん"
   },
   "toolbar": {
-    "languageHint": "コースはこの言語で生成されます",
     "pdfParser": "パーサー",
     "pdfUpload": "PDFをアップロード",
     "removePdf": "ファイルを削除",
@@ -35,7 +34,23 @@
     "resourcePackDesc": "PPTX＋インタラクティブページ",
     "exporting": "エクスポート中...",
     "exportSuccess": "エクスポートが完了しました",
-    "exportFailed": "エクスポートに失敗しました"
+    "exportFailed": "エクスポートに失敗しました",
+    "classroomZip": "教室ZIPをエクスポート",
+    "classroomZipDesc": "コース構造 + メディアファイル"
+  },
+  "import": {
+    "classroom": "教室をインポート",
+    "parsing": "ZIP を解析中...",
+    "validating": "データを検証中...",
+    "writingMedia": "メディアファイルを書き込み中...",
+    "writingCourse": "コースデータを書き込み中...",
+    "success": "教室のインポートが完了しました",
+    "error": {
+      "invalidZip": "無効なファイルです。有効な .maic.zip ファイルを選択してください。",
+      "invalidManifest": "無効な教室ファイル：manifest.json が見つからないか破損しています。",
+      "missingData": "無効な教室ファイル：必要なコースデータが不足しています。",
+      "storageFull": "インポート失敗：ブラウザのストレージが一杯です。古い教室を削除してください。"
+    }
   },
   "chat": {
     "lecture": "講義",
@@ -212,7 +227,6 @@
       "mentionHint": "@question で質問、@judge で提出・レビュー依頼",
       "placeholder": "メッセージを入力...",
       "send": "送信",
-      "welcomeMessage": "こんにちは！この課題の質問エージェントです：「{{title}}」\n\n学習の手助けとして、いくつかの質問を用意しました：\n\n{{questions}}\n\nいつでも @question で気軽に質問してくださいね！",
       "issueCompleteMessage": "課題「{{completed}}」が完了しました！次の課題に進みます：「{{next}}」",
       "allCompleteMessage": "🎉 すべての課題が完了しました！プロジェクトお疲れさまでした！"
     },
@@ -403,7 +417,9 @@
       "kimi": "Kimi",
       "minimax": "MiniMax",
       "glm": "GLM",
-      "siliconflow": "SiliconFlow"
+      "siliconflow": "SiliconFlow",
+      "doubao": "豆包",
+      "ollama": "Ollama（ローカルモデル）"
     },
     "providerTypes": {
       "openai": "OpenAIプロトコル",
@@ -454,6 +470,20 @@
     "requiresApiKey": "APIキーが必要",
     "deleteProvider": "プロバイダーを削除",
     "deleteProviderConfirm": "このプロバイダーを削除してもよろしいですか？",
+    "addCustomTTSProvider": "カスタムTTSプロバイダーを追加",
+    "addCustomASRProvider": "カスタムASRプロバイダーを追加",
+    "addCustomAudioProviderDescription": "OpenAI互換のオーディオプロバイダーを追加",
+    "customVoices": "音声リスト",
+    "voiceIdPlaceholder": "音声ID（例: alloy）",
+    "voiceNamePlaceholder": "表示名",
+    "addVoice": "追加",
+    "modelNamePlaceholder": "表示名",
+    "addModel": "追加",
+    "defaultModelHint": "APIリクエストで送信されるモデル名（例: kokoro、tts-1）",
+    "noVoicesAdded": "音声がまだ追加されていません。エージェントごとの音声選択のために下で追加してください。",
+    "noModelsAdded": "モデルがまだ追加されていません。モデル選択のために下で追加してください。",
+    "noModelsWarning": "このプロバイダーを使用するには、まず下でモデルを追加してください。",
+    "asrNoTranscription": "文字起こし結果がありません。もう少し大きな声で、長めに話してみてください。",
     "cannotDeleteBuiltIn": "組み込みプロバイダーは削除できません",
     "resetToDefault": "デフォルトに戻す",
     "resetToDefaultDescription": "モデルリストをデフォルト設定に復元します（APIキーとベースURLは保持されます）",
@@ -539,6 +569,7 @@
     "providerQwenASR": "Qwen ASR（Alibaba Cloud百錬）",
     "providerUnpdf": "unpdf（組み込み）",
     "providerMinerU": "MinerU",
+    "providerMinerUCloud": "MinerU（クラウド）",
     "browserNativeTTSNote": "ブラウザネイティブTTSは設定不要で完全無料です。システム内蔵のボイスを使用します",
     "testTTS": "TTSをテスト",
     "testASR": "ASRをテスト",
@@ -549,6 +580,7 @@
     "ttsTestFailed": "TTSテストに失敗しました",
     "asrTestSuccess": "音声認識に成功しました",
     "asrTestFailed": "音声認識に失敗しました",
+    "asrProcessing": "処理中...",
     "asrResult": "認識結果",
     "asrNotSupported": "お使いのブラウザは音声認識APIに対応していません",
     "browserTTSNotSupported": "お使いのブラウザは音声合成APIに対応していません",
@@ -766,6 +798,7 @@
     "mineruLocalDescription": "MinerUはローカルデプロイに対応し、高度なPDF解析（表、数式、レイアウト分析）が可能です。事前にMinerUサービスのデプロイが必要です。",
     "mineruServerAddress": "ローカルMinerUサーバーアドレス（例：http://localhost:8080）",
     "mineruApiKeyOptional": "サーバーで認証が有効な場合のみ必要",
+    "mineruCloudApiKeyPlaceholder": "MinerU Cloud API キーを入力",
     "optionalApiKey": "APIキー（任意）",
     "featureText": "テキスト抽出",
     "featureImages": "画像抽出",
@@ -873,5 +906,10 @@
     "voice": "ボイス",
     "speed": "速度",
     "language": "言語"
+  },
+  "accessCode": {
+    "title": "アクセスコードを入力",
+    "placeholder": "アクセスコード",
+    "error": "アクセスコードが正しくありません。もう一度お試しください。"
   }
 }
