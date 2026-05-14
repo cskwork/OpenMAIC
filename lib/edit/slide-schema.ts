@@ -18,10 +18,17 @@ import type { Scene, SceneContent, SlideContent } from '@/lib/types/stage';
 export const CURRENT_SLIDE_CONTENT_SCHEMA_VERSION = 1;
 
 export function migrateSlideContent(content: SlideContent): SlideContent {
-  if (content.schemaVersion === CURRENT_SLIDE_CONTENT_SCHEMA_VERSION) {
+  // Forward-compatibility: if a future client has written content with a
+  // newer schemaVersion than we know about, return it untouched rather
+  // than silently downgrading. The slide may not render correctly here,
+  // but its on-disk shape stays intact for the next compatible client.
+  if (
+    content.schemaVersion !== undefined &&
+    content.schemaVersion >= CURRENT_SLIDE_CONTENT_SCHEMA_VERSION
+  ) {
     return content;
   }
-  // Legacy data (no schemaVersion) and any future intermediate versions
+  // Legacy data (no schemaVersion) and any older intermediate versions
   // fall through here. As schema versions accumulate, walk versions in
   // order and apply each step's body before stamping the final version.
   return {

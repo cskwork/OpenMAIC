@@ -71,6 +71,13 @@ describe('migrateSlideContent', () => {
     const out = migrateSlideContent(input);
     expect(out.canvas).toBe(canvas);
   });
+
+  it('does not downgrade content written with a future schemaVersion', () => {
+    // A newer client writes v2; this v1 client should leave it intact
+    // rather than silently truncating the schema down to v1.
+    const future = makeSlideContent({ schemaVersion: CURRENT_SLIDE_CONTENT_SCHEMA_VERSION + 1 });
+    expect(migrateSlideContent(future)).toBe(future);
+  });
 });
 
 describe('migrateScene', () => {
