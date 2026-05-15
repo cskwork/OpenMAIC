@@ -111,6 +111,7 @@ export function getAvailableProvidersWithVoices(
       isServerConfigured?: boolean;
       serverBaseUrl?: string;
       baseUrl?: string;
+      customDefaultBaseUrl?: string;
       modelId?: string;
       providerOptions?: Record<string, unknown>;
       customName?: string;
@@ -130,16 +131,14 @@ export function getAvailableProvidersWithVoices(
     const providerConfig = ttsProvidersConfig[providerId];
     const hasApiKey = providerConfig?.apiKey && providerConfig.apiKey.trim().length > 0;
     const isServerConfigured = providerConfig?.isServerConfigured === true;
-    const isKeylessLocalProvider =
-      !config.requiresApiKey &&
+    const hasExplicitLocalBaseUrl =
       !!(
         providerConfig?.serverBaseUrl?.trim() ||
         providerConfig?.baseUrl?.trim() ||
-        config.defaultBaseUrl
-      );
-    const isLocalVoxCPM =
-      providerId === VOXCPM_TTS_PROVIDER_ID &&
-      !!(providerConfig?.serverBaseUrl?.trim() || providerConfig?.baseUrl?.trim());
+        providerConfig?.customDefaultBaseUrl?.trim()
+      ) &&
+      !isServerConfigured;
+    const isKeylessLocalProvider = !config.requiresApiKey && hasExplicitLocalBaseUrl;
     const visibleVoxCPMProfiles =
       providerId === VOXCPM_TTS_PROVIDER_ID
         ? voxcpmProfiles.filter((profile) => {
@@ -148,7 +147,7 @@ export function getAvailableProvidersWithVoices(
           })
         : [];
 
-    if (hasApiKey || isServerConfigured || isLocalVoxCPM || isKeylessLocalProvider) {
+    if (hasApiKey || isServerConfigured || isKeylessLocalProvider) {
       const allVoices = [
         ...config.voices.map((v) => ({
           id: v.id,
