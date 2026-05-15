@@ -22,24 +22,21 @@ You are responsible for:
 - Explaining concepts clearly with examples and analogies
 - Asking questions to check understanding
 - Using spotlight/laser to direct attention to slide elements
-- Using the whiteboard for diagrams and formulas
-You can use all available actions. Never announce your actions — just teach naturally.`,
+You can use all available actions. Never announce your actions - just teach naturally.`,
 
   assistant: `Your role in this classroom: TEACHING ASSISTANT.
 You are responsible for:
 - Supporting the lead teacher by filling gaps and answering side questions
 - Rephrasing explanations in simpler terms when students are confused
 - Providing concrete examples and background context
-- Using the whiteboard sparingly to supplement (not duplicate) the teacher's content
-You play a supporting role — don't take over the lesson.`,
+You play a supporting role - don't take over the lesson.`,
 
   student: `Your role in this classroom: STUDENT.
 You are responsible for:
 - Participating actively in discussions
 - Asking questions, sharing observations, reacting to the lesson
 - Keeping responses SHORT (1-2 sentences max)
-- Only using the whiteboard when explicitly invited by the teacher
-You are NOT a teacher — your responses should be much shorter than the teacher's.`,
+You are NOT a teacher - your responses should be much shorter than the teacher's.`,
 };
 
 // ==================== Types ====================
@@ -55,26 +52,29 @@ interface DiscussionContext {
 // ==================== Per-variant string constants ====================
 
 const FORMAT_EXAMPLE_SLIDE = `[{"type":"action","name":"spotlight","params":{"elementId":"img_1"}},{"type":"text","content":"Your natural speech to students"}]`;
-const FORMAT_EXAMPLE_WB = `[{"type":"action","name":"wb_open","params":{}},{"type":"text","content":"Your natural speech to students"}]`;
+const FORMAT_EXAMPLE_TEXT = `[{"type":"text","content":"Your natural speech to students"}]`;
 
-const ORDERING_SLIDE = `- spotlight/laser actions should appear BEFORE the corresponding text object (point first, then speak)
-- whiteboard actions can interleave WITH text objects (draw while speaking)`;
-const ORDERING_WB = `- whiteboard actions can interleave WITH text objects (draw while speaking)`;
+const ORDERING_SLIDE = `- spotlight/laser actions should appear BEFORE the corresponding text object (point first, then speak)`;
+const ORDERING_TEXT_ONLY = `- If you have no actions available, respond with speech only.`;
 
 const SPOTLIGHT_EXAMPLES = `[{"type":"action","name":"spotlight","params":{"elementId":"img_1"}},{"type":"text","content":"Photosynthesis is the process by which plants convert light energy into chemical energy. Take a look at this diagram."},{"type":"text","content":"During this process, plants absorb carbon dioxide and water to produce glucose and oxygen."}]
 
-[{"type":"action","name":"spotlight","params":{"elementId":"eq_1"}},{"type":"action","name":"laser","params":{"elementId":"eq_2"}},{"type":"text","content":"Compare these two equations — notice how the left side is endothermic while the right side is exothermic."}]
+[{"type":"action","name":"spotlight","params":{"elementId":"eq_1"}},{"type":"action","name":"laser","params":{"elementId":"eq_2"}},{"type":"text","content":"Compare these two equations - notice how the left side is endothermic while the right side is exothermic."}]
 
 `;
 
-const SLIDE_ACTION_GUIDELINES = `- spotlight: Use to focus attention on ONE key element. Don't overuse — max 1-2 per response.
+const SLIDE_ACTION_GUIDELINES = `- spotlight: Use to focus attention on ONE key element. Don't overuse - max 1-2 per response.
 - laser: Use to point at elements. Good for directing attention during explanations.
 `;
 
-const MUTUAL_EXCLUSION_NOTE = `- IMPORTANT — Whiteboard / Canvas mutual exclusion: The whiteboard and slide canvas are mutually exclusive. When the whiteboard is OPEN, the slide canvas is hidden — spotlight and laser actions targeting slide elements will have NO visible effect. If you need to use spotlight or laser, call wb_close first to reveal the slide canvas. Conversely, if the whiteboard is CLOSED, wb_draw_* actions still work (they implicitly open the whiteboard), but be aware that doing so hides the slide canvas.
+const MUTUAL_EXCLUSION_NOTE = `- IMPORTANT - Whiteboard / Canvas mutual exclusion: The whiteboard and slide canvas are mutually exclusive. When the whiteboard is OPEN, the slide canvas is hidden - spotlight and laser actions targeting slide elements will have NO visible effect. If you need to use spotlight or laser, call wb_close first to reveal the slide canvas. Conversely, if the whiteboard is CLOSED, wb_draw_* actions still work (they implicitly open the whiteboard), but be aware that doing so hides the slide canvas.
 - Prefer variety: mix spotlights, laser, and whiteboard for engaging teaching. Don't use the same action type repeatedly.`;
 
 // ==================== Private helpers ====================
+
+function hideWhiteboardActions(allowedActions: string[]): string[] {
+  return allowedActions.filter((action) => !action.startsWith('wb_'));
+}
 
 function buildStudentProfileSection(userProfile?: { nickname?: string; bio?: string }): string {
   if (!userProfile?.nickname && !userProfile?.bio) return '';
@@ -99,7 +99,7 @@ function buildDiscussionContextSection(
 Topic: "${discussionContext.topic}"
 ${discussionContext.prompt ? `Guiding prompt: ${discussionContext.prompt}` : ''}
 
-You are JOINING an ongoing discussion — do NOT re-introduce the topic or greet the students. The discussion has already started. Contribute your unique perspective, ask a follow-up question, or challenge an assumption made by a previous speaker.`;
+You are JOINING an ongoing discussion - do NOT re-introduce the topic or greet the students. The discussion has already started. Contribute your unique perspective, ask a follow-up question, or challenge an assumption made by a previous speaker.`;
   }
   return `
 
@@ -128,14 +128,17 @@ export function buildStructuredPrompt(
   userProfile?: { nickname?: string; bio?: string },
   agentResponses?: AgentTurnSummary[],
 ): string {
-  // Determine current scene type for action filtering
   const currentScene = storeState.currentSceneId
     ? storeState.scenes.find((s) => s.id === storeState.currentSceneId)
     : undefined;
   const sceneType = currentScene?.type;
-  const effectiveActions = getEffectiveActions(agentConfig.allowedActions, sceneType);
+  const effectiveActions = getEffectiveActions(
+    hideWhiteboardActions(agentConfig.allowedActions),
+    sceneType,
+  );
   const hasSlideActions =
     effectiveActions.includes('spotlight') || effectiveActions.includes('laser');
+  const hasWhiteboardActions = effectiveActions.some((action) => action.startsWith('wb_'));
 
   const vars = {
     agentName: agentConfig.name,
@@ -144,17 +147,20 @@ export function buildStructuredPrompt(
     studentProfileSection: buildStudentProfileSection(userProfile),
     peerContext: buildPeerContextSection(agentResponses, agentConfig.name),
     languageConstraint: buildLanguageConstraint(storeState.stage?.languageDirective),
-    formatExample: hasSlideActions ? FORMAT_EXAMPLE_SLIDE : FORMAT_EXAMPLE_WB,
-    orderingPrinciples: hasSlideActions ? ORDERING_SLIDE : ORDERING_WB,
+    formatExample: hasSlideActions ? FORMAT_EXAMPLE_SLIDE : FORMAT_EXAMPLE_TEXT,
+    orderingPrinciples: hasSlideActions ? ORDERING_SLIDE : ORDERING_TEXT_ONLY,
     spotlightExamples: hasSlideActions ? SPOTLIGHT_EXAMPLES : '',
     actionDescriptions: getActionDescriptions(effectiveActions),
     slideActionGuidelines: hasSlideActions ? SLIDE_ACTION_GUIDELINES : '',
-    mutualExclusionNote: hasSlideActions ? MUTUAL_EXCLUSION_NOTE : '',
-    stateContext: buildStateContext(storeState),
-    virtualWhiteboardContext: buildVirtualWhiteboardContext(storeState, whiteboardLedger),
+    mutualExclusionNote: hasSlideActions && hasWhiteboardActions ? MUTUAL_EXCLUSION_NOTE : '',
+    stateContext: buildStateContext(storeState, { includeWhiteboard: false }),
+    virtualWhiteboardContext: hasWhiteboardActions
+      ? buildVirtualWhiteboardContext(storeState, whiteboardLedger)
+      : '',
     lengthGuidelines: buildLengthGuidelines(agentConfig.role),
-    whiteboardGuidelines: buildWhiteboardGuidelines(agentConfig.role),
+    whiteboardGuidelines: hasWhiteboardActions ? buildWhiteboardGuidelines(agentConfig.role) : '',
     discussionContextSection: buildDiscussionContextSection(discussionContext, agentResponses),
+    hasWhiteboardActions,
   };
 
   const prompt = buildPrompt(PROMPT_IDS.AGENT_SYSTEM, vars);
@@ -173,23 +179,22 @@ export function buildStructuredPrompt(
  * significantly shorter than teacher to avoid overshadowing the teacher's role.
  */
 function buildLengthGuidelines(role: string): string {
-  const common = `- Length targets count ONLY your speech text (type:"text" content). Actions (spotlight, whiteboard, etc.) do NOT count toward length. Use as many actions as needed — they don't make your speech "too long."
-- Speak conversationally and naturally — this is a live classroom, not a textbook. Use oral language, not written prose.`;
+  const common = `- Length targets count ONLY your speech text (type:"text" content). Actions (for example spotlight or laser) do NOT count toward length. Use as many actions as needed - they don't make your speech "too long."
+- Speak conversationally and naturally - this is a live classroom, not a textbook. Use oral language, not written prose.`;
 
   if (role === 'teacher') {
     return `- Keep your TOTAL speech text around 100 characters (across all text objects combined). Prefer 2-3 short sentences over one long paragraph.
 ${common}
-- Prioritize inspiring students to THINK over explaining everything yourself. Ask questions, pose challenges, give hints — don't just lecture.
+- Prioritize inspiring students to THINK over explaining everything yourself. Ask questions, pose challenges, give hints - don't just lecture.
 - When explaining, give the key insight in one crisp sentence, then pause or ask a question. Avoid exhaustive explanations.`;
   }
 
   if (role === 'assistant') {
-    return `- Keep your TOTAL speech text around 80 characters. You are a supporting role — be brief.
+    return `- Keep your TOTAL speech text around 80 characters. You are a supporting role - be brief.
 ${common}
-- One key point per response. Don't repeat the teacher's full explanation — add a quick angle, example, or summary.`;
+- One key point per response. Don't repeat the teacher's full explanation - add a quick angle, example, or summary.`;
   }
 
-  // Student roles — must be noticeably shorter than teacher
   return `- Keep your TOTAL speech text around 50 characters. 1-2 sentences max.
 ${common}
 - You are a STUDENT, not a teacher. Your responses should be much shorter than the teacher's. If your response is as long as the teacher's, you are doing it wrong.

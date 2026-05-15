@@ -94,8 +94,12 @@ export function summarizeElements(elements: any[]): string {
 /**
  * Build context string from store state
  */
-export function buildStateContext(storeState: StatelessChatRequest['storeState']): string {
+export function buildStateContext(
+  storeState: StatelessChatRequest['storeState'],
+  options?: { includeWhiteboard?: boolean },
+): string {
   const { stage, scenes, currentSceneId, mode, whiteboardOpen } = storeState;
+  const includeWhiteboard = options?.includeWhiteboard ?? true;
 
   const lines: string[] = [];
 
@@ -103,9 +107,11 @@ export function buildStateContext(storeState: StatelessChatRequest['storeState']
   lines.push(`Mode: ${mode}`);
 
   // Whiteboard status
-  lines.push(
-    `Whiteboard: ${whiteboardOpen ? 'OPEN (slide canvas is hidden)' : 'closed (slide canvas is visible)'}`,
-  );
+  if (includeWhiteboard) {
+    lines.push(
+      `Whiteboard: ${whiteboardOpen ? 'OPEN (slide canvas is hidden)' : 'closed (slide canvas is visible)'}`,
+    );
+  }
 
   // Stage info
   if (stage) {
@@ -158,7 +164,7 @@ export function buildStateContext(storeState: StatelessChatRequest['storeState']
   }
 
   // Whiteboard content (last whiteboard in the stage)
-  if (stage?.whiteboard && stage.whiteboard.length > 0) {
+  if (includeWhiteboard && stage?.whiteboard && stage.whiteboard.length > 0) {
     const lastWb = stage.whiteboard[stage.whiteboard.length - 1];
     const wbElements = lastWb.elements || [];
     lines.push(

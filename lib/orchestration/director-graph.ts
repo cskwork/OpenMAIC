@@ -277,6 +277,7 @@ async function runAgentGeneration(
     : undefined;
   const sceneType = currentScene?.type;
   const effectiveActions = getEffectiveActions(agentConfig.allowedActions, sceneType);
+  const visibleActions = effectiveActions.filter((action) => !action.startsWith('wb_'));
 
   const discussionContext = state.discussionContext || undefined;
   const systemPrompt = buildStructuredPrompt(
@@ -349,7 +350,7 @@ async function runAgentGeneration(
           } else if (entry.type === 'action') {
             const ac = parseResult.actions[entry.index];
             if (!ac) continue;
-            if (!effectiveActions.includes(ac.actionName)) {
+            if (!visibleActions.includes(ac.actionName)) {
               log.warn(
                 `[AgentGenerate] Agent ${agentConfig.name} attempted disallowed action: ${ac.actionName}, skipping`,
               );

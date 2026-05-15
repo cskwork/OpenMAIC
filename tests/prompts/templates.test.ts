@@ -1,7 +1,7 @@
 /**
  * Structural assertion tests for the orchestration prompt templates.
  *
- * These replace the byte-equal snapshot suite that was initially added — the
+ * These replace the byte-equal snapshot suite that was initially added - the
  * goal here is catching real regressions (missing variables, broken role
  * dispatch, broken scene-type stripping) without forcing a snapshot update
  * for every intentional prompt-content tweak.
@@ -84,7 +84,6 @@ const quizState: StatelessChatRequest['storeState'] = {
   ],
 };
 
-// Matches any surviving {{placeholder}} token in rendered output
 const UNRESOLVED_PLACEHOLDER = /\{\{\w[\w-]*\}\}/;
 
 describe('no surviving placeholders', () => {
@@ -130,21 +129,24 @@ describe('role dispatch', () => {
     expect(out).not.toContain('LEAD TEACHER');
   });
 
-  test('teacher whiteboard prompt is sourced from agent-system-wb-teacher template', () => {
+  test('teacher classroom prompt hides whiteboard instructions', () => {
     const out = buildStructuredPrompt(baseAgent, slideState);
-    expect(out).toContain('Whiteboard — Teacher Role');
+    expect(out).not.toContain('Whiteboard');
+    expect(out).not.toContain('wb_open');
   });
 
-  test('assistant whiteboard prompt is sourced from agent-system-wb-assistant template', () => {
+  test('assistant classroom prompt hides whiteboard instructions', () => {
     const assistantAgent: AgentConfig = { ...baseAgent, role: 'assistant' };
     const out = buildStructuredPrompt(assistantAgent, slideState);
-    expect(out).toContain('Whiteboard — Teaching Assistant Role');
+    expect(out).not.toContain('Whiteboard');
+    expect(out).not.toContain('wb_open');
   });
 
-  test('student whiteboard prompt is sourced from agent-system-wb-student template', () => {
+  test('student classroom prompt hides whiteboard instructions', () => {
     const studentAgent: AgentConfig = { ...baseAgent, role: 'student' };
     const out = buildStructuredPrompt(studentAgent, slideState);
-    expect(out).toContain('Whiteboard — Student Role');
+    expect(out).not.toContain('Whiteboard');
+    expect(out).not.toContain('wb_open');
   });
 });
 
@@ -215,6 +217,45 @@ describe('director routing contract', () => {
     expect(out).toContain('Force decomposition');
     expect(out).toContain('student_1');
   });
+
+  test('director prompt hides whiteboard routing hints', () => {
+    const out = buildDirectorPrompt(
+      [baseAgent],
+      'No history',
+      [
+        {
+          agentId: 'a1',
+          agentName: 'Mr. Chen',
+          contentPreview: 'Quick answer',
+          actionCount: 2,
+          whiteboardActions: [
+            {
+              actionName: 'wb_draw_text',
+              agentId: 'a1',
+              agentName: 'Mr. Chen',
+              params: { content: 'x+y' },
+            },
+          ],
+        },
+      ],
+      1,
+      undefined,
+      undefined,
+      [
+        {
+          actionName: 'wb_draw_text',
+          agentId: 'a1',
+          agentName: 'Mr. Chen',
+          params: { content: 'x+y' },
+        },
+      ],
+      undefined,
+      true,
+    );
+    expect(out).not.toContain('Whiteboard');
+    expect(out).not.toContain('crowded');
+    expect(out).not.toContain('spotlight/laser');
+  });
 });
 
 describe('pbl-design template fills all repeated placeholders', () => {
@@ -227,22 +268,12 @@ describe('pbl-design template fills all repeated placeholders', () => {
       issueCount: UNIQUE,
       languageDirective: 'en',
     });
-    // Template references {{issueCount}} at 3 positions:
-    // "Suggested Number of Issues: N", "Create N sequential issues", "Create exactly N issues"
     const occurrences = out.match(new RegExp(`\\b${UNIQUE}\\b`, 'g'))?.length ?? 0;
     expect(occurrences).toBeGreaterThanOrEqual(3);
   });
 });
 
 describe('placeholder naming convention lint', () => {
-  // The `interpolateVariables` regex is /\{\{(\w+)\}\}/, which is
-  // strictly [A-Za-z0-9_]. Kebab-case placeholders would silently pass
-  // through. Convention (per README) is camelCase. This test scans every
-  // template for non-conforming placeholders.
-  //
-  // slide-content/{system,user}.md predates the convention and still uses
-  // snake_case ({{canvas_width}}, {{canvas_height}}). Grandfather it here;
-  // new templates must be camelCase.
   test('templates (excluding grandfathered) use camelCase placeholders', async () => {
     const { readdirSync, readFileSync, statSync } = await import('fs');
     const { join } = await import('path');
@@ -260,11 +291,9 @@ describe('placeholder naming convention lint', () => {
         const p = join(promptDir, file);
         try {
           const content = readFileSync(p, 'utf-8');
-          // Match {{placeholder}} but NOT {{snippet:name}}, {{#if}}, or {{/if}}
           const matches = content.match(/\{\{(?!snippet:|#if |\/if)([^}]+)\}\}/g) || [];
           for (const m of matches) {
             const name = m.slice(2, -2);
-            // camelCase: starts with lowercase, rest alphanumeric; reject _ and -
             if (!/^[a-z][a-zA-Z0-9]*$/.test(name)) {
               offenders.push(`${promptId}/${file}: ${m}`);
             }
@@ -279,7 +308,7 @@ describe('placeholder naming convention lint', () => {
   });
 });
 
-describe('whiteboard-reference snippet is wired into every role', () => {
+describe('whiteboard-reference snippet is hidden from classroom roles', () => {
   const KEY_SECTIONS = [
     'Canvas Specifications',
     'Action Reference',
@@ -289,26 +318,26 @@ describe('whiteboard-reference snippet is wired into every role', () => {
     'Pre-Output Checklist',
   ];
 
-  test('teacher prompt contains every key whiteboard-reference section', () => {
+  test('teacher prompt omits every key whiteboard-reference section', () => {
     const out = buildStructuredPrompt(baseAgent, slideState);
     for (const section of KEY_SECTIONS) {
-      expect(out).toContain(section);
+      expect(out).not.toContain(section);
     }
   });
 
-  test('assistant prompt contains every key whiteboard-reference section', () => {
+  test('assistant prompt omits every key whiteboard-reference section', () => {
     const assistantAgent: AgentConfig = { ...baseAgent, role: 'assistant' };
     const out = buildStructuredPrompt(assistantAgent, slideState);
     for (const section of KEY_SECTIONS) {
-      expect(out).toContain(section);
+      expect(out).not.toContain(section);
     }
   });
 
-  test('student prompt contains every key whiteboard-reference section', () => {
+  test('student prompt omits every key whiteboard-reference section', () => {
     const studentAgent: AgentConfig = { ...baseAgent, role: 'student' };
     const out = buildStructuredPrompt(studentAgent, slideState);
     for (const section of KEY_SECTIONS) {
-      expect(out).toContain(section);
+      expect(out).not.toContain(section);
     }
   });
 });
