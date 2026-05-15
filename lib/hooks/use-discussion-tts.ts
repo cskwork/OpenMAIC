@@ -5,6 +5,7 @@ import { useSettingsStore } from '@/lib/store/settings';
 import { useBrowserTTS } from '@/lib/hooks/use-browser-tts';
 import {
   resolveAgentVoice,
+  resolveVoiceFromProvider,
   getAvailableProvidersWithVoices,
   type ResolvedVoice,
 } from '@/lib/audio/voice-resolver';
@@ -120,6 +121,15 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
         };
       }
       const index = agentIndexMap.current.get(agentId) ?? 0;
+      const globalProviderFallback = resolveVoiceFromProvider(
+        globalTtsProviderId,
+        index,
+        providers,
+        ttsProvidersConfig[globalTtsProviderId]?.modelId,
+      );
+      if (globalProviderFallback) {
+        return globalProviderFallback;
+      }
       return resolveAgentVoice(agent, index, providers);
     },
     [agents, ttsProvidersConfig, voxcpmProfiles, globalTtsProviderId, globalTtsVoice],

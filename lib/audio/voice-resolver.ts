@@ -63,6 +63,26 @@ export function resolveAgentVoice(
 }
 
 /**
+ * Resolve a deterministic voice from a specific provider when that provider is available.
+ * Returns null when the provider is not in the available list or has no voices.
+ */
+export function resolveVoiceFromProvider(
+  providerId: TTSProviderId,
+  agentIndex: number,
+  availableProviders: ProviderWithVoices[],
+  modelId?: string,
+): ResolvedVoice | null {
+  const provider = availableProviders.find((item) => item.providerId === providerId);
+  if (!provider || provider.voices.length === 0) return null;
+
+  return {
+    providerId,
+    modelId,
+    voiceId: provider.voices[agentIndex % provider.voices.length].id,
+  };
+}
+
+/**
  * Get the list of voice IDs for a TTS provider.
  * For browser-native-tts, returns empty (browser voices are dynamic).
  * For custom providers, reads from ttsProvidersConfig.customVoices.
