@@ -249,7 +249,7 @@ const THINKING_CAPABILITIES: Record<string, ThinkingCapability> = {
 
   [getModelMetadataKey('google', 'gemini-3.5-flash')]: levelCapability(
     ['minimal', 'low', 'medium', 'high'],
-    'high',
+    'medium',
   ),
   [getModelMetadataKey('google', 'gemini-3.1-pro-preview')]: levelCapability(
     ['minimal', 'low', 'medium', 'high'],
