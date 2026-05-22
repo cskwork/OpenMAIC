@@ -185,7 +185,9 @@ export const ProsemirrorEditor = forwardRef<ProsemirrorEditorRef, ProsemirrorEdi
             autoSelectAll(editorView.current);
             addMark(editorView.current, mark);
 
-            if (item.value && !document.fonts.check(`16px ${item.value}`)) {
+            // Quote the family — document.fonts.check throws on an unquoted
+            // name with spaces or a trailing digit (e.g. "Source Sans 3").
+            if (item.value && !document.fonts.check(`16px "${item.value}"`)) {
               toast.warning('Font is loading, please wait...');
             }
           } else if (item.command === 'fontsize' && item.value) {
