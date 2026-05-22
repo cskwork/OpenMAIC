@@ -71,9 +71,9 @@ describe('slide floating actions', () => {
     expect(buildFloatingActions((k) => k, undefined)).toEqual([]);
   });
 
-  it('a selected text element gets the text-format bar plus a delete action', () => {
+  it('a selected text element gets only a delete action (text formatting moved to the anchored bar)', () => {
     const actions = buildFloatingActions((k) => k, createDefaultTextElement('text-9'));
-    expect(actions.map((a) => a.id)).toEqual(['text-format', 'delete']);
+    expect(actions.map((a) => a.id)).toEqual(['delete']);
   });
 
   it('a selected image element gets only a delete action (no text-format)', () => {

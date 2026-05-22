@@ -2,7 +2,7 @@
 
 import { produce } from 'immer';
 import { Image as ImageIcon, Trash2, Type } from 'lucide-react';
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import type { SceneDataController } from '@/lib/contexts/scene-context';
 import type {
   FloatingAction,
@@ -22,6 +22,7 @@ import type { PPTElement } from '@/lib/types/slides';
 import type { SlideContent } from '@/lib/types/stage';
 import { ImagePicker } from './ImagePicker';
 import { useSlideEditSession } from './slide-edit-session';
+import { resolveEditingElementId } from './editing-state';
 
 export interface SlideSelection {
   readonly activeElementIds: readonly string[];
@@ -86,19 +87,26 @@ function currentSlideContent(sceneId: string): SlideContent | null {
 }
 
 /**
+ * Resolves the slide content the surface should read from: the in-memory
+ * edit-session present, else the canonical stage scene, else an empty slide.
+ */
+export function useResolvedSlideContent(): SlideContent {
+  const history = useSlideEditSession((s) => s.history);
+  const sessionSceneId = useSlideEditSession((s) => s.sceneId);
+  return (
+    history?.present ?? (sessionSceneId ? currentSlideContent(sessionSceneId) : null) ?? EMPTY_SLIDE
+  );
+}
+
+/**
  * The slide surface's `useSurfaceState`. Pure read over the shared
  * session store + the renderer's selection store.
  */
 export function useSlideSurfaceState(): SurfaceState<SlideContent, SlideSelection> {
   const { t } = useI18n();
   const history = useSlideEditSession((s) => s.history);
-  const sessionSceneId = useSlideEditSession((s) => s.sceneId);
   const activeElementIds = useCanvasStore.use.activeElementIdList();
-
-  const content: SlideContent =
-    history?.present ??
-    (sessionSceneId ? currentSlideContent(sessionSceneId) : null) ??
-    EMPTY_SLIDE;
+  const content = useResolvedSlideContent();
 
   const onlyEl =
     activeElementIds.length === 1
@@ -209,4 +217,34 @@ export function useSlideCanvasController(): SlideCanvasController {
     controller,
     gestureProps,
   };
+}
+
+/**
+ * The id of the text element currently being edited — i.e. the sole selected
+ * element, when it is a text element. "" means "not editing text". Drives both
+ * the AnchoredTextBar and the canvas store's `editingElementId`.
+ */
+export function useEditingTextElementId(): string {
+  const activeElementIds = useCanvasStore.use.activeElementIdList();
+  const content = useResolvedSlideContent();
+  return resolveEditingElementId(activeElementIds, content.canvas.elements);
+}
+
+/**
+ * Mirrors the surface's editing-element decision into the canvas store's
+ * `editingElementId` flag, which the renderer's `TextElementOperate` reads.
+ * useLayoutEffect so the renderer suppresses the dashed frame in the same
+ * commit the selection changes — no one-frame flicker. Cleared on unmount.
+ */
+export function useSyncEditingElementId(editingElementId: string): void {
+  const setEditingElementId = useCanvasStore.use.setEditingElementId();
+  useLayoutEffect(() => {
+    setEditingElementId(editingElementId);
+  }, [editingElementId, setEditingElementId]);
+  useLayoutEffect(
+    () => () => {
+      setEditingElementId('');
+    },
+    [setEditingElementId],
+  );
 }
