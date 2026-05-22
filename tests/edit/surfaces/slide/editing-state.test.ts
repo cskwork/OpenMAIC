@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'vitest';
 import { resolveEditingElementId } from '@/components/edit/surfaces/slide/editing-state';
-import { createDefaultImageElement, createDefaultTextElement } from '@/lib/edit/slide-edit-elements';
+import {
+  createDefaultImageElement,
+  createDefaultTextElement,
+} from '@/lib/edit/slide-edit-elements';
 
 describe('resolveEditingElementId', () => {
   const text = createDefaultTextElement('t1');
