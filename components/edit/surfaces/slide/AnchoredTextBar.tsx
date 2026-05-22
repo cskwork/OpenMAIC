@@ -47,8 +47,10 @@ export function AnchoredTextBar({ editingElementId }: AnchoredTextBarProps) {
           // Mirrors the FloatingToolbar popover hardening: opening the bar must
           // not pull focus off the canvas selection, and format commands that
           // refocus the editor must not dismiss it — so it stays up across
-          // consecutive formatting clicks. Escape / a true outside click still
-          // change the selection, which closes it via the controlled `open`.
+          // consecutive formatting clicks. Visibility is fully selection-driven
+          // (controlled `open`, no `onOpenChange`): the bar closes when the
+          // canvas selection clears or changes — e.g. a click elsewhere on the
+          // canvas — not via Radix's own dismiss events.
           onOpenAutoFocus={(e) => e.preventDefault()}
           onFocusOutside={(e) => e.preventDefault()}
           className="w-auto max-w-[92vw] p-2"

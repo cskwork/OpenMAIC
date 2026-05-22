@@ -15,12 +15,20 @@ function sameRect(a: TrackedRect | null, b: TrackedRect | null): boolean {
 }
 
 /**
- * Tracks the on-screen rect of the rendered element `#editable-element-{id}`.
+ * Tracks the on-screen rect of a rendered slide element.
+ *
+ * `#editable-element-{id}` is only a zero-size `absolute` wrapper (it carries
+ * just a z-index); the geometry lives on its `.editable-element-text` child,
+ * which has the real left/top/width/height and inherits the viewport scale.
+ * So we resolve the wrapper by id, then measure that child — measuring the
+ * wrapper itself would collapse to a 0x0 rect at the canvas origin.
+ *
  * A requestAnimationFrame loop re-measures via getBoundingClientRect — that
- * one call already resolves canvas scale, viewport offset, rotation and page
- * scroll, so the anchored bar follows the element through every gesture
- * (drag, resize, zoom) without separate store subscriptions or listeners.
- * Returns null while `elementId` is "" or the node is not mounted.
+ * one call already resolves canvas scale, viewport offset and page scroll, so
+ * the anchored bar follows the element through every gesture (drag, resize,
+ * zoom) without separate store subscriptions or listeners. The loop starts
+ * after mount, so on first selection the bar appears one frame late — an
+ * imperceptible delay. Returns null while `elementId` is "" or unmounted.
  */
 export function useTrackedRect(elementId: string): TrackedRect | null {
   const [rect, setRect] = useState<TrackedRect | null>(null);
@@ -33,7 +41,8 @@ export function useTrackedRect(elementId: string): TrackedRect | null {
     let raf = 0;
     let current: TrackedRect | null = null;
     const measure = () => {
-      const node = document.getElementById(`editable-element-${elementId}`);
+      const wrapper = document.getElementById(`editable-element-${elementId}`);
+      const node = wrapper?.querySelector<HTMLElement>('.editable-element-text') ?? null;
       let next: TrackedRect | null = null;
       if (node) {
         const r = node.getBoundingClientRect();
