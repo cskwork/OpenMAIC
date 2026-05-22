@@ -22,7 +22,7 @@ import type { PPTElement } from '@/lib/types/slides';
 import type { SlideContent } from '@/lib/types/stage';
 import { ImagePicker } from './ImagePicker';
 import { useSlideEditSession } from './slide-edit-session';
-import { resolveEditingElementId } from './editing-state';
+import { resolveEditingElementId, resolveSelectedElement } from './editing-state';
 
 export interface SlideSelection {
   readonly activeElementIds: readonly string[];
@@ -65,11 +65,10 @@ export function buildFloatingActions(
   selected: PPTElement | undefined,
 ): FloatingAction[] {
   if (!selected) return [];
-  // Text elements carry their whole contextual cluster — formatting *and*
-  // delete — on the selection-anchored AnchoredTextBar, so the top-center
-  // FloatingToolbar shows nothing for them. Non-text elements (image, …) have
-  // no anchored bar yet, so they still get a delete affordance here.
-  if (selected.type === 'text') return [];
+  // Text and image elements carry their delete on the selection-anchored bar,
+  // so the top-center FloatingToolbar shows nothing for them. Other element
+  // types (shape, …) have no anchored bar yet — they still get a delete here.
+  if (selected.type === 'text' || selected.type === 'image') return [];
   return [
     {
       id: 'delete',
@@ -231,6 +230,17 @@ export function useEditingTextElementId(): string {
   const activeElementIds = useCanvasStore.use.activeElementIdList();
   const content = useResolvedSlideContent();
   return resolveEditingElementId(activeElementIds, content.canvas.elements);
+}
+
+/**
+ * The id of the single selected image element, or "" — drives the
+ * selection-anchored image action bar.
+ */
+export function useSelectedImageElementId(): string {
+  const activeElementIds = useCanvasStore.use.activeElementIdList();
+  const content = useResolvedSlideContent();
+  const el = resolveSelectedElement(activeElementIds, content.canvas.elements);
+  return el?.type === 'image' ? el.id : '';
 }
 
 /**

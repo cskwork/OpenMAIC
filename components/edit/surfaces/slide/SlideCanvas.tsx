@@ -4,10 +4,12 @@ import Canvas from '@/components/slide-renderer/Editor/Canvas';
 import { SceneProvider } from '@/lib/contexts/scene-context';
 import {
   useEditingTextElementId,
+  useSelectedImageElementId,
   useSlideCanvasController,
   useSyncEditingElementId,
 } from './use-slide-surface';
 import { AnchoredTextBar } from './AnchoredTextBar';
+import { AnchoredImageBar } from './AnchoredImageBar';
 
 /**
  * The slide surface's canvas. Reuses the unmodified slide renderer
@@ -16,13 +18,15 @@ import { AnchoredTextBar } from './AnchoredTextBar';
  * through the slide-edit-session which auto-saves it back to the
  * canonical stage store (no staging, no "restore unsaved" prompt).
  *
- * It also owns the text-editing chrome: it derives the editing text element,
- * mirrors it into the canvas store's `editingElementId` (which the renderer
- * reads to draw a clean frame), and renders the selection-anchored format bar.
+ * It also owns the selection-anchored chrome: it derives the selected text /
+ * image element, mirrors the text one into the canvas store's `editingElementId`
+ * (which the renderer reads to draw a clean frame), and renders the anchored
+ * bars. At most one bar is open at a time (single selection).
  */
 export function SlideCanvas() {
   const { controller, gestureProps } = useSlideCanvasController();
   const editingElementId = useEditingTextElementId();
+  const selectedImageId = useSelectedImageElementId();
   useSyncEditingElementId(editingElementId);
 
   return (
@@ -34,6 +38,7 @@ export function SlideCanvas() {
         <Canvas />
       </SceneProvider>
       <AnchoredTextBar editingElementId={editingElementId} />
+      <AnchoredImageBar imageElementId={selectedImageId} />
     </div>
   );
 }

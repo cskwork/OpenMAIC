@@ -1,10 +1,22 @@
 import type { PPTElement } from '@/lib/types/slides';
 
 /**
+ * The single selected slide element — `undefined` unless exactly one element is
+ * selected and it resolves in the content. The basis for the surface's
+ * selection-anchored chrome (the text format bar, the image action bar).
+ */
+export function resolveSelectedElement(
+  activeElementIdList: readonly string[],
+  elements: readonly PPTElement[],
+): PPTElement | undefined {
+  if (activeElementIdList.length !== 1) return undefined;
+  return elements.find((el) => el.id === activeElementIdList[0]);
+}
+
+/**
  * The slide surface's text-editing policy: a single selected text element is,
  * by definition, the element being edited (there is no separate
- * "selected-not-editing" state for text). Anything else — empty selection,
- * multi-selection, a non-text element — resolves to "" (not editing).
+ * "selected-not-editing" state for text). Anything else resolves to "".
  *
  * This is the value the surface writes into the canvas store's
  * `editingElementId`, which the renderer's `TextElementOperate` reads to swap
@@ -14,8 +26,6 @@ export function resolveEditingElementId(
   activeElementIdList: readonly string[],
   elements: readonly PPTElement[],
 ): string {
-  if (activeElementIdList.length !== 1) return '';
-  const id = activeElementIdList[0];
-  const element = elements.find((el) => el.id === id);
-  return element?.type === 'text' ? id : '';
+  const el = resolveSelectedElement(activeElementIdList, elements);
+  return el?.type === 'text' ? el.id : '';
 }

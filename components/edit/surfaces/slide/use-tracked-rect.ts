@@ -18,10 +18,11 @@ function sameRect(a: TrackedRect | null, b: TrackedRect | null): boolean {
  * Tracks the on-screen rect of a rendered slide element.
  *
  * `#editable-element-{id}` is only a zero-size `absolute` wrapper (it carries
- * just a z-index); the geometry lives on its `.editable-element-text` child,
- * which has the real left/top/width/height and inherits the viewport scale.
- * So we resolve the wrapper by id, then measure that child — measuring the
- * wrapper itself would collapse to a 0x0 rect at the canvas origin.
+ * just a z-index); the geometry lives on its inner content child
+ * (`.editable-element-text` / `.editable-element-image`), which has the real
+ * left/top/width/height and inherits the viewport scale. So we resolve the
+ * wrapper by id, then measure that child — measuring the wrapper itself would
+ * collapse to a 0x0 rect at the canvas origin.
  *
  * A requestAnimationFrame loop re-measures via getBoundingClientRect — that
  * one call already resolves canvas scale, viewport offset and page scroll, so
@@ -42,7 +43,9 @@ export function useTrackedRect(elementId: string): TrackedRect | null {
     let current: TrackedRect | null = null;
     const measure = () => {
       const wrapper = document.getElementById(`editable-element-${elementId}`);
-      const node = wrapper?.querySelector<HTMLElement>('.editable-element-text') ?? null;
+      const node =
+        wrapper?.querySelector<HTMLElement>('.editable-element-text, .editable-element-image') ??
+        null;
       let next: TrackedRect | null = null;
       if (node) {
         const r = node.getBoundingClientRect();

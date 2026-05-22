@@ -1,14 +1,35 @@
 import { describe, expect, test } from 'vitest';
-import { resolveEditingElementId } from '@/components/edit/surfaces/slide/editing-state';
+import {
+  resolveEditingElementId,
+  resolveSelectedElement,
+} from '@/components/edit/surfaces/slide/editing-state';
 import {
   createDefaultImageElement,
   createDefaultTextElement,
 } from '@/lib/edit/slide-edit-elements';
 
-describe('resolveEditingElementId', () => {
-  const text = createDefaultTextElement('t1');
-  const image = createDefaultImageElement('i1', 'gen_img_x');
+const text = createDefaultTextElement('t1');
+const image = createDefaultImageElement('i1', 'gen_img_x');
 
+describe('resolveSelectedElement', () => {
+  test('returns undefined when nothing is selected', () => {
+    expect(resolveSelectedElement([], [text])).toBeUndefined();
+  });
+
+  test('returns undefined for a multi-selection', () => {
+    expect(resolveSelectedElement(['t1', 'i1'], [text, image])).toBeUndefined();
+  });
+
+  test('returns undefined when the selected id is not found', () => {
+    expect(resolveSelectedElement(['ghost'], [text])).toBeUndefined();
+  });
+
+  test('returns the element for a single selection', () => {
+    expect(resolveSelectedElement(['i1'], [text, image])).toBe(image);
+  });
+});
+
+describe('resolveEditingElementId', () => {
   test('returns "" when nothing is selected', () => {
     expect(resolveEditingElementId([], [text])).toBe('');
   });

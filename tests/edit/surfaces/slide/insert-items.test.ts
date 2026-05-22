@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   buildInsertItems,
   buildFloatingActions,
+  deleteSlideElement,
 } from '@/components/edit/surfaces/slide/use-slide-surface';
 import { useSlideEditSession } from '@/components/edit/surfaces/slide/slide-edit-session';
 import {
@@ -76,18 +77,14 @@ describe('slide floating actions', () => {
     expect(actions).toEqual([]);
   });
 
-  it('a selected image element gets only a delete action (no text-format)', () => {
+  it('a selected image element gets no floating actions (delete is on the anchored bar)', () => {
     const actions = buildFloatingActions((k) => k, createDefaultImageElement('img-9', 'gen_img_x'));
-    expect(actions.map((a) => a.id)).toEqual(['delete']);
+    expect(actions).toEqual([]);
   });
 
-  it('the delete action dispatches element.delete for the selected element', () => {
+  it('deleteSlideElement dispatches an element.delete op', () => {
     const spy = vi.spyOn(useSlideEditSession.getState(), 'applyOp');
-    const del = buildFloatingActions(
-      (k) => k,
-      createDefaultImageElement('img-9', 'gen_img_x'),
-    ).find((a) => a.id === 'delete');
-    del?.onInvoke?.();
+    deleteSlideElement('img-9');
     expect(spy).toHaveBeenCalledWith({ type: 'element.delete', elementId: 'img-9' });
   });
 });
