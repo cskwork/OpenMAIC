@@ -111,8 +111,8 @@ export function TextFormatBar({ elementId, attrs }: TextFormatBarProps) {
     // w-max keeps the row at its natural width so the popover (w-auto) sizes to
     // it — one clean line, nothing squished.
     <div className="flex w-max items-center gap-1">
-      {/* Font — design-system Select. Fonts come from OpenMAIC's canonical
-          FONTS registry (configs/font.ts): the web fonts the renderer loads. */}
+      {/* Font — design-system Select; options come from the FONTS registry
+          (configs/font.ts), scoped to fonts the app actually loads. */}
       <Select
         value={attrs.fontname || DEFAULT_FONT}
         onValueChange={(v) => run({ command: 'fontname', value: v === DEFAULT_FONT ? '' : v })}
