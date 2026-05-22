@@ -3,7 +3,6 @@
 import { produce } from 'immer';
 import { Image as ImageIcon, Trash2, Type } from 'lucide-react';
 import React, { useEffect, useMemo, useRef } from 'react';
-import { ConnectedTextFormatBar } from './text-format-bar';
 import type { SceneDataController } from '@/lib/contexts/scene-context';
 import type {
   FloatingAction,
@@ -59,33 +58,24 @@ export function buildFloatingActions(
   selected: PPTElement | undefined,
 ): FloatingAction[] {
   if (!selected) return [];
-  const actions: FloatingAction[] = [];
-  if (selected.type === 'text') {
-    // The text property bar is surfaced via FloatingToolbar's popover slot
-    // (button → popover → bar), not always-inline — a popover-vs-inline
-    // ergonomics tradeoff deferred for future polish.
-    actions.push({
-      id: 'text-format',
-      label: t('edit.text.label'),
-      tooltip: t('edit.text.label'),
-      popoverContent: () => React.createElement(ConnectedTextFormatBar, { elementId: selected.id }),
-    });
-  }
-  // Delete affordance for any single selected element (text or image). The
-  // renderer's own delete lives only in a right-click menu; this is the
-  // discoverable, button-only entry (keyboard shortcuts deferred — see #560).
-  actions.push({
-    id: 'delete',
-    label: t('edit.delete'),
-    tooltip: t('edit.delete'),
-    icon: React.createElement(Trash2, { className: 'h-4 w-4' }),
-    group: 'danger',
-    onInvoke: () => {
-      useSlideEditSession.getState().applyOp({ type: 'element.delete', elementId: selected.id });
-      useCanvasStore.getState().setActiveElementIdList([]);
+  // Text formatting is now surfaced by the selection-anchored AnchoredTextBar
+  // (it hugs the element instead of sitting in the top-center FloatingToolbar).
+  // The FloatingToolbar keeps only the delete affordance — the renderer's own
+  // delete lives in a right-click menu; this is the discoverable button entry
+  // for any single selected element (keyboard shortcuts deferred — see #560).
+  return [
+    {
+      id: 'delete',
+      label: t('edit.delete'),
+      tooltip: t('edit.delete'),
+      icon: React.createElement(Trash2, { className: 'h-4 w-4' }),
+      group: 'danger',
+      onInvoke: () => {
+        useSlideEditSession.getState().applyOp({ type: 'element.delete', elementId: selected.id });
+        useCanvasStore.getState().setActiveElementIdList([]);
+      },
     },
-  });
-  return actions;
+  ];
 }
 
 const EMPTY_SLIDE: SlideContent = { type: 'slide', canvas: createDefaultSlide('') };
