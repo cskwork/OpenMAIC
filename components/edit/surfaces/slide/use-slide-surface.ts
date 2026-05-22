@@ -54,16 +54,22 @@ export function buildInsertItems(t: (k: string) => string): InsertPaletteItem[] 
   ];
 }
 
+/** Delete a slide element and clear the canvas selection. */
+export function deleteSlideElement(elementId: string): void {
+  useSlideEditSession.getState().applyOp({ type: 'element.delete', elementId });
+  useCanvasStore.getState().setActiveElementIdList([]);
+}
+
 export function buildFloatingActions(
   t: (k: string) => string,
   selected: PPTElement | undefined,
 ): FloatingAction[] {
   if (!selected) return [];
-  // Text formatting is now surfaced by the selection-anchored AnchoredTextBar
-  // (it hugs the element instead of sitting in the top-center FloatingToolbar).
-  // The FloatingToolbar keeps only the delete affordance — the renderer's own
-  // delete lives in a right-click menu; this is the discoverable button entry
-  // for any single selected element (keyboard shortcuts deferred — see #560).
+  // Text elements carry their whole contextual cluster — formatting *and*
+  // delete — on the selection-anchored AnchoredTextBar, so the top-center
+  // FloatingToolbar shows nothing for them. Non-text elements (image, …) have
+  // no anchored bar yet, so they still get a delete affordance here.
+  if (selected.type === 'text') return [];
   return [
     {
       id: 'delete',
@@ -71,10 +77,7 @@ export function buildFloatingActions(
       tooltip: t('edit.delete'),
       icon: React.createElement(Trash2, { className: 'h-4 w-4' }),
       group: 'danger',
-      onInvoke: () => {
-        useSlideEditSession.getState().applyOp({ type: 'element.delete', elementId: selected.id });
-        useCanvasStore.getState().setActiveElementIdList([]);
-      },
+      onInvoke: () => deleteSlideElement(selected.id),
     },
   ];
 }
