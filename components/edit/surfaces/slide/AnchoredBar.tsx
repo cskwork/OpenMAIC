@@ -53,7 +53,7 @@ export function AnchoredBar({ elementId, children }: AnchoredBarProps) {
           // changes, not via Radix's own dismiss events.
           onOpenAutoFocus={(e) => e.preventDefault()}
           onFocusOutside={(e) => e.preventDefault()}
-          className="w-auto max-w-[92vw] p-2"
+          className="w-auto max-w-[92vw] p-1"
         >
           {children}
         </PopoverContent>
