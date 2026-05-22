@@ -1,31 +1,25 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   buildInsertItems,
-  buildFloatingActions,
   deleteSlideElement,
 } from '@/components/edit/surfaces/slide/use-slide-surface';
 import { useSlideEditSession } from '@/components/edit/surfaces/slide/slide-edit-session';
-import {
-  createDefaultImageElement,
-  createDefaultTextElement,
-} from '@/lib/edit/slide-edit-elements';
+
+function seedEmptySlideSession() {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  useSlideEditSession.setState({
+    history: {
+      past: [],
+      present: { type: 'slide', canvas: { id: 's', elements: [] } } as any,
+      future: [],
+    },
+  } as any);
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+}
 
 describe('slide insert palette', () => {
-  beforeEach(() => {
-    /* eslint-disable @typescript-eslint/no-explicit-any */
-    useSlideEditSession.setState({
-      history: {
-        past: [],
-        present: { type: 'slide', canvas: { id: 's', elements: [] } } as any,
-        future: [],
-      },
-    } as any);
-    /* eslint-enable @typescript-eslint/no-explicit-any */
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  beforeEach(seedEmptySlideSession);
+  afterEach(() => vi.restoreAllMocks());
 
   it('exposes a text-box and an image insert item', () => {
     const items = buildInsertItems((k) => k);
@@ -44,43 +38,11 @@ describe('slide insert palette', () => {
       }),
     );
   });
-
-  it('no longer contributes a geometry floating action', () => {
-    const actions = buildFloatingActions((k) => k, undefined);
-    expect(actions.find((a) => a.id === 'geometry')).toBeUndefined();
-  });
 });
 
-describe('slide floating actions', () => {
-  beforeEach(() => {
-    /* eslint-disable @typescript-eslint/no-explicit-any */
-    useSlideEditSession.setState({
-      history: {
-        past: [],
-        present: { type: 'slide', canvas: { id: 's', elements: [] } } as any,
-        future: [],
-      },
-    } as any);
-    /* eslint-enable @typescript-eslint/no-explicit-any */
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it('returns no actions when nothing is selected', () => {
-    expect(buildFloatingActions((k) => k, undefined)).toEqual([]);
-  });
-
-  it('a selected text element gets no floating actions (format + delete are on the anchored bar)', () => {
-    const actions = buildFloatingActions((k) => k, createDefaultTextElement('text-9'));
-    expect(actions).toEqual([]);
-  });
-
-  it('a selected image element gets no floating actions (delete is on the anchored bar)', () => {
-    const actions = buildFloatingActions((k) => k, createDefaultImageElement('img-9', 'gen_img_x'));
-    expect(actions).toEqual([]);
-  });
+describe('slide element deletion', () => {
+  beforeEach(seedEmptySlideSession);
+  afterEach(() => vi.restoreAllMocks());
 
   it('deleteSlideElement dispatches an element.delete op', () => {
     const spy = vi.spyOn(useSlideEditSession.getState(), 'applyOp');

@@ -1,14 +1,10 @@
 'use client';
 
 import { produce } from 'immer';
-import { Image as ImageIcon, Trash2, Type } from 'lucide-react';
+import { Image as ImageIcon, Type } from 'lucide-react';
 import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import type { SceneDataController } from '@/lib/contexts/scene-context';
-import type {
-  FloatingAction,
-  InsertPaletteItem,
-  SurfaceState,
-} from '@/lib/edit/scene-editor-surface';
+import type { InsertPaletteItem, SurfaceState } from '@/lib/edit/scene-editor-surface';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { createElementId } from '@/lib/edit/element-id';
 import {
@@ -60,27 +56,6 @@ export function deleteSlideElement(elementId: string): void {
   useCanvasStore.getState().setActiveElementIdList([]);
 }
 
-export function buildFloatingActions(
-  t: (k: string) => string,
-  selected: PPTElement | undefined,
-): FloatingAction[] {
-  if (!selected) return [];
-  // Text and image elements carry their delete on the selection-anchored bar,
-  // so the top-center FloatingToolbar shows nothing for them. Other element
-  // types (shape, …) have no anchored bar yet — they still get a delete here.
-  if (selected.type === 'text' || selected.type === 'image') return [];
-  return [
-    {
-      id: 'delete',
-      label: t('edit.delete'),
-      tooltip: t('edit.delete'),
-      icon: React.createElement(Trash2, { className: 'h-4 w-4' }),
-      group: 'danger',
-      onInvoke: () => deleteSlideElement(selected.id),
-    },
-  ];
-}
-
 const EMPTY_SLIDE: SlideContent = { type: 'slide', canvas: createDefaultSlide('') };
 
 function currentSlideContent(sceneId: string): SlideContent | null {
@@ -110,11 +85,6 @@ export function useSlideSurfaceState(): SurfaceState<SlideContent, SlideSelectio
   const activeElementIds = useCanvasStore.use.activeElementIdList();
   const content = useResolvedSlideContent();
 
-  const onlyEl =
-    activeElementIds.length === 1
-      ? (content.canvas.elements.find((el) => el.id === activeElementIds[0]) ?? undefined)
-      : undefined;
-
   return {
     content,
     selection: { activeElementIds },
@@ -126,7 +96,10 @@ export function useSlideSurfaceState(): SurfaceState<SlideContent, SlideSelectio
       redo: () => useSlideEditSession.getState().redo(),
     },
     insertItems: buildInsertItems(t),
-    floatingActions: buildFloatingActions(t, onlyEl),
+    // Every element type carries its own actions on a selection-anchored bar
+    // (AnchoredTextBar / AnchoredDeleteBar) — the surface contributes no
+    // top-center FloatingToolbar actions.
+    floatingActions: [],
     commands: [],
     hints: [],
   };
@@ -233,14 +206,15 @@ export function useEditingTextElementId(): string {
 }
 
 /**
- * The id of the single selected image element, or "" — drives the
- * selection-anchored image action bar.
+ * The id of the single selected non-text element (image, shape, line, …), or
+ * "" — drives the selection-anchored delete bar. Text elements get their own
+ * AnchoredTextBar; every other element type shares the delete-only bar.
  */
-export function useSelectedImageElementId(): string {
+export function useSelectedNonTextElementId(): string {
   const activeElementIds = useCanvasStore.use.activeElementIdList();
   const content = useResolvedSlideContent();
   const el = resolveSelectedElement(activeElementIds, content.canvas.elements);
-  return el?.type === 'image' ? el.id : '';
+  return el && el.type !== 'text' ? el.id : '';
 }
 
 /**

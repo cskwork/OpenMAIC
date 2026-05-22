@@ -15,7 +15,7 @@ interface AnchoredBarProps {
  * a virtual anchor: an invisible fixed-positioned box at the element's live
  * screen rect (from useTrackedRect). PopoverContent is portaled, so the canvas's
  * overflow-hidden never clips it, and Radix flips it below / clamps it
- * horizontally on its own. AnchoredTextBar and AnchoredImageBar supply the
+ * horizontally on its own. AnchoredTextBar and AnchoredDeleteBar supply the
  * contents.
  */
 export function AnchoredBar({ elementId, children }: AnchoredBarProps) {
