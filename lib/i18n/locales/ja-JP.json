@@ -152,6 +152,7 @@
     "proMode": "プロモード",
     "undo": "元に戻す",
     "redo": "やり直し",
+    "delete": "削除",
     "title": "編集 · {{type}}",
     "unsupportedScene": "{{type}}はまだ編集できません",
     "sceneType": {
@@ -160,14 +161,6 @@
       "interactive": "インタラクティブ",
       "pbl": "PBL"
     },
-    "history": {
-      "restore": {
-        "title": "保存されていない変更を復元しますか？",
-        "body": "前回の編集セッションは保存される前に終了しました。変更を復元するか、破棄して新たに始めてください。",
-        "actionRestore": "復元",
-        "actionDiscard": "破棄"
-      }
-    },
     "multiTab": {
       "conflict": {
         "title": "別のタブでこのコースを編集中です",
@@ -175,14 +168,28 @@
         "actionDismiss": "了解"
       }
     },
-    "geometry": {
-      "label": "位置とサイズ",
-      "tooltip": "位置とサイズ",
-      "x": "X",
-      "y": "Y",
-      "width": "幅",
-      "height": "高さ",
-      "rotate": "回転"
+    "text": {
+      "label": "テキスト",
+      "font": "フォント",
+      "fontDefault": "デフォルト",
+      "sizeUp": "文字を大きく",
+      "sizeDown": "文字を小さく",
+      "bold": "太字",
+      "italic": "斜体",
+      "underline": "下線",
+      "color": "文字色",
+      "alignLeft": "左揃え",
+      "alignCenter": "中央揃え",
+      "alignRight": "右揃え",
+      "bullet": "箇条書き"
+    },
+    "insert": {
+      "textBox": "テキストボックス",
+      "image": "画像",
+      "imageDrop": "画像をドロップまたはクリックして選択",
+      "imageOr": "または画像 URL を貼り付け",
+      "imageUrlPlaceholder": "https://…",
+      "imageInsert": "挿入"
     }
   },
   "classroomComplete": {

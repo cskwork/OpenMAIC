@@ -1,25 +1,91 @@
 'use client';
 
 import { produce } from 'immer';
-import { Move } from 'lucide-react';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  clearPersistedSlideHistory,
-  loadPersistedSlideHistory,
-} from '@/lib/edit/slide-history-persistence';
+import { Image as ImageIcon, Trash2, Type } from 'lucide-react';
+import React, { useEffect, useMemo, useRef } from 'react';
+import { ConnectedTextFormatBar } from './text-format-bar';
 import type { SceneDataController } from '@/lib/contexts/scene-context';
-import type { FloatingAction, SurfaceState } from '@/lib/edit/scene-editor-surface';
+import type {
+  FloatingAction,
+  InsertPaletteItem,
+  SurfaceState,
+} from '@/lib/edit/scene-editor-surface';
 import { useI18n } from '@/lib/hooks/use-i18n';
-import { createDefaultSlide } from '@/lib/edit/slide-edit-elements';
+import { createElementId } from '@/lib/edit/element-id';
+import {
+  createDefaultImageElement,
+  createDefaultSlide,
+  createDefaultTextElement,
+} from '@/lib/edit/slide-edit-elements';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useStageStore } from '@/lib/store/stage';
 import type { PPTElement } from '@/lib/types/slides';
 import type { SlideContent } from '@/lib/types/stage';
-import { GeometryPopover } from './GeometryPopover';
+import { ImagePicker } from './ImagePicker';
 import { useSlideEditSession } from './slide-edit-session';
 
 export interface SlideSelection {
   readonly activeElementIds: readonly string[];
+}
+
+export function buildInsertItems(t: (k: string) => string): InsertPaletteItem[] {
+  const addElement = (element: PPTElement) =>
+    useSlideEditSession.getState().applyOp({ type: 'element.add', element });
+  return [
+    {
+      id: 'insert-text',
+      label: t('edit.insert.textBox'),
+      tooltip: t('edit.insert.textBox'),
+      icon: React.createElement(Type, { className: 'h-4 w-4' }),
+      onInvoke: () => addElement(createDefaultTextElement(createElementId('text'))),
+    },
+    {
+      id: 'insert-image',
+      label: t('edit.insert.image'),
+      tooltip: t('edit.insert.image'),
+      icon: React.createElement(ImageIcon, { className: 'h-4 w-4' }),
+      onInvoke: () => {}, // popover-only: CommandBar's InsertButton ignores onInvoke when popoverContent is set
+      popoverContent: () =>
+        React.createElement(ImagePicker, {
+          onPick: (src: string) =>
+            addElement(createDefaultImageElement(createElementId('image'), src)),
+        }),
+    },
+  ];
+}
+
+export function buildFloatingActions(
+  t: (k: string) => string,
+  selected: PPTElement | undefined,
+): FloatingAction[] {
+  if (!selected) return [];
+  const actions: FloatingAction[] = [];
+  if (selected.type === 'text') {
+    // The text property bar is surfaced via FloatingToolbar's popover slot
+    // (button → popover → bar), not always-inline — a popover-vs-inline
+    // ergonomics tradeoff deferred for future polish.
+    actions.push({
+      id: 'text-format',
+      label: t('edit.text.label'),
+      tooltip: t('edit.text.label'),
+      popoverContent: () => React.createElement(ConnectedTextFormatBar, { elementId: selected.id }),
+    });
+  }
+  // Delete affordance for any single selected element (text or image). The
+  // renderer's own delete lives only in a right-click menu; this is the
+  // discoverable, button-only entry (keyboard shortcuts deferred — see #560).
+  actions.push({
+    id: 'delete',
+    label: t('edit.delete'),
+    tooltip: t('edit.delete'),
+    icon: React.createElement(Trash2, { className: 'h-4 w-4' }),
+    group: 'danger',
+    onInvoke: () => {
+      useSlideEditSession.getState().applyOp({ type: 'element.delete', elementId: selected.id });
+      useCanvasStore.getState().setActiveElementIdList([]);
+    },
+  });
+  return actions;
 }
 
 const EMPTY_SLIDE: SlideContent = { type: 'slide', canvas: createDefaultSlide('') };
@@ -31,9 +97,7 @@ function currentSlideContent(sceneId: string): SlideContent | null {
 
 /**
  * The slide surface's `useSurfaceState`. Pure read over the shared
- * session store + the renderer's selection store; the only PR1 editing
- * affordance is the geometry numeric popover (canvas drag-resize is the
- * primary path and flows through the scene-context bridge).
+ * session store + the renderer's selection store.
  */
 export function useSlideSurfaceState(): SurfaceState<SlideContent, SlideSelection> {
   const { t } = useI18n();
@@ -46,38 +110,10 @@ export function useSlideSurfaceState(): SurfaceState<SlideContent, SlideSelectio
     (sessionSceneId ? currentSlideContent(sessionSceneId) : null) ??
     EMPTY_SLIDE;
 
-  const selectedId = activeElementIds.length === 1 ? activeElementIds[0] : null;
-  const selectedEl = selectedId
-    ? (content.canvas.elements.find((el) => el.id === selectedId) ?? null)
-    : null;
-
-  // Lines model geometry as start/end/points and omit height/rotate
-  // (PPTLineElement = Omit<PPTBaseElement,'height'|'rotate'>); the x/y/w/h
-  // /rotate panel would write meaningless props onto them, so it's only
-  // offered for box-geometry elements.
-  const geomTarget = selectedEl && selectedEl.type !== 'line' ? selectedEl : null;
-
-  // No hand-written memo: the React Compiler auto-memoizes, and a manual
-  // useMemo with `t` in the closure trips its "could not preserve" rule.
-  const geometryAction: FloatingAction = {
-    id: 'geometry',
-    label: t('edit.geometry.label'),
-    tooltip: t('edit.geometry.tooltip'),
-    icon: React.createElement(Move, { className: 'h-4 w-4' }),
-    disabled: !geomTarget,
-    popoverContent: geomTarget
-      ? () =>
-          React.createElement(GeometryPopover, {
-            element: geomTarget,
-            onPatch: (patch: Partial<PPTElement>) =>
-              useSlideEditSession.getState().applyOp({
-                type: 'element.update',
-                elementId: geomTarget.id,
-                patch,
-              }),
-          })
-      : undefined,
-  };
+  const onlyEl =
+    activeElementIds.length === 1
+      ? (content.canvas.elements.find((el) => el.id === activeElementIds[0]) ?? undefined)
+      : undefined;
 
   return {
     content,
@@ -89,8 +125,8 @@ export function useSlideSurfaceState(): SurfaceState<SlideContent, SlideSelectio
       undo: () => useSlideEditSession.getState().undo(),
       redo: () => useSlideEditSession.getState().redo(),
     },
-    insertItems: [],
-    floatingActions: [geometryAction],
+    insertItems: buildInsertItems(t),
+    floatingActions: buildFloatingActions(t, onlyEl),
     commands: [],
     hints: [],
   };
@@ -98,12 +134,6 @@ export function useSlideSurfaceState(): SurfaceState<SlideContent, SlideSelectio
 
 interface SlideCanvasController {
   readonly controller: SceneDataController;
-  readonly restorePrompt: {
-    readonly open: boolean;
-    readonly onRestore: () => void;
-    readonly onDiscard: () => void;
-    readonly onOpenChange: (open: boolean) => void;
-  };
   /**
    * Spread onto the canvas wrapper. Tracks whether a pointer gesture is in
    * flight so a renderer commit can be classified as a real user edit vs
@@ -117,17 +147,19 @@ interface SlideCanvasController {
 }
 
 /**
- * Owns the edit-entry lifecycle for the slide canvas: seeds the session
- * from the live scene (without clobbering persisted history), drives the
- * #571 history-restore prompt, and exposes the scene-context controller
- * that funnels the unmodified renderer's commits into the op history.
+ * Owns the edit-entry lifecycle for the slide canvas: seeds the in-memory
+ * undo history from the live scene and exposes the scene-context
+ * controller. The controller's writes flow through `slide-edit-session`
+ * which auto-saves them to the canonical `useStageStore` (no staging, no
+ * "restore unsaved" UX — the stage store is the source of truth).
  */
 export function useSlideCanvasController(): SlideCanvasController {
   const sceneId = useStageStore((s) => {
     const scene = s.scenes.find((x) => x.id === s.currentSceneId) ?? null;
     return scene && scene.type === 'slide' ? scene.id : '';
   });
-  // Re-render (and thus re-feed SceneProvider) whenever staged history moves.
+  // Re-render (and thus re-feed SceneProvider's getSnapshot) on every
+  // history move (apply / commit / undo / redo).
   useSlideEditSession((s) => s.history);
 
   // True only while a pointer gesture is in flight. The renderer commits a
@@ -155,14 +187,6 @@ export function useSlideCanvasController(): SlideCanvasController {
     [],
   );
 
-  // `pendingRestore` is decided once in `seed()` (before any renderer
-  // mount write), so a within-session normalization commit can't trigger
-  // the prompt. `resolvedSceneId` is the scene the user already answered
-  // for; deriving `open` keeps the prompt React-Compiler clean.
-  const pendingRestore = useSlideEditSession((s) => s.pendingRestore);
-  const [resolvedSceneId, setResolvedSceneId] = useState<string | null>(null);
-  const restoreOpen = !!sceneId && resolvedSceneId !== sceneId && pendingRestore;
-
   useEffect(() => {
     if (!sceneId) return;
     const content = currentSlideContent(sceneId);
@@ -173,34 +197,16 @@ export function useSlideCanvasController(): SlideCanvasController {
 
   useEffect(() => () => useSlideEditSession.getState().end(), []);
 
-  const onRestore = useCallback(() => {
-    const persisted = loadPersistedSlideHistory(sceneId);
-    if (persisted) useSlideEditSession.getState().restore(sceneId, persisted);
-    setResolvedSceneId(sceneId);
-  }, [sceneId]);
-
-  const onDiscard = useCallback(() => {
-    clearPersistedSlideHistory(sceneId);
-    setResolvedSceneId(sceneId);
-  }, [sceneId]);
-
-  const onOpenChange = useCallback(
-    (open: boolean) => {
-      if (!open) setResolvedSceneId(sceneId);
-    },
-    [sceneId],
-  );
-
   const controller = useMemo<SceneDataController>(
     () => ({
       sceneId,
       sceneType: 'slide',
-      getSnapshot: () =>
-        useSlideEditSession.getState().history?.present ??
-        currentSlideContent(sceneId) ??
-        EMPTY_SLIDE,
+      // Read from the canonical stage store; the session writes through to
+      // it on every history move so this is always the up-to-date content.
+      getSnapshot: () => currentSlideContent(sceneId) ?? EMPTY_SLIDE,
       updateSceneData: (updater) => {
-        const base = useSlideEditSession.getState().history?.present;
+        const base =
+          useSlideEditSession.getState().history?.present ?? currentSlideContent(sceneId);
         if (!base) return;
         const next = produce(base, updater as (draft: SlideContent) => void);
         useSlideEditSession.getState().commitContent(next, gestureRef.current);
@@ -211,7 +217,6 @@ export function useSlideCanvasController(): SlideCanvasController {
 
   return {
     controller,
-    restorePrompt: { open: restoreOpen, onRestore, onDiscard, onOpenChange },
     gestureProps,
   };
 }
