@@ -10,8 +10,17 @@
  * `app/editor-fonts.ts`, then add an entry here whose `value` matches the
  * package's `@font-face` family name.
  */
-export const FONTS = [
-  { label: '默认字体', value: '' },
+export interface FontEntry {
+  /** Display name; rendered as the fallback when `labelKey` is absent. */
+  readonly label: string;
+  /** CSS font-family value; "" means the element's own default (no override). */
+  readonly value: string;
+  /** Optional i18n key — preferred over `label` when present. */
+  readonly labelKey?: string;
+}
+
+export const FONTS: readonly FontEntry[] = [
+  { labelKey: 'edit.text.fontDefault', label: 'Default', value: '' },
   // Chinese
   { label: '思源黑体', value: 'Noto Sans SC' },
   { label: '思源宋体', value: 'Noto Serif SC' },

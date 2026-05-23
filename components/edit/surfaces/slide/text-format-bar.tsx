@@ -122,12 +122,16 @@ export function TextFormatBar({ elementId, attrs }: TextFormatBarProps) {
           aria-label={t('edit.text.font')}
           className="w-32 border-0 px-2 text-xs font-normal text-zinc-700 shadow-none hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
         >
-          <SelectValue />
+          {/* placeholder kicks in when `value` doesn't match any item — e.g.
+              a legacy `attrs.fontname` outside the curated FONTS registry
+              ("Microsoft YaHei", "PingFang SC", …). Surfacing the raw family
+              name keeps the trigger informative instead of blank. */}
+          <SelectValue placeholder={attrs.fontname || t('edit.text.fontDefault')} />
         </SelectTrigger>
         <SelectContent position="popper" className="max-h-72">
           {FONTS.map((f) => (
             <SelectItem key={f.value} value={f.value || DEFAULT_FONT} className="text-xs">
-              {f.value === '' ? t('edit.text.fontDefault') : f.label}
+              {f.labelKey ? t(f.labelKey) : f.label}
             </SelectItem>
           ))}
         </SelectContent>
