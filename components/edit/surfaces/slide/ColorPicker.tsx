@@ -56,8 +56,13 @@ export function ColorPicker({ value, onChange, onCommit }: ColorPickerProps) {
     const onUp = () => {
       isDragging.current = false;
     };
-    window.addEventListener('pointerup', onUp);
-    return () => window.removeEventListener('pointerup', onUp);
+    // react-colorful dispatches `mouseup` / `touchend` directly (not
+    // synthetic pointer events), so we listen on every gesture-end channel
+    // to catch any browser / emulator that only emits one family.
+    // `pointercancel` handles the OS yanking the gesture mid-drag.
+    const channels = ['mouseup', 'touchend', 'pointerup', 'pointercancel'] as const;
+    channels.forEach((ev) => window.addEventListener(ev, onUp));
+    return () => channels.forEach((ev) => window.removeEventListener(ev, onUp));
   }, []);
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
