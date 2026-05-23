@@ -8,6 +8,7 @@ import type { InsertPaletteItem, SurfaceState } from '@/lib/edit/scene-editor-su
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { createElementId } from '@/lib/edit/element-id';
 import { createDefaultImageElement, createDefaultSlide } from '@/lib/edit/slide-edit-elements';
+import { defaultRichTextAttrs } from '@/lib/prosemirror/utils';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useStageStore } from '@/lib/store/stage';
 import type { PPTElement } from '@/lib/types/slides';
@@ -234,8 +235,17 @@ export function useSelectedNonTextElementId(): string {
  */
 export function useSyncEditingElementId(editingElementId: string): void {
   const setEditingElementId = useCanvasStore.use.setEditingElementId();
+  const setRichTextAttrs = useCanvasStore.use.setRichtextAttrs();
   useLayoutEffect(() => {
     setEditingElementId(editingElementId);
+    // Also reset `richTextAttrs` to defaults: it's a single shared store
+    // updated by whichever ProseMirror was last focused. Without this, the
+    // format bar visibly carries the previous element's toggle states (B, I,
+    // alignment, …) for a moment when the selection jumps to a different
+    // text element — the new element's ProseMirror only repopulates the
+    // attrs once it takes focus. Resetting on every editing-id change makes
+    // the bar show neutral defaults during the transition instead of stale.
+    setRichTextAttrs(defaultRichTextAttrs);
     return () => setEditingElementId('');
-  }, [editingElementId, setEditingElementId]);
+  }, [editingElementId, setEditingElementId, setRichTextAttrs]);
 }
