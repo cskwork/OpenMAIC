@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Bold,
   Italic,
@@ -106,6 +106,24 @@ export function TextFormatBar({ elementId, attrs }: TextFormatBarProps) {
     [elementId],
   );
   const fontSize = parseInt(attrs.fontsize, 10) || 16;
+  // Local mirror so the user can type freely; only commits on Enter / blur.
+  // The effect re-syncs from `attrs.fontsize` whenever it changes externally
+  // (+/- buttons, undo, font-attr resync) — `attrs.fontsize` doesn't change
+  // mid-type, so this doesn't clobber the user's partial input.
+  const [sizeInput, setSizeInput] = useState(String(fontSize));
+  useEffect(() => {
+    setSizeInput(String(fontSize));
+  }, [fontSize]);
+  const commitSize = useCallback(() => {
+    const n = parseInt(sizeInput, 10);
+    if (Number.isNaN(n)) {
+      setSizeInput(String(fontSize));
+      return;
+    }
+    const clamped = Math.max(8, Math.min(96, n));
+    if (clamped !== fontSize) run({ command: 'fontsize', value: `${clamped}px` });
+    setSizeInput(String(clamped));
+  }, [sizeInput, fontSize, run]);
 
   return (
     // w-max keeps the row at its natural width so the popover (w-auto) sizes to
@@ -146,9 +164,23 @@ export function TextFormatBar({ elementId, attrs }: TextFormatBarProps) {
         >
           <Minus className="h-3.5 w-3.5" />
         </BarButton>
-        <span className="w-9 text-center text-xs font-semibold tabular-nums text-zinc-800 dark:text-zinc-100">
-          {fontSize}
-        </span>
+        <input
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          aria-label={t('edit.text.fontSize')}
+          value={sizeInput}
+          onChange={(e) => setSizeInput(e.target.value.replace(/\D/g, ''))}
+          onBlur={commitSize}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur();
+            else if (e.key === 'Escape') {
+              setSizeInput(String(fontSize));
+              e.currentTarget.blur();
+            }
+          }}
+          className="w-9 bg-transparent text-center text-xs font-semibold tabular-nums text-zinc-800 outline-none focus:bg-white dark:text-zinc-100 dark:focus:bg-zinc-700"
+        />
         <BarButton
           label={t('edit.text.sizeUp')}
           onClick={() => run({ command: 'fontsize', value: stepFontSize(attrs.fontsize, 2) })}
