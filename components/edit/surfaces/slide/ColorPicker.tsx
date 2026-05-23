@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { HexColorPicker } from 'react-colorful';
 import { Pipette } from 'lucide-react';
 
@@ -44,14 +44,28 @@ interface ColorPickerProps {
  */
 export function ColorPicker({ value, onChange, onCommit }: ColorPickerProps) {
   // Local mirror so the picker UI stays responsive while dragging without
-  // round-tripping through ProseMirror + store on every tick. Re-sync when
-  // `value` changes externally (swatch click, eyedropper, parent reset);
-  // suppressing the cascade-render lint because the cascade *is* the intent.
+  // round-tripping through ProseMirror + store on every tick.
   const [color, setColor] = useState(value);
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => setColor(value), [value]);
+  // Don't snap the picker back mid-drag: a stale `value` arriving from a
+  // ProseMirror dispatch a few ticks behind would otherwise overwrite the
+  // user's current pointer position. Gate the re-sync on the pointer being
+  // up. External commits (swatch / eyedropper) sync immediately because
+  // they fire while no drag is in flight.
+  const isDragging = useRef(false);
+  useEffect(() => {
+    const onUp = () => {
+      isDragging.current = false;
+    };
+    window.addEventListener('pointerup', onUp);
+    return () => window.removeEventListener('pointerup', onUp);
+  }, []);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (!isDragging.current) setColor(value);
+  }, [value]);
 
   const handleChange = (c: string) => {
+    isDragging.current = true;
     setColor(c);
     onChange(c);
   };

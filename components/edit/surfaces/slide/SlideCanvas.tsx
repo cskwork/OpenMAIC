@@ -44,6 +44,17 @@ export function SlideCanvas() {
     return () => document.removeEventListener('keydown', handler);
   }, []);
 
+  // Mark the body while the editor is mounted, so the editor-scoped CSS rule
+  // in globals.css that pins `body.padding-right` to 0 only fires here — not
+  // on non-editor pages where Radix's react-remove-scroll compensation is
+  // still wanted.
+  useEffect(() => {
+    document.body.dataset.maicEditor = 'true';
+    return () => {
+      delete document.body.dataset.maicEditor;
+    };
+  }, []);
+
   return (
     // gestureProps marks pointer-gesture windows so a renderer commit is
     // classified as a real user edit vs ResizeObserver text normalization

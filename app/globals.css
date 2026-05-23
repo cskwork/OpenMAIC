@@ -131,11 +131,15 @@
   }
   body {
     @apply bg-background text-foreground;
-    /* Radix Select / Popover wrap with `react-remove-scroll`, which adds a
-       compensation `padding-right` to <body> when they open. Our <html>
-       already reserves the scrollbar gutter (above), so that compensation
-       creates a visible layout shift on every dropdown open — pin body's
-       padding-right so opening a Select doesn't move the page. */
+  }
+  /* Radix Select / Popover wrap with `react-remove-scroll`, which adds a
+     compensation `padding-right` to <body> when they open. Our <html>
+     already reserves the scrollbar gutter (above), so that compensation
+     creates a visible layout shift on every dropdown open. Scope the
+     override to editor mode — the SlideCanvas sets `data-maic-editor` on
+     the body while mounted — so Radix's compensation still works on the
+     rest of the app (modals, sheets, etc. on non-editor pages). */
+  body[data-maic-editor='true'] {
     padding-right: 0 !important;
   }
 }
