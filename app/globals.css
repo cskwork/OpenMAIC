@@ -131,6 +131,12 @@
   }
   body {
     @apply bg-background text-foreground;
+    /* Radix Select / Popover wrap with `react-remove-scroll`, which adds a
+       compensation `padding-right` to <body> when they open. Our <html>
+       already reserves the scrollbar gutter (above), so that compensation
+       creates a visible layout shift on every dropdown open — pin body's
+       padding-right so opening a Select doesn't move the page. */
+    padding-right: 0 !important;
   }
 }
 /* ProseMirror Editor Styles */
