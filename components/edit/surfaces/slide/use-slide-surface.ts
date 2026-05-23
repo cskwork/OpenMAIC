@@ -227,11 +227,6 @@ export function useSyncEditingElementId(editingElementId: string): void {
   const setEditingElementId = useCanvasStore.use.setEditingElementId();
   useLayoutEffect(() => {
     setEditingElementId(editingElementId);
+    return () => setEditingElementId('');
   }, [editingElementId, setEditingElementId]);
-  useLayoutEffect(
-    () => () => {
-      setEditingElementId('');
-    },
-    [setEditingElementId],
-  );
 }

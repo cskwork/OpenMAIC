@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
+import { useCanvasStore } from '@/lib/store/canvas';
 import { useTrackedRect } from './use-tracked-rect';
 
 interface AnchoredBarProps {
@@ -23,7 +24,17 @@ export function AnchoredBar({ elementId, children }: AnchoredBarProps) {
   const open = elementId !== '' && rect !== null;
 
   return (
-    <Popover open={open}>
+    <Popover
+      open={open}
+      // Selection-driven close path: when Radix wants to close (Esc, or any
+      // dismiss our hardening doesn't intercept) we clear the canvas selection
+      // — which then closes us via the controlled `open` prop. Also silences
+      // Radix's controlled-without-onOpenChange dev warning and keeps Esc /
+      // SR dismissal working.
+      onOpenChange={(o) => {
+        if (!o) useCanvasStore.getState().setActiveElementIdList([]);
+      }}
+    >
       {rect && (
         <PopoverAnchor asChild>
           <div
