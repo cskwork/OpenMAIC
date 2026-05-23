@@ -59,10 +59,15 @@ export function AnchoredBar({ elementId, children }: AnchoredBarProps) {
           // Mirrors the FloatingToolbar popover hardening: opening the bar must
           // not pull focus off the canvas selection, and commands that refocus
           // the editor must not dismiss it — so it stays up across consecutive
-          // clicks. Visibility is fully selection-driven (controlled `open`, no
-          // `onOpenChange`): the bar closes when the canvas selection clears or
-          // changes, not via Radix's own dismiss events.
+          // clicks. Visibility is fully selection-driven: the bar closes when
+          // the canvas selection clears or changes (via the controlled `open`),
+          // *not* via Radix's pointer/focus-outside dismiss. preventDefault on
+          // pointer-down-outside too is essential — otherwise mousedown on the
+          // selected element (to drag-to-move or to resize-handle) triggers
+          // Radix's dismiss → `onOpenChange(false)` → we'd clear the selection
+          // before the drag could start. Esc still routes through onOpenChange.
           onOpenAutoFocus={(e) => e.preventDefault()}
+          onPointerDownOutside={(e) => e.preventDefault()}
           onFocusOutside={(e) => e.preventDefault()}
           className="w-auto max-w-[92vw] p-1"
         >
