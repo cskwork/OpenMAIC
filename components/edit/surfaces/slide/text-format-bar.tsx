@@ -18,6 +18,7 @@ import {
   runActiveTextCommand,
   type TextCommandPayload,
 } from '@/lib/prosemirror/active-editor-registry';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   Select,
   SelectContent,
@@ -27,6 +28,7 @@ import {
 } from '@/components/ui/select';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useI18n } from '@/lib/hooks/use-i18n';
+import { ColorPicker } from './ColorPicker';
 
 interface TextFormatBarProps {
   readonly elementId: string;
@@ -124,6 +126,7 @@ export function TextFormatBar({ elementId, attrs }: TextFormatBarProps) {
     if (clamped !== fontSize) run({ command: 'fontsize', value: `${clamped}px` });
     setSizeInput(String(clamped));
   }, [sizeInput, fontSize, run]);
+  const [colorOpen, setColorOpen] = useState(false);
 
   return (
     // w-max keeps the row at its natural width so the popover (w-auto) sizes to
@@ -217,23 +220,39 @@ export function TextFormatBar({ elementId, attrs }: TextFormatBarProps) {
         <Underline className="h-4 w-4" />
       </ToggleButton>
 
-      {/* Text color — a swatch reflecting the current color; the native color
-          input is visually hidden but still owns the picker interaction. */}
-      <label
-        aria-label={t('edit.text.color')}
-        className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800"
-      >
-        <span
-          className="h-4 w-4 rounded ring-1 ring-inset ring-black/15 dark:ring-white/20"
-          style={{ backgroundColor: attrs.color }}
-        />
-        <input
-          type="color"
-          value={attrs.color}
-          className="sr-only"
-          onChange={(e) => run({ command: 'forecolor', value: e.target.value })}
-        />
-      </label>
+      {/* Text color — curated palette + hex input in a popover, replacing the
+          OS color dialog. preventDefault on mousedown so opening the popover
+          doesn't steal focus from ProseMirror. */}
+      <Popover open={colorOpen} onOpenChange={setColorOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            aria-label={t('edit.text.color')}
+            onMouseDown={(e) => e.preventDefault()}
+            className="flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800"
+          >
+            <span
+              className="h-4 w-4 rounded ring-1 ring-inset ring-black/15 dark:ring-white/20"
+              style={{ backgroundColor: attrs.color }}
+            />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          side="bottom"
+          align="center"
+          sideOffset={8}
+          className="w-auto p-3"
+          onOpenAutoFocus={(e) => e.preventDefault()}
+        >
+          <ColorPicker
+            value={attrs.color}
+            onPick={(c) => {
+              run({ command: 'forecolor', value: c });
+              setColorOpen(false);
+            }}
+          />
+        </PopoverContent>
+      </Popover>
 
       <Divider />
 
