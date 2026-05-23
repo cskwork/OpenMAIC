@@ -246,7 +246,8 @@ export function TextFormatBar({ elementId, attrs }: TextFormatBarProps) {
         >
           <ColorPicker
             value={attrs.color}
-            onPick={(c) => {
+            onChange={(c) => run({ command: 'forecolor', value: c })}
+            onCommit={(c) => {
               run({ command: 'forecolor', value: c });
               setColorOpen(false);
             }}

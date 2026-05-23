@@ -96,6 +96,7 @@
     "prosemirror-view": "^1.41.5",
     "radix-ui": "^1.4.3",
     "react": "19.2.3",
+    "react-colorful": "^5.7.0",
     "react-dom": "19.2.3",
     "react-i18next": "^17.0.1",
     "shadcn": "^3.6.3",
