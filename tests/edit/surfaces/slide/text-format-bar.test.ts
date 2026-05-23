@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import * as registry from '@/lib/prosemirror/active-editor-registry';
-import { stepFontSize } from '@/components/edit/surfaces/slide/text-format-bar';
+import { currentFontLabel, stepFontSize } from '@/components/edit/surfaces/slide/text-format-bar';
 
 describe('TextFormatBar — pure logic', () => {
   it('stepFontSize increments and decrements by delta', () => {
@@ -18,6 +18,24 @@ describe('TextFormatBar — pure logic', () => {
   it('stepFontSize handles invalid input (defaults to 16)', () => {
     expect(stepFontSize('', 2)).toBe('18px');
     expect(stepFontSize('abc', -2)).toBe('14px');
+  });
+});
+
+describe('TextFormatBar — currentFontLabel', () => {
+  const t = (k: string) => `T:${k}`;
+
+  it('returns the i18n label for the default (empty) font', () => {
+    expect(currentFontLabel('', t)).toBe('T:edit.text.fontDefault');
+  });
+
+  it("returns the registry entry's label for a matched font", () => {
+    expect(currentFontLabel('Roboto', t)).toBe('Roboto');
+    expect(currentFontLabel('Noto Sans SC', t)).toBe('思源黑体');
+  });
+
+  it('returns the raw family name for an unmatched legacy font', () => {
+    expect(currentFontLabel('Microsoft YaHei', t)).toBe('Microsoft YaHei');
+    expect(currentFontLabel('PingFang SC', t)).toBe('PingFang SC');
   });
 });
 

@@ -122,11 +122,11 @@ export function TextFormatBar({ elementId, attrs }: TextFormatBarProps) {
           aria-label={t('edit.text.font')}
           className="w-32 border-0 px-2 text-xs font-normal text-zinc-700 shadow-none hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
         >
-          {/* placeholder kicks in when `value` doesn't match any item — e.g.
-              a legacy `attrs.fontname` outside the curated FONTS registry
-              ("Microsoft YaHei", "PingFang SC", …). Surfacing the raw family
-              name keeps the trigger informative instead of blank. */}
-          <SelectValue placeholder={attrs.fontname || t('edit.text.fontDefault')} />
+          {/* Render the trigger text via children — Radix's `placeholder` only
+              fires for an *empty* `value`, not for an unmatched non-empty one,
+              so legacy fontnames outside the curated FONTS registry (e.g.
+              `Microsoft YaHei`, `PingFang SC`) need to be surfaced here. */}
+          <SelectValue>{currentFontLabel(attrs.fontname, t)}</SelectValue>
         </SelectTrigger>
         <SelectContent position="popper" className="max-h-72">
           {FONTS.map((f) => (
@@ -253,4 +253,16 @@ export function ConnectedTextFormatBar({ elementId }: { readonly elementId: stri
 export function stepFontSize(current: string, delta: number): string {
   const n = parseInt(current, 10) || 16;
   return `${Math.max(8, Math.min(96, n + delta))}px`;
+}
+
+/**
+ * Display label for the current font: the registry entry's i18n label /
+ * fallback label when matched, the raw family name when unmatched (legacy
+ * theme fonts like `Microsoft YaHei` aren't in the curated FONTS), the
+ * default-font label when empty.
+ */
+export function currentFontLabel(fontname: string, t: (k: string) => string): string {
+  const matched = FONTS.find((f) => f.value === fontname);
+  if (matched) return matched.labelKey ? t(matched.labelKey) : matched.label;
+  return fontname || t('edit.text.fontDefault');
 }
