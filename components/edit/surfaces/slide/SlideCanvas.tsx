@@ -1,7 +1,9 @@
 'use client';
 
+import { useEffect } from 'react';
 import Canvas from '@/components/slide-renderer/Editor/Canvas';
 import { SceneProvider } from '@/lib/contexts/scene-context';
+import { useCanvasStore } from '@/lib/store/canvas';
 import {
   useEditingTextElementId,
   useSelectedNonTextElementId,
@@ -29,6 +31,18 @@ export function SlideCanvas() {
   const editingElementId = useEditingTextElementId();
   const nonTextElementId = useSelectedNonTextElementId();
   useSyncEditingElementId(editingElementId);
+
+  // Esc disarms in-flight insert mode. Read via getState so the listener mounts
+  // once; checking inside the handler keeps us inert when nothing is armed.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const cs = useCanvasStore.getState();
+      if (cs.creatingElement) cs.setCreatingElement(null);
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, []);
 
   return (
     // gestureProps marks pointer-gesture windows so a renderer commit is

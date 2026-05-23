@@ -7,11 +7,7 @@ import type { SceneDataController } from '@/lib/contexts/scene-context';
 import type { InsertPaletteItem, SurfaceState } from '@/lib/edit/scene-editor-surface';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { createElementId } from '@/lib/edit/element-id';
-import {
-  createDefaultImageElement,
-  createDefaultSlide,
-  createDefaultTextElement,
-} from '@/lib/edit/slide-edit-elements';
+import { createDefaultImageElement, createDefaultSlide } from '@/lib/edit/slide-edit-elements';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useStageStore } from '@/lib/store/stage';
 import type { PPTElement } from '@/lib/types/slides';
@@ -24,16 +20,28 @@ export interface SlideSelection {
   readonly activeElementIds: readonly string[];
 }
 
-export function buildInsertItems(t: (k: string) => string): InsertPaletteItem[] {
+export function buildInsertItems(
+  t: (k: string) => string,
+  // The currently-armed creating type, or undefined when nothing is armed. The
+  // text item toggles `creatingElement` (no auto-insert): the renderer's
+  // ElementCreateSelection then captures the canvas click/drag and the text
+  // branch in useInsertFromCreateSelection adds the element at that rect.
+  creatingType?: string,
+): InsertPaletteItem[] {
   const addElement = (element: PPTElement) =>
     useSlideEditSession.getState().applyOp({ type: 'element.add', element });
+  const armText = () => {
+    const cs = useCanvasStore.getState();
+    cs.setCreatingElement(creatingType === 'text' ? null : { type: 'text' });
+  };
   return [
     {
       id: 'insert-text',
       label: t('edit.insert.textBox'),
       tooltip: t('edit.insert.textBox'),
       icon: React.createElement(Type, { className: 'h-4 w-4' }),
-      onInvoke: () => addElement(createDefaultTextElement(createElementId('text'))),
+      active: creatingType === 'text',
+      onInvoke: armText,
     },
     {
       id: 'insert-image',
@@ -83,6 +91,7 @@ export function useSlideSurfaceState(): SurfaceState<SlideContent, SlideSelectio
   const { t } = useI18n();
   const history = useSlideEditSession((s) => s.history);
   const activeElementIds = useCanvasStore.use.activeElementIdList();
+  const creatingElement = useCanvasStore.use.creatingElement();
   const content = useResolvedSlideContent();
 
   return {
@@ -95,7 +104,7 @@ export function useSlideSurfaceState(): SurfaceState<SlideContent, SlideSelectio
       undo: () => useSlideEditSession.getState().undo(),
       redo: () => useSlideEditSession.getState().redo(),
     },
-    insertItems: buildInsertItems(t),
+    insertItems: buildInsertItems(t, creatingElement?.type),
     // Every element type carries its own actions on a selection-anchored bar
     // (AnchoredTextBar / AnchoredDeleteBar) — the surface contributes no
     // top-center FloatingToolbar actions.
