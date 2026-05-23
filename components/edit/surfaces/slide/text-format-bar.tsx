@@ -242,7 +242,13 @@ export function TextFormatBar({ elementId, attrs }: TextFormatBarProps) {
           align="center"
           sideOffset={8}
           className="w-auto p-3"
+          // Dragging on the SV pad / hue slider fires onChange every tick,
+          // each tick dispatches the color command which calls
+          // editorView.focus() — pulling focus out of this popover. Without
+          // preventing onFocusOutside, that focus shift triggers Radix's
+          // dismiss path and the picker closes the instant the drag starts.
           onOpenAutoFocus={(e) => e.preventDefault()}
+          onFocusOutside={(e) => e.preventDefault()}
         >
           <ColorPicker
             value={attrs.color}
