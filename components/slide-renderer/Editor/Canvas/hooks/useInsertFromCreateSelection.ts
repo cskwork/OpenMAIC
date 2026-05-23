@@ -90,6 +90,16 @@ export function useInsertFromCreateSelection(viewportRef: RefObject<HTMLElement 
           // point. A real drag → the dragged rect. Either way addElement
           // auto-selects, which the slide surface picks up to open the
           // AnchoredTextBar on the new element.
+          //
+          // Why not surface-side `applyOp({type:'element.add'})` like the
+          // image insert in `use-slide-surface.ts`? The rect math lives here
+          // (canvas-coord conversion from the pointer gesture), and
+          // `addElement` routes through SceneController → slide-edit-session,
+          // so the content commit ends up in the same store either way. The
+          // tradeoff: this lane doesn't show as a typed `element.add` op in
+          // the session history, just an immer snapshot. Acceptable for a
+          // text-insert; image insert uses the typed op because its source
+          // is the ImagePicker, not a canvas gesture.
           const width = position.width < TEXT_CLICK_MIN ? TEXT_DEFAULT_W : position.width;
           const height = position.height < TEXT_CLICK_MIN ? TEXT_DEFAULT_H : position.height;
           const textEl: PPTTextElement = {

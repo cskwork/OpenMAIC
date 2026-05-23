@@ -236,16 +236,23 @@ export function useSelectedNonTextElementId(): string {
 export function useSyncEditingElementId(editingElementId: string): void {
   const setEditingElementId = useCanvasStore.use.setEditingElementId();
   const setRichTextAttrs = useCanvasStore.use.setRichtextAttrs();
+  // Track the previous editing id so we only reset attrs on element-to-element
+  // *transitions*. Resetting on the first selection (or initial mount with a
+  // restored selection) would briefly flash neutral defaults — `color #000`,
+  // `fontsize 16px` — before the focusing ProseMirror repopulates the real
+  // values, which is more jarring than skipping the reset there.
+  const prevEditingElementId = useRef('');
   useLayoutEffect(() => {
     setEditingElementId(editingElementId);
-    // Also reset `richTextAttrs` to defaults: it's a single shared store
-    // updated by whichever ProseMirror was last focused. Without this, the
-    // format bar visibly carries the previous element's toggle states (B, I,
-    // alignment, …) for a moment when the selection jumps to a different
-    // text element — the new element's ProseMirror only repopulates the
-    // attrs once it takes focus. Resetting on every editing-id change makes
-    // the bar show neutral defaults during the transition instead of stale.
-    setRichTextAttrs(defaultRichTextAttrs);
+    if (prevEditingElementId.current && prevEditingElementId.current !== editingElementId) {
+      // `richTextAttrs` is a single shared store updated by whichever
+      // ProseMirror was last focused. Without this reset on switch, the
+      // format bar visibly carries the previous element's toggle states
+      // (B, I, alignment, …) until the new element's ProseMirror takes
+      // focus and writes its own attrs.
+      setRichTextAttrs(defaultRichTextAttrs);
+    }
+    prevEditingElementId.current = editingElementId;
     return () => setEditingElementId('');
   }, [editingElementId, setEditingElementId, setRichTextAttrs]);
 }
