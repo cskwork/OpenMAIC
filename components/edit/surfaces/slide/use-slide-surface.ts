@@ -11,7 +11,6 @@ import { createDefaultImageElement, createDefaultSlide } from '@/lib/edit/slide-
 import { defaultRichTextAttrs } from '@/lib/prosemirror/utils';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useStageStore } from '@/lib/store/stage';
-import type { PPTElement } from '@/lib/types/slides';
 import type { SlideContent } from '@/lib/types/stage';
 import { ImagePicker } from './ImagePicker';
 import { useSlideEditSession } from './slide-edit-session';
