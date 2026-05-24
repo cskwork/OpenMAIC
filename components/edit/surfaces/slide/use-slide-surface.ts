@@ -52,11 +52,52 @@ export function buildInsertItems(
       onInvoke: () => {}, // popover-only: CommandBar's InsertButton ignores onInvoke when popoverContent is set
       popoverContent: () =>
         React.createElement(ImagePicker, {
-          onPick: (src: string) =>
-            addElement(createDefaultImageElement(createElementId('image'), src)),
+          onPick: insertImageElement,
         }),
     },
   ];
+}
+
+// Default insertion size for an image whose natural dimensions are unknown
+// (e.g. the URL fails to load). Larger sizes get scaled to fit under MAX_W /
+// MAX_H while preserving the natural aspect ratio.
+const IMAGE_MAX_W = 600;
+const IMAGE_MAX_H = 400;
+
+/**
+ * Insert an image element, sized to preserve the source's natural aspect
+ * ratio (scaled down to fit MAX_W × MAX_H, never upscaled). The op is
+ * dispatched on `Image` load; if the source fails to load, we still insert
+ * at the factory's hardcoded default so the user sees something.
+ */
+export function insertImageElement(src: string): void {
+  const id = createElementId('image');
+  const dispatch = (width?: number, height?: number) => {
+    const base = createDefaultImageElement(id, src);
+    const element = width && height ? { ...base, width, height } : base;
+    useSlideEditSession.getState().applyOp({ type: 'element.add', element });
+  };
+  if (typeof window === 'undefined') {
+    dispatch();
+    return;
+  }
+  const img = new window.Image();
+  img.onload = () => {
+    const ratio = img.naturalWidth / img.naturalHeight;
+    let width = img.naturalWidth;
+    let height = img.naturalHeight;
+    if (width > IMAGE_MAX_W) {
+      width = IMAGE_MAX_W;
+      height = width / ratio;
+    }
+    if (height > IMAGE_MAX_H) {
+      height = IMAGE_MAX_H;
+      width = height * ratio;
+    }
+    dispatch(Math.round(width), Math.round(height));
+  };
+  img.onerror = () => dispatch();
+  img.src = src;
 }
 
 /** Delete a slide element and clear the canvas selection. */
