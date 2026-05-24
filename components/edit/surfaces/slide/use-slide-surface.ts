@@ -29,8 +29,6 @@ export function buildInsertItems(
   // branch in useInsertFromCreateSelection adds the element at that rect.
   creatingType?: string,
 ): InsertPaletteItem[] {
-  const addElement = (element: PPTElement) =>
-    useSlideEditSession.getState().applyOp({ type: 'element.add', element });
   const armText = () => {
     const cs = useCanvasStore.getState();
     cs.setCreatingElement(creatingType === 'text' ? null : { type: 'text' });
