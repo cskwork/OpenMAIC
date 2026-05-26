@@ -187,6 +187,8 @@
     },
     "insert": {
       "textBox": "文本框",
+      "expandToolbar": "展开插入工具",
+      "collapseToolbar": "收起插入工具",
       "image": "图片",
       "imageDrop": "拖入图片或点击选择文件",
       "imageOr": "或粘贴图片 URL",

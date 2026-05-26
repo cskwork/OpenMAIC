@@ -187,6 +187,8 @@
     },
     "insert": {
       "textBox": "مربع نص",
+      "expandToolbar": "إظهار أدوات الإدراج",
+      "collapseToolbar": "إخفاء أدوات الإدراج",
       "image": "صورة",
       "imageDrop": "أفلِت صورة أو انقر لاختيار ملف",
       "imageOr": "أو الصق رابط صورة",

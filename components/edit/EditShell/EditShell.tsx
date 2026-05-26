@@ -9,6 +9,7 @@ import type { Scene } from '@/lib/types/stage';
 import { CHROME_DURATION, CHROME_EASE, CHROME_STAGGER } from '@/lib/edit/transitions';
 import { StageGrid } from '@/components/edit/StageGrid';
 import { CommandBar } from './CommandBar';
+import { FloatingInsertToolbar } from './FloatingInsertToolbar';
 import { FloatingToolbar } from './FloatingToolbar';
 import { HintRail } from './HintRail';
 
@@ -86,11 +87,13 @@ export function EditShell({ scene, leftRail, commandTrailing }: EditShellProps) 
         title={scene.title}
         leftRail={leftRail}
         history={state?.history}
-        insertItems={state?.insertItems}
         commands={state?.commands}
         trailing={commandTrailing}
       >
         <CanvasComponent />
+        {state?.insertItems && state.insertItems.length > 0 && (
+          <FloatingInsertToolbar items={state.insertItems} />
+        )}
         {state?.hasSelection && <FloatingToolbar actions={state.floatingActions} />}
         <HintRail hints={state?.hints} />
       </Frame>
@@ -163,21 +166,12 @@ interface FrameProps {
   readonly title: string;
   readonly leftRail?: ReactNode;
   readonly history?: React.ComponentProps<typeof CommandBar>['history'];
-  readonly insertItems?: React.ComponentProps<typeof CommandBar>['insertItems'];
   readonly commands?: React.ComponentProps<typeof CommandBar>['commands'];
   readonly trailing?: ReactNode;
   readonly children: ReactNode;
 }
 
-function Frame({
-  title,
-  leftRail,
-  history,
-  insertItems,
-  commands,
-  trailing,
-  children,
-}: FrameProps) {
+function Frame({ title, leftRail, history, commands, trailing, children }: FrameProps) {
   const prefersReducedMotion = useReducedMotion();
 
   // When reduced motion is requested, drop transforms (y/x) and only fade.
@@ -203,7 +197,6 @@ function Frame({
           <CommandBar
             title={title}
             history={history}
-            insertItems={insertItems}
             commands={commands}
             trailing={trailing}
           />
