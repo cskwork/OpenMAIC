@@ -55,55 +55,95 @@ export function SlideNavRail() {
   //
   // We mutate the rail's `style.width` directly on the DOM during pointer
   // move (bypassing React entirely) and only commit the final width to the
-  // settings store on mouse-up. This is what makes the handle feel glued
+  // settings store on pointer-up. This is what makes the handle feel glued
   // to the cursor: there's no React render → reconcile → DOM commit
-  // latency between mousemove and the visible width change. The thumbnails
-  // inside (which depend on the rail's CSS width via ResizeObserver in
-  // `ThumbnailSlide`) get notified by the browser's layout engine on the
-  // same frame, so they scale in lock-step.
+  // latency between move events and the visible width change.
+  //
+  // Pointer Events (with `setPointerCapture` on the handle) replace the
+  // older `document` mousemove/mouseup binding. With capture, the handle
+  // receives `pointerup` / `pointercancel` even if the cursor leaves the
+  // window, the OS reclaims focus, or a tab switch interrupts the gesture
+  // — none of which fire `document` mouseup, which previously left the
+  // rail stuck in a "drag is still in progress" state until remount.
   //
   // `isDragging` is still React state so we can turn off the CSS
   // `transition: width` for the duration of the gesture — otherwise the
   // 280ms tween from the collapse/expand animation would fight every
   // direct width write.
   const railRef = useRef<HTMLElement>(null);
+  const dragStateRef = useRef<{
+    startX: number;
+    startWidth: number;
+    lastWidth: number;
+    pointerId: number;
+  } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
+  const cleanupDrag = useCallback(() => {
+    dragStateRef.current = null;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    setIsDragging(false);
+  }, []);
+
   const handleResizeStart = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.PointerEvent<HTMLDivElement>) => {
       if (collapsed) return;
+      // Only primary button; ignore right-click / middle-click.
+      if (e.button !== 0) return;
       e.preventDefault();
-      const startX = e.clientX;
-      const startWidth = persistedWidth;
-      let lastWidth = startWidth;
-      setIsDragging(true);
-      const onMove = (me: MouseEvent) => {
-        const delta = me.clientX - startX;
-        const next = Math.min(RAIL_MAX_PX, Math.max(RAIL_MIN_PX, startWidth + delta));
-        lastWidth = next;
-        if (railRef.current) railRef.current.style.width = `${next}px`;
-      };
-      const onUp = () => {
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
-        document.body.style.cursor = '';
-        document.body.style.userSelect = '';
-        // Commit final width to persisted settings exactly once per gesture.
-        // React will re-render with `style.width = persistedWidth`, which
-        // matches the DOM value we already wrote — no visual jump.
-        setPersistedWidth(lastWidth);
-        setIsDragging(false);
+      const target = e.currentTarget;
+      // Pointer capture guarantees this element receives pointermove /
+      // pointerup / pointercancel for the duration of the gesture, even
+      // when the cursor leaves the window.
+      try {
+        target.setPointerCapture(e.pointerId);
+      } catch {
+        // Some browsers throw if the pointer is already captured; ignore.
+      }
+      dragStateRef.current = {
+        startX: e.clientX,
+        startWidth: persistedWidth,
+        lastWidth: persistedWidth,
+        pointerId: e.pointerId,
       };
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
+      setIsDragging(true);
     },
-    [collapsed, persistedWidth, setPersistedWidth],
+    [collapsed, persistedWidth],
+  );
+
+  const handleResizeMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragStateRef.current;
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    const delta = e.clientX - drag.startX;
+    const next = Math.min(RAIL_MAX_PX, Math.max(RAIL_MIN_PX, drag.startWidth + delta));
+    drag.lastWidth = next;
+    if (railRef.current) railRef.current.style.width = `${next}px`;
+  }, []);
+
+  const handleResizeEnd = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const drag = dragStateRef.current;
+      if (!drag || e.pointerId !== drag.pointerId) return;
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        // Capture may already have been released by a pointercancel.
+      }
+      // Commit final width to persisted settings exactly once per gesture.
+      // React will re-render with `style.width = persistedWidth`, which
+      // matches the DOM value we already wrote — no visual jump.
+      setPersistedWidth(drag.lastWidth);
+      cleanupDrag();
+    },
+    [cleanupDrag, setPersistedWidth],
   );
 
   useEffect(
     () => () => {
+      // Belt and suspenders: clear any document-level overrides on unmount.
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     },
@@ -228,6 +268,14 @@ export function SlideNavRail() {
           onClick: () => {
             const entry = useDeletedSceneRecycle.getState().consume();
             if (!entry) return;
+            // Stage-scope guard: if the user has navigated to a
+            // different stage while the toast was up, the recycle
+            // entry belongs to the previous stage and `insertSceneAfter`
+            // would reject it on stage-id mismatch (silently losing the
+            // deleted scene). Drop the undo when stages don't match
+            // rather than blasting the entry into the wrong deck.
+            const currentStage = useStageStore.getState().stage;
+            if (!currentStage || currentStage.id !== entry.stageId) return;
             const live = useStageStore.getState().scenes;
             const anchorIndex = Math.min(Math.max(entry.index - 1, 0), live.length - 1);
             const anchor = live[anchorIndex];
@@ -289,11 +337,18 @@ export function SlideNavRail() {
       }}
     >
       {/* Resize handle — right edge, 6px hit zone, only enabled when
-          expanded. Matches the playback SceneSidebar drag handle. */}
+          expanded. Pointer Events with capture: once the gesture starts
+          this element owns the move/up/cancel stream regardless of
+          cursor location, so the rail can't get stuck in a "still
+          dragging" state on alt-tab / window blur / cursor-leaves-
+          window. */}
       {!collapsed && (
         <div
-          onMouseDown={handleResizeStart}
-          className="group absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-violet-400/30 dark:hover:bg-violet-500/30 active:bg-violet-500/50 transition-colors"
+          onPointerDown={handleResizeStart}
+          onPointerMove={handleResizeMove}
+          onPointerUp={handleResizeEnd}
+          onPointerCancel={handleResizeEnd}
+          className="group absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize touch-none hover:bg-violet-400/30 dark:hover:bg-violet-500/30 active:bg-violet-500/50 transition-colors"
         >
           <div className="absolute right-0.5 top-1/2 -translate-y-1/2 w-0.5 h-8 rounded-full bg-gray-300 dark:bg-gray-600 group-hover:bg-violet-400 dark:group-hover:bg-violet-500 transition-colors" />
         </div>

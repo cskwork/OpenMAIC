@@ -135,10 +135,23 @@ function SurfaceStateRunner({
 
 /**
  * Field-by-field equality for the subset of SurfaceState that the chrome
- * reads (CommandBar history/insertItems/commands + Frame.hasSelection +
- * floating/hints). Reference-equal `content` is the canonical signal that
- * the slide buffer hasn't changed; insert/command arrays are compared by
- * length + per-item `active` flag (which is what CommandBar styles on).
+ * reads. Surface hooks (e.g. `useSlideSurfaceState`) return a fresh object
+ * literal every render, so naive reference equality would publish on
+ * every render and trip an infinite render loop via the runner →
+ * setState → re-render cycle. We compare semantic content instead.
+ *
+ * **When you extend `SurfaceState`** (new field on `EditorCommand`,
+ * `InsertPaletteItem`, `FloatingAction`, `EditorHint`, or a new top-level
+ * field), update this function in lock-step. A field that's read by the
+ * chrome but missing from the comparison silently goes stale.
+ *
+ * - `content` is reference-equal as long as the in-memory slide buffer
+ *   hasn't been committed — the canonical "real change" signal.
+ * - History flags compared individually (functions like undo/redo are
+ *   stable references via `useSlideEditSession.getState()`).
+ * - InsertPaletteItem / EditorCommand / FloatingAction arrays: length +
+ *   per-item `id` + per-item flags that drive visual state.
+ * - EditorHint compared by length + per-item severity/message.
  */
 function surfaceStateEqual(a: SurfaceState, b: SurfaceState | null): boolean {
   if (!b) return false;
@@ -158,7 +171,19 @@ function surfaceStateEqual(a: SurfaceState, b: SurfaceState | null): boolean {
     if (a.commands[i].disabled !== b.commands[i].disabled) return false;
   }
   if (a.floatingActions.length !== b.floatingActions.length) return false;
-  if ((a.hints?.length ?? 0) !== (b.hints?.length ?? 0)) return false;
+  for (let i = 0; i < a.floatingActions.length; i++) {
+    if (a.floatingActions[i].id !== b.floatingActions[i].id) return false;
+    if (a.floatingActions[i].disabled !== b.floatingActions[i].disabled) return false;
+    if (a.floatingActions[i].label !== b.floatingActions[i].label) return false;
+  }
+  const aHints = a.hints ?? [];
+  const bHints = b.hints ?? [];
+  if (aHints.length !== bHints.length) return false;
+  for (let i = 0; i < aHints.length; i++) {
+    if (aHints[i].id !== bHints[i].id) return false;
+    if (aHints[i].severity !== bHints[i].severity) return false;
+    if (aHints[i].message !== bHints[i].message) return false;
+  }
   return true;
 }
 

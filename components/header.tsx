@@ -28,10 +28,15 @@ export function Header({ currentSceneTitle, mode, canEdit, onToggleEditMode }: H
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
-          {/* Title block — hidden in Pro mode (CommandBar shows the
-              scene title down below; double-stacking that title was the
-              "层叠割裂" complaint). The back button + right-side pill +
-              Pro Switch stay visible in both modes. */}
+          {/* Title block — hidden when `mode === 'edit'`. Header lives
+              inside `PlaybackChromeRoot`, which is unmounted by `Stage`
+              once mode flips to 'edit', so in steady state this branch
+              is always taken. The guard exists for the ~280ms
+              AnimatePresence exit window where the playback chrome
+              is still rendering its exit animation while `mode` has
+              already flipped — without the guard, this title would
+              briefly stack on top of the incoming EditChromeRoot's
+              CommandBar title during the cross-fade. */}
           {mode !== 'edit' && (
             <div className="flex flex-col min-w-0">
               <span className="text-[10px] uppercase tracking-widest font-bold text-gray-400 dark:text-gray-500 mb-0.5">
