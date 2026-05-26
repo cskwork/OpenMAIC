@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence, Reorder, motion, useReducedMotion } from 'motion/react';
-import { PanelLeftClose, PanelLeftOpen, PlusCircle } from 'lucide-react';
+import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { useStageStore } from '@/lib/store';
@@ -141,6 +141,32 @@ export function SlideNavRail() {
       setCurrentSceneId(sceneId);
     },
     [currentSceneId, setCurrentSceneId],
+  );
+
+  /**
+   * Insert a fresh blank slide *before* the given scene. The first
+   * InsertionZone (above the first thumb) calls this with `scenes[0]`
+   * so it ends up at index 0 — `setScenes([blank, ...scenes])` is
+   * used directly there since the `insertSceneAfter` API only supports
+   * insertion after an existing anchor.
+   */
+  const handleInsertBefore = useCallback(
+    (beforeSceneId: string) => {
+      if (!stage) return;
+      const beforeIndex = scenes.findIndex((s) => s.id === beforeSceneId);
+      if (beforeIndex < 0) return;
+      const blank = createBlankSlideScene(stage.id, t('edit.nav.untitledSlide'), beforeIndex + 1);
+      if (beforeIndex === 0) {
+        // Prepend: setScenes rebalances `order` to match the array index.
+        setScenes([blank, ...scenes]);
+        setCurrentSceneId(blank.id);
+        return;
+      }
+      const anchor = scenes[beforeIndex - 1];
+      insertSceneAfter(anchor.id, blank);
+      setCurrentSceneId(blank.id);
+    },
+    [insertSceneAfter, scenes, setCurrentSceneId, setScenes, stage, t],
   );
 
   const handleInsertAt = useCallback(
@@ -294,21 +320,8 @@ export function SlideNavRail() {
           </button>
         )}
         <div className={cn('flex items-center gap-1', collapsed && 'flex-col')}>
-          <button
-            type="button"
-            onClick={() => handleInsertAt(currentSceneId)}
-            aria-label={t('edit.nav.addSlide')}
-            title={t('edit.nav.addSlide')}
-            className={cn(
-              'inline-flex h-7 w-7 items-center justify-center rounded-lg',
-              'text-gray-500 dark:text-gray-400 transition-all duration-150',
-              'hover:bg-violet-50 hover:text-violet-600',
-              'dark:hover:bg-violet-950/40 dark:hover:text-violet-300',
-              'active:scale-90',
-            )}
-          >
-            <PlusCircle className="h-4 w-4" />
-          </button>
+          {/* Insertion lives in the `InsertionZone` strips between (and
+              before/after) thumbs now — no header `+` button. */}
           <button
             type="button"
             onClick={() => setCollapsed(!collapsed)}
@@ -357,6 +370,15 @@ export function SlideNavRail() {
                 as="ol"
                 className="m-0 list-none p-0"
               >
+                {/* Leading zone — hover the top padding to insert
+                    before the first thumb. Hits the `+ at top` use
+                    case the user called out. */}
+                {scenes[0] ? (
+                  <InsertionZone
+                    label={t('edit.nav.addSlide')}
+                    onInsert={() => handleInsertBefore(scenes[0].id)}
+                  />
+                ) : null}
                 {scenes.map((scene, index) => (
                   <Fragment key={scene.id}>
                     <ThumbItem
