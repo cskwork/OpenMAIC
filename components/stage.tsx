@@ -1,9 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useRef } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import { useStageStore } from '@/lib/store';
 import { isCurrentSceneEditable } from '@/lib/edit/stage-mode';
 import { isMaicEditorEnabled } from '@/lib/config/feature-flags';
+import { CHROME_EASE } from '@/lib/edit/transitions';
 import { EditChromeRoot } from '@/components/edit/EditChromeRoot';
 import {
   PlaybackChromeRoot,
@@ -88,26 +90,56 @@ export function Stage({
 
   const toggleHandler = isMaicEditorEnabled() ? handleToggleEditMode : undefined;
 
+  // Mode swap is wrapped in `AnimatePresence mode="wait"` so the outgoing
+  // chrome root fully exits (fades out) before the incoming one mounts.
+  // `mode="wait"` keeps the single-canvasStore-writer guarantee — the two
+  // canvas implementations (ScreenCanvas in playback, Editor/Canvas in
+  // edit) never coexist, so their `useViewportSize` writes don't compete.
+  // `initial={false}` skips the entry fade on the first render so the page
+  // loads instantly in playback mode.
+  //
+  // The outer div carries a stable background so neither side reveals the
+  // raw page background while it fades through opacity 0.
   return (
-    <>
-      {mode === 'edit' && currentScene ? (
-        <EditChromeRoot
-          scene={currentScene}
-          isEditable={isEditable}
-          onToggleEditMode={toggleHandler}
-        />
-      ) : (
-        <PlaybackChromeRoot
-          ref={playbackRef}
-          onRetryOutline={onRetryOutline}
-          canEnterProMode={isEditable}
-          onEnterProMode={toggleHandler}
-        />
-      )}
+    <div className="flex-1 flex overflow-hidden bg-gray-50 dark:bg-gray-900">
+      <AnimatePresence mode="wait" initial={false}>
+        {mode === 'edit' && currentScene ? (
+          <motion.div
+            key="edit-chrome"
+            className="flex-1 flex overflow-hidden"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18, ease: CHROME_EASE }}
+          >
+            <EditChromeRoot
+              scene={currentScene}
+              isEditable={isEditable}
+              onToggleEditMode={toggleHandler}
+            />
+          </motion.div>
+        ) : (
+          <motion.div
+            key="playback-chrome"
+            className="flex-1 flex overflow-hidden"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18, ease: CHROME_EASE }}
+          >
+            <PlaybackChromeRoot
+              ref={playbackRef}
+              onRetryOutline={onRetryOutline}
+              canEnterProMode={isEditable}
+              onEnterProMode={toggleHandler}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
       <MultiTabEditConflictPrompt
         open={editLock.conflictOpen}
         onDismiss={editLock.dismissConflict}
       />
-    </>
+    </div>
   );
 }
