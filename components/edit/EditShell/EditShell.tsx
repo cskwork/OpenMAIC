@@ -152,6 +152,17 @@ function SurfaceStateRunner({
  * - InsertPaletteItem / EditorCommand / FloatingAction arrays: length +
  *   per-item `id` + per-item flags that drive visual state.
  * - EditorHint compared by length + per-item severity/message.
+ *
+ * **Callback identity (`onInvoke`, `popoverContent`) is intentionally
+ * NOT compared.** Per-render closure rebinding is normal and would
+ * trip equality every render. Today this is safe because slide is the
+ * only registered surface and its `floatingActions` is `[]` — the only
+ * `onInvoke` set the chrome reads is on `InsertPaletteItem`, which is
+ * a stable module-level closure from `buildInsertItems`. A future
+ * surface that returns non-empty `floatingActions` with closures
+ * capturing per-render state must fold its own change signal (a
+ * content ref / version counter) into the comparison, otherwise the
+ * stale callback fires at click time.
  */
 function surfaceStateEqual(a: SurfaceState, b: SurfaceState | null): boolean {
   if (!b) return false;

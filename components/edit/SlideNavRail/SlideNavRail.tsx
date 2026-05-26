@@ -99,7 +99,14 @@ export function SlideNavRail() {
       try {
         target.setPointerCapture(e.pointerId);
       } catch {
-        // Some browsers throw if the pointer is already captured; ignore.
+        // Spec-wise `setPointerCapture` can only throw `InvalidPointerId`,
+        // which shouldn't happen inside the same pointer's `pointerdown`.
+        // This catch is paranoia, NOT a real fallback: if capture
+        // genuinely fails the gesture still tracks for in-window moves
+        // but `pointerup` outside the handle's bbox won't route here and
+        // the rail will stay in `isDragging` until SlideNavRail
+        // unmounts. The pointermove path remains useful so dropping the
+        // throw on the floor is preferable to bailing the gesture.
       }
       dragStateRef.current = {
         startX: e.clientX,
