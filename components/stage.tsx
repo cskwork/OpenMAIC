@@ -5,7 +5,6 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useStageStore } from '@/lib/store';
 import { isCurrentSceneEditable } from '@/lib/edit/stage-mode';
 import { isMaicEditorEnabled } from '@/lib/config/feature-flags';
-import { CHROME_EASE } from '@/lib/edit/transitions';
 import { EditChromeRoot } from '@/components/edit/EditChromeRoot';
 import {
   PlaybackChromeRoot,
@@ -13,6 +12,7 @@ import {
 } from '@/components/edit/PlaybackChromeRoot';
 import { useEditModeLock } from '@/components/edit/use-edit-mode-lock';
 import { MultiTabEditConflictPrompt } from '@/components/edit/MultiTabEditConflictPrompt';
+import { CHROME_EASE } from '@/lib/edit/transitions';
 // Side-effect: registers the slide SceneEditorSurface so EditShell can
 // resolve it the moment Pro mode is entered (the shell never imports
 // surfaces directly).
@@ -90,27 +90,23 @@ export function Stage({
 
   const toggleHandler = isMaicEditorEnabled() ? handleToggleEditMode : undefined;
 
-  // Mode swap is wrapped in `AnimatePresence mode="wait"` so the outgoing
-  // chrome root fully exits (fades out) before the incoming one mounts.
-  // `mode="wait"` keeps the single-canvasStore-writer guarantee — the two
-  // canvas implementations (ScreenCanvas in playback, Editor/Canvas in
-  // edit) never coexist, so their `useViewportSize` writes don't compete.
-  // `initial={false}` skips the entry fade on the first render so the page
-  // loads instantly in playback mode.
-  //
-  // The outer div carries a stable background so neither side reveals the
-  // raw page background while it fades through opacity 0.
+  // Mode swap choreography — drawer feel. Edit chrome enters from above
+  // (translateY: -32 → 0) + fades in; playback chrome fades. Both layer
+  // via `absolute inset-0` so they coexist for the ~250ms cross-fade
+  // window without one popping out before the other arrives. The
+  // outgoing root keeps rendering its canvas during exit so `canvasStore`
+  // (the shared scale writer) doesn't briefly read zero.
   return (
-    <div className="flex-1 flex overflow-hidden bg-gray-50 dark:bg-gray-900">
-      <AnimatePresence mode="wait" initial={false}>
+    <div className="relative flex flex-1 overflow-hidden">
+      <AnimatePresence initial={false}>
         {mode === 'edit' && currentScene ? (
           <motion.div
-            key="edit-chrome"
-            className="flex-1 flex overflow-hidden"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.18, ease: CHROME_EASE }}
+            key="edit"
+            initial={{ opacity: 0, y: -32 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -32 }}
+            transition={{ duration: 0.28, ease: CHROME_EASE }}
+            className="absolute inset-0 flex"
           >
             <EditChromeRoot
               scene={currentScene}
@@ -120,12 +116,12 @@ export function Stage({
           </motion.div>
         ) : (
           <motion.div
-            key="playback-chrome"
-            className="flex-1 flex overflow-hidden"
+            key="playback"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.18, ease: CHROME_EASE }}
+            transition={{ duration: 0.28, ease: CHROME_EASE }}
+            className="absolute inset-0 flex"
           >
             <PlaybackChromeRoot
               ref={playbackRef}
