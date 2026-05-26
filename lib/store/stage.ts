@@ -71,6 +71,7 @@ interface StageState {
   setStage: (stage: Stage) => void;
   setScenes: (scenes: Scene[]) => void;
   addScene: (scene: Scene) => void;
+  insertSceneAfter: (anchorSceneId: string, scene: Scene) => void;
   updateScene: (sceneId: string, updates: Partial<Scene>) => void;
   deleteScene: (sceneId: string) => void;
   setCurrentSceneId: (sceneId: string | null) => void;
@@ -156,6 +157,28 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
       generatingOutlines,
       ...(shouldSwitch ? { currentSceneId: scene.id } : {}),
     });
+    debouncedSave();
+  },
+
+  insertSceneAfter: (anchorSceneId, scene) => {
+    // Pro mode slide management entry point — inserts after the anchor and
+    // rebalances `order` so PPTX export / array position stay consistent.
+    // Edit mode is gated against active regeneration (see useEditModeLock),
+    // so rewriting `order` here is safe — no outline matcher is racing us.
+    const currentStage = get().stage;
+    if (!currentStage || scene.stageId !== currentStage.id) {
+      log.warn(
+        `insertSceneAfter ignored "${scene.title}" - stageId mismatch (scene: ${scene.stageId}, current: ${currentStage?.id})`,
+      );
+      return;
+    }
+    const current = get().scenes;
+    const anchorIndex = current.findIndex((s) => s.id === anchorSceneId);
+    const insertIndex = anchorIndex < 0 ? current.length : anchorIndex + 1;
+    const migrated = migrateScene(scene);
+    const next = [...current.slice(0, insertIndex), migrated, ...current.slice(insertIndex)];
+    const rebalanced = next.map((s, i) => (s.order === i + 1 ? s : { ...s, order: i + 1 }));
+    set({ scenes: rebalanced });
     debouncedSave();
   },
 

@@ -193,6 +193,8 @@ export interface SettingsState {
   sidebarCollapsed: boolean;
   chatAreaCollapsed: boolean;
   chatAreaWidth: number;
+  editRailCollapsed: boolean;
+  editRailWidth: number;
 
   // Actions
   setModel: (providerId: ProviderId, modelId: string) => void;
@@ -217,6 +219,8 @@ export interface SettingsState {
   setSidebarCollapsed: (collapsed: boolean) => void;
   setChatAreaCollapsed: (collapsed: boolean) => void;
   setChatAreaWidth: (width: number) => void;
+  setEditRailCollapsed: (collapsed: boolean) => void;
+  setEditRailWidth: (width: number) => void;
 
   // Audio actions
   setTTSProvider: (providerId: TTSProviderId) => void;
@@ -720,6 +724,8 @@ export const useSettingsStore = create<SettingsState>()(
         sidebarCollapsed: true,
         chatAreaCollapsed: true,
         chatAreaWidth: 320,
+        editRailCollapsed: false,
+        editRailWidth: 220,
 
         // Audio settings (use defaults)
         ...defaultAudioConfig,
@@ -802,6 +808,8 @@ export const useSettingsStore = create<SettingsState>()(
         // Layout actions
         setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
         setChatAreaCollapsed: (collapsed) => set({ chatAreaCollapsed: collapsed }),
+        setEditRailCollapsed: (collapsed) => set({ editRailCollapsed: collapsed }),
+        setEditRailWidth: (width) => set({ editRailWidth: width }),
         setChatAreaWidth: (width) => set({ chatAreaWidth: width }),
 
         // Audio actions

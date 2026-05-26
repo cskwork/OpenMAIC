@@ -1,30 +1,16 @@
 'use client';
 
-import {
-  Settings,
-  Sun,
-  Moon,
-  Monitor,
-  ArrowLeft,
-  Loader2,
-  Download,
-  FileDown,
-  Package,
-  Archive,
-} from 'lucide-react';
-import { Switch } from '@/components/ui/switch';
+import { ArrowLeft, Loader2, Download, FileDown, Package, Archive } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
-import { useTheme } from '@/lib/hooks/use-theme';
-import { LanguageSwitcher } from './language-switcher';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { SettingsDialog } from './settings';
 import { cn } from '@/lib/utils';
 import { useStageStore } from '@/lib/store/stage';
 import { useMediaGenerationStore } from '@/lib/store/media-generation';
 import { useExportPPTX } from '@/lib/export/use-export-pptx';
 import { useExportClassroom } from '@/lib/export/use-export-classroom';
 import type { StageMode } from '@/lib/types/stage';
+import { HeaderControls } from './stage/header-controls';
 
 interface HeaderProps {
   readonly currentSceneTitle: string;
@@ -35,10 +21,7 @@ interface HeaderProps {
 
 export function Header({ currentSceneTitle, mode, canEdit, onToggleEditMode }: HeaderProps) {
   const { t } = useI18n();
-  const { theme, setTheme } = useTheme();
   const router = useRouter();
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [themeOpen, setThemeOpen] = useState(false);
 
   // Export
   const { exporting: isExporting, exportPPTX, exportResourcePack } = useExportPPTX();
@@ -56,27 +39,22 @@ export function Header({ currentSceneTitle, mode, canEdit, onToggleEditMode }: H
     failedOutlines.length === 0 &&
     Object.values(mediaTasks).every((task) => task.status === 'done' || task.status === 'failed');
 
-  const themeRef = useRef<HTMLDivElement>(null);
-
-  // Close dropdown when clicking outside
+  // Close export dropdown when clicking outside (lang/theme/settings
+  // dropdowns live inside HeaderControls and self-manage there).
   const handleClickOutside = useCallback(
     (e: MouseEvent) => {
-      if (themeOpen && themeRef.current && !themeRef.current.contains(e.target as Node)) {
-        setThemeOpen(false);
-      }
       if (exportMenuOpen && exportRef.current && !exportRef.current.contains(e.target as Node)) {
         setExportMenuOpen(false);
       }
     },
-    [themeOpen, exportMenuOpen],
+    [exportMenuOpen],
   );
 
   useEffect(() => {
-    if (themeOpen || exportMenuOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
-    }
-  }, [themeOpen, exportMenuOpen, handleClickOutside]);
+    if (!exportMenuOpen) return;
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [exportMenuOpen, handleClickOutside]);
 
   return (
     <>
@@ -89,131 +67,26 @@ export function Header({ currentSceneTitle, mode, canEdit, onToggleEditMode }: H
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <div className="flex flex-col min-w-0">
-            <span className="text-[10px] uppercase tracking-widest font-bold text-gray-400 dark:text-gray-500 mb-0.5">
-              {t('stage.currentScene')}
-            </span>
-            <h1
-              className="text-xl font-bold text-gray-800 dark:text-gray-200 tracking-tight truncate"
-              suppressHydrationWarning
-            >
-              {currentSceneTitle || t('common.loading')}
-            </h1>
-          </div>
+          {/* Title block — hidden in Pro mode (CommandBar shows the
+              scene title down below; double-stacking that title was the
+              "层叠割裂" complaint). The back button + right-side pill +
+              Pro Switch stay visible in both modes. */}
+          {mode !== 'edit' && (
+            <div className="flex flex-col min-w-0">
+              <span className="text-[10px] uppercase tracking-widest font-bold text-gray-400 dark:text-gray-500 mb-0.5">
+                {t('stage.currentScene')}
+              </span>
+              <h1
+                className="text-xl font-bold text-gray-800 dark:text-gray-200 tracking-tight truncate"
+                suppressHydrationWarning
+              >
+                {currentSceneTitle || t('common.loading')}
+              </h1>
+            </div>
+          )}
         </div>
 
-        <div className="flex items-center gap-1 bg-white/60 dark:bg-gray-800/60 backdrop-blur-md px-2 py-1.5 rounded-full border border-gray-100/50 dark:border-gray-700/50 shadow-sm shrink-0">
-          {/* Language Selector */}
-          <LanguageSwitcher onOpen={() => setThemeOpen(false)} />
-
-          {/* Theme Selector */}
-          <div className="relative" ref={themeRef}>
-            <button
-              onClick={() => {
-                setThemeOpen(!themeOpen);
-              }}
-              className="p-2 rounded-full text-gray-400 dark:text-gray-500 hover:bg-white dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:shadow-sm transition-all group"
-            >
-              {theme === 'light' && <Sun className="w-4 h-4" />}
-              {theme === 'dark' && <Moon className="w-4 h-4" />}
-              {theme === 'system' && <Monitor className="w-4 h-4" />}
-            </button>
-            {themeOpen && (
-              <div className="absolute top-full mt-2 right-0 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg overflow-hidden z-50 min-w-[140px]">
-                <button
-                  onClick={() => {
-                    setTheme('light');
-                    setThemeOpen(false);
-                  }}
-                  className={cn(
-                    'w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-2',
-                    theme === 'light' &&
-                      'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
-                  )}
-                >
-                  <Sun className="w-4 h-4" />
-                  {t('settings.themeOptions.light')}
-                </button>
-                <button
-                  onClick={() => {
-                    setTheme('dark');
-                    setThemeOpen(false);
-                  }}
-                  className={cn(
-                    'w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-2',
-                    theme === 'dark' &&
-                      'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
-                  )}
-                >
-                  <Moon className="w-4 h-4" />
-                  {t('settings.themeOptions.dark')}
-                </button>
-                <button
-                  onClick={() => {
-                    setTheme('system');
-                    setThemeOpen(false);
-                  }}
-                  className={cn(
-                    'w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-2',
-                    theme === 'system' &&
-                      'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
-                  )}
-                >
-                  <Monitor className="w-4 h-4" />
-                  {t('settings.themeOptions.system')}
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Settings Button */}
-          <div className="relative">
-            <button
-              onClick={() => setSettingsOpen(true)}
-              className="p-2 rounded-full text-gray-400 dark:text-gray-500 hover:bg-white dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:shadow-sm transition-all group"
-            >
-              <Settings className="w-4 h-4 group-hover:rotate-90 transition-transform duration-500" />
-            </button>
-          </div>
-        </div>
-
-        {/* Pro Mode (edit) toggle — caps label + switch. Surfaces only the
-            two i18n strings already shipped in stage.editCourse/doneEditing
-            from #561; consumer code lives behind the optional onToggleEditMode
-            prop so embedders without an edit affordance render the same header. */}
-        {onToggleEditMode && (
-          <label
-            className={cn(
-              'shrink-0 inline-flex items-center gap-2.5 h-9 px-3 rounded-full transition-colors duration-200',
-              'bg-white/60 dark:bg-gray-800/60 backdrop-blur-md border shadow-sm',
-              mode === 'edit'
-                ? 'border-violet-500/60 dark:border-violet-400/60'
-                : 'border-gray-100/50 dark:border-gray-700/50',
-              !canEdit && mode !== 'edit'
-                ? 'opacity-60 cursor-not-allowed'
-                : 'cursor-pointer hover:border-violet-400/60 dark:hover:border-violet-500/50',
-            )}
-            title={mode === 'edit' ? t('stage.doneEditing') : t('stage.editCourse')}
-          >
-            <span
-              className={cn(
-                'text-[11px] font-bold uppercase tracking-[0.14em] tabular-nums select-none transition-colors duration-200',
-                mode === 'edit'
-                  ? 'text-violet-600 dark:text-violet-300'
-                  : 'text-gray-500 dark:text-gray-400',
-              )}
-            >
-              {t('edit.proMode')}
-            </span>
-            <Switch
-              checked={mode === 'edit'}
-              onCheckedChange={onToggleEditMode}
-              disabled={!canEdit && mode !== 'edit'}
-              aria-label={mode === 'edit' ? t('stage.doneEditing') : t('stage.editCourse')}
-              className="data-[state=checked]:bg-violet-600 dark:data-[state=checked]:bg-violet-500"
-            />
-          </label>
-        )}
+        <HeaderControls mode={mode} canEdit={canEdit} onToggleEditMode={onToggleEditMode} />
 
         {/* Export Dropdown */}
         <div className="relative" ref={exportRef}>
@@ -289,7 +162,6 @@ export function Header({ currentSceneTitle, mode, canEdit, onToggleEditMode }: H
           )}
         </div>
       </header>
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     </>
   );
 }
