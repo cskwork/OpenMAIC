@@ -24,13 +24,19 @@ interface StageGridProps {
  * `minHeight: 0` so its children can shrink correctly (the usual
  * "flex / grid item won't shrink below content" trap).
  *
- *   ┌──────────────────────────────────────────────┐
- *   │                topSlot                       │
- *   ├──────────┬─────────────────────┬─────────────┤
- *   │ leftSlot │       centerSlot    │  rightSlot  │
- *   ├──────────┴─────────────────────┴─────────────┤
- *   │                bottomSlot                    │
- *   └──────────────────────────────────────────────┘
+ *   ┌──────────┬─────────────────────┬─────────────┐
+ *   │          │       topSlot                     │
+ *   │ leftSlot ├─────────────────────┬─────────────┤
+ *   │          │       centerSlot    │  rightSlot  │
+ *   │ (full    ├─────────────────────┴─────────────┤
+ *   │  height) │       bottomSlot                  │
+ *   └──────────┴────────────────────────────────────┘
+ *
+ * The left slot spans all three rows so a sidebar always renders at
+ * the absolute left edge of the chrome — matches the playback
+ * `SceneSidebar` shape exactly so mode swaps don't shift the
+ * sidebar/header pixel positions and the user's click targets stay
+ * anchored.
  *
  * Inline `gridTemplateAreas` is used instead of Tailwind utility
  * classes because Tailwind can't statically generate dynamic named
@@ -39,7 +45,7 @@ interface StageGridProps {
  */
 const GRID_STYLE: CSSProperties = {
   display: 'grid',
-  gridTemplateAreas: `"top top top" "left center right" "bottom bottom bottom"`,
+  gridTemplateAreas: `"left top top" "left center right" "left bottom bottom"`,
   gridTemplateColumns: 'auto minmax(0, 1fr) auto',
   gridTemplateRows: 'auto minmax(0, 1fr) auto',
 };

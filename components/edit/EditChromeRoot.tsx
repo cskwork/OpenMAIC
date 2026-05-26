@@ -56,7 +56,6 @@ export function EditChromeRoot({ scene, isEditable, onToggleEditMode }: EditChro
           mode="edit"
           canEdit={isEditable}
           onToggleEditMode={isMaicEditorEnabled() ? onToggleEditMode : undefined}
-          variant="compact"
         />
       }
     />
