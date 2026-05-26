@@ -194,12 +194,7 @@ function Frame({ title, leftRail, history, commands, trailing, children }: Frame
           animate={cmdAnimate}
           transition={{ ...stepTransition, delay: prefersReducedMotion ? 0 : COMMANDBAR_DELAY }}
         >
-          <CommandBar
-            title={title}
-            history={history}
-            commands={commands}
-            trailing={trailing}
-          />
+          <CommandBar title={title} history={history} commands={commands} trailing={trailing} />
         </motion.div>
       }
       leftSlot={

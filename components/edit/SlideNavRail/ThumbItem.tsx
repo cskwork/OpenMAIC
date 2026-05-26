@@ -42,16 +42,13 @@ function ThumbItemComponent({
   const ref = useRef<HTMLLIElement>(null);
   const visible = useNearViewport(ref);
 
-  // Inline title-edit state.
+  // Inline title-edit state. `draft` is only used while renaming; when
+  // idle we derive the visible title from `scene.title` directly so an
+  // external rename (other tab / Duplicate suffix) shows up without a
+  // sync effect. `startRename` seeds `draft` once at session start.
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(scene.title);
   const inputRef = useRef<HTMLInputElement>(null);
-
-  // Reset draft whenever scene title changes externally (e.g. another tab
-  // edited it, or duplicate appended a suffix).
-  useEffect(() => {
-    if (!renaming) setDraft(scene.title);
-  }, [scene.title, renaming]);
 
   const startRename = useCallback(() => {
     setDraft(scene.title);
@@ -70,13 +67,13 @@ function ThumbItemComponent({
     const trimmed = draft.trim();
     if (trimmed && trimmed !== scene.title) {
       updateScene(scene.id, { title: trimmed });
-    } else if (!trimmed) {
-      setDraft(scene.title);
     }
     setRenaming(false);
   }, [draft, scene.id, scene.title, updateScene]);
 
   const cancelRename = useCallback(() => {
+    // Reset draft to the canonical title so the next rename session
+    // starts from a clean state.
     setDraft(scene.title);
     setRenaming(false);
   }, [scene.title]);
@@ -217,11 +214,7 @@ function ThumbItemComponent({
                 <DropdownMenuItem onSelect={onDuplicate}>
                   {t('edit.nav.duplicate')}
                 </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={!canDelete}
-                  onSelect={onDelete}
-                  variant="destructive"
-                >
+                <DropdownMenuItem disabled={!canDelete} onSelect={onDelete} variant="destructive">
                   {t('edit.nav.delete')}
                 </DropdownMenuItem>
               </DropdownMenuContent>
