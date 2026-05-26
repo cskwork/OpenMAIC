@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { motion } from 'motion/react';
 import { Settings, Sun, Moon, Monitor } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { useI18n } from '@/lib/hooks/use-i18n';
@@ -14,7 +15,17 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
+import { CHROME_EASE } from '@/lib/edit/transitions';
 import type { StageMode } from '@/lib/types/stage';
+
+// Stable layout IDs used by `motion.layoutId` so the Pro Switch and the
+// settings pill morph between their positions in the playback Header and
+// the edit-mode CommandBar (instead of "jumping" when the mode swap
+// re-renders the trees). The transition is automatic — motion measures
+// both instances and animates the shared element across the gap.
+const PRO_SWITCH_LAYOUT_ID = 'maic-pro-switch';
+const SETTINGS_PILL_LAYOUT_ID = 'maic-settings-pill';
+const SHARED_LAYOUT_TRANSITION = { duration: 0.28, ease: CHROME_EASE } as const;
 
 interface HeaderControlsProps {
   readonly mode?: StageMode;
@@ -56,7 +67,9 @@ export function HeaderControls({
 
   return (
     <>
-      <div
+      <motion.div
+        layoutId={SETTINGS_PILL_LAYOUT_ID}
+        transition={SHARED_LAYOUT_TRANSITION}
         className={cn(
           'shrink-0 flex items-center gap-1 backdrop-blur-md shadow-sm rounded-full',
           compact
@@ -125,13 +138,19 @@ export function HeaderControls({
         >
           <Settings className="w-4 h-4 group-hover:rotate-90 transition-transform duration-500" />
         </button>
-      </div>
+      </motion.div>
 
       {/* Pro Switch — toggle property: on/off both clickable, not a
           one-way "Done" button. Disabled only when the current scene
-          can't be entered (pending/generating/etc.). */}
+          can't be entered (pending/generating/etc.).
+          `layoutId` makes it a shared element between the playback
+          Header and the edit CommandBar — motion morphs its position
+          and size across the mode swap instead of letting the user
+          watch the click target jump. */}
       {onToggleEditMode && (
-        <label
+        <motion.label
+          layoutId={PRO_SWITCH_LAYOUT_ID}
+          transition={SHARED_LAYOUT_TRANSITION}
           className={cn(
             'shrink-0 inline-flex items-center gap-2.5 rounded-full border shadow-sm transition-colors duration-200',
             'bg-white/60 dark:bg-gray-800/60 backdrop-blur-md',
@@ -162,7 +181,7 @@ export function HeaderControls({
             aria-label={mode === 'edit' ? t('stage.doneEditing') : t('stage.editCourse')}
             className="data-[state=checked]:bg-violet-600 dark:data-[state=checked]:bg-violet-500"
           />
-        </label>
+        </motion.label>
       )}
 
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
