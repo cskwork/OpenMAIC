@@ -238,6 +238,8 @@ cp .env.example .env.local
 docker compose up --build
 ```
 
+**内网 / 离线部署：** 新生成的互动场景（KaTeX 数学公式、Three.js 3D 可视化）从你自己实例的 `/vendor/katex/` 与 `/vendor/three/` 加载，资源由 `pnpm install` 阶段的 `scripts/vendor-static-libs.mjs` 自动从 `node_modules` 拷贝到 `public/vendor/`。课堂播放时不再访问 jsdelivr / unpkg。注意：该改动仅影响新生成的课堂；本次改动之前生成的 `.maic.zip` 课堂内 HTML 中仍可能内嵌 jsdelivr URL，需重新生成才能享受离线播放。
+
 ### 可选：MinerU（增强文档解析）
 
 [MinerU](https://github.com/opendatalab/MinerU) 提供更强的表格、公式和 OCR 解析能力。你可以使用 [MinerU 官方 API](https://mineru.net/) 或[自行部署](https://opendatalab.github.io/MinerU/quick_start/docker_deployment/)。

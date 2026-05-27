@@ -238,6 +238,8 @@ cp .env.example .env.local
 docker compose up --build
 ```
 
+**Intranet / airgapped deployment:** Generated interactive scenes (math via KaTeX, 3D via Three.js) reference assets at `/vendor/katex/` and `/vendor/three/` on your own instance, populated by `scripts/vendor-static-libs.mjs` during `pnpm install`. No public CDN (jsdelivr / unpkg) calls are made at classroom playback time. Note: this applies to *newly generated* classrooms; classrooms imported from `.maic.zip` files that were generated before this change may still reference jsdelivr URLs.
+
 ### Optional: MinerU (Advanced Document Parsing)
 
 [MinerU](https://github.com/opendatalab/MinerU) provides enhanced parsing for complex tables, formulas, and OCR. You can use the [MinerU official API](https://mineru.net/) or [self-host your own instance](https://opendatalab.github.io/MinerU/quick_start/docker_deployment/).
