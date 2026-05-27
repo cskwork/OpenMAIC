@@ -33,16 +33,10 @@ async function main() {
   await mkdir(vendorDir, { recursive: true });
 
   // KaTeX: copy entire dist/ (CSS, JS, fonts, contrib/)
-  await copyDir(
-    resolve(root, 'node_modules/katex/dist'),
-    resolve(vendorDir, 'katex'),
-  );
+  await copyDir(resolve(root, 'node_modules/katex/dist'), resolve(vendorDir, 'katex'));
 
   // Three.js: copy build/ (three.module.js + maps) and examples/jsm/ (addons)
-  await copyDir(
-    resolve(root, 'node_modules/three/build'),
-    resolve(vendorDir, 'three/build'),
-  );
+  await copyDir(resolve(root, 'node_modules/three/build'), resolve(vendorDir, 'three/build'));
   await copyDir(
     resolve(root, 'node_modules/three/examples/jsm'),
     resolve(vendorDir, 'three/examples/jsm'),

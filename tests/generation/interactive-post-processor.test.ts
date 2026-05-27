@@ -44,8 +44,7 @@ describe('postProcessInteractiveHtml', () => {
     });
 
     it('does not touch $ inside <script> blocks', () => {
-      const html =
-        '<html><head></head><body><script>const x = "$10";</script></body></html>';
+      const html = '<html><head></head><body><script>const x = "$10";</script></body></html>';
       const out = postProcessInteractiveHtml(html);
       expect(out).toContain('const x = "$10";');
     });
