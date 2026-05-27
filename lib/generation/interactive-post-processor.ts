@@ -10,12 +10,51 @@
  */
 
 /**
+ * Rewrite known CDN URLs for vendored libraries to local /vendor/ paths.
+ * Matches unpkg.com and cdn.jsdelivr.net references to three.js (build/three.module.js
+ * and examples/jsm/<anything>) and katex (dist/<anything>), version-agnostic.
+ * Other CDNs (cdnjs, esm.sh, etc.) are not covered — best effort.
+ */
+export function rewriteVendoredCdnUrls(html: string): string {
+  const rules: Array<{ pattern: RegExp; replacement: string }> = [
+    // Three.js — build/three.module.js
+    {
+      pattern:
+        /https?:\/\/(?:cdn\.jsdelivr\.net\/npm|unpkg\.com)\/three(?:@[^\/"'\s]+)?\/build\/three\.module\.js/g,
+      replacement: '/vendor/three/build/three.module.js',
+    },
+    // Three.js — examples/jsm/<anything>  (capture path suffix)
+    {
+      pattern:
+        /https?:\/\/(?:cdn\.jsdelivr\.net\/npm|unpkg\.com)\/three(?:@[^\/"'\s]+)?\/examples\/jsm\//g,
+      replacement: '/vendor/three/examples/jsm/',
+    },
+    // KaTeX — dist/<anything>
+    {
+      pattern:
+        /https?:\/\/(?:cdn\.jsdelivr\.net\/npm|unpkg\.com)\/katex(?:@[^\/"'\s]+)?\/dist\//g,
+      replacement: '/vendor/katex/',
+    },
+  ];
+  let out = html;
+  for (const { pattern, replacement } of rules) {
+    out = out.replace(pattern, replacement);
+  }
+  return out;
+}
+
+/**
  * Main entry point: post-process generated interactive HTML
  * Converts LaTeX delimiters and injects KaTeX rendering resources.
  */
 export function postProcessInteractiveHtml(html: string): string {
   // Convert LaTeX delimiters while protecting script tags
   let processed = convertLatexDelimiters(html);
+
+  // Rewrite CDN URLs for vendored libs (katex, three) to local /vendor/ paths.
+  // Must run BEFORE injectKatex so that LLM-written CDN katex refs are normalized
+  // and the injector's 'katex' substring guard correctly skips re-injection.
+  processed = rewriteVendoredCdnUrls(processed);
 
   // Inject KaTeX resources if not already present
   if (!processed.toLowerCase().includes('katex')) {
