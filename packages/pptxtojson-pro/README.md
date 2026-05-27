@@ -13,6 +13,8 @@
 
 **实现说明**：主入口为 TypeScript 实现（`src/`），构建产物为 `dist/`；输出 JSON 格式与文档及原示例一致。原 JavaScript 实现位于 `src1/`，仅作输出格式与逻辑参考，不参与构建。
 
+**OpenMAIC 扩展**：在 `parse()`（PPTX → 中间 JSON）之上新增了完整的 import pipeline —— `importPptx()` 直接吃 `.pptx` 文件、吐 OpenMAIC 画布需要的 `Slide[]`，并可选地把所有 base64 图片 / blob 媒体转交给你提供的 OSS 上传函数。详见下方「🚀 进阶用法」。
+
 > 与其他的pptx文件解析工具的最大区别在于：
 > 1. 直接运行在浏览器端；
 > 2. 解析结果是**可读**的 JSON 数据，而不仅仅是把 XML 文件内容原样翻译成难以理解的 JSON。
@@ -73,7 +75,163 @@ async function func() {
 func()
 ```
 
-### 输出示例
+# 🚀 进阶用法：PPTX → OpenMAIC 画布 `Slide[]`
+
+`parse()` 只完成「PPTX → 可读 JSON」这一步，元素的字段还是 PPT 语义（`type: 'text' | 'shape' | 'image' …`、单位 `pt`、媒体是 base64 / `blob:` URL）。
+
+如果你需要的最终产物是 **OpenMAIC 画布直接可渲染的 `Slide[]`**（`PPTTextElement` / `PPTShapeElement` / `PPTImageElement` 等、单位 `px`、媒体替换为 OSS URL），用 `importPptx()`。
+
+## 🔑 API 一览
+
+| 导出 | 类型 | 用途 |
+|------|------|------|
+| `importPptx(input, options?)` | `(File \| Blob \| ArrayBuffer, ImportPptxOptions?) => Promise<Slide[]>` | 一站式：`.pptx` → `Slide[]`，等所有上传 settle 后再 resolve |
+| `parsedToSlides(json, options?)` | `(Output, ImportPptxOptions?) => Promise<Slide[]>` | 只做「中间 JSON → `Slide[]`」，给已经用 `parse()` 拿到 JSON 的场景 |
+| `OssUpload` | `(blob: Blob, filename: string, dir?: string) => Promise<string>` | 上传回调签名 |
+| `ImportPptxOptions` | `{ upload?: OssUpload }` | 选项对象 |
+| `CanvasSlide` | OpenMAIC `Slide` 类型 | 用于消费方做类型注解 |
+
+`importPptx` 内部就是 `parse(buffer, { mediaMode: 'base64' })` + `parsedToSlides(...)`，两者任选其一即可。
+
+## 🧩 完整签名
+
+```ts
+import {
+  importPptx,
+  parsedToSlides,
+  type OssUpload,
+  type ImportPptxOptions,
+  type CanvasSlide,
+} from 'pptxtojson-pro';
+
+export type OssUpload = (
+  blob: Blob,
+  filename: string,
+  dir?: string,
+) => Promise<string>;
+
+export interface ImportPptxOptions {
+  /**
+   * 上传媒体（图片 / 音频 / 视频）到远程存储并返回公网 URL。
+   * - 提供：所有 base64 图片会先转成 Blob，再调用此函数，URL 写回 slide。
+   * - 不提供：图片保留 base64 data URL；音视频保留临时 `blob:` URL（仅当前 tab 有效）。
+   */
+  upload?: OssUpload;
+}
+
+export function importPptx(
+  input: File | Blob | ArrayBuffer,
+  options?: ImportPptxOptions,
+): Promise<CanvasSlide[]>;
+
+export function parsedToSlides(
+  json: Output,
+  options?: ImportPptxOptions,
+): Promise<CanvasSlide[]>;
+```
+
+## 📦 用法
+
+### 1. 不传 `upload` —— 本地预览 / 调试
+
+媒体留在内存，slide 可以直接在当前 tab 里渲染，但**刷新就失效**（音视频）/ **JSON 体积大**（图片）。
+
+```ts
+import { importPptx } from 'pptxtojson-pro';
+
+const slides = await importPptx(file);
+// slides[*].elements 里的 image.src 还是 data:image/png;base64,…
+// audio/video.src 是 blob:http://… URL
+```
+
+### 2. 传 `upload` —— 生产场景
+
+把媒体上传到你自己的 OSS / classroom-media / S3 / 任意存储，slide 里只剩 URL：
+
+```ts
+import { importPptx, type OssUpload } from 'pptxtojson-pro';
+
+const upload: OssUpload = async (blob, filename, dir) => {
+  const form = new FormData();
+  form.append('file', blob, filename);
+  form.append('dir', dir ?? 'pptx-import');
+
+  const res = await fetch('/api/upload', { method: 'POST', body: form });
+  if (!res.ok) throw new Error(`upload failed: ${res.status}`);
+  const { url } = await res.json();
+  return url; // ← 必须返回最终可访问 URL
+};
+
+const slides = await importPptx(file, { upload });
+// 此时 slides[*].elements 里的 src 全是 OSS URL
+```
+
+### 3. 已经用 `parse()` 拿到 JSON 时
+
+```ts
+import { parse, parsedToSlides } from 'pptxtojson-pro';
+
+const json = await parse(buffer, { mediaMode: 'base64' });
+const slides = await parsedToSlides(json, { upload });
+```
+
+> ⚠️ 必须用 `mediaMode: 'base64'`。`blob` 模式产出的 URL 只在当前 tab 有效，无法上传后跨页面使用。
+
+## 📞 `upload` 回调被调用的时机
+
+| 元素类型 | 源数据 | filename 示例 | dir |
+|---------|--------|---------------|-----|
+| 背景图片 | base64 → Blob | `background_<timestamp>.png` | `a2m` |
+| 图片元素 | base64 → Blob | `image_<timestamp>.png` | `a2m` |
+| 数学公式渲染图 | base64 → Blob | `math_<timestamp>.png` | `a2m` |
+| 形状的图案填充 | base64 → Blob | `pattern_<timestamp>.png` | `a2m` |
+| 音频 | 直接是 Blob | `audio_<timestamp>.mp3` | `a2m/audio` |
+| 视频 | 直接是 Blob | `video_<timestamp>.mp4` | `a2m/video` |
+
+并发：内部用 6 路并发上传图片，避免一次性打满网络。
+
+## 💥 错误处理
+
+- **单个媒体上传失败** → transform 内部 `.catch` 吞掉错误（控制台 `console.error`），该元素的 `src` 仍是原始 base64 / 空字符串。整体 import **不会失败**。
+- **`parse()` 解析失败**（坏文件等）→ `importPptx` 直接 `throw`，调用方自己 `try/catch`。
+- 内部用 `Promise.allSettled` 等所有上传 settle 后才 resolve，调用方拿到的 `Slide[]` 不需要再 await 任何东西。
+
+## ⚠️ 当前限制
+
+| 模块 | 状态 | 影响 |
+|------|------|------|
+| 字体白名单（`resolveFont`） | **stub，透传** | 中文字体保留原名，浏览器找不到字体时会回退到默认。后续可移植 PPTist 字体替换逻辑。 |
+| 视频编码检测（`videoCodec`） | **stub，永远视为支持** | HEVC 等浏览器不支持的编码会变成坏的 `<video>`，而不是降级到占位图标。 |
+| SVG path bbox（`svgPathParser`） | 自实现 tokenizer | 标准命令（M L H V C S Q T A Z 大小写）都覆盖；弧线 bbox 用端点近似，可能略小。 |
+
+## 🧪 在 Next.js (Turbopack) 里用
+
+`pptxtojson-pro` 源码依赖 `pdfjs-dist`，其动态 `require()` 模式会被 Turbopack 拒绝。OpenMAIC 的做法：
+
+1. `pnpm run build` 把整个包（含 importPptx）打成 `dist/`。
+2. `scripts/sync-pptxtojson-pro.mjs` 把 `dist/` 复制到 `public/vendor/pptxtojson-pro/`。
+3. 在客户端组件里用**静态 URL 动态 import**，bundler 完全看不到：
+
+```ts
+import type * as PptxtojsonPro from 'pptxtojson-pro';
+
+const mod = (await import(
+  /* webpackIgnore: true */
+  /* turbopackIgnore: true */
+  /* @vite-ignore */
+  '/vendor/pptxtojson-pro/index.js'
+)) as typeof PptxtojsonPro;
+
+const slides = await mod.importPptx(file, { upload });
+```
+
+类型仍走 workspace 包，IntelliSense 不丢。
+
+参考：`lib/import/use-import-pptx.ts`。
+
+---
+
+### 输出示例（`parse()`，未走 import pipeline）
 ```javascript
 {
 	"slides": [

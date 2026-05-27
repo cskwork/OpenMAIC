@@ -32,3 +32,20 @@ export type { Output, Slide, Element } from './adapter/types'
 export type { PptxFiles } from './parser/ZipParser'
 export type { PresentationData } from './model/Presentation'
 export type { MediaMode } from './serializer/RenderContext'
+
+// PPTX → OpenMAIC canvas pipeline. The aliased `Slide` export below
+// shadows the adapter-level `Slide` above; consumers wanting the raw
+// pptxtojson Slide shape should import from './adapter/types' directly.
+export {
+  importPptx,
+  parsedToSlides,
+  transformParsedToSlides,
+  createMockImportContext,
+} from './import-pipeline'
+export type {
+  OssUpload,
+  ImportPptxOptions,
+  ImportContext,
+  TransformResult,
+} from './import-pipeline'
+export type { Slide as CanvasSlide } from './openmaic/types/slides'
