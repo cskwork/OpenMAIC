@@ -284,13 +284,19 @@ export function SlideNavRail() {
             const currentStage = useStageStore.getState().stage;
             if (!currentStage || currentStage.id !== entry.stageId) return;
             const live = useStageStore.getState().scenes;
-            const anchorIndex = Math.min(Math.max(entry.index - 1, 0), live.length - 1);
-            const anchor = live[anchorIndex];
-            if (!anchor) {
-              useStageStore.getState().setScenes([entry.scene]);
+            // Prepend path — `insertSceneAfter` requires an anchor, but
+            // restoring index 0 (the previously-first slide) has no
+            // predecessor to anchor on. Clamping `entry.index - 1` to 0
+            // and inserting after `live[0]` would land the entry at
+            // position 1 instead of 0. setScenes-with-rebalance
+            // preserves the original "first slide" semantics.
+            if (entry.index === 0 || live.length === 0) {
+              useStageStore.getState().setScenes([entry.scene, ...live]);
               useStageStore.getState().setCurrentSceneId(entry.scene.id);
               return;
             }
+            const anchorIndex = Math.min(entry.index - 1, live.length - 1);
+            const anchor = live[anchorIndex];
             useStageStore.getState().insertSceneAfter(anchor.id, entry.scene);
             useStageStore.getState().setCurrentSceneId(entry.scene.id);
           },

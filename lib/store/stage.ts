@@ -330,6 +330,13 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
           outlines,
           // Compute generatingOutlines from persisted outlines minus completed scenes
           generatingOutlines: outlines.filter((o) => !data.scenes.some((s) => s.order === o.order)),
+          // `mode` is transient UI state, not persisted with the stage.
+          // Reset to 'playback' on every load so SPA navigation between
+          // classrooms doesn't carry Pro-mode state across — e.g. user
+          // enters edit in A, navigates to B → B was inheriting
+          // mode='edit'. Refresh already reset via initial store value;
+          // this normalises the SPA path to match.
+          mode: 'playback',
         });
         log.info('Loaded from storage:', stageId);
       } else {
