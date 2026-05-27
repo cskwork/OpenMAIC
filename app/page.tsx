@@ -22,6 +22,7 @@ import {
   Sparkles,
   Atom,
   X,
+  Presentation,
 } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { LanguageSwitcher } from '@/components/language-switcher';
@@ -56,6 +57,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { useDraftCache } from '@/lib/hooks/use-draft-cache';
 import { SpeechButton } from '@/components/audio/speech-button';
 import { useImportClassroom } from '@/lib/import/use-import-classroom';
+import { useImportPptx } from '@/lib/import/use-import-pptx';
 
 const log = createLogger('Home');
 
@@ -197,6 +199,13 @@ function HomePage() {
       loadClassrooms();
     },
   );
+
+  const {
+    importing: pptxImporting,
+    fileInputRef: pptxFileInputRef,
+    triggerFileSelect: triggerPptxFileSelect,
+    handleFileChange: handlePptxFileChange,
+  } = useImportPptx();
 
   useEffect(() => {
     // Clear stale media store to prevent cross-course thumbnail contamination.
@@ -355,6 +364,13 @@ function HomePage() {
         type="file"
         accept=".zip"
         onChange={handleFileChange}
+        className="hidden"
+      />
+      <input
+        ref={pptxFileInputRef}
+        type="file"
+        accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        onChange={handlePptxFileChange}
         className="hidden"
       />
       {/* ═══ Top-right pill (unchanged) ═══ */}
@@ -613,16 +629,26 @@ function HomePage() {
           )}
         </AnimatePresence>
 
-        {/* ── Import button (empty state) ── */}
+        {/* ── Import buttons (empty state) ── */}
         {classrooms.length === 0 && (
-          <button
-            onClick={triggerFileSelect}
-            disabled={importing}
-            className="relative z-10 mt-4 flex items-center gap-1.5 text-[12px] text-muted-foreground/40 hover:text-foreground/60 transition-colors"
-          >
-            <Upload className="size-3.5" />
-            <span>{t('import.classroom')}</span>
-          </button>
+          <div className="relative z-10 mt-4 flex items-center gap-4">
+            <button
+              onClick={triggerFileSelect}
+              disabled={importing}
+              className="flex items-center gap-1.5 text-[12px] text-muted-foreground/40 hover:text-foreground/60 transition-colors"
+            >
+              <Upload className="size-3.5" />
+              <span>{t('import.classroom')}</span>
+            </button>
+            <button
+              onClick={triggerPptxFileSelect}
+              disabled={pptxImporting}
+              className="flex items-center gap-1.5 text-[12px] text-muted-foreground/40 hover:text-foreground/60 transition-colors"
+            >
+              <Presentation className="size-3.5" />
+              <span>{t('import.pptx')}</span>
+            </button>
+          </div>
         )}
       </motion.div>
 
@@ -743,6 +769,16 @@ function HomePage() {
                 <Upload className="size-3" />
                 <span className="overflow-hidden opacity-0 group-hover/import:opacity-100 transition-opacity duration-200 whitespace-nowrap">
                   {t('import.classroom')}
+                </span>
+              </button>
+              <button
+                onClick={triggerPptxFileSelect}
+                disabled={pptxImporting}
+                className="group/import-pptx grid grid-cols-[auto_0fr] hover:grid-cols-[auto_1fr] items-center gap-1 rounded-full px-1.5 py-0.5 text-[12px] text-muted-foreground/35 hover:text-muted-foreground/70 hover:bg-muted/50 transition-all duration-200 cursor-pointer"
+              >
+                <Presentation className="size-3" />
+                <span className="overflow-hidden opacity-0 group-hover/import-pptx:opacity-100 transition-opacity duration-200 whitespace-nowrap">
+                  {t('import.pptx')}
                 </span>
               </button>
             </div>
