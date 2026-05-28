@@ -142,18 +142,44 @@ function guessMime(url: string): string {
   return table[ext] ?? 'application/octet-stream';
 }
 
-/** Inline every url(...) inside a CSS text, resolving relative URLs against cssUrl. */
+/** Extension pattern matching non-woff2 font files (.woff, .ttf, .otf, .eot).
+ * The `(\?|#|$)` boundary prevents `.woff` from matching inside `.woff2`. */
+const NON_WOFF2_FONT_EXT = /\.(woff|ttf|otf|eot)(\?|#|$)/i;
+const WOFF2_EXT = /\.woff2(\?|#|$)/i;
+
+/** Inline every url(...) inside a CSS text, resolving relative URLs against cssUrl.
+ *
+ * Woff2-preference optimisation: within any @font-face block that contains a
+ * woff2 url(), only the woff2 is inlined; sibling woff/ttf/otf/eot urls are
+ * rewritten to `url(about:invalid)` so browsers never fetch them (they use the
+ * first matching format — woff2 — and never reach the fallbacks). @font-face
+ * blocks with NO woff2 fall back to the normal inline-everything behaviour.
+ */
 export async function inlineCssUrls(
   css: string,
   cssUrl: string,
   fetchAsset: FetchAsset,
 ): Promise<string> {
+  // 1. Find @font-face blocks; build dropRefs (non-woff2 fonts in blocks that have a woff2).
+  const dropRefs = new Set<string>();
+  for (const block of css.match(/@font-face\s*\{[^}]*\}/gi) ?? []) {
+    const blockUrls = [...block.matchAll(/url\(\s*(["']?)([^"')]+)\1\s*\)/gi)].map((m) =>
+      m[2].trim(),
+    );
+    const hasWoff2 = blockUrls.some((u) => WOFF2_EXT.test(u) || /^data:font\/woff2/i.test(u));
+    if (!hasWoff2) continue;
+    for (const u of blockUrls) {
+      if (!/^data:/i.test(u) && NON_WOFF2_FONT_EXT.test(u)) dropRefs.add(u);
+    }
+  }
+
+  // 2. Collect unique refs to FETCH (exclude data:, dropRefs, unresolvable).
   const urlRe = /url\(\s*(["']?)([^"')]+)\1\s*\)/gi;
-  const matches = [...css.matchAll(urlRe)];
   const uniqueRefs = new Map<string, string>(); // raw -> absolute url
-  for (const m of matches) {
+  for (const m of css.matchAll(urlRe)) {
     const raw = m[2].trim();
     if (/^data:/i.test(raw)) continue;
+    if (dropRefs.has(raw)) continue;
     if (uniqueRefs.has(raw)) continue;
     try {
       uniqueRefs.set(raw, new URL(raw, cssUrl).href);
@@ -161,16 +187,21 @@ export async function inlineCssUrls(
       // skip unresolvable
     }
   }
+
+  // 3. Fetch in parallel (bounded).
   const replacements = new Map<string, string>();
   const entries = [...uniqueRefs.entries()];
   await mapWithConcurrency(entries, 8, async ([raw, abs]) => {
     const got = await fetchAsset(abs);
     if (got) replacements.set(raw, toDataUri(got.bytes, got.contentType));
   });
+
+  // 4. Rewrite.
   return css.replace(urlRe, (full, _q, raw) => {
     const key = String(raw).trim();
-    const dataUri = replacements.get(key);
-    return dataUri ? `url(${dataUri})` : full;
+    if (replacements.has(key)) return `url(${replacements.get(key)})`;
+    if (dropRefs.has(key)) return 'url(about:invalid)';
+    return full;
   });
 }
 

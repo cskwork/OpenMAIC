@@ -229,6 +229,47 @@ describe('inlineCssUrls', () => {
     // a.woff2 (quoted twice, same resolved url) fetched once + b.woff2 once = 2
     expect(calls).toBe(2);
   });
+
+  it('inlines only woff2 and drops sibling woff/ttf to about:invalid within an @font-face that has woff2', async () => {
+    const css =
+      '@font-face{font-family:K;src:url(K.woff2) format("woff2"),url(K.woff) format("woff"),url(K.ttf) format("truetype")}';
+    const calls: string[] = [];
+    const fetchAsset = async (url: string) => {
+      calls.push(url);
+      return { bytes: new Uint8Array([1]), contentType: 'font/woff2' };
+    };
+    const out = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
+    expect(out).toContain('url(data:font/woff2;base64,'); // woff2 inlined
+    expect(out).toContain('url(about:invalid) format("woff")'); // woff dropped
+    expect(out).toContain('url(about:invalid) format("truetype")'); // ttf dropped
+    expect(out).not.toContain('K.woff2');
+    expect(out).not.toContain('K.woff)');
+    expect(out).not.toContain('K.ttf');
+    // only the woff2 was fetched
+    expect(calls.filter((u) => u.endsWith('.woff') || u.endsWith('.ttf'))).toEqual([]);
+    expect(calls.some((u) => u.endsWith('.woff2'))).toBe(true);
+  });
+
+  it('falls back to inlining a ttf-only @font-face (no woff2 present)', async () => {
+    const css = '@font-face{font-family:T;src:url(T.ttf) format("truetype")}';
+    const fetchAsset = async () => ({ bytes: new Uint8Array([2]), contentType: 'font/ttf' });
+    const out = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
+    expect(out).toContain('url(data:font/ttf;base64,'); // ttf inlined since no woff2 sibling
+    expect(out).not.toContain('about:invalid');
+  });
+
+  it('still inlines non-font url() (images) outside @font-face', async () => {
+    const css =
+      '.bg{background:url(https://img/x.png)} @font-face{font-family:K;src:url(K.woff2) format("woff2"),url(K.ttf) format("truetype")}';
+    const fetchAsset = async (url: string) => ({
+      bytes: new Uint8Array([3]),
+      contentType: url.includes('.png') ? 'image/png' : 'font/woff2',
+    });
+    const out = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
+    expect(out).toContain('url(data:image/png;base64,'); // image inlined
+    expect(out).toContain('url(data:font/woff2;base64,'); // woff2 inlined
+    expect(out).toContain('url(about:invalid) format("truetype")'); // ttf dropped
+  });
 });
 
 describe('inlineHtmlAssets — importmap integration', () => {
