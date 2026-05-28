@@ -47,10 +47,14 @@
     "react": ">=18",
     "react-dom": ">=18",
     "motion": ">=11",
+    "echarts": ">=5",
     "shiki": ">=1.0.0",
     "tailwindcss": ">=4"
   },
   "peerDependenciesMeta": {
+    "echarts": {
+      "optional": true
+    },
     "shiki": {
       "optional": true
     }

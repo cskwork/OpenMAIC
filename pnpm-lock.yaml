@@ -521,6 +521,9 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
+      echarts:
+        specifier: '>=5'
+        version: 6.0.0
       katex:
         specifier: ^0.16.33
         version: 0.16.38

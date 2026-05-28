@@ -7,6 +7,7 @@ const external = [
   /^react-dom($|\/)/,
   /^motion($|\/)/,
   /^katex($|\/)/,
+  /^echarts($|\/)/,
   /^shiki($|\/)/,
   /^lucide-react($|\/)/,
   /^tinycolor2($|\/)/,
