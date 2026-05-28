@@ -15,6 +15,8 @@ export interface AssetRef {
   url: string;
 }
 
+import { buildInlinedImportmap } from './inline-assets-importmap';
+
 const HTTP_URL = /^https?:\/\//i;
 
 /** Scan LLM-generated interactive HTML for external http(s) asset references. */
@@ -165,13 +167,44 @@ async function replaceAsync(
   return result + input.slice(last);
 }
 
-// Stub — real importmap inlining lands in Task 5.
 async function inlineImportmaps(
   html: string,
-  _fetchAsset: FetchAsset,
-  _report: InlineReport,
+  fetchAsset: FetchAsset,
+  report: InlineReport,
 ): Promise<string> {
-  return html;
+  // Collect inline module-script bodies (type="module", non-importmap, with a body).
+  const moduleBodies: string[] = [];
+  for (const m of html.matchAll(
+    /<script\b([^>]*)\btype\s*=\s*["']module["']([^>]*)>([\s\S]*?)<\/script>/gi,
+  )) {
+    if (m[3]?.trim()) moduleBodies.push(m[3]);
+  }
+  return await replaceAsync(
+    html,
+    /<script\b[^>]*type\s*=\s*["']importmap["'][^>]*>([\s\S]*?)<\/script>/gi,
+    async (full, json) => {
+      let parsed: { imports?: Record<string, string> };
+      try {
+        parsed = JSON.parse(json);
+      } catch {
+        return full;
+      }
+      const orig = parsed.imports ?? {};
+      const { imports: inlined, report: r } = await buildInlinedImportmap(orig, moduleBodies, fetchAsset);
+      for (const u of r.inlined) if (!report.inlined.includes(u)) report.inlined.push(u);
+      for (const f of r.failed) if (!report.failed.some((g) => g.url === f.url)) report.failed.push(f);
+      // Merge: start from originals, overlay inlined data: entries.
+      const merged: Record<string, string> = { ...orig, ...inlined };
+      // Drop any '/'-terminated prefix key that was expanded into explicit data: entries.
+      for (const key of Object.keys(merged)) {
+        if (key.endsWith('/')) {
+          const expanded = Object.keys(inlined).some((k) => k.startsWith(key));
+          if (expanded) delete merged[key];
+        }
+      }
+      return `<script type="importmap">${JSON.stringify({ imports: merged })}</script>`;
+    },
+  );
 }
 
 export async function inlineHtmlAssets(

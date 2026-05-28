@@ -208,6 +208,35 @@ describe('inlineCssUrls', () => {
   });
 });
 
+describe('inlineHtmlAssets — importmap integration', () => {
+  it('inlines three + three/addons via importmap and drops the prefix', async () => {
+    const base = 'https://unpkg.com/three@0.160.0/examples/jsm/';
+    const fetchImpl = (async (url: string) => {
+      const map: Record<string, string> = {
+        'https://unpkg.com/three@0.160.0/build/three.module.js': 'export const THREE=1',
+        [base + 'controls/OrbitControls.js']: "import * as THREE from 'three'; export class OrbitControls{}",
+      };
+      const body = map[String(url)];
+      if (body === undefined) return new Response('', { status: 404 });
+      return new Response(body, { status: 200, headers: { 'content-type': 'text/javascript' } });
+    }) as unknown as typeof fetch;
+
+    const html = [
+      '<script type="importmap">{"imports":{',
+      '"three":"https://unpkg.com/three@0.160.0/build/three.module.js",',
+      '"three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"',
+      '}}</script>',
+      "<script type=\"module\">import * as THREE from 'three'; import { OrbitControls } from 'three/addons/controls/OrbitControls.js';</script>",
+    ].join('');
+
+    const { html: out } = await inlineHtmlAssets(html, { fetchImpl });
+    expect(out).toContain('"three":"data:text/javascript;base64,');
+    expect(out).toContain('"three/addons/controls/OrbitControls.js":"data:text/javascript;base64,');
+    expect(out).not.toContain('unpkg.com');
+    expect(out).not.toContain('"three/addons/":');
+  });
+});
+
 function fetchFromMap(map: Record<string, { body: string; ct: string }>): typeof fetch {
   return (async (url: string) => {
     const hit = map[String(url)];
