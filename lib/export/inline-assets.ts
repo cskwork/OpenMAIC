@@ -1,12 +1,8 @@
-export interface InlineReport {
-  inlined: string[];
-  failed: { url: string; reason: string }[];
-}
+import { toDataUri, type InlineReport, type InlineOptions, type FetchAsset } from './inline-assets-shared';
+import { buildInlinedImportmap } from './inline-assets-importmap';
 
-export interface InlineOptions {
-  fetchImpl?: typeof fetch;
-  maxAssetBytes?: number;
-}
+export { toDataUri } from './inline-assets-shared';
+export type { InlineReport, InlineOptions } from './inline-assets-shared';
 
 export type AssetRefKind = 'link' | 'script' | 'img' | 'source' | 'css-url' | 'importmap';
 
@@ -14,8 +10,6 @@ export interface AssetRef {
   kind: AssetRefKind;
   url: string;
 }
-
-import { buildInlinedImportmap } from './inline-assets-importmap';
 
 const HTTP_URL = /^https?:\/\//i;
 
@@ -103,8 +97,6 @@ function guessMime(url: string): string {
   return table[ext] ?? 'application/octet-stream';
 }
 
-type FetchAsset = (url: string) => Promise<{ bytes: Uint8Array; contentType: string } | null>;
-
 /** Inline every url(...) inside a CSS text, resolving relative URLs against cssUrl. */
 export async function inlineCssUrls(
   css: string,
@@ -132,14 +124,6 @@ export async function inlineCssUrls(
     const dataUri = replacements.get(key);
     return dataUri ? `url(${dataUri})` : full;
   });
-}
-
-/** Encode bytes as a data: URI. */
-export function toDataUri(bytes: Uint8Array, contentType: string): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  const b64 = typeof btoa !== 'undefined' ? btoa(binary) : Buffer.from(bytes).toString('base64');
-  return `data:${contentType};base64,${b64}`;
 }
 
 // ---------------------------------------------------------------------------

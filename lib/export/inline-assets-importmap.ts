@@ -1,4 +1,4 @@
-import { toDataUri, type InlineReport } from './inline-assets';
+import { toDataUri, type InlineReport } from './inline-assets-shared';
 
 // Matches: import ... from 'X'  |  import 'X'  |  export ... from 'X'  |  import('X')
 const IMPORT_SPEC_RE =
