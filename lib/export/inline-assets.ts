@@ -60,32 +60,29 @@ export function collectAssetRefs(html: string): AssetRef[] {
 
 const DEFAULT_MAX_ASSET_BYTES = 8 * 1024 * 1024;
 
-export function createAssetFetcher(options?: InlineOptions) {
+export function createAssetFetcher(options?: InlineOptions): FetchAsset {
   const fetchImpl = options?.fetchImpl ?? fetch;
   const maxBytes = options?.maxAssetBytes ?? DEFAULT_MAX_ASSET_BYTES;
-  const cache = new Map<string, { bytes: Uint8Array; contentType: string } | null>();
+  const cache = new Map<string, Promise<{ bytes: Uint8Array; contentType: string } | null>>();
 
-  return async function fetchAsset(
-    url: string,
-  ): Promise<{ bytes: Uint8Array; contentType: string } | null> {
-    if (cache.has(url)) return cache.get(url)!;
-    let result: { bytes: Uint8Array; contentType: string } | null = null;
-    try {
-      const res = await fetchImpl(url);
-      if (res.ok) {
+  return function fetchAsset(url: string) {
+    const cached = cache.get(url);
+    if (cached) return cached;
+    const promise = (async () => {
+      try {
+        const res = await fetchImpl(url);
+        if (!res.ok) return null;
         const buf = new Uint8Array(await res.arrayBuffer());
-        if (buf.byteLength <= maxBytes) {
-          const rawCt = res.headers.get('content-type') ?? '';
-          const bareCt = rawCt.split(';')[0].trim();
-          const contentType = bareCt || guessMime(url);
-          result = { bytes: buf, contentType };
-        }
+        if (buf.byteLength > maxBytes) return null;
+        const contentType =
+          res.headers.get('content-type')?.split(';')[0]?.trim() || guessMime(url);
+        return { bytes: buf, contentType };
+      } catch {
+        return null;
       }
-    } catch {
-      result = null;
-    }
-    cache.set(url, result);
-    return result;
+    })();
+    cache.set(url, promise);
+    return promise;
   };
 }
 
@@ -122,20 +119,24 @@ export async function inlineCssUrls(
 ): Promise<string> {
   const urlRe = /url\(\s*(["']?)([^"')]+)\1\s*\)/gi;
   const matches = [...css.matchAll(urlRe)];
-  const replacements = new Map<string, string>(); // raw ref -> data uri
+  const uniqueRefs = new Map<string, string>(); // raw -> absolute url
   for (const m of matches) {
     const raw = m[2].trim();
     if (/^data:/i.test(raw)) continue;
-    if (replacements.has(raw)) continue;
-    let abs: string;
+    if (uniqueRefs.has(raw)) continue;
     try {
-      abs = new URL(raw, cssUrl).href;
+      uniqueRefs.set(raw, new URL(raw, cssUrl).href);
     } catch {
-      continue;
+      // skip unresolvable
     }
-    const got = await fetchAsset(abs);
-    if (got) replacements.set(raw, toDataUri(got.bytes, got.contentType));
   }
+  const replacements = new Map<string, string>();
+  await Promise.all(
+    [...uniqueRefs.entries()].map(async ([raw, abs]) => {
+      const got = await fetchAsset(abs);
+      if (got) replacements.set(raw, toDataUri(got.bytes, got.contentType));
+    }),
+  );
   return css.replace(urlRe, (full, _q, raw) => {
     const key = String(raw).trim();
     const dataUri = replacements.get(key);
@@ -220,8 +221,17 @@ export async function inlineHtmlAssets(
   html: string,
   options?: InlineOptions,
 ): Promise<{ html: string; report: InlineReport }> {
-  const fetchAsset = createAssetFetcher(options);
+  const fetchAsset = options?.fetcher ?? createAssetFetcher(options);
   const report: InlineReport = { inlined: [], failed: [] };
+
+  // Pre-warm non-importmap asset fetches in parallel so the sequential
+  // replaceAsync passes below hit a warm cache (fonts are parallelized
+  // inside inlineCssUrls; importmap modules are handled in buildInlinedImportmap).
+  await Promise.all(
+    collectAssetRefs(html)
+      .filter((r) => r.kind !== 'importmap')
+      .map((r) => fetchAsset(r.url).catch(() => null)),
+  );
   let out = html;
 
   const markInlined = (url: string) => {

@@ -6,6 +6,7 @@ export interface InlineReport {
 export interface InlineOptions {
   fetchImpl?: typeof fetch;
   maxAssetBytes?: number;
+  fetcher?: FetchAsset;
 }
 
 export type FetchAsset = (

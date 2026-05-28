@@ -18,7 +18,12 @@ import {
 import { collectAudioFiles, collectMediaFiles, actionsToManifest } from './classroom-zip-utils';
 import type { SpeechAction } from '@/lib/types/action';
 import { createLogger } from '@/lib/logger';
-import { inlineHtmlAssets, type InlineOptions, type InlineReport } from './inline-assets';
+import {
+  inlineHtmlAssets,
+  createAssetFetcher,
+  type InlineOptions,
+  type InlineReport,
+} from './inline-assets';
 import type { SceneContent } from '@/lib/types/stage';
 
 export async function inlineSceneContent(
@@ -109,9 +114,12 @@ export function useExportClassroom() {
       }
 
       const aggregateReport: InlineReport = { inlined: [], failed: [] };
+      const sharedFetcher = createAssetFetcher();
       const manifestScenes: ManifestScene[] = await Promise.all(
         scenes.map(async (scene) => {
-          const { content, report } = await inlineSceneContent(scene.content);
+          const { content, report } = await inlineSceneContent(scene.content, {
+            fetcher: sharedFetcher,
+          });
           for (const u of report.inlined)
             if (!aggregateReport.inlined.includes(u)) aggregateReport.inlined.push(u);
           for (const f of report.failed)

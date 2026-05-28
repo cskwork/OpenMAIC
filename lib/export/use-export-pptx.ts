@@ -24,7 +24,7 @@ import { type SvgPoints, toPoints, getSvgPathRange } from '@/lib/export/svg-path
 import { svg2Base64 } from '@/lib/export/svg2base64';
 import { latexToOmml } from '@/lib/export/latex-to-omml';
 import { createLogger } from '@/lib/logger';
-import { inlineHtmlAssets } from './inline-assets';
+import { inlineHtmlAssets, createAssetFetcher } from './inline-assets';
 
 const log = createLogger('ExportPPTX');
 
@@ -1174,13 +1174,16 @@ export function useExportPPTX() {
       zip.file(`${fileName}.pptx`, pptxBlob);
 
       // 2. Add interactive HTML pages
+      const sharedFetcher = createAssetFetcher();
       let interactiveIndex = 0;
       for (const scene of scenes) {
         if (scene.content.type === 'interactive' && scene.content.html) {
           interactiveIndex++;
           const safeName = scene.title.replace(/[\\/:*?"<>|]/g, '_');
           const htmlFileName = `interactive/${String(interactiveIndex).padStart(2, '0')}_${safeName}.html`;
-          const { html: inlinedHtml, report } = await inlineHtmlAssets(scene.content.html);
+          const { html: inlinedHtml, report } = await inlineHtmlAssets(scene.content.html, {
+            fetcher: sharedFetcher,
+          });
           if (report.failed.length > 0) {
             log.warn(
               'Resource Pack: some interactive-scene assets could not be inlined:',
