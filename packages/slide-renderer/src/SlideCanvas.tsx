@@ -18,10 +18,14 @@ import { SlideElement } from './SlideElement';
 import { HighlightOverlay } from './effects/HighlightOverlay';
 import { SpotlightOverlay } from './effects/SpotlightOverlay';
 import { LaserOverlay } from './effects/LaserOverlay';
+import { useOptionalSlideContext } from './context';
 
 export interface SlideCanvasProps {
-  /** Single slide data (PPTist-style). */
-  slide: Slide;
+  /**
+   * Single slide data (PPTist-style). May be omitted when this component is
+   * rendered inside a `<SlideRendererProvider>` that supplies it.
+   */
+  slide?: Slide;
   /**
    * Canvas scale. When omitted, the canvas auto-fits the container using
    * `slide.viewportSize` and `slide.viewportRatio`. Set to a fixed number
@@ -44,17 +48,23 @@ export interface SlideCanvasProps {
   style?: CSSProperties;
 }
 
-export function SlideCanvas({
-  slide,
-  scale,
-  background,
-  effects,
-  renderImage,
-  renderVideo,
-  onElementClick,
-  className,
-  style,
-}: SlideCanvasProps) {
+export function SlideCanvas(props: SlideCanvasProps) {
+  const ctx = useOptionalSlideContext();
+  const slide = props.slide ?? ctx?.slide;
+  if (!slide) {
+    throw new Error(
+      '<SlideCanvas> requires `slide` either as a prop or via <SlideRendererProvider>.',
+    );
+  }
+
+  const scale = props.scale ?? ctx?.scale;
+  const background = props.background ?? ctx?.background;
+  const effects = props.effects ?? ctx?.effects;
+  const renderImage = props.renderImage ?? ctx?.renderImage;
+  const renderVideo = props.renderVideo ?? ctx?.renderVideo;
+  const onElementClick = props.onElementClick ?? ctx?.onElementClick;
+  const { className, style } = props;
+
   const canvasRef = useRef<HTMLDivElement>(null);
   const elements = slide.elements;
 
