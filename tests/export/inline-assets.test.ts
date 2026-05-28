@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { collectAssetRefs, createAssetFetcher, toDataUri } from '@/lib/export/inline-assets';
+import { collectAssetRefs, createAssetFetcher, toDataUri, inlineCssUrls } from '@/lib/export/inline-assets';
 
 describe('collectAssetRefs', () => {
   it('collects stylesheet link hrefs', () => {
@@ -140,5 +140,63 @@ describe('toDataUri', () => {
   it('encodes bytes as base64 data uri with content type', () => {
     const uri = toDataUri(new TextEncoder().encode('hi'), 'text/plain');
     expect(uri).toBe('data:text/plain;base64,aGk=');
+  });
+});
+
+describe('inlineCssUrls', () => {
+  it('inlines relative font url() resolved against the css base url', async () => {
+    const css = "@font-face{font-family:K;src:url(fonts/K.woff2) format('woff2')}";
+    const fetchAsset = async (url: string) => {
+      if (url === 'https://cdn.example/dist/fonts/K.woff2') {
+        return { bytes: new TextEncoder().encode('FONT'), contentType: 'font/woff2' };
+      }
+      return null;
+    };
+    const out = await inlineCssUrls(css, 'https://cdn.example/dist/katex.min.css', fetchAsset);
+    expect(out).toContain('data:font/woff2;base64,');
+    expect(out).not.toContain('fonts/K.woff2');
+  });
+
+  it('inlines whatever url() is referenced (ttf etc.)', async () => {
+    const css = 'src:url(a.ttf)';
+    const fetchAsset = async () => ({ bytes: new Uint8Array([1]), contentType: 'font/ttf' });
+    const out = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
+    expect(out).toContain('data:font/ttf;base64,');
+  });
+
+  it('resolves absolute http url() too', async () => {
+    const css = 'background:url(https://img.example/bg.png)';
+    const fetchAsset = async (url: string) =>
+      url === 'https://img.example/bg.png' ? { bytes: new Uint8Array([2]), contentType: 'image/png' } : null;
+    const out = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
+    expect(out).toContain('data:image/png;base64,');
+  });
+
+  it('leaves url() unmodified when fetch fails', async () => {
+    const css = 'src:url(missing.woff2)';
+    const fetchAsset = async () => null;
+    const out = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
+    expect(out).toContain('missing.woff2');
+  });
+
+  it('leaves data: url() untouched and does not fetch it', async () => {
+    const css = 'src:url(data:font/woff2;base64,AAAA)';
+    const fetchAsset = async () => { throw new Error('should not fetch'); };
+    const out = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
+    expect(out).toContain('data:font/woff2;base64,AAAA');
+  });
+
+  it('handles quoted url() and multiple refs, fetching each unique once', async () => {
+    let calls = 0;
+    const css = `src:url("a.woff2"),url('a.woff2'),url(b.woff2)`;
+    const fetchAsset = async (url: string) => {
+      calls++;
+      return { bytes: new Uint8Array([9]), contentType: 'font/woff2' };
+    };
+    const out = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
+    expect(out).not.toContain('a.woff2');
+    expect(out).not.toContain('b.woff2');
+    // a.woff2 (quoted twice, same resolved url) fetched once + b.woff2 once = 2
+    expect(calls).toBe(2);
   });
 });

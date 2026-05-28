@@ -101,6 +101,37 @@ function guessMime(url: string): string {
   return table[ext] ?? 'application/octet-stream';
 }
 
+type FetchAsset = (url: string) => Promise<{ bytes: Uint8Array; contentType: string } | null>;
+
+/** Inline every url(...) inside a CSS text, resolving relative URLs against cssUrl. */
+export async function inlineCssUrls(
+  css: string,
+  cssUrl: string,
+  fetchAsset: FetchAsset,
+): Promise<string> {
+  const urlRe = /url\(\s*(["']?)([^"')]+)\1\s*\)/gi;
+  const matches = [...css.matchAll(urlRe)];
+  const replacements = new Map<string, string>(); // raw ref -> data uri
+  for (const m of matches) {
+    const raw = m[2].trim();
+    if (/^data:/i.test(raw)) continue;
+    if (replacements.has(raw)) continue;
+    let abs: string;
+    try {
+      abs = new URL(raw, cssUrl).href;
+    } catch {
+      continue;
+    }
+    const got = await fetchAsset(abs);
+    if (got) replacements.set(raw, toDataUri(got.bytes, got.contentType));
+  }
+  return css.replace(urlRe, (full, _q, raw) => {
+    const key = String(raw).trim();
+    const dataUri = replacements.get(key);
+    return dataUri ? `url(${dataUri})` : full;
+  });
+}
+
 /** Encode bytes as a data: URI. */
 export function toDataUri(bytes: Uint8Array, contentType: string): string {
   let binary = '';
