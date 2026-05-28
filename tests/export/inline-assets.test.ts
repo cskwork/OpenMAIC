@@ -259,6 +259,32 @@ describe('inlineHtmlAssets — importmap integration', () => {
     expect(out).not.toContain('unpkg.com');
     expect(out).not.toContain('"three/addons/":');
   });
+
+  it('keeps the three/addons/ prefix as fallback when an addon fails to fetch', async () => {
+    const base = 'https://unpkg.com/three@0.160.0/examples/jsm/';
+    const fetchImpl = (async (url: string) => {
+      // three OK, OrbitControls OK, but a second addon 404s
+      const map: Record<string, string> = {
+        'https://unpkg.com/three@0.160.0/build/three.module.js': 'export const THREE=1',
+        [base + 'controls/OrbitControls.js']: "import 'three'; export class OrbitControls{}",
+      };
+      const body = map[String(url)];
+      if (body === undefined) return new Response('', { status: 404 });
+      return new Response(body, { status: 200, headers: { 'content-type': 'text/javascript' } });
+    }) as unknown as typeof fetch;
+    const html = [
+      '<script type="importmap">{"imports":{',
+      '"three":"https://unpkg.com/three@0.160.0/build/three.module.js",',
+      '"three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"',
+      '}}</script>',
+      "<script type=\"module\">import { OrbitControls } from 'three/addons/controls/OrbitControls.js'; import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';</script>",
+    ].join('');
+    const { html: out } = await inlineHtmlAssets(html, { fetchImpl });
+    // OrbitControls inlined as explicit data: entry
+    expect(out).toContain('"three/addons/controls/OrbitControls.js":"data:');
+    // GLTFLoader failed → prefix retained as online fallback
+    expect(out).toContain('"three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"');
+  });
 });
 
 function fetchFromMap(map: Record<string, { body: string; ct: string }>): typeof fetch {
@@ -342,5 +368,16 @@ describe('inlineHtmlAssets', () => {
     const { html: out } = await inlineHtmlAssets(html, { fetchImpl });
     expect(out).toContain('data:image/png;base64,');
     expect(out).not.toContain('cdn/bg.png');
+  });
+
+  it('preserves the media attribute when converting a stylesheet link to <style>', async () => {
+    const html = '<link rel="stylesheet" media="print" href="https://cdn/x.css">';
+    const fetchImpl = (async () =>
+      new Response('.a{color:red}', {
+        status: 200,
+        headers: { 'content-type': 'text/css' },
+      })) as unknown as typeof fetch;
+    const { html: out } = await inlineHtmlAssets(html, { fetchImpl });
+    expect(out).toMatch(/<style[^>]*media="print"/);
   });
 });

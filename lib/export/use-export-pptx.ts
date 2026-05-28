@@ -1180,7 +1180,13 @@ export function useExportPPTX() {
           interactiveIndex++;
           const safeName = scene.title.replace(/[\\/:*?"<>|]/g, '_');
           const htmlFileName = `interactive/${String(interactiveIndex).padStart(2, '0')}_${safeName}.html`;
-          const { html: inlinedHtml } = await inlineHtmlAssets(scene.content.html);
+          const { html: inlinedHtml, report } = await inlineHtmlAssets(scene.content.html);
+          if (report.failed.length > 0) {
+            log.warn(
+              'Resource Pack: some interactive-scene assets could not be inlined:',
+              report.failed,
+            );
+          }
           zip.file(htmlFileName, inlinedHtml);
         }
       }

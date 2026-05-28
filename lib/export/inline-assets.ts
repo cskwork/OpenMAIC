@@ -201,12 +201,15 @@ async function inlineImportmaps(
         if (!report.failed.some((g) => g.url === f.url)) report.failed.push(f);
       // Merge: start from originals, overlay inlined data: entries.
       const merged: Record<string, string> = { ...orig, ...inlined };
-      // Drop any '/'-terminated prefix key that was expanded into explicit data: entries.
+      // Drop any '/'-terminated prefix key that was fully expanded into explicit data: entries.
+      // BUT keep the prefix as an online fallback if any fetch under it failed.
       for (const key of Object.keys(merged)) {
-        if (key.endsWith('/')) {
-          const expanded = Object.keys(inlined).some((k) => k.startsWith(key));
-          if (expanded) delete merged[key];
-        }
+        if (!key.endsWith('/')) continue;
+        const expanded = Object.keys(inlined).some((k) => k.startsWith(key));
+        const prefixUrl = orig[key];
+        const hadFailureUnderPrefix =
+          typeof prefixUrl === 'string' && report.failed.some((f) => f.url.startsWith(prefixUrl));
+        if (expanded && !hadFailureUnderPrefix) delete merged[key];
       }
       return `<script type="importmap">${JSON.stringify({ imports: merged })}</script>`;
     },
@@ -242,8 +245,10 @@ export async function inlineHtmlAssets(
       }
       let cssText = new TextDecoder().decode(got.bytes);
       cssText = await inlineCssUrls(cssText, url, fetchAsset);
+      const mediaMatch = /\bmedia\s*=\s*["']([^"']+)["']/i.exec(pre + post);
+      const mediaAttr = mediaMatch ? ` media="${mediaMatch[1].replace(/"/g, '&quot;')}"` : '';
       markInlined(url);
-      return `<style data-inlined-from="">${cssText}</style>`;
+      return `<style data-inlined-from=""${mediaAttr}>${cssText}</style>`;
     },
   );
 
