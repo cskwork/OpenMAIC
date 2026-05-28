@@ -2,7 +2,7 @@
 
 React component for rendering PPTist-style `Slide` JSON. Extracted from [OpenMAIC](https://github.com/THU-MAIC/OpenMAIC).
 
-> **v1 = 只读画布。** 编辑能力（选中、拖拽、resize、ProseMirror 内联编辑等）规划在 v2。
+> **v1 = read-only canvas.** Editing (selection, drag/resize, ProseMirror inline editor) is planned for v2.
 
 ## Install
 
@@ -12,12 +12,17 @@ pnpm add slide-renderer
 npm install slide-renderer
 ```
 
-Peer deps your project must provide:
+Required peers:
 
 - `react >= 18`
 - `react-dom >= 18`
 - `motion >= 11`
-- `tailwindcss >= 4` （**包内组件使用 Tailwind 4 任意值类，消费者必须用 Tailwind 4**）
+- `tailwindcss >= 4` — **the package emits Tailwind 4 arbitrary-value classes, consumers must use Tailwind 4**
+
+Optional peers (install only if your slides use the corresponding element type):
+
+- `echarts >= 5` — for chart elements
+- `shiki >= 1` — for code elements
 
 ## Quickstart
 
@@ -26,41 +31,144 @@ import { SlideCanvas, type Slide } from 'slide-renderer';
 
 const slide: Slide = {
   id: 'demo-1',
+  viewportSize: 1000,
+  viewportRatio: 0.5625,
+  theme: {
+    backgroundColor: '#ffffff',
+    themeColors: ['#5b8def'],
+    fontColor: '#222222',
+    fontName: 'sans-serif',
+  },
   elements: [
-    { type: 'text', id: 't1', left: 100, top: 80, width: 600, height: 60,
-      content: '<p>Hello, Slide</p>', defaultFontName: 'sans-serif', defaultColor: '#222' },
+    {
+      type: 'text',
+      id: 't1',
+      left: 100,
+      top: 80,
+      width: 800,
+      height: 60,
+      rotate: 0,
+      content: '<p>Hello, Slide</p>',
+      defaultFontName: 'sans-serif',
+      defaultColor: '#222',
+    },
   ],
   background: { type: 'solid', color: '#ffffff' },
 };
 
 export default function Demo() {
-  return <SlideCanvas slide={slide} scale={1} />;
+  return (
+    <div style={{ width: 800, height: 450 }}>
+      <SlideCanvas slide={slide} />
+    </div>
+  );
 }
 ```
 
+The canvas auto-fits its parent container. The parent must have a defined `width × height`.
+
 ## API
 
-详见 [DESIGN.md §3](./DESIGN.md#3-对外-api)。
+### `<SlideCanvas slide effects? renderImage? renderVideo? onElementClick? scale? background? />`
 
-### `<SlideCanvas slide effects? renderImage? renderVideo? onElementClick? scale? />`
+The main read-only entry. Reads everything from props; zero global state.
 
-只读渲染入口。所有数据走 props，零 store 依赖。
+```ts
+interface SlideCanvasProps {
+  slide?: Slide;                       // required unless via <SlideRendererProvider>
+  scale?: number;                      // omit = auto-fit container
+  background?: SlideBackground;        // overrides slide.background
+  effects?: SlideEffects;              // laser / spotlight / highlight / zoom, all default off
+  renderImage?: (el, src) => ReactNode;
+  renderVideo?: (el) => ReactNode;
+  onElementClick?: (el, event) => void;
+  className?: string;
+  style?: CSSProperties;
+}
+```
+
+### Play-time effects
+
+All effects are off by default. Pass any combination via `effects`:
+
+```tsx
+<SlideCanvas
+  slide={slide}
+  effects={{
+    laser:     { elementId: 't1', color: '#ff3b30' },
+    spotlight: { elementId: 't1' },
+    highlight: { elementId: 't1', color: '#ff6b6b', animated: true },
+    zoom:      { elementId: 't1', scale: 1.5 },
+  }}
+/>
+```
+
+### Media injection slots
+
+The package's `BaseImageElement` and `BaseVideoElement` render plain `<img>` / `<video>` and know nothing about your media pipeline. Inject business behaviour via the `renderImage` / `renderVideo` slots:
+
+```tsx
+<SlideCanvas
+  slide={slide}
+  renderImage={(el, src) => (
+    src.startsWith('placeholder:')
+      ? <MyPlaceholder taskId={src} />
+      : <img src={resolveCdnUrl(src)} alt="" style={{ width: '100%', height: '100%' }} />
+  )}
+/>
+```
 
 ### `<SlideRendererProvider>` + `useSlideContext()`
 
-可选高阶模式，便于自定义 overlay 子组件读取共享数据。
+Optional high-order pattern when sibling overlays need the same slide data:
 
-### `slide-renderer/elements`
+```tsx
+import { SlideRendererProvider, SlideCanvas, useSlideContext } from 'slide-renderer';
 
-细粒度复用：单独导出 9 个 `BaseXxxElement`（Text/Shape/Image/Line/Chart/Latex/Table/Video/Code）。
+function MyAnnotationLayer() {
+  const { slide } = useSlideContext();
+  return <div>Annotations for {slide.id}</div>;
+}
 
-### `slide-renderer/types`
+<SlideRendererProvider slide={slide} scale={0.9}>
+  <SlideCanvas /> {/* reads slide/scale from context */}
+  <MyAnnotationLayer />
+</SlideRendererProvider>
+```
 
-PPTist 风格的 `Slide` / `PPTElement` 等类型。
+### Granular components — `slide-renderer/elements`
 
-## Tailwind 4 配置
+If you want to compose your own layout instead of using `SlideCanvas`, the 9 base elements are exported individually:
 
-确保你的 `tailwind.config.{ts,js}` content 数组包含包源码：
+```ts
+import {
+  BaseTextElement, BaseShapeElement, BaseImageElement,
+  BaseLineElement, BaseChartElement, BaseLatexElement,
+  BaseTableElement, BaseVideoElement, BaseCodeElement,
+  ElementOutline,
+} from 'slide-renderer/elements';
+```
+
+Each accepts `{ elementInfo: PPTXxxElement }`. Image/Video also take a render slot.
+
+### Types — `slide-renderer/types`
+
+```ts
+import type {
+  Slide, PPTElement, SlideBackground, SlideTheme,
+  PPTTextElement, PPTShapeElement, PPTImageElement,
+  PPTLineElement, PPTChartElement, PPTLatexElement,
+  PPTTableElement, PPTVideoElement, PPTCodeElement,
+  ImageElementClip, ImageElementFilters,
+  Gradient, GradientType, PPTElementOutline, PPTElementShadow,
+  SlideEffects, LaserEffectOptions, SpotlightEffectOptions,
+  HighlightEffectOptions, ZoomEffectOptions,
+} from 'slide-renderer/types';
+```
+
+## Tailwind 4 setup
+
+Ensure your `tailwind.config.{ts,js}` includes the package source:
 
 ```js
 export default {
@@ -68,8 +176,17 @@ export default {
     './src/**/*.{ts,tsx}',
     './node_modules/slide-renderer/dist/**/*.{js,cjs}',
   ],
-}
+};
 ```
+
+## Companion package
+
+[`pptxtojson-pro`](../pptxtojson-pro) converts `.pptx` files to the same `Slide[]` shape, so you can do `.pptx → slide-renderer` end-to-end.
+
+## See also
+
+- [DESIGN.md](./DESIGN.md) — package design decisions and scope
+- v2 will add editing (`<SlideEditor editable onChange />`); the read-only `<SlideCanvas>` API will remain stable
 
 ## License
 
