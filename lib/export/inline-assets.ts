@@ -139,3 +139,115 @@ export function toDataUri(bytes: Uint8Array, contentType: string): string {
   const b64 = typeof btoa !== 'undefined' ? btoa(binary) : Buffer.from(bytes).toString('base64');
   return `data:${contentType};base64,${b64}`;
 }
+
+// ---------------------------------------------------------------------------
+// inlineHtmlAssets — Task 4
+// ---------------------------------------------------------------------------
+
+async function replaceAsync(
+  input: string,
+  re: RegExp,
+  replacer: (...args: string[]) => Promise<string>,
+): Promise<string> {
+  const matches = [...input.matchAll(re)];
+  // Process sequentially so the fetcher cache is populated before the next
+  // occurrence of the same URL is processed (dedup guarantee).
+  const replaced: string[] = [];
+  for (const m of matches) {
+    replaced.push(await replacer(...(m as unknown as string[])));
+  }
+  let result = '';
+  let last = 0;
+  matches.forEach((m, i) => {
+    result += input.slice(last, m.index!) + replaced[i];
+    last = m.index! + m[0].length;
+  });
+  return result + input.slice(last);
+}
+
+function escapeAttr(s: string): string {
+  return s.replace(/"/g, '&quot;');
+}
+
+// Stub — real importmap inlining lands in Task 5.
+async function inlineImportmaps(
+  html: string,
+  _fetchAsset: FetchAsset,
+  _report: InlineReport,
+): Promise<string> {
+  return html;
+}
+
+export async function inlineHtmlAssets(
+  html: string,
+  options?: InlineOptions,
+): Promise<{ html: string; report: InlineReport }> {
+  const fetchAsset = createAssetFetcher(options);
+  const report: InlineReport = { inlined: [], failed: [] };
+  let out = html;
+
+  const markInlined = (url: string) => {
+    if (!report.inlined.includes(url)) report.inlined.push(url);
+  };
+  const markFailed = (url: string, reason: string) => {
+    if (!report.failed.some((f) => f.url === url)) report.failed.push({ url, reason });
+  };
+
+  // 1) <link rel=stylesheet href> → <style> with nested url() inlined
+  out = await replaceAsync(
+    out,
+    /<link\b([^>]*?)\bhref\s*=\s*["'](https?:\/\/[^"']+)["']([^>]*)>/gi,
+    async (full, pre, url, post) => {
+      const isStylesheet = /rel\s*=\s*["']?stylesheet/i.test(pre + post);
+      if (!isStylesheet) return full;
+      const got = await fetchAsset(url);
+      if (!got) { markFailed(url, 'fetch failed'); return full; }
+      let cssText = new TextDecoder().decode(got.bytes);
+      cssText = await inlineCssUrls(cssText, url, fetchAsset);
+      markInlined(url);
+      return `<style data-inlined-from="">${cssText}</style>`;
+    },
+  );
+
+  // 2) <script src> (non-importmap) → data: URI src
+  out = await replaceAsync(
+    out,
+    /<script\b([^>]*?)\bsrc\s*=\s*["'](https?:\/\/[^"']+)["']([^>]*)>/gi,
+    async (full, pre, url, post) => {
+      const attrs = (pre + post).toLowerCase();
+      if (attrs.includes('importmap') || attrs.includes('application/json')) return full;
+      const got = await fetchAsset(url);
+      if (!got) { markFailed(url, 'fetch failed'); return full; }
+      markInlined(url);
+      return `<script${pre}src="${toDataUri(got.bytes, got.contentType)}"${post}>`;
+    },
+  );
+
+  // 3) <img src> and <source src>
+  out = await replaceAsync(
+    out,
+    /<(img|source)\b([^>]*?)\bsrc\s*=\s*["'](https?:\/\/[^"']+)["']([^>]*)>/gi,
+    async (full, tag, pre, url, post) => {
+      const got = await fetchAsset(url);
+      if (!got) { markFailed(url, 'fetch failed'); return full; }
+      markInlined(url);
+      return `<${tag}${pre}src="${toDataUri(got.bytes, got.contentType)}"${post}>`;
+    },
+  );
+
+  // 4) url() inside authored <style> blocks (skip ones we created in step 1)
+  out = await replaceAsync(
+    out,
+    /<style\b([^>]*)>([\s\S]*?)<\/style>/gi,
+    async (full, attrs, body) => {
+      if (/data-inlined-from=/.test(attrs)) return full;
+      const inlined = await inlineCssUrls(body, 'about:blank', fetchAsset);
+      return `<style${attrs}>${inlined}</style>`;
+    },
+  );
+
+  // 5) importmap (Task 5)
+  out = await inlineImportmaps(out, fetchAsset, report);
+
+  return { html: out, report };
+}

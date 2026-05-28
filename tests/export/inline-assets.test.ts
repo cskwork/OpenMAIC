@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { collectAssetRefs, createAssetFetcher, toDataUri, inlineCssUrls } from '@/lib/export/inline-assets';
+import { collectAssetRefs, createAssetFetcher, toDataUri, inlineCssUrls, inlineHtmlAssets } from '@/lib/export/inline-assets';
 
 describe('collectAssetRefs', () => {
   it('collects stylesheet link hrefs', () => {
@@ -198,5 +198,82 @@ describe('inlineCssUrls', () => {
     expect(out).not.toContain('b.woff2');
     // a.woff2 (quoted twice, same resolved url) fetched once + b.woff2 once = 2
     expect(calls).toBe(2);
+  });
+});
+
+function fetchFromMap(map: Record<string, { body: string; ct: string }>): typeof fetch {
+  return (async (url: string) => {
+    const hit = map[String(url)];
+    if (!hit) return new Response('', { status: 404 });
+    return new Response(hit.body, { status: 200, headers: { 'content-type': hit.ct } });
+  }) as unknown as typeof fetch;
+}
+
+describe('inlineHtmlAssets', () => {
+  it('inlines a stylesheet link into a <style> with fonts inlined', async () => {
+    const html = '<head><link rel="stylesheet" href="https://cdn/x/katex.min.css"></head>';
+    const fetchImpl = fetchFromMap({
+      'https://cdn/x/katex.min.css': { body: '@font-face{src:url(fonts/a.woff2)}', ct: 'text/css' },
+      'https://cdn/x/fonts/a.woff2': { body: 'FONT', ct: 'font/woff2' },
+    });
+    const { html: out, report } = await inlineHtmlAssets(html, { fetchImpl });
+    expect(out).toContain('<style');
+    expect(out).toContain('data:font/woff2;base64,');
+    expect(out).not.toContain('katex.min.css');
+    expect(report.inlined).toContain('https://cdn/x/katex.min.css');
+  });
+
+  it('inlines a script src as a data: URI (preserving type=module)', async () => {
+    const html = '<script type="module" src="https://cdn/app.js"></script>';
+    const fetchImpl = fetchFromMap({ 'https://cdn/app.js': { body: 'export const a=1', ct: 'text/javascript' } });
+    const { html: out } = await inlineHtmlAssets(html, { fetchImpl });
+    expect(out).toMatch(/<script[^>]*type="module"[^>]*src="data:text\/javascript;base64,/);
+  });
+
+  it('inlines an img src', async () => {
+    const html = '<img src="https://cdn/p.png">';
+    const fetchImpl = fetchFromMap({ 'https://cdn/p.png': { body: 'PNG', ct: 'image/png' } });
+    const { html: out } = await inlineHtmlAssets(html, { fetchImpl });
+    expect(out).toContain('src="data:image/png;base64,');
+  });
+
+  it('inlines a Tailwind CDN runtime script', async () => {
+    const html = '<script src="https://cdn.tailwindcss.com"></script>';
+    const fetchImpl = fetchFromMap({ 'https://cdn.tailwindcss.com': { body: '/*tw*/', ct: 'text/javascript' } });
+    const { html: out, report } = await inlineHtmlAssets(html, { fetchImpl });
+    expect(out).toContain('data:text/javascript;base64,');
+    expect(report.inlined).toContain('https://cdn.tailwindcss.com');
+  });
+
+  it('records failures and leaves the URL in place', async () => {
+    const html = '<img src="https://oss.example/blocked.png">';
+    const fetchImpl = fetchFromMap({});
+    const { html: out, report } = await inlineHtmlAssets(html, { fetchImpl });
+    expect(out).toContain('https://oss.example/blocked.png');
+    expect(report.failed.map((f) => f.url)).toContain('https://oss.example/blocked.png');
+  });
+
+  it('does not touch SVG xmlns namespaces', async () => {
+    const html = '<svg xmlns="http://www.w3.org/2000/svg"></svg>';
+    const fetchImpl = fetchFromMap({});
+    const { html: out, report } = await inlineHtmlAssets(html, { fetchImpl });
+    expect(out).toBe(html);
+    expect(report.failed).toEqual([]);
+  });
+
+  it('dedups identical URLs (one fetch)', async () => {
+    let calls = 0;
+    const fetchImpl = (async () => { calls++; return new Response('X', { status: 200, headers: { 'content-type': 'image/png' } }); }) as unknown as typeof fetch;
+    const html = '<img src="https://cdn/same.png"><img src="https://cdn/same.png">';
+    await inlineHtmlAssets(html, { fetchImpl });
+    expect(calls).toBe(1);
+  });
+
+  it('inlines url() inside authored <style> blocks', async () => {
+    const html = '<style>.b{background:url(https://cdn/bg.png)}</style>';
+    const fetchImpl = fetchFromMap({ 'https://cdn/bg.png': { body: 'IMG', ct: 'image/png' } });
+    const { html: out } = await inlineHtmlAssets(html, { fetchImpl });
+    expect(out).toContain('data:image/png;base64,');
+    expect(out).not.toContain('cdn/bg.png');
   });
 });
