@@ -1,0 +1,157 @@
+'use client';
+
+import { useMemo, useRef, type CSSProperties, type ReactNode } from 'react';
+import { AnimatePresence } from 'motion/react';
+
+import type {
+  PPTElement,
+  PPTImageElement,
+  PPTVideoElement,
+  Slide,
+  SlideBackground,
+} from './types/slides';
+import type { SlideEffects } from './types/effects';
+import { findElementGeometry, type PercentageGeometry } from './utils/geometry';
+import { useSlideBackgroundStyle } from './hooks/useSlideBackgroundStyle';
+import { useViewportSize } from './hooks/useViewportSize';
+import { SlideElement } from './SlideElement';
+import { HighlightOverlay } from './effects/HighlightOverlay';
+import { SpotlightOverlay } from './effects/SpotlightOverlay';
+import { LaserOverlay } from './effects/LaserOverlay';
+
+export interface SlideCanvasProps {
+  /** Single slide data (PPTist-style). */
+  slide: Slide;
+  /**
+   * Canvas scale. When omitted, the canvas auto-fits the container using
+   * `slide.viewportSize` and `slide.viewportRatio`. Set to a fixed number
+   * (e.g. 1) to skip auto-fit and render at slide-native dimensions.
+   */
+  scale?: number;
+  /** Override `slide.background`. */
+  background?: SlideBackground;
+  /** Optional play-time effects, all default off. */
+  effects?: SlideEffects;
+  /** Replace default <img> rendering for image elements. */
+  renderImage?: (element: PPTImageElement, resolvedSrc: string) => ReactNode;
+  /** Replace default <video> rendering for video elements. */
+  renderVideo?: (element: PPTVideoElement) => ReactNode;
+  /** Click handler invoked on any element. */
+  onElementClick?: (element: PPTElement, event: React.MouseEvent) => void;
+  /** Class on the outer container. */
+  className?: string;
+  /** Inline style on the outer container. */
+  style?: CSSProperties;
+}
+
+export function SlideCanvas({
+  slide,
+  scale,
+  background,
+  effects,
+  renderImage,
+  renderVideo,
+  onElementClick,
+  className,
+  style,
+}: SlideCanvasProps) {
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const elements = slide.elements;
+
+  const { viewportStyles, fitScale } = useViewportSize(canvasRef, {
+    viewportSize: slide.viewportSize,
+    viewportRatio: slide.viewportRatio,
+  });
+  const canvasScale = scale ?? fitScale;
+
+  const resolvedBackground = background ?? slide.background;
+  const { backgroundStyle } = useSlideBackgroundStyle(resolvedBackground);
+
+  const laserGeometry = useMemo<PercentageGeometry | null>(() => {
+    if (!effects?.laser) return null;
+    return findElementGeometry(elements, effects.laser.elementId, slide.viewportSize);
+  }, [effects?.laser, elements, slide.viewportSize]);
+
+  const zoomGeometry = useMemo<PercentageGeometry | null>(() => {
+    if (!effects?.zoom) return null;
+    return findElementGeometry(elements, effects.zoom.elementId, slide.viewportSize);
+  }, [effects?.zoom, elements, slide.viewportSize]);
+
+  const highlightElement = useMemo(() => {
+    if (!effects?.highlight) return null;
+    return elements.find((el) => el.id === effects.highlight!.elementId) ?? null;
+  }, [effects?.highlight, elements]);
+
+  return (
+    <div
+      ref={canvasRef}
+      className={['relative h-full w-full overflow-hidden select-none', className]
+        .filter(Boolean)
+        .join(' ')}
+      style={style}
+    >
+      <div
+        className="absolute shadow-[0_0_0_1px_rgba(0,0,0,0.01),0_0_12px_0_rgba(0,0,0,0.1)] rounded-lg overflow-hidden transition-transform duration-700"
+        style={{
+          width: `${viewportStyles.width * canvasScale}px`,
+          height: `${viewportStyles.height * canvasScale}px`,
+          left: `${viewportStyles.left}px`,
+          top: `${viewportStyles.top}px`,
+          ...(effects?.zoom && zoomGeometry
+            ? {
+                transform: `scale(${effects.zoom.scale})`,
+                transformOrigin: `${zoomGeometry.centerX}% ${zoomGeometry.centerY}%`,
+              }
+            : {}),
+        }}
+      >
+        <div
+          className="w-full h-full bg-position-center rounded-lg"
+          style={{ ...backgroundStyle }}
+        />
+
+        <div
+          className="absolute top-0 left-0 origin-top-left"
+          style={{
+            width: `${viewportStyles.width}px`,
+            height: `${viewportStyles.height}px`,
+            transform: `scale(${canvasScale})`,
+          }}
+        >
+          {elements.map((element, index) => (
+            <SlideElement
+              key={element.id}
+              elementInfo={element}
+              elementIndex={index + 1}
+              theme={slide.theme}
+              renderImage={renderImage}
+              renderVideo={renderVideo}
+              onElementClick={onElementClick}
+            />
+          ))}
+
+          {highlightElement && (
+            <HighlightOverlay element={highlightElement} options={effects?.highlight} />
+          )}
+        </div>
+
+        <SpotlightOverlay options={effects?.spotlight} />
+
+        <div className="absolute inset-0 pointer-events-none" style={{ padding: '5%' }}>
+          <div className="relative w-full h-full">
+            <AnimatePresence>
+              {effects?.laser && laserGeometry && (
+                <LaserOverlay
+                  key={`laser-${effects.laser.elementId}`}
+                  geometry={laserGeometry}
+                  color={effects.laser.color}
+                  duration={effects.laser.duration}
+                />
+              )}
+            </AnimatePresence>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
