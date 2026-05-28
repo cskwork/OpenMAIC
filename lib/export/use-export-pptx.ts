@@ -24,6 +24,7 @@ import { type SvgPoints, toPoints, getSvgPathRange } from '@/lib/export/svg-path
 import { svg2Base64 } from '@/lib/export/svg2base64';
 import { latexToOmml } from '@/lib/export/latex-to-omml';
 import { createLogger } from '@/lib/logger';
+import { inlineHtmlAssets } from './inline-assets';
 
 const log = createLogger('ExportPPTX');
 
@@ -1179,7 +1180,8 @@ export function useExportPPTX() {
           interactiveIndex++;
           const safeName = scene.title.replace(/[\\/:*?"<>|]/g, '_');
           const htmlFileName = `interactive/${String(interactiveIndex).padStart(2, '0')}_${safeName}.html`;
-          zip.file(htmlFileName, scene.content.html);
+          const { html: inlinedHtml } = await inlineHtmlAssets(scene.content.html);
+          zip.file(htmlFileName, inlinedHtml);
         }
       }
 
