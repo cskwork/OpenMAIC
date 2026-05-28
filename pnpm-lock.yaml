@@ -212,6 +212,9 @@ importers:
       shiki:
         specifier: ^3.21.0
         version: 3.23.0
+      slide-renderer:
+        specifier: workspace:*
+        version: link:packages/slide-renderer
       sonner:
         specifier: ^2.0.7
         version: 2.0.7(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
