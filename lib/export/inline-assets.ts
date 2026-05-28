@@ -28,8 +28,8 @@ export function collectAssetRefs(html: string): AssetRef[] {
     push('link', m[1]);
   }
   for (const m of html.matchAll(/<script\b([^>]*?)\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi)) {
-    const attrs = m[1].toLowerCase();
-    if (attrs.includes('type="importmap"') || attrs.includes('type="application/json"')) continue;
+    const whole = m[0].toLowerCase();
+    if (whole.includes('importmap') || whole.includes('application/json')) continue;
     push('script', m[2]);
   }
   for (const m of html.matchAll(/<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi)) {
@@ -163,10 +163,6 @@ async function replaceAsync(
     last = m.index! + m[0].length;
   });
   return result + input.slice(last);
-}
-
-function escapeAttr(s: string): string {
-  return s.replace(/"/g, '&quot;');
 }
 
 // Stub — real importmap inlining lands in Task 5.

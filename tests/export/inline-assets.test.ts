@@ -54,6 +54,13 @@ describe('collectAssetRefs', () => {
     const refs = collectAssetRefs(html);
     expect(refs.map((r) => r.url).sort()).toEqual(['http://b/y.js', 'https://a/x.js']);
   });
+
+  it('skips importmap scripts regardless of quote style or attribute order', () => {
+    const a = collectAssetRefs(`<script type='importmap' src="https://x/i.js"></script>`);
+    const b = collectAssetRefs(`<script src="https://x/i.js" type="importmap"></script>`);
+    expect(a).toEqual([]);
+    expect(b).toEqual([]);
+  });
 });
 
 describe('createAssetFetcher', () => {
