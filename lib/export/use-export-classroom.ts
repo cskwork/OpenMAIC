@@ -115,7 +115,8 @@ export function useExportClassroom() {
           for (const u of report.inlined)
             if (!aggregateReport.inlined.includes(u)) aggregateReport.inlined.push(u);
           for (const f of report.failed)
-            if (!aggregateReport.failed.some((g) => g.url === f.url)) aggregateReport.failed.push(f);
+            if (!aggregateReport.failed.some((g) => g.url === f.url))
+              aggregateReport.failed.push(f);
           return {
             type: scene.type,
             title: scene.title,

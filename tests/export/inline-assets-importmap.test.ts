@@ -6,7 +6,9 @@ const enc = (s: string) => ({ bytes: new TextEncoder().encode(s), contentType: '
 describe('buildInlinedImportmap', () => {
   it('inlines a direct module entry to a data: URI', async () => {
     const fetchAsset = async (url: string) =>
-      url === 'https://unpkg.com/three@0.160.0/build/three.module.js' ? enc('export const THREE=1') : null;
+      url === 'https://unpkg.com/three@0.160.0/build/three.module.js'
+        ? enc('export const THREE=1')
+        : null;
     const { imports, report } = await buildInlinedImportmap(
       { three: 'https://unpkg.com/three@0.160.0/build/three.module.js' },
       ["import * as THREE from 'three';"],
@@ -19,8 +21,10 @@ describe('buildInlinedImportmap', () => {
   it('expands a prefix entry (three/addons/) into explicit full-specifier data: entries and drops the prefix', async () => {
     const base = 'https://unpkg.com/three@0.160.0/examples/jsm/';
     const fetchAsset = async (url: string) => {
-      if (url === 'https://unpkg.com/three@0.160.0/build/three.module.js') return enc('export const THREE=1');
-      if (url === base + 'controls/OrbitControls.js') return enc("import * as THREE from 'three'; export class OrbitControls{}");
+      if (url === 'https://unpkg.com/three@0.160.0/build/three.module.js')
+        return enc('export const THREE=1');
+      if (url === base + 'controls/OrbitControls.js')
+        return enc("import * as THREE from 'three'; export class OrbitControls{}");
       return null;
     };
     const moduleBodies = [

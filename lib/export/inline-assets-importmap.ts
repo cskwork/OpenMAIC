@@ -45,7 +45,8 @@ export async function buildInlinedImportmap(
     }
     const got = await fetchAsset(absUrl);
     if (!got) {
-      if (!report.failed.some((f) => f.url === absUrl)) report.failed.push({ url: absUrl, reason: 'fetch failed' });
+      if (!report.failed.some((f) => f.url === absUrl))
+        report.failed.push({ url: absUrl, reason: 'fetch failed' });
       return;
     }
     resolvedDataUri.set(spec, toDataUri(got.bytes, got.contentType));

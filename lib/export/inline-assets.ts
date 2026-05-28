@@ -1,4 +1,9 @@
-import { toDataUri, type InlineReport, type InlineOptions, type FetchAsset } from './inline-assets-shared';
+import {
+  toDataUri,
+  type InlineReport,
+  type InlineOptions,
+  type FetchAsset,
+} from './inline-assets-shared';
 import { buildInlinedImportmap } from './inline-assets-importmap';
 
 export { toDataUri } from './inline-assets-shared';
@@ -88,11 +93,23 @@ export function createAssetFetcher(options?: InlineOptions) {
 function guessMime(url: string): string {
   const ext = url.split('?')[0].split('#')[0].split('.').pop()?.toLowerCase() ?? '';
   const table: Record<string, string> = {
-    js: 'text/javascript', mjs: 'text/javascript', css: 'text/css',
-    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
-    svg: 'image/svg+xml', webp: 'image/webp', woff2: 'font/woff2', woff: 'font/woff',
-    ttf: 'font/ttf', otf: 'font/otf', mp4: 'video/mp4', webm: 'video/webm',
-    mp3: 'audio/mpeg', wav: 'audio/wav',
+    js: 'text/javascript',
+    mjs: 'text/javascript',
+    css: 'text/css',
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    svg: 'image/svg+xml',
+    webp: 'image/webp',
+    woff2: 'font/woff2',
+    woff: 'font/woff',
+    ttf: 'font/ttf',
+    otf: 'font/otf',
+    mp4: 'video/mp4',
+    webm: 'video/webm',
+    mp3: 'audio/mpeg',
+    wav: 'audio/wav',
   };
   return table[ext] ?? 'application/octet-stream';
 }
@@ -174,9 +191,14 @@ async function inlineImportmaps(
         return full;
       }
       const orig = parsed.imports ?? {};
-      const { imports: inlined, report: r } = await buildInlinedImportmap(orig, moduleBodies, fetchAsset);
+      const { imports: inlined, report: r } = await buildInlinedImportmap(
+        orig,
+        moduleBodies,
+        fetchAsset,
+      );
       for (const u of r.inlined) if (!report.inlined.includes(u)) report.inlined.push(u);
-      for (const f of r.failed) if (!report.failed.some((g) => g.url === f.url)) report.failed.push(f);
+      for (const f of r.failed)
+        if (!report.failed.some((g) => g.url === f.url)) report.failed.push(f);
       // Merge: start from originals, overlay inlined data: entries.
       const merged: Record<string, string> = { ...orig, ...inlined };
       // Drop any '/'-terminated prefix key that was expanded into explicit data: entries.
@@ -214,7 +236,10 @@ export async function inlineHtmlAssets(
       const isStylesheet = /rel\s*=\s*["']?stylesheet/i.test(pre + post);
       if (!isStylesheet) return full;
       const got = await fetchAsset(url);
-      if (!got) { markFailed(url, 'fetch failed'); return full; }
+      if (!got) {
+        markFailed(url, 'fetch failed');
+        return full;
+      }
       let cssText = new TextDecoder().decode(got.bytes);
       cssText = await inlineCssUrls(cssText, url, fetchAsset);
       markInlined(url);
@@ -230,7 +255,10 @@ export async function inlineHtmlAssets(
       const attrs = (pre + post).toLowerCase();
       if (attrs.includes('importmap') || attrs.includes('application/json')) return full;
       const got = await fetchAsset(url);
-      if (!got) { markFailed(url, 'fetch failed'); return full; }
+      if (!got) {
+        markFailed(url, 'fetch failed');
+        return full;
+      }
       markInlined(url);
       return `<script${pre}src="${toDataUri(got.bytes, got.contentType)}"${post}>`;
     },
@@ -242,7 +270,10 @@ export async function inlineHtmlAssets(
     /<(img|source)\b([^>]*?)\bsrc\s*=\s*["'](https?:\/\/[^"']+)["']([^>]*)>/gi,
     async (full, tag, pre, url, post) => {
       const got = await fetchAsset(url);
-      if (!got) { markFailed(url, 'fetch failed'); return full; }
+      if (!got) {
+        markFailed(url, 'fetch failed');
+        return full;
+      }
       markInlined(url);
       return `<${tag}${pre}src="${toDataUri(got.bytes, got.contentType)}"${post}>`;
     },

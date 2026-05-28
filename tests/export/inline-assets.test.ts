@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { collectAssetRefs, createAssetFetcher, toDataUri, inlineCssUrls, inlineHtmlAssets } from '@/lib/export/inline-assets';
+import {
+  collectAssetRefs,
+  createAssetFetcher,
+  toDataUri,
+  inlineCssUrls,
+  inlineHtmlAssets,
+} from '@/lib/export/inline-assets';
 
 describe('collectAssetRefs', () => {
   it('collects stylesheet link hrefs', () => {
@@ -77,7 +83,9 @@ describe('createAssetFetcher', () => {
 
   it('fetches bytes + content-type', async () => {
     const fetchAsset = createAssetFetcher({
-      fetchImpl: fakeFetch({ 'https://x/a.js': { body: 'console.log(1)', contentType: 'text/javascript' } }),
+      fetchImpl: fakeFetch({
+        'https://x/a.js': { body: 'console.log(1)', contentType: 'text/javascript' },
+      }),
     });
     const got = await fetchAsset('https://x/a.js');
     expect(got).not.toBeNull();
@@ -111,7 +119,11 @@ describe('createAssetFetcher', () => {
 
   it('strips content-type parameters (charset) to the bare mime', async () => {
     const fetchAsset = createAssetFetcher({
-      fetchImpl: (async () => new Response('x', { status: 200, headers: { 'content-type': 'text/css; charset=utf-8' } })) as unknown as typeof fetch,
+      fetchImpl: (async () =>
+        new Response('x', {
+          status: 200,
+          headers: { 'content-type': 'text/css; charset=utf-8' },
+        })) as unknown as typeof fetch,
     });
     const got = await fetchAsset('https://x/a.css');
     expect(got!.contentType).toBe('text/css');
@@ -120,7 +132,8 @@ describe('createAssetFetcher', () => {
   it('falls back to extension-based mime when content-type missing', async () => {
     const fetchAsset = createAssetFetcher({
       // Use a Uint8Array body so Node does not auto-inject "text/plain;charset=UTF-8"
-      fetchImpl: (async () => new Response(new Uint8Array([120]), { status: 200 })) as unknown as typeof fetch,
+      fetchImpl: (async () =>
+        new Response(new Uint8Array([120]), { status: 200 })) as unknown as typeof fetch,
     });
     const got = await fetchAsset('https://x/font.woff2');
     expect(got!.contentType).toBe('font/woff2');
@@ -129,7 +142,11 @@ describe('createAssetFetcher', () => {
   it('skips assets larger than maxAssetBytes', async () => {
     const big = 'x'.repeat(100);
     const fetchAsset = createAssetFetcher({
-      fetchImpl: (async () => new Response(big, { status: 200, headers: { 'content-type': 'text/plain' } })) as unknown as typeof fetch,
+      fetchImpl: (async () =>
+        new Response(big, {
+          status: 200,
+          headers: { 'content-type': 'text/plain' },
+        })) as unknown as typeof fetch,
       maxAssetBytes: 10,
     });
     expect(await fetchAsset('https://x/big')).toBeNull();
@@ -137,7 +154,9 @@ describe('createAssetFetcher', () => {
 
   it('returns null when fetch throws (network error)', async () => {
     const fetchAsset = createAssetFetcher({
-      fetchImpl: (async () => { throw new Error('network down'); }) as unknown as typeof fetch,
+      fetchImpl: (async () => {
+        throw new Error('network down');
+      }) as unknown as typeof fetch,
     });
     expect(await fetchAsset('https://x/err')).toBeNull();
   });
@@ -174,7 +193,9 @@ describe('inlineCssUrls', () => {
   it('resolves absolute http url() too', async () => {
     const css = 'background:url(https://img.example/bg.png)';
     const fetchAsset = async (url: string) =>
-      url === 'https://img.example/bg.png' ? { bytes: new Uint8Array([2]), contentType: 'image/png' } : null;
+      url === 'https://img.example/bg.png'
+        ? { bytes: new Uint8Array([2]), contentType: 'image/png' }
+        : null;
     const out = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
     expect(out).toContain('data:image/png;base64,');
   });
@@ -188,7 +209,9 @@ describe('inlineCssUrls', () => {
 
   it('leaves data: url() untouched and does not fetch it', async () => {
     const css = 'src:url(data:font/woff2;base64,AAAA)';
-    const fetchAsset = async () => { throw new Error('should not fetch'); };
+    const fetchAsset = async () => {
+      throw new Error('should not fetch');
+    };
     const out = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
     expect(out).toContain('data:font/woff2;base64,AAAA');
   });
@@ -196,7 +219,7 @@ describe('inlineCssUrls', () => {
   it('handles quoted url() and multiple refs, fetching each unique once', async () => {
     let calls = 0;
     const css = `src:url("a.woff2"),url('a.woff2'),url(b.woff2)`;
-    const fetchAsset = async (url: string) => {
+    const fetchAsset = async (_url: string) => {
       calls++;
       return { bytes: new Uint8Array([9]), contentType: 'font/woff2' };
     };
@@ -214,7 +237,8 @@ describe('inlineHtmlAssets — importmap integration', () => {
     const fetchImpl = (async (url: string) => {
       const map: Record<string, string> = {
         'https://unpkg.com/three@0.160.0/build/three.module.js': 'export const THREE=1',
-        [base + 'controls/OrbitControls.js']: "import * as THREE from 'three'; export class OrbitControls{}",
+        [base + 'controls/OrbitControls.js']:
+          "import * as THREE from 'three'; export class OrbitControls{}",
       };
       const body = map[String(url)];
       if (body === undefined) return new Response('', { status: 404 });
@@ -261,7 +285,9 @@ describe('inlineHtmlAssets', () => {
 
   it('inlines a script src as a data: URI (preserving type=module)', async () => {
     const html = '<script type="module" src="https://cdn/app.js"></script>';
-    const fetchImpl = fetchFromMap({ 'https://cdn/app.js': { body: 'export const a=1', ct: 'text/javascript' } });
+    const fetchImpl = fetchFromMap({
+      'https://cdn/app.js': { body: 'export const a=1', ct: 'text/javascript' },
+    });
     const { html: out } = await inlineHtmlAssets(html, { fetchImpl });
     expect(out).toMatch(/<script[^>]*type="module"[^>]*src="data:text\/javascript;base64,/);
   });
@@ -275,7 +301,9 @@ describe('inlineHtmlAssets', () => {
 
   it('inlines a Tailwind CDN runtime script', async () => {
     const html = '<script src="https://cdn.tailwindcss.com"></script>';
-    const fetchImpl = fetchFromMap({ 'https://cdn.tailwindcss.com': { body: '/*tw*/', ct: 'text/javascript' } });
+    const fetchImpl = fetchFromMap({
+      'https://cdn.tailwindcss.com': { body: '/*tw*/', ct: 'text/javascript' },
+    });
     const { html: out, report } = await inlineHtmlAssets(html, { fetchImpl });
     expect(out).toContain('data:text/javascript;base64,');
     expect(report.inlined).toContain('https://cdn.tailwindcss.com');
@@ -299,7 +327,10 @@ describe('inlineHtmlAssets', () => {
 
   it('dedups identical URLs (one fetch)', async () => {
     let calls = 0;
-    const fetchImpl = (async () => { calls++; return new Response('X', { status: 200, headers: { 'content-type': 'image/png' } }); }) as unknown as typeof fetch;
+    const fetchImpl = (async () => {
+      calls++;
+      return new Response('X', { status: 200, headers: { 'content-type': 'image/png' } });
+    }) as unknown as typeof fetch;
     const html = '<img src="https://cdn/same.png"><img src="https://cdn/same.png">';
     await inlineHtmlAssets(html, { fetchImpl });
     expect(calls).toBe(1);

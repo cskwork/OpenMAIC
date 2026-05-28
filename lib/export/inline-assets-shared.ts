@@ -8,7 +8,9 @@ export interface InlineOptions {
   maxAssetBytes?: number;
 }
 
-export type FetchAsset = (url: string) => Promise<{ bytes: Uint8Array; contentType: string } | null>;
+export type FetchAsset = (
+  url: string,
+) => Promise<{ bytes: Uint8Array; contentType: string } | null>;
 
 /** Encode bytes as a data: URI. */
 export function toDataUri(bytes: Uint8Array, contentType: string): string {
