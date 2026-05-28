@@ -213,6 +213,10 @@ export function useExportClassroom() {
 
       if (aggregateReport.failed.length > 0) {
         log.warn('Some interactive-scene assets could not be inlined:', aggregateReport.failed);
+        const n = aggregateReport.failed.length;
+        toast.warning(
+          `${n} external asset(s) could not be bundled. The course may not display correctly offline.`,
+        );
       }
       toast.success(t('export.exportSuccess'), { id: toastId });
     } catch (error) {

@@ -1176,6 +1176,7 @@ export function useExportPPTX() {
       // 2. Add interactive HTML pages
       const sharedFetcher = createAssetFetcher();
       let interactiveIndex = 0;
+      const failedAssetUrls = new Set<string>();
       for (const scene of scenes) {
         if (scene.content.type === 'interactive' && scene.content.html) {
           interactiveIndex++;
@@ -1189,6 +1190,7 @@ export function useExportPPTX() {
               'Resource Pack: some interactive-scene assets could not be inlined:',
               report.failed,
             );
+            for (const f of report.failed) failedAssetUrls.add(f.url);
           }
           zip.file(htmlFileName, inlinedHtml);
         }
@@ -1198,6 +1200,12 @@ export function useExportPPTX() {
       const zipBlob = await zip.generateAsync({ type: 'blob' });
       saveAs(zipBlob, `${fileName}.zip`);
       toast.success(t('export.exportSuccess'));
+      if (failedAssetUrls.size > 0) {
+        const n = failedAssetUrls.size;
+        toast.warning(
+          `${n} external asset(s) could not be bundled. The course may not display correctly offline.`,
+        );
+      }
     });
   }, [
     withExportGuard,

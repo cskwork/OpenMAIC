@@ -69,21 +69,52 @@ export function createAssetFetcher(options?: InlineOptions): FetchAsset {
     const cached = cache.get(url);
     if (cached) return cached;
     const promise = (async () => {
-      try {
-        const res = await fetchImpl(url);
-        if (!res.ok) return null;
-        const buf = new Uint8Array(await res.arrayBuffer());
-        if (buf.byteLength > maxBytes) return null;
-        const contentType =
-          res.headers.get('content-type')?.split(';')[0]?.trim() || guessMime(url);
-        return { bytes: buf, contentType };
-      } catch {
-        return null;
+      const MAX_ATTEMPTS = 3;
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          const res = await fetchImpl(url);
+          if (!res.ok) {
+            // permanent client errors (e.g. 404, 403): don't retry
+            if (res.status !== 429 && res.status < 500) return null;
+            // transient server/rate-limit error: fall through to retry
+            if (attempt === MAX_ATTEMPTS) return null;
+          } else {
+            const buf = new Uint8Array(await res.arrayBuffer());
+            if (buf.byteLength > maxBytes) return null;
+            const contentType =
+              res.headers.get('content-type')?.split(';')[0]?.trim() || guessMime(url);
+            return { bytes: buf, contentType };
+          }
+        } catch {
+          // network error (connection reset, ECONNRESET, etc.)
+          if (attempt === MAX_ATTEMPTS) return null;
+        }
+        // backoff before next attempt (150ms, 300ms)
+        await new Promise((r) => setTimeout(r, 150 * attempt));
       }
+      return null;
     })();
     cache.set(url, promise);
     return promise;
   };
+}
+
+/** Run `fn` over `items` with at most `limit` concurrent calls. */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }
 
 /** Fallback MIME by extension when the server omits content-type. */
@@ -131,12 +162,11 @@ export async function inlineCssUrls(
     }
   }
   const replacements = new Map<string, string>();
-  await Promise.all(
-    [...uniqueRefs.entries()].map(async ([raw, abs]) => {
-      const got = await fetchAsset(abs);
-      if (got) replacements.set(raw, toDataUri(got.bytes, got.contentType));
-    }),
-  );
+  const entries = [...uniqueRefs.entries()];
+  await mapWithConcurrency(entries, 8, async ([raw, abs]) => {
+    const got = await fetchAsset(abs);
+    if (got) replacements.set(raw, toDataUri(got.bytes, got.contentType));
+  });
   return css.replace(urlRe, (full, _q, raw) => {
     const key = String(raw).trim();
     const dataUri = replacements.get(key);
