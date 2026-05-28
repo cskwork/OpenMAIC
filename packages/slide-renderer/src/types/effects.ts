@@ -10,6 +10,10 @@ export interface SpotlightEffectOptions {
 
 export interface HighlightEffectOptions {
   elementId: string;
+  color?: string;
+  opacity?: number;
+  borderWidth?: number;
+  animated?: boolean;
 }
 
 export interface ZoomEffectOptions {
