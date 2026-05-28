@@ -213,10 +213,20 @@ export function useExportClassroom() {
 
       if (aggregateReport.failed.length > 0) {
         log.warn('Some interactive-scene assets could not be inlined:', aggregateReport.failed);
-        const n = aggregateReport.failed.length;
-        toast.warning(
-          `${n} external asset(s) could not be bundled. The course may not display correctly offline.`,
-        );
+        const hosts = [
+          ...new Set(
+            aggregateReport.failed.map((f) => {
+              try {
+                return new URL(f.url).host;
+              } catch {
+                return f.url;
+              }
+            }),
+          ),
+        ];
+        toast.warning(t('export.inlinePartial', { count: aggregateReport.failed.length }), {
+          description: hosts.join(', '),
+        });
       }
       toast.success(t('export.exportSuccess'), { id: toastId });
     } catch (error) {

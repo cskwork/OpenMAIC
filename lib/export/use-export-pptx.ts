@@ -1201,10 +1201,20 @@ export function useExportPPTX() {
       saveAs(zipBlob, `${fileName}.zip`);
       toast.success(t('export.exportSuccess'));
       if (failedAssetUrls.size > 0) {
-        const n = failedAssetUrls.size;
-        toast.warning(
-          `${n} external asset(s) could not be bundled. The course may not display correctly offline.`,
-        );
+        const hosts = [
+          ...new Set(
+            [...failedAssetUrls].map((u) => {
+              try {
+                return new URL(u).host;
+              } catch {
+                return u;
+              }
+            }),
+          ),
+        ];
+        toast.warning(t('export.inlinePartial', { count: failedAssetUrls.size }), {
+          description: hosts.join(', '),
+        });
       }
     });
   }, [
