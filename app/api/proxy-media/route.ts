@@ -44,8 +44,7 @@ export async function POST(request: NextRequest) {
       const location = response.headers.get('location');
       if (!location)
         return apiError('UPSTREAM_ERROR', 502, 'Redirect response without Location header');
-      if (hop >= MAX_REDIRECTS)
-        return apiError('TOO_MANY_REDIRECTS', 502, 'Too many redirects');
+      if (hop >= MAX_REDIRECTS) return apiError('TOO_MANY_REDIRECTS', 502, 'Too many redirects');
       let nextUrl: string;
       try {
         nextUrl = new URL(location, currentUrl).href; // resolve relative redirects
@@ -61,19 +60,14 @@ export async function POST(request: NextRequest) {
     if (!response!.ok) {
       // Forward client (4xx) errors as-is so the caller treats them as permanent
       // (no retry); collapse upstream server (5xx) errors to 502.
-      const status =
-        response!.status >= 400 && response!.status < 500 ? response!.status : 502;
+      const status = response!.status >= 400 && response!.status < 500 ? response!.status : 502;
       return apiError('UPSTREAM_ERROR', status, `Upstream returned ${response!.status}`);
     }
 
     const MAX_PROXY_BYTES = 25 * 1024 * 1024; // 25 MiB
     const contentLength = Number(response!.headers.get('content-length') ?? '');
     if (Number.isFinite(contentLength) && contentLength > MAX_PROXY_BYTES) {
-      return apiError(
-        'UPSTREAM_ERROR',
-        502,
-        `Upstream asset too large (${contentLength} bytes)`,
-      );
+      return apiError('UPSTREAM_ERROR', 502, `Upstream asset too large (${contentLength} bytes)`);
     }
     const blob = await response!.blob();
     if (blob.size > MAX_PROXY_BYTES) {

@@ -158,10 +158,7 @@ describe('POST /api/proxy-media', () => {
 
   it('7. upstream 404 returns 404 UPSTREAM_ERROR (forwarded, not 502)', async () => {
     mocks.validateUrlForSSRF.mockResolvedValue(null);
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(new Response(null, { status: 404 })),
-    );
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 404 })));
 
     const res = await postProxy({ url: 'https://example.com/not-found' });
     const json = await res.json();
@@ -172,10 +169,7 @@ describe('POST /api/proxy-media', () => {
 
   it('8. upstream 503 is collapsed to 502', async () => {
     mocks.validateUrlForSSRF.mockResolvedValue(null);
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(new Response(null, { status: 503 })),
-    );
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 503 })));
 
     const res = await postProxy({ url: 'https://example.com/server-error' });
     const json = await res.json();

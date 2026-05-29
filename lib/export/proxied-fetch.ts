@@ -6,7 +6,8 @@
  */
 export function createProxiedFetch(): typeof fetch {
   return (async (input: RequestInfo | URL) => {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : String(input);
+    const url =
+      typeof input === 'string' ? input : input instanceof URL ? input.href : String(input);
     return fetch('/api/proxy-media', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
