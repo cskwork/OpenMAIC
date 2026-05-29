@@ -1027,16 +1027,24 @@ export async function transformParsedToSlides(
                   ? ps.map(p => `<p>${escapeHtml(p.innerText)}</p>`).join("")
                   : textDiv.innerText;
 
+              // 把 PPT 原生的 vAlign 词汇映射到 CSS-native 值，让 renderer 直接透传
+              // 到 `vertical-align`，不再需要在渲染层做转换。
+              const vAlignRaw = (cellData as { vAlign?: "up" | "mid" | "down" }).vAlign;
+              const vAlign: "top" | "middle" | "bottom" | undefined =
+                vAlignRaw === "up"
+                  ? "top"
+                  : vAlignRaw === "mid"
+                  ? "middle"
+                  : vAlignRaw === "down"
+                  ? "bottom"
+                  : undefined;
+
               rowCells.push({
                 id: nanoid(10),
                 colspan: cellData.colSpan || 1,
                 rowspan: cellData.rowSpan || 1,
                 text,
-                // ParsedPptxJson 类型走的是官方 pptxtojson（其 TableCell 没有 vAlign），
-                // 但运行时由 pptxtojson-pro 输出该字段（adapter/types.d.ts 已声明），故走断言。
-                // 统一类型源即可消除此断言，属于本 PR 范围外的清理。
-                vAlign: (cellData as { vAlign?: "up" | "mid" | "down" })
-                  .vAlign,
+                vAlign,
                 padding: padding || undefined,
                 style: {
                   ...style,

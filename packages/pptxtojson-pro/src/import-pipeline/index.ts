@@ -25,10 +25,13 @@ import { transformParsedToSlides } from "./transformParsedToSlides";
 import { createMockImportContext } from "./mockContext";
 
 /**
- * OpenMAIC canvas default viewport width in CSS pixels. Matches the value
- * used by the slide renderer when no per-slide override is present.
+ * Fallback viewport width in CSS pixels — used only when the parsed deck
+ * has no usable size (json.size.width <= 0). For real PPTX files the deck's
+ * own pixel width (json.size.width * ratio) drives both the transform-time
+ * clamp and the per-slide `viewportSize`, so a 16:9 widescreen deck lands
+ * at 1280 and a 4:3 deck at 960 without any caller override.
  */
-const CANVAS_VIEWPORT_SIZE = 1000;
+const FALLBACK_VIEWPORT_SIZE = 1280;
 
 export type OssUpload = (
   blob: Blob,
@@ -58,7 +61,15 @@ export async function parsedToSlides(
   json: Output,
   options: ImportPptxOptions = {},
 ): Promise<Slide[]> {
-  const ctx = createMockImportContext(buildContextOverrides(options.upload));
+  const baseCtx = createMockImportContext(buildContextOverrides(options.upload));
+  // Drive the transform-time width clamp from the deck's own pixel width
+  // (pt → px via ratio) so 16:9 widescreen decks (960pt → 1280px) don't
+  // get text elements truncated to the legacy 4:3 default of 960.
+  const deckViewportWidth =
+    json.size.width > 0
+      ? json.size.width * baseCtx.ratio
+      : FALLBACK_VIEWPORT_SIZE;
+  const ctx: ImportContext = { ...baseCtx, viewportWidth: deckViewportWidth };
 
   // pptxtojson-pro's `Output` is structurally compatible with the npm
   // `pptxtojson` shape that `transformParsedToSlides` is typed against;
@@ -84,7 +95,7 @@ export async function parsedToSlides(
     shadow: ctx.theme.shadow,
   };
   for (const slide of slides) {
-    if (slide.viewportSize === undefined) slide.viewportSize = CANVAS_VIEWPORT_SIZE;
+    if (slide.viewportSize === undefined) slide.viewportSize = deckViewportWidth;
     if (slide.viewportRatio === undefined) slide.viewportRatio = viewportRatio;
     if (slide.theme === undefined) slide.theme = theme;
   }
