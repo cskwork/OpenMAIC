@@ -37,9 +37,9 @@ export function LaserOverlay({
         top: { duration: 0.5, ease: [0.22, 1, 0.36, 1] },
         opacity: { duration: 0.15 },
       }}
-      className="absolute z-[101] pointer-events-none"
+      style={{ position: 'absolute', zIndex: 101, pointerEvents: 'none' }}
     >
-      <div className="relative -translate-x-1/2 -translate-y-1/2">
+      <div style={{ position: 'relative', transform: 'translate(-50%, -50%)' }}>
         <motion.div
           animate={{ scale: [1, 2.8], opacity: [0.6, 0] }}
           transition={{
@@ -48,12 +48,21 @@ export function LaserOverlay({
             ease: 'easeOut',
             repeatDelay: 0.3,
           }}
-          className="absolute inset-0 rounded-full"
-          style={{ border: `1.5px solid ${color}` }}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            borderRadius: '9999px',
+            border: `1.5px solid ${color}`,
+          }}
         />
         <div
-          className="w-2.5 h-2.5 rounded-full"
-          style={{ backgroundColor: color, boxShadow: `0 0 8px 2px ${color}60` }}
+          style={{
+            width: '10px',
+            height: '10px',
+            borderRadius: '9999px',
+            backgroundColor: color,
+            boxShadow: `0 0 8px 2px ${color}60`,
+          }}
         />
       </div>
     </motion.div>

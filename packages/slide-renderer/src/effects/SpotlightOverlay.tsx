@@ -65,7 +65,16 @@ export function SpotlightOverlay({
   const active = !!spotlightElementId && !!rect;
 
   return (
-    <div ref={containerRef} className="absolute inset-0 z-[100] pointer-events-none overflow-hidden">
+    <div
+      ref={containerRef}
+      style={{
+        position: 'absolute',
+        inset: 0,
+        zIndex: 100,
+        pointerEvents: 'none',
+        overflow: 'hidden',
+      }}
+    >
       <AnimatePresence mode="wait">
         {active && rect && (
           <motion.div
@@ -73,14 +82,14 @@ export function SpotlightOverlay({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0"
+            style={{ position: 'absolute', inset: 0 }}
           >
             <svg
               width="100%"
               height="100%"
               viewBox="0 0 100 100"
               preserveAspectRatio="none"
-              className="absolute inset-0"
+              style={{ position: 'absolute', inset: 0 }}
             >
               <defs>
                 <mask id={`mask-${spotlightElementId}`}>

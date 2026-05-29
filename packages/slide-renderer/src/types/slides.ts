@@ -253,6 +253,18 @@ export interface TableCell {
   rowspan: number;
   text: string;
   style?: TableCellStyle;
+  /**
+   * CSS padding string (e.g. "3.6pt 7.2pt") applied to the cell. When
+   * undefined the renderer applies no padding — data is the single source
+   * of truth for cell inner spacing.
+   */
+  padding?: string;
+  /**
+   * CSS-native `vertical-align` value applied to the cell. When undefined
+   * the renderer applies no vertical alignment — defaults to the browser
+   * baseline.
+   */
+  vAlign?: 'top' | 'middle' | 'bottom';
 }
 
 export interface TableTheme {
@@ -269,6 +281,12 @@ export interface PPTTableElement extends PPTBaseElement {
   theme?: TableTheme;
   colWidths: number[];
   cellMinHeight: number;
+  /**
+   * Optional per-row heights in CSS pixels. Acts as a min-height — content
+   * exceeding the value still expands the row. When omitted the renderer
+   * falls back to `cellMinHeight` for every row.
+   */
+  rowHeights?: number[];
   data: TableCell[][];
 }
 

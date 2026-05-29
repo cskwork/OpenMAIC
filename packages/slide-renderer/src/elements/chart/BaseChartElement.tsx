@@ -12,21 +12,27 @@ export interface BaseChartElementProps {
 export function BaseChartElement({ elementInfo, target }: BaseChartElementProps) {
   return (
     <div
-      className={`base-element-chart absolute ${target === 'thumbnail' ? 'pointer-events-none' : ''}`}
+      className="base-element-chart"
       style={{
+        position: 'absolute',
         top: `${elementInfo.top}px`,
         left: `${elementInfo.left}px`,
         width: `${elementInfo.width}px`,
         height: `${elementInfo.height}px`,
+        pointerEvents: target === 'thumbnail' ? 'none' : undefined,
       }}
     >
       <div
-        className="rotate-wrapper w-full h-full"
-        style={{ transform: `rotate(${elementInfo.rotate}deg)` }}
+        className="rotate-wrapper"
+        style={{
+          width: '100%',
+          height: '100%',
+          transform: `rotate(${elementInfo.rotate}deg)`,
+        }}
       >
         <div
-          className="element-content w-full h-full"
-          style={{ backgroundColor: elementInfo.fill }}
+          className="element-content"
+          style={{ width: '100%', height: '100%', backgroundColor: elementInfo.fill }}
         >
           <ElementOutline
             width={elementInfo.width}

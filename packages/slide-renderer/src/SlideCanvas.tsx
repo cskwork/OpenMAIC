@@ -19,6 +19,7 @@ import { HighlightOverlay } from './effects/HighlightOverlay';
 import { SpotlightOverlay } from './effects/SpotlightOverlay';
 import { LaserOverlay } from './effects/LaserOverlay';
 import { useOptionalSlideContext } from './context';
+import { SLIDE_RENDERER_STYLES } from './styles';
 
 export interface SlideCanvasProps {
   /**
@@ -95,14 +96,26 @@ export function SlideCanvas(props: SlideCanvasProps) {
   return (
     <div
       ref={canvasRef}
-      className={['relative h-full w-full overflow-hidden select-none', className]
-        .filter(Boolean)
-        .join(' ')}
-      style={style}
+      className={className}
+      style={{
+        position: 'relative',
+        width: '100%',
+        height: '100%',
+        overflow: 'hidden',
+        userSelect: 'none',
+        ...style,
+      }}
     >
+      <style dangerouslySetInnerHTML={{ __html: SLIDE_RENDERER_STYLES }} />
       <div
-        className="absolute shadow-[0_0_0_1px_rgba(0,0,0,0.01),0_0_12px_0_rgba(0,0,0,0.1)] rounded-lg overflow-hidden transition-transform duration-700"
         style={{
+          position: 'absolute',
+          boxShadow:
+            '0 0 0 1px rgba(0, 0, 0, 0.01), 0 0 12px 0 rgba(0, 0, 0, 0.1)',
+          borderRadius: '0.5rem',
+          overflow: 'hidden',
+          transitionProperty: 'transform',
+          transitionDuration: '700ms',
           width: `${viewportStyles.width * canvasScale}px`,
           height: `${viewportStyles.height * canvasScale}px`,
           left: `${viewportStyles.left}px`,
@@ -116,13 +129,21 @@ export function SlideCanvas(props: SlideCanvasProps) {
         }}
       >
         <div
-          className="w-full h-full bg-position-center rounded-lg"
-          style={{ ...backgroundStyle }}
+          style={{
+            width: '100%',
+            height: '100%',
+            backgroundPosition: 'center',
+            borderRadius: '0.5rem',
+            ...backgroundStyle,
+          }}
         />
 
         <div
-          className="absolute top-0 left-0 origin-top-left"
           style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            transformOrigin: 'top left',
             width: `${viewportStyles.width}px`,
             height: `${viewportStyles.height}px`,
             transform: `scale(${canvasScale})`,
@@ -147,8 +168,15 @@ export function SlideCanvas(props: SlideCanvasProps) {
 
         <SpotlightOverlay options={effects?.spotlight} />
 
-        <div className="absolute inset-0 pointer-events-none" style={{ padding: '5%' }}>
-          <div className="relative w-full h-full">
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            pointerEvents: 'none',
+            padding: '5%',
+          }}
+        >
+          <div style={{ position: 'relative', width: '100%', height: '100%' }}>
             <AnimatePresence>
               {effects?.laser && laserGeometry && (
                 <LaserOverlay

@@ -16,7 +16,8 @@ export function ElementOutline({ width, height, outline }: ElementOutlineProps) 
 
   return (
     <svg
-      className="element-outline absolute top-0 left-0 overflow-visible"
+      className="element-outline"
+      style={{ position: 'absolute', top: 0, left: 0, overflow: 'visible' }}
       width={width}
       height={height}
     >

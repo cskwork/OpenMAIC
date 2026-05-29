@@ -29,18 +29,27 @@ export function BaseImageElement({ elementInfo, renderImage }: BaseImageElementP
 
   return (
     <div
-      className="element-content absolute"
+      className="element-content"
       style={{
+        position: 'absolute',
         top: `${elementInfo.top}px`,
         left: `${elementInfo.left}px`,
         width: `${elementInfo.width}px`,
         height: `${elementInfo.height}px`,
       }}
     >
-      <div className="w-full h-full" style={{ transform: `rotate(${elementInfo.rotate}deg)` }}>
+      <div
+        style={{
+          width: '100%',
+          height: '100%',
+          transform: `rotate(${elementInfo.rotate}deg)`,
+        }}
+      >
         <div
-          className="w-full h-full relative"
           style={{
+            position: 'relative',
+            width: '100%',
+            height: '100%',
             filter: shadowStyle ? `drop-shadow(${shadowStyle})` : '',
             transform: flipStyle,
           }}
@@ -48,8 +57,13 @@ export function BaseImageElement({ elementInfo, renderImage }: BaseImageElementP
           <ImageOutline elementInfo={elementInfo} />
 
           <div
-            className="w-full h-full overflow-hidden relative"
-            style={{ clipPath: clipShape.style }}
+            style={{
+              position: 'relative',
+              width: '100%',
+              height: '100%',
+              overflow: 'hidden',
+              clipPath: clipShape.style,
+            }}
           >
             {renderImage ? (
               renderImage(elementInfo, src)
@@ -71,8 +85,11 @@ export function BaseImageElement({ elementInfo, renderImage }: BaseImageElementP
                 />
                 {elementInfo.colorMask && (
                   <div
-                    className="absolute inset-0"
-                    style={{ backgroundColor: elementInfo.colorMask }}
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      backgroundColor: elementInfo.colorMask,
+                    }}
                   />
                 )}
               </>

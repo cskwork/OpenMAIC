@@ -21,12 +21,15 @@ export function ZoomWrapper({ children, zoom, geometry }: ZoomWrapperProps) {
 
   return (
     <motion.div
-      className="w-full h-full"
       initial={{ scale: 1 }}
       animate={{ scale }}
       exit={{ scale: 1 }}
       transition={{ type: 'spring', stiffness: 200, damping: 25 }}
-      style={{ transformOrigin: `${centerX}% ${centerY}%` }}
+      style={{
+        width: '100%',
+        height: '100%',
+        transformOrigin: `${centerX}% ${centerY}%`,
+      }}
     >
       {children}
     </motion.div>

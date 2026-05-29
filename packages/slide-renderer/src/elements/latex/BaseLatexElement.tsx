@@ -10,8 +10,9 @@ export interface BaseLatexElementProps {
 export function BaseLatexElement({ elementInfo }: BaseLatexElementProps) {
   return (
     <div
-      className="base-element-latex absolute"
+      className="base-element-latex"
       style={{
+        position: 'absolute',
         top: `${elementInfo.top}px`,
         left: `${elementInfo.left}px`,
         width: `${elementInfo.width}px`,
@@ -19,10 +20,17 @@ export function BaseLatexElement({ elementInfo }: BaseLatexElementProps) {
       }}
     >
       <div
-        className="rotate-wrapper w-full h-full"
-        style={{ transform: `rotate(${elementInfo.rotate}deg)` }}
+        className="rotate-wrapper"
+        style={{
+          width: '100%',
+          height: '100%',
+          transform: `rotate(${elementInfo.rotate}deg)`,
+        }}
       >
-        <div className="element-content relative w-full h-full">
+        <div
+          className="element-content"
+          style={{ position: 'relative', width: '100%', height: '100%' }}
+        >
           {elementInfo.html ? (
             <KatexContent
               html={elementInfo.html}
@@ -40,7 +48,7 @@ export function BaseLatexElement({ elementInfo }: BaseLatexElementProps) {
               fill="none"
               strokeLinecap="round"
               strokeLinejoin="round"
-              className="transform-origin-[0_0] overflow-visible"
+              style={{ transformOrigin: '0 0', overflow: 'visible' }}
             >
               <g
                 transform={`scale(${elementInfo.width / elementInfo.viewBox[0]}, ${
@@ -103,7 +111,7 @@ function KatexContent({
     >
       <div
         ref={innerRef}
-        className="[&_.katex-display]:!m-0"
+        className="slide-renderer-prose"
         style={{
           transformOrigin: origin,
           transform: `scale(${scale})`,

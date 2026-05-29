@@ -25,10 +25,14 @@ export function BaseShapeElement({ elementInfo }: BaseShapeElementProps) {
     defaultColor: '#333333',
   };
 
+  const justifyContent =
+    text.align === 'top' ? 'flex-start' : text.align === 'bottom' ? 'flex-end' : 'center';
+
   return (
     <div
-      className="base-element-shape absolute"
+      className="base-element-shape"
       style={{
+        position: 'absolute',
         top: `${elementInfo.top}px`,
         left: `${elementInfo.left}px`,
         width: `${elementInfo.width}px`,
@@ -36,12 +40,19 @@ export function BaseShapeElement({ elementInfo }: BaseShapeElementProps) {
       }}
     >
       <div
-        className="rotate-wrapper w-full h-full"
-        style={{ transform: `rotate(${elementInfo.rotate}deg)` }}
+        className="rotate-wrapper"
+        style={{
+          width: '100%',
+          height: '100%',
+          transform: `rotate(${elementInfo.rotate}deg)`,
+        }}
       >
         <div
-          className="element-content relative w-full h-full"
+          className="element-content"
           style={{
+            position: 'relative',
+            width: '100%',
+            height: '100%',
             opacity: elementInfo.opacity,
             filter: shadowStyle ? `drop-shadow(${shadowStyle})` : '',
             transform: flipStyle,
@@ -53,7 +64,7 @@ export function BaseShapeElement({ elementInfo }: BaseShapeElementProps) {
             overflow="visible"
             width={elementInfo.width}
             height={elementInfo.height}
-            className="transform-origin-[0_0] overflow-visible block"
+            style={{ transformOrigin: '0 0', overflow: 'visible', display: 'block' }}
           >
             <defs>
               {elementInfo.pattern && (
@@ -87,20 +98,20 @@ export function BaseShapeElement({ elementInfo }: BaseShapeElementProps) {
           </svg>
 
           <div
-            className={`shape-text flex flex-col px-2.5 py-2.5 leading-relaxed break-words absolute inset-0 ${
-              text.align === 'top'
-                ? 'justify-start'
-                : text.align === 'bottom'
-                  ? 'justify-end'
-                  : 'justify-center'
-            }`}
+            className="shape-text"
             style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent,
+              overflowWrap: 'break-word',
               lineHeight: text.lineHeight,
               letterSpacing: `${text.wordSpace || 0}px`,
             }}
           >
             <div
-              className="ProseMirror-static [&_p]:mb-[var(--paragraphSpace)]"
+              className="ProseMirror-static slide-renderer-prose"
               style={{
                 // @ts-expect-error CSS custom properties
                 '--paragraphSpace': `${text.paragraphSpace === undefined ? 5 : text.paragraphSpace}px`,

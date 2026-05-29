@@ -19,7 +19,11 @@ function ImageRectOutline({ width, height, outline, radius = '0' }: ImageRectOut
   const { outlineWidth, outlineColor, strokeDashArray } = useElementOutline(outline);
   if (!outline) return null;
   return (
-    <svg className="absolute top-0 left-0 z-[2] overflow-visible" width={width} height={height}>
+    <svg
+      style={{ position: 'absolute', top: 0, left: 0, zIndex: 2, overflow: 'visible' }}
+      width={width}
+      height={height}
+    >
       <rect
         vectorEffect="non-scaling-stroke"
         strokeLinecap="butt"
@@ -47,7 +51,11 @@ function ImageEllipseOutline({ width, height, outline }: ImageEllipseOutlineProp
   const { outlineWidth, outlineColor, strokeDashArray } = useElementOutline(outline);
   if (!outline) return null;
   return (
-    <svg className="absolute top-0 left-0 z-[2] overflow-visible" width={width} height={height}>
+    <svg
+      style={{ position: 'absolute', top: 0, left: 0, zIndex: 2, overflow: 'visible' }}
+      width={width}
+      height={height}
+    >
       <ellipse
         vectorEffect="non-scaling-stroke"
         strokeLinecap="butt"
@@ -76,7 +84,11 @@ function ImagePolygonOutline({ width, height, createPath, outline }: ImagePolygo
   const { outlineWidth, outlineColor, strokeDashArray } = useElementOutline(outline);
   if (!outline) return null;
   return (
-    <svg className="absolute top-0 left-0 z-[2] overflow-visible" width={width} height={height}>
+    <svg
+      style={{ position: 'absolute', top: 0, left: 0, zIndex: 2, overflow: 'visible' }}
+      width={width}
+      height={height}
+    >
       <path
         vectorEffect="non-scaling-stroke"
         strokeLinecap="butt"

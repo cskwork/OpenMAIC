@@ -10,7 +10,7 @@ interface StaticTableProps {
 }
 
 export function StaticTable({ elementInfo }: StaticTableProps) {
-  const { width, data, colWidths, cellMinHeight, outline, theme } = elementInfo;
+  const { width, data, colWidths, cellMinHeight, rowHeights, outline, theme } = elementInfo;
 
   const hiddenCells = useMemo(() => getHiddenCells(data), [data]);
 
@@ -58,7 +58,14 @@ export function StaticTable({ elementInfo }: StaticTableProps) {
   };
 
   return (
-    <table className="w-full h-full" style={{ borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+    <table
+      className="slide-renderer-prose"
+      style={{
+        width: '100%',
+        borderCollapse: 'collapse',
+        tableLayout: 'fixed',
+      }}
+    >
       <colgroup>
         {colWidths.map((w, i) => (
           <col key={i} style={{ width: `${w * width}px` }} />
@@ -66,7 +73,10 @@ export function StaticTable({ elementInfo }: StaticTableProps) {
       </colgroup>
       <tbody>
         {data.map((row, rowIdx) => (
-          <tr key={rowIdx} style={{ height: `${cellMinHeight}px` }}>
+          <tr
+            key={rowIdx}
+            style={{ height: `${rowHeights?.[rowIdx] ?? cellMinHeight}px` }}
+          >
             {row.map((cell, colIdx) => {
               if (hiddenCells.has(`${rowIdx}_${colIdx}`)) return null;
 
@@ -86,13 +96,29 @@ export function StaticTable({ elementInfo }: StaticTableProps) {
                   style={{
                     border: borderStyle,
                     backgroundColor: bgColor,
-                    padding: '5px',
-                    verticalAlign: 'middle',
-                    wordBreak: 'break-word',
                     ...textStyle,
                   }}
-                  dangerouslySetInnerHTML={{ __html: formatText(cell.text) }}
-                />
+                >
+                  <div
+                    className="slide-renderer-cell-text"
+                    style={{
+                      minHeight: `${(rowHeights?.[rowIdx] ?? cellMinHeight) - 4}px`,
+                      padding: cell.padding,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      lineHeight: 1,
+                      justifyContent:
+                        cell.vAlign === 'top'
+                          ? 'flex-start'
+                          : cell.vAlign === 'bottom'
+                            ? 'flex-end'
+                            : cell.vAlign === 'middle'
+                              ? 'center'
+                              : undefined,
+                    }}
+                    dangerouslySetInnerHTML={{ __html: formatText(cell.text) }}
+                  />
+                </td>
               );
             })}
           </tr>

@@ -17,9 +17,10 @@ export interface BaseVideoElementProps {
 export function BaseVideoElement({ elementInfo, renderVideo }: BaseVideoElementProps) {
   return (
     <div
-      className="element-content absolute"
+      className="element-content"
       data-video-element
       style={{
+        position: 'absolute',
         top: `${elementInfo.top}px`,
         left: `${elementInfo.left}px`,
         width: `${elementInfo.width}px`,
@@ -29,24 +30,36 @@ export function BaseVideoElement({ elementInfo, renderVideo }: BaseVideoElementP
       onPointerDown={(e) => e.stopPropagation()}
     >
       <div
-        className="w-full h-full"
-        style={{ transform: `rotate(${elementInfo.rotate}deg)` }}
+        style={{
+          width: '100%',
+          height: '100%',
+          transform: `rotate(${elementInfo.rotate}deg)`,
+        }}
       >
         {renderVideo ? (
           renderVideo(elementInfo)
         ) : elementInfo.src ? (
           <video
-            className="w-full h-full"
-            style={{ objectFit: 'contain' }}
+            style={{ width: '100%', height: '100%', objectFit: 'contain' }}
             src={elementInfo.src}
             poster={elementInfo.poster}
             preload="metadata"
             controls
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center bg-black/10 rounded">
+          <div
+            style={{
+              width: '100%',
+              height: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: 'rgba(0, 0, 0, 0.1)',
+              borderRadius: '4px',
+            }}
+          >
             <svg
-              className="w-12 h-12 text-gray-400"
+              style={{ width: '48px', height: '48px', color: '#9ca3af' }}
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"

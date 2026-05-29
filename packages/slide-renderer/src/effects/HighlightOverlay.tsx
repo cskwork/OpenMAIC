@@ -21,8 +21,10 @@ export function HighlightOverlay({ element, options }: HighlightOverlayProps) {
 
   return (
     <div
-      className="highlight-overlay absolute pointer-events-none"
+      className="highlight-overlay"
       style={{
+        position: 'absolute',
+        pointerEvents: 'none',
         left: `${element.left}px`,
         top: `${element.top}px`,
         width: `${element.width}px`,
@@ -34,8 +36,11 @@ export function HighlightOverlay({ element, options }: HighlightOverlayProps) {
       }}
     >
       <div
-        className={`absolute inset-0 rounded ${animated ? 'animate-pulse' : ''}`}
+        className={animated ? 'slide-renderer-pulse' : undefined}
         style={{
+          position: 'absolute',
+          inset: 0,
+          borderRadius: '4px',
           border: `${borderWidth}px solid ${color}`,
           boxShadow: `0 0 ${borderWidth * 3}px ${color}, inset 0 0 ${borderWidth * 2}px rgba(255,255,255,${opacity * 0.5})`,
           backgroundColor: `${color}${Math.round(opacity * 255).toString(16).padStart(2, '0')}`,
@@ -43,8 +48,11 @@ export function HighlightOverlay({ element, options }: HighlightOverlayProps) {
       />
       {animated && (
         <div
-          className="absolute inset-0 rounded animate-ping"
+          className="slide-renderer-ping"
           style={{
+            position: 'absolute',
+            inset: 0,
+            borderRadius: '4px',
             border: `${borderWidth}px solid ${color}`,
             opacity: 0.5,
             animationDuration: '2s',

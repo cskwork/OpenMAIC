@@ -1,0 +1,124 @@
+/**
+ * Self-hosted Chinese font set for slides imported from PPTX. The 22 names
+ * here are the target whitelist that the import pipeline maps unknown PPT
+ * fonts onto (see pptxtojson-pro/src/openmaic/configs/font.ts).
+ *
+ * Each woff2 is a single Regular master; bold runs are synthesized by the
+ * browser (faux-bold) rather than mapped to a real heavy weight.
+ *
+ * Consumers import this once at the app shell:
+ *     import 'slide-renderer/fonts.css';
+ *
+ * The relative `./fonts/<name>.woff2` paths are resolved by the consumer's
+ * bundler (Next.js/Turbopack/webpack/Vite/etc.) and emitted as static assets.
+ */
+@font-face {
+  font-display: swap;
+  font-family: 'SourceHanSans';
+  src: url('./fonts/SourceHanSans.woff2') format('woff2');
+}
+@font-face {
+  font-display: swap;
+  font-family: 'SourceHanSerif';
+  src: url('./fonts/SourceHanSerif.woff2') format('woff2');
+}
+@font-face {
+  font-display: swap;
+  font-family: 'FangZhengHeiTi';
+  src: url('./fonts/FangZhengHeiTi.woff2') format('woff2');
+}
+@font-face {
+  font-display: swap;
+  font-family: 'FangZhengKaiTi';
+  src: url('./fonts/FangZhengKaiTi.woff2') format('woff2');
+}
+@font-face {
+  font-display: swap;
+  font-family: 'FangZhengShuSong';
+  src: url('./fonts/FangZhengShuSong.woff2') format('woff2');
+}
+@font-face {
+  font-display: swap;
+  font-family: 'FangZhengFangSong';
+  src: url('./fonts/FangZhengFangSong.woff2') format('woff2');
+}
+@font-face {
+  font-display: swap;
+  font-family: 'AlibabaPuHuiTi';
+  src: url('./fonts/AlibabaPuHuiTi.woff2') format('woff2');
+}
+@font-face {
+  font-display: swap;
+  font-family: 'ZhuQueFangSong';
+  src: url('./fonts/ZhuQueFangSong.woff2') format('woff2');
+}
+@font-face {
+  font-display: swap;
+  font-family: 'LXGWWenKai';
+  src: url('./fonts/LXGWWenKai.woff2') format('woff2');
+}
+@font-face {
+  font-display: swap;
+  font-family: 'WenDingPLKaiTi';
+  src: url('./fonts/WenDingPLKaiTi.woff2') format('woff2');
+}
+@font-face {
+  font-display: swap;
+  font-family: 'DeYiHei';
+  src: url('./fonts/DeYiHei.woff2') format('woff2');
+}
+@font-face {
+  font-display: swap;
+  font-family: 'MiSans';
+  src: url('./fonts/MiSans.woff2') format('woff2');
+}
+@font-face {
+  font-display: swap;
+  font-family: 'CangerXiaowanzi';
+  src: url('./fonts/CangerXiaowanzi.woff2') format('woff2');
+}
+@font-face {
+  font-display: swap;
+  font-family: 'YousheTitleBlack';
+  src: url('./fonts/YousheTitleBlack.woff2') format('woff2');
+}
+@font-face {
+  font-display: swap;
+  font-family: 'FengguangMingrui';
+  src: url('./fonts/FengguangMingrui.woff2') format('woff2');
+}
+@font-face {
+  font-display: swap;
+  font-family: 'ShetuModernSquare';
+  src: url('./fonts/ShetuModernSquare.woff2') format('woff2');
+}
+@font-face {
+  font-display: swap;
+  font-family: 'ZcoolHappy';
+  src: url('./fonts/ZcoolHappy.woff2') format('woff2');
+}
+@font-face {
+  font-display: swap;
+  font-family: 'ZizhiQuXiMai';
+  src: url('./fonts/ZizhiQuXiMai.woff2') format('woff2');
+}
+@font-face {
+  font-display: swap;
+  font-family: 'SucaiJishiKangkang';
+  src: url('./fonts/SucaiJishiKangkang.woff2') format('woff2');
+}
+@font-face {
+  font-display: swap;
+  font-family: 'SucaiJishiCoolSquare';
+  src: url('./fonts/SucaiJishiCoolSquare.woff2') format('woff2');
+}
+@font-face {
+  font-display: swap;
+  font-family: 'TuniuRounded';
+  src: url('./fonts/TuniuRounded.woff2') format('woff2');
+}
+@font-face {
+  font-display: swap;
+  font-family: 'RuiziZhenyan';
+  src: url('./fonts/RuiziZhenyan.woff2') format('woff2');
+}

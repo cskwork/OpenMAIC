@@ -105,5 +105,5 @@ export function Chart({
     updateOption();
   }, [updateOption]);
 
-  return <div ref={chartRef} className="chart w-full h-full" />;
+  return <div ref={chartRef} className="chart" style={{ width: '100%', height: '100%' }} />;
 }

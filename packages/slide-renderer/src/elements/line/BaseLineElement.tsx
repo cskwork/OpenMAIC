@@ -69,21 +69,27 @@ export function BaseLineElement({ elementInfo, animate }: BaseLineElementProps) 
 
   return (
     <div
-      className="base-element-line absolute"
+      className="base-element-line"
       style={{
+        position: 'absolute',
         top: `${elementInfo.top}px`,
         left: `${elementInfo.left}px`,
       }}
     >
       <div
-        className="element-content relative w-full h-full"
-        style={{ filter: shadowStyle ? `drop-shadow(${shadowStyle})` : '' }}
+        className="element-content"
+        style={{
+          position: 'relative',
+          width: '100%',
+          height: '100%',
+          filter: shadowStyle ? `drop-shadow(${shadowStyle})` : '',
+        }}
       >
         <svg
           overflow="visible"
           width={svgWidth}
           height={svgHeight}
-          className="transform-origin-[0_0] overflow-visible"
+          style={{ transformOrigin: '0 0', overflow: 'visible' }}
         >
           <defs>
             {elementInfo.points[0] && (

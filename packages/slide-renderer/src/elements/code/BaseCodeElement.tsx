@@ -176,11 +176,14 @@ function TypingReveal({
       />
       {revealPct < 1 && (
         <span
-          className="absolute top-0 w-[2px] bg-gray-800"
           style={{
+            position: 'absolute',
+            top: 0,
+            width: '2px',
+            backgroundColor: '#1f2937',
             left: `${revealPct * 100}%`,
             height: '1.1em',
-            animation: 'code-cursor-blink 0.6s step-end infinite',
+            animation: 'slide-renderer-code-cursor-blink 0.6s step-end infinite',
           }}
         />
       )}
@@ -331,16 +334,20 @@ function CodeLineRow({
           opacity: { duration: 0, delay: 0.3 },
         },
       }}
-      className="flex leading-[1.6]"
       style={{
+        display: 'flex',
+        lineHeight: 1.6,
         fontSize: 'inherit',
         overflow: 'hidden',
       }}
     >
       {showLineNumbers && (
         <span
-          className="select-none text-right shrink-0 pr-4 pl-2"
           style={{
+            flexShrink: 0,
+            textAlign: 'right',
+            paddingRight: '16px',
+            paddingLeft: '8px',
             width: '3.5em',
             color: '#9ca3af',
             userSelect: 'none',
@@ -349,7 +356,9 @@ function CodeLineRow({
           {lineNumber}
         </span>
       )}
-      <span className="flex-1 pr-4" style={{ whiteSpace: 'pre', tabSize: 4 }}>
+      <span
+        style={{ flex: 1, paddingRight: '16px', whiteSpace: 'pre', tabSize: 4 }}
+      >
         {contentNode}
       </span>
     </motion.div>
@@ -550,8 +559,9 @@ export function BaseCodeElement({ elementInfo, animate }: BaseCodeElementProps) 
   return (
     <div
       ref={wrapperRef}
-      className="base-element-code absolute"
+      className="base-element-code"
       style={{
+        position: 'absolute',
         top: `${elementInfo.top}px`,
         left: `${elementInfo.left}px`,
         width: `${elementInfo.width}px`,
@@ -561,19 +571,21 @@ export function BaseCodeElement({ elementInfo, animate }: BaseCodeElementProps) 
       onClick={stopPointer}
     >
       <div
-        className="rotate-wrapper w-full h-full"
-        style={{ transform: `rotate(${elementInfo.rotate}deg)` }}
+        className="rotate-wrapper"
+        style={{
+          width: '100%',
+          height: '100%',
+          transform: `rotate(${elementInfo.rotate}deg)`,
+        }}
       >
-        <style>{`
-          @keyframes code-cursor-blink {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0; }
-          }
-        `}</style>
-
         <div
-          className="element-content w-full h-full flex flex-col overflow-hidden"
+          className="element-content"
           style={{
+            width: '100%',
+            height: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
             borderRadius: '8px',
             border: '1px solid #d1d5db',
             background: '#fafbfc',
@@ -584,23 +596,52 @@ export function BaseCodeElement({ elementInfo, animate }: BaseCodeElementProps) 
           }}
         >
           <div
-            className="flex items-center justify-between shrink-0 px-3"
             style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexShrink: 0,
+              paddingLeft: '12px',
+              paddingRight: '12px',
               height: '32px',
               background: '#f8f9fa',
               borderBottom: '1px solid #e5e7eb',
             }}
           >
-            <div className="flex items-center gap-2">
-              <div className="flex gap-[6px]">
-                <div className="w-[10px] h-[10px] rounded-full" style={{ background: '#ff5f57' }} />
-                <div className="w-[10px] h-[10px] rounded-full" style={{ background: '#febc2e' }} />
-                <div className="w-[10px] h-[10px] rounded-full" style={{ background: '#28c840' }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <div
+                  style={{
+                    width: '10px',
+                    height: '10px',
+                    borderRadius: '9999px',
+                    background: '#ff5f57',
+                  }}
+                />
+                <div
+                  style={{
+                    width: '10px',
+                    height: '10px',
+                    borderRadius: '9999px',
+                    background: '#febc2e',
+                  }}
+                />
+                <div
+                  style={{
+                    width: '10px',
+                    height: '10px',
+                    borderRadius: '9999px',
+                    background: '#28c840',
+                  }}
+                />
               </div>
               {fileName && (
                 <span
-                  className="ml-2 truncate"
                   style={{
+                    marginLeft: '8px',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
                     color: '#6b7280',
                     fontSize: '11px',
                     letterSpacing: '0.01em',
@@ -625,8 +666,11 @@ export function BaseCodeElement({ elementInfo, animate }: BaseCodeElementProps) 
 
           <div
             ref={codeBodyRef}
-            className="flex-1 overflow-auto py-2"
             style={{
+              flex: 1,
+              overflow: 'auto',
+              paddingTop: '8px',
+              paddingBottom: '8px',
               background: '#fafbfc',
               color: '#24292e',
               userSelect: 'none',
