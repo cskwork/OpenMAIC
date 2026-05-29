@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { SlideCanvas, type Slide } from 'slide-renderer';
+import { slideToPng } from 'slide-renderer/snapshot';
 import { useImportPptx } from '@/lib/import/use-import-pptx';
 import { cn } from '@/lib/utils/cn';
 
@@ -645,6 +646,7 @@ const demoSlides: StoredCanvas[] = [
 export default function SlideRendererDemoPage() {
   const [slides, setSlides] = useState<Slide[]>(() => demoSlides.map(storedToSlide));
   const [activeIndex, setActiveIndex] = useState(0);
+  const [exporting, setExporting] = useState(false);
 
   const { importing, fileInputRef, triggerFileSelect, handleFileChange } = useImportPptx({
     // No remote OSS in this demo: hand every media blob a local object URL so
@@ -671,6 +673,26 @@ export default function SlideRendererDemoPage() {
       return current;
     });
   }, []);
+
+  const handleExportPng = useCallback(async () => {
+    if (!active || exporting) return;
+    setExporting(true);
+    try {
+      const blob = (await slideToPng(active, { format: 'blob' })) as Blob;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `slide-${activeIndex + 1}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('[slideToPng] export failed:', err);
+    } finally {
+      setExporting(false);
+    }
+  }, [active, activeIndex, exporting]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -703,9 +725,17 @@ export default function SlideRendererDemoPage() {
         </span>
         <button
           type="button"
+          onClick={handleExportPng}
+          disabled={exporting || !active}
+          className="ml-auto inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {exporting ? '导出中…' : '导出 PNG'}
+        </button>
+        <button
+          type="button"
           onClick={triggerFileSelect}
           disabled={importing}
-          className="ml-auto inline-flex items-center gap-2 rounded-md bg-violet-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex items-center gap-2 rounded-md bg-violet-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {importing ? '导入中…' : '导入 PPTX'}
         </button>

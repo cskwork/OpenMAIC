@@ -13,6 +13,8 @@ const external = [
   /^tinycolor2($|\/)/,
   /^tailwind-merge($|\/)/,
   /^clsx($|\/)/,
+  /^html-to-image($|\/)/,
+  /^html2canvas-pro($|\/)/,
 ]
 
 const onwarn = (warning) => {
@@ -36,6 +38,7 @@ const entries = {
   index: 'src/index.ts',
   'elements/index': 'src/elements/index.ts',
   'types/index': 'src/types/index.ts',
+  'snapshot/index': 'src/snapshot/index.ts',
 }
 
 const buildBundle = (format) => ({
