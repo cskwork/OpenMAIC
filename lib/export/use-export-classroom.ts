@@ -24,6 +24,7 @@ import {
   type InlineOptions,
   type InlineReport,
 } from './inline-assets';
+import { createProxiedFetch } from './proxied-fetch';
 import type { SceneContent } from '@/lib/types/stage';
 
 export async function inlineSceneContent(
@@ -114,7 +115,7 @@ export function useExportClassroom() {
       }
 
       const aggregateReport: InlineReport = { inlined: [], failed: [] };
-      const sharedFetcher = createAssetFetcher();
+      const sharedFetcher = createAssetFetcher({ fetchImpl: createProxiedFetch() });
       const manifestScenes: ManifestScene[] = await Promise.all(
         scenes.map(async (scene) => {
           const { content, report } = await inlineSceneContent(scene.content, {

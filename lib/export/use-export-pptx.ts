@@ -25,6 +25,7 @@ import { svg2Base64 } from '@/lib/export/svg2base64';
 import { latexToOmml } from '@/lib/export/latex-to-omml';
 import { createLogger } from '@/lib/logger';
 import { inlineHtmlAssets, createAssetFetcher } from './inline-assets';
+import { createProxiedFetch } from './proxied-fetch';
 
 const log = createLogger('ExportPPTX');
 
@@ -1174,7 +1175,7 @@ export function useExportPPTX() {
       zip.file(`${fileName}.pptx`, pptxBlob);
 
       // 2. Add interactive HTML pages
-      const sharedFetcher = createAssetFetcher();
+      const sharedFetcher = createAssetFetcher({ fetchImpl: createProxiedFetch() });
       let interactiveIndex = 0;
       const failedAssetUrls = new Set<string>();
       for (const scene of scenes) {
