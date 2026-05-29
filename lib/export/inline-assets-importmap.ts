@@ -15,7 +15,7 @@ export function extractSpecifiers(code: string): string[] {
 
 /** Resolve a specifier against importmap: exact match first, then longest '/'-terminated prefix. */
 export function resolveSpecifier(spec: string, imports: Record<string, string>): string | null {
-  if (imports[spec]) return imports[spec];
+  if (spec in imports) return imports[spec];
   let best: { key: string; url: string } | null = null;
   for (const [key, url] of Object.entries(imports)) {
     if (key.endsWith('/') && spec.startsWith(key)) {

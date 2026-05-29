@@ -59,10 +59,26 @@ export async function POST(request: NextRequest) {
     }
 
     if (!response!.ok) {
-      return apiError('UPSTREAM_ERROR', 502, `Upstream returned ${response!.status}`);
+      // Forward client (4xx) errors as-is so the caller treats them as permanent
+      // (no retry); collapse upstream server (5xx) errors to 502.
+      const status =
+        response!.status >= 400 && response!.status < 500 ? response!.status : 502;
+      return apiError('UPSTREAM_ERROR', status, `Upstream returned ${response!.status}`);
     }
 
+    const MAX_PROXY_BYTES = 25 * 1024 * 1024; // 25 MiB
+    const contentLength = Number(response!.headers.get('content-length') ?? '');
+    if (Number.isFinite(contentLength) && contentLength > MAX_PROXY_BYTES) {
+      return apiError(
+        'UPSTREAM_ERROR',
+        502,
+        `Upstream asset too large (${contentLength} bytes)`,
+      );
+    }
     const blob = await response!.blob();
+    if (blob.size > MAX_PROXY_BYTES) {
+      return apiError('UPSTREAM_ERROR', 502, `Upstream asset too large (${blob.size} bytes)`);
+    }
     const contentType = response!.headers.get('content-type') || 'application/octet-stream';
 
     return new NextResponse(blob, {

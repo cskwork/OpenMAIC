@@ -273,7 +273,7 @@ describe('inlineCssUrls', () => {
 });
 
 describe('inlineHtmlAssets — importmap integration', () => {
-  it('inlines three + three/addons via importmap and drops the prefix', async () => {
+  it('inlines three + three/addons via importmap and retains the prefix as fallback', async () => {
     const base = 'https://unpkg.com/three@0.160.0/examples/jsm/';
     const fetchImpl = (async (url: string) => {
       const map: Record<string, string> = {
@@ -297,8 +297,8 @@ describe('inlineHtmlAssets — importmap integration', () => {
     const { html: out } = await inlineHtmlAssets(html, { fetchImpl });
     expect(out).toContain('"three":"data:text/javascript;base64,');
     expect(out).toContain('"three/addons/controls/OrbitControls.js":"data:text/javascript;base64,');
-    expect(out).not.toContain('unpkg.com');
-    expect(out).not.toContain('"three/addons/":');
+    // prefix is retained as online fallback for sub-paths not seen during static analysis
+    expect(out).toContain('"three/addons/":');
   });
 
   it('keeps the three/addons/ prefix as fallback when an addon fails to fetch', async () => {

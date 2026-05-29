@@ -156,7 +156,7 @@ describe('POST /api/proxy-media', () => {
     expect(json).toMatchObject({ errorCode: 'UPSTREAM_ERROR' });
   });
 
-  it('7. upstream 404 returns 502 UPSTREAM_ERROR', async () => {
+  it('7. upstream 404 returns 404 UPSTREAM_ERROR (forwarded, not 502)', async () => {
     mocks.validateUrlForSSRF.mockResolvedValue(null);
     vi.stubGlobal(
       'fetch',
@@ -164,6 +164,42 @@ describe('POST /api/proxy-media', () => {
     );
 
     const res = await postProxy({ url: 'https://example.com/not-found' });
+    const json = await res.json();
+
+    expect(res.status).toBe(404);
+    expect(json).toMatchObject({ errorCode: 'UPSTREAM_ERROR' });
+  });
+
+  it('8. upstream 503 is collapsed to 502', async () => {
+    mocks.validateUrlForSSRF.mockResolvedValue(null);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response(null, { status: 503 })),
+    );
+
+    const res = await postProxy({ url: 'https://example.com/server-error' });
+    const json = await res.json();
+
+    expect(res.status).toBe(502);
+    expect(json).toMatchObject({ errorCode: 'UPSTREAM_ERROR' });
+  });
+
+  it('9. upstream Content-Length exceeding cap returns 502', async () => {
+    mocks.validateUrlForSSRF.mockResolvedValue(null);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(null, {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'Content-Length': String(26 * 1024 * 1024), // 26 MiB > 25 MiB cap
+          },
+        }),
+      ),
+    );
+
+    const res = await postProxy({ url: 'https://example.com/huge-asset' });
     const json = await res.json();
 
     expect(res.status).toBe(502);

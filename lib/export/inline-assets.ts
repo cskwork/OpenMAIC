@@ -7,7 +7,7 @@ import {
 import { buildInlinedImportmap } from './inline-assets-importmap';
 
 export { toDataUri } from './inline-assets-shared';
-export type { InlineReport, InlineOptions } from './inline-assets-shared';
+export type { InlineReport, InlineOptions, FetchAsset } from './inline-assets-shared';
 
 export type AssetRefKind = 'link' | 'script' | 'img' | 'source' | 'css-url' | 'importmap';
 
@@ -262,17 +262,11 @@ async function inlineImportmaps(
       for (const f of r.failed)
         if (!report.failed.some((g) => g.url === f.url)) report.failed.push(f);
       // Merge: start from originals, overlay inlined data: entries.
+      // Merge: original prefix entries are retained as online fallback; inlined explicit
+      // data: entries take precedence for the modules we inlined. Keeping both is safe per
+      // the importmap spec (explicit specifier shadows prefix key) and strictly more correct:
+      // a sub-path not seen during static analysis can still resolve via the prefix online.
       const merged: Record<string, string> = { ...orig, ...inlined };
-      // Drop any '/'-terminated prefix key that was fully expanded into explicit data: entries.
-      // BUT keep the prefix as an online fallback if any fetch under it failed.
-      for (const key of Object.keys(merged)) {
-        if (!key.endsWith('/')) continue;
-        const expanded = Object.keys(inlined).some((k) => k.startsWith(key));
-        const prefixUrl = orig[key];
-        const hadFailureUnderPrefix =
-          typeof prefixUrl === 'string' && report.failed.some((f) => f.url.startsWith(prefixUrl));
-        if (expanded && !hadFailureUnderPrefix) delete merged[key];
-      }
       return `<script type="importmap">${JSON.stringify({ imports: merged })}</script>`;
     },
   );
