@@ -178,7 +178,11 @@ describe('inlineCssUrls', () => {
       }
       return null;
     };
-    const out = await inlineCssUrls(css, 'https://cdn.example/dist/katex.min.css', fetchAsset);
+    const { css: out } = await inlineCssUrls(
+      css,
+      'https://cdn.example/dist/katex.min.css',
+      fetchAsset,
+    );
     expect(out).toContain('data:font/woff2;base64,');
     expect(out).not.toContain('fonts/K.woff2');
   });
@@ -186,7 +190,7 @@ describe('inlineCssUrls', () => {
   it('inlines whatever url() is referenced (ttf etc.)', async () => {
     const css = 'src:url(a.ttf)';
     const fetchAsset = async () => ({ bytes: new Uint8Array([1]), contentType: 'font/ttf' });
-    const out = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
+    const { css: out } = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
     expect(out).toContain('data:font/ttf;base64,');
   });
 
@@ -196,14 +200,14 @@ describe('inlineCssUrls', () => {
       url === 'https://img.example/bg.png'
         ? { bytes: new Uint8Array([2]), contentType: 'image/png' }
         : null;
-    const out = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
+    const { css: out } = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
     expect(out).toContain('data:image/png;base64,');
   });
 
   it('leaves url() unmodified when fetch fails', async () => {
     const css = 'src:url(missing.woff2)';
     const fetchAsset = async () => null;
-    const out = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
+    const { css: out } = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
     expect(out).toContain('missing.woff2');
   });
 
@@ -212,7 +216,7 @@ describe('inlineCssUrls', () => {
     const fetchAsset = async () => {
       throw new Error('should not fetch');
     };
-    const out = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
+    const { css: out } = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
     expect(out).toContain('data:font/woff2;base64,AAAA');
   });
 
@@ -223,7 +227,7 @@ describe('inlineCssUrls', () => {
       calls++;
       return { bytes: new Uint8Array([9]), contentType: 'font/woff2' };
     };
-    const out = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
+    const { css: out } = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
     expect(out).not.toContain('a.woff2');
     expect(out).not.toContain('b.woff2');
     // a.woff2 (quoted twice, same resolved url) fetched once + b.woff2 once = 2
@@ -238,7 +242,7 @@ describe('inlineCssUrls', () => {
       calls.push(url);
       return { bytes: new Uint8Array([1]), contentType: 'font/woff2' };
     };
-    const out = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
+    const { css: out } = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
     expect(out).toContain('url(data:font/woff2;base64,'); // woff2 inlined
     expect(out).toContain('url(about:invalid) format("woff")'); // woff dropped
     expect(out).toContain('url(about:invalid) format("truetype")'); // ttf dropped
@@ -253,7 +257,7 @@ describe('inlineCssUrls', () => {
   it('falls back to inlining a ttf-only @font-face (no woff2 present)', async () => {
     const css = '@font-face{font-family:T;src:url(T.ttf) format("truetype")}';
     const fetchAsset = async () => ({ bytes: new Uint8Array([2]), contentType: 'font/ttf' });
-    const out = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
+    const { css: out } = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
     expect(out).toContain('url(data:font/ttf;base64,'); // ttf inlined since no woff2 sibling
     expect(out).not.toContain('about:invalid');
   });
@@ -265,10 +269,22 @@ describe('inlineCssUrls', () => {
       bytes: new Uint8Array([3]),
       contentType: url.includes('.png') ? 'image/png' : 'font/woff2',
     });
-    const out = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
+    const { css: out } = await inlineCssUrls(css, 'https://x/base.css', fetchAsset);
     expect(out).toContain('url(data:image/png;base64,'); // image inlined
     expect(out).toContain('url(data:font/woff2;base64,'); // woff2 inlined
     expect(out).toContain('url(about:invalid) format("truetype")'); // ttf dropped
+  });
+
+  it('reports nested url() assets that fail to fetch', async () => {
+    const css = '@font-face{src:url(https://cdn.example/missing.woff2) format("woff2")}';
+    const fetchAsset = async () => null; // all fetches fail
+    const { css: out, failed } = await inlineCssUrls(
+      css,
+      'https://cdn.example/base.css',
+      fetchAsset,
+    );
+    expect(out).toContain('https://cdn.example/missing.woff2'); // left as-is
+    expect(failed.map((f) => f.url)).toContain('https://cdn.example/missing.woff2');
   });
 });
 
@@ -420,5 +436,20 @@ describe('inlineHtmlAssets', () => {
       })) as unknown as typeof fetch;
     const { html: out } = await inlineHtmlAssets(html, { fetchImpl });
     expect(out).toMatch(/<style[^>]*media="print"/);
+  });
+
+  it('reports a CSS-nested font that fails to fetch (stylesheet succeeds, font does not)', async () => {
+    const html = '<link rel="stylesheet" href="https://cdn/x.css">';
+    const fetchImpl = (async (url: string) => {
+      if (String(url) === 'https://cdn/x.css')
+        return new Response('@font-face{src:url(f.woff2) format("woff2")}', {
+          status: 200,
+          headers: { 'content-type': 'text/css' },
+        });
+      return new Response('', { status: 404 }); // the font 404s
+    }) as unknown as typeof fetch;
+    const { report } = await inlineHtmlAssets(html, { fetchImpl });
+    expect(report.inlined).toContain('https://cdn/x.css'); // sheet itself inlined
+    expect(report.failed.map((f) => f.url)).toContain('https://cdn/f.woff2'); // nested font reported
   });
 });

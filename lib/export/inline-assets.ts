@@ -159,7 +159,7 @@ export async function inlineCssUrls(
   css: string,
   cssUrl: string,
   fetchAsset: FetchAsset,
-): Promise<string> {
+): Promise<{ css: string; failed: { url: string; reason: string }[] }> {
   // 1. Find @font-face blocks; build dropRefs (non-woff2 fonts in blocks that have a woff2).
   const dropRefs = new Set<string>();
   for (const block of css.match(/@font-face\s*\{[^}]*\}/gi) ?? []) {
@@ -190,19 +190,26 @@ export async function inlineCssUrls(
 
   // 3. Fetch in parallel (bounded).
   const replacements = new Map<string, string>();
+  const failed: { url: string; reason: string }[] = [];
   const entries = [...uniqueRefs.entries()];
   await mapWithConcurrency(entries, 8, async ([raw, abs]) => {
     const got = await fetchAsset(abs);
-    if (got) replacements.set(raw, toDataUri(got.bytes, got.contentType));
+    if (got) {
+      replacements.set(raw, toDataUri(got.bytes, got.contentType));
+    } else {
+      failed.push({ url: abs, reason: 'fetch failed' });
+    }
   });
 
   // 4. Rewrite.
-  return css.replace(urlRe, (full, _q, raw) => {
+  const rewritten = css.replace(urlRe, (full, _q, raw) => {
     const key = String(raw).trim();
     if (replacements.has(key)) return `url(${replacements.get(key)})`;
     if (dropRefs.has(key)) return 'url(about:invalid)';
     return full;
   });
+
+  return { css: rewritten, failed };
 }
 
 // ---------------------------------------------------------------------------
@@ -309,7 +316,9 @@ export async function inlineHtmlAssets(
         return full;
       }
       let cssText = new TextDecoder().decode(got.bytes);
-      cssText = await inlineCssUrls(cssText, url, fetchAsset);
+      const { css: rewritten, failed: cssFailed } = await inlineCssUrls(cssText, url, fetchAsset);
+      cssText = rewritten;
+      for (const f of cssFailed) markFailed(f.url, f.reason);
       const mediaMatch = /\bmedia\s*=\s*["']([^"']+)["']/i.exec(pre + post);
       const mediaAttr = mediaMatch ? ` media="${mediaMatch[1].replace(/"/g, '&quot;')}"` : '';
       markInlined(url);
@@ -355,8 +364,13 @@ export async function inlineHtmlAssets(
     /<style\b([^>]*)>([\s\S]*?)<\/style>/gi,
     async (full, attrs, body) => {
       if (/data-inlined-from=/.test(attrs)) return full;
-      const inlined = await inlineCssUrls(body, 'about:blank', fetchAsset);
-      return `<style${attrs}>${inlined}</style>`;
+      const { css: rewritten, failed: cssFailed } = await inlineCssUrls(
+        body,
+        'about:blank',
+        fetchAsset,
+      );
+      for (const f of cssFailed) markFailed(f.url, f.reason);
+      return `<style${attrs}>${rewritten}</style>`;
     },
   );
 
