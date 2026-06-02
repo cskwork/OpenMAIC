@@ -36,16 +36,109 @@ function isEmfFormat(path: string): boolean {
 }
 
 /**
- * Resolve preset geometry from spPr > prstGeom.
- * Falls back to 'rect' when no explicit preset is specified —
- * same as ImageRenderer which treats images as rectangular by default.
+ * Pull the endpoint of every path-op child of <a:path> (moveTo/lnTo/cubicBezTo/
+ * quadBezTo) into a flat [x, y] list. The endpoint is always the LAST <a:pt>
+ * child of the op. arcTo / close contribute no useful endpoint so are skipped.
+ */
+function pathEndpoints(path: SafeXmlNode): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (const op of path.allChildren()) {
+    if (op.localName === 'close' || op.localName === 'arcTo') continue;
+    const pts = op.children('pt');
+    if (pts.length === 0) continue;
+    const last = pts[pts.length - 1];
+    const x = last.numAttr('x');
+    const y = last.numAttr('y');
+    if (x === undefined || y === undefined) continue;
+    out.push([x, y]);
+  }
+  return out;
+}
+
+/**
+ * Is the path a chamfered (cut-corner) rectangle with 8 distinct vertices —
+ * two on each of the four bounding-box edges? PowerPoint exports the "snipped
+ * corners" / chamfered-square photo frame this way, and there is no prst that
+ * names it, so without this check it falls through to 'rect' and the photo
+ * renders with sharp corners.
+ *
+ * Heuristic: snap every endpoint onto the bounding edge it sits on (x=0,
+ * x=cx, y=0, y=cy) within 2% tolerance, then require exactly 2 distinct
+ * endpoints per edge. Coordinates inside the box are ignored — they're
+ * bezier handles, not corners.
+ */
+function looksLikeChamferedRect(
+  path: SafeXmlNode,
+  cx: number,
+  cy: number,
+): boolean {
+  if (cx <= 0 || cy <= 0) return false;
+  const tolX = cx * 0.02;
+  const tolY = cy * 0.02;
+  const onEdge = { top: [] as number[], bottom: [] as number[], left: [] as number[], right: [] as number[] };
+  for (const [x, y] of pathEndpoints(path)) {
+    if (Math.abs(y) <= tolY) onEdge.top.push(x);
+    else if (Math.abs(y - cy) <= tolY) onEdge.bottom.push(x);
+    if (Math.abs(x) <= tolX) onEdge.left.push(y);
+    else if (Math.abs(x - cx) <= tolX) onEdge.right.push(y);
+  }
+  const distinct = (vals: number[], tol: number): number => {
+    const sorted = [...vals].sort((a, b) => a - b);
+    let count = 0;
+    let prev = -Infinity;
+    for (const v of sorted) {
+      if (v - prev > tol) {
+        count += 1;
+        prev = v;
+      }
+    }
+    return count;
+  };
+  return (
+    distinct(onEdge.top, tolX) === 2 &&
+    distinct(onEdge.bottom, tolX) === 2 &&
+    distinct(onEdge.left, tolY) === 2 &&
+    distinct(onEdge.right, tolY) === 2
+  );
+}
+
+/**
+ * Resolve clip geometry from spPr (prstGeom or custGeom).
+ * Many decks use custGeom circles on p:pic instead of prst="ellipse".
  */
 function resolvePresetGeom(node: PicNodeData): string {
   const spPr = node.source.child('spPr');
   if (!spPr.exists()) return 'rect';
   const prstGeom = spPr.child('prstGeom');
-  if (!prstGeom.exists()) return 'rect';
-  return prstGeom.attr('prst') ?? 'rect';
+  if (prstGeom.exists()) return prstGeom.attr('prst') ?? 'rect';
+  const custGeom = spPr.child('custGeom');
+  if (custGeom.exists()) {
+    const ext = spPr.child('xfrm').child('ext');
+    const cx = ext.numAttr('cx') ?? 0;
+    const cy = ext.numAttr('cy') ?? 0;
+    const path = custGeom.child('pathLst').child('path');
+    // A real ellipse path is encoded as 1 moveTo + exactly 4 cubicBezTo + close
+    // (one bezier per quadrant). Chamfered / rounded-corner squares hit the
+    // same near-1:1 aspect ratio but use 8+ beziers around the corners, so
+    // bound the bezier count before claiming it's an ellipse — otherwise
+    // every fancy framed photo gets clipped to a circle.
+    if (cx > 0 && cy > 0 && Math.abs(cx - cy) / Math.max(cx, cy) < 0.05) {
+      const cubics = path.children('cubicBezTo').length;
+      const lines = path.children('lnTo').length;
+      const arcs = path.children('arcTo').length;
+      if (lines === 0 && arcs === 0 && cubics > 0 && cubics <= 4) {
+        return 'ellipse';
+      }
+    }
+    // Photo frames with 8 corner vertices (top/bottom/left/right edges each
+    // hosting 2 distinct points) are the chamfered-square pattern. Renderer
+    // already has an `octagon` clip-path at 30%/70%, which is close enough
+    // to typical 33%/67% PPT chamfers visually.
+    if (looksLikeChamferedRect(path, cx, cy)) {
+      return 'octagon';
+    }
+  }
+  return 'rect';
 }
 
 /**

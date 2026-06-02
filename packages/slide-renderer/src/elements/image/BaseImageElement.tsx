@@ -78,6 +78,8 @@ export function BaseImageElement({ elementInfo, renderImage }: BaseImageElementP
                     left: imgPosition.left,
                     width: imgPosition.width,
                     height: imgPosition.height,
+                    maxWidth: 'none',
+                    maxHeight: 'none',
                     filter,
                   }}
                   alt=""

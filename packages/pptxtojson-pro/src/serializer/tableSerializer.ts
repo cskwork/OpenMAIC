@@ -30,6 +30,7 @@ function ensureHex(color: string): string {
   const s = color.trim();
   if (s === 'transparent') return '#000000';
   if (s.startsWith('#')) return s;
+  if (/^(rgba?|hsla?)\(/i.test(s)) return s;
   return `#${s}`;
 }
 

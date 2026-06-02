@@ -109,6 +109,9 @@ const FONT_ALIAS_TO_CATEGORY: Record<string, FontCategory> = {
   'noto sans': 'sans',
   'noto sans cjk sc': 'sans',
   'noto sans cjk tc': 'sans',
+  思源黑体: 'sans',
+  'source han sans': 'sans',
+  'source han sans hw': 'sans',
 
   // ---- 宋体（系统/商业 serif）----
   宋体: 'serif',
@@ -126,6 +129,9 @@ const FONT_ALIAS_TO_CATEGORY: Record<string, FontCategory> = {
   georgia: 'serif',
   'noto serif': 'serif',
   'noto serif cjk sc': 'serif',
+  思源宋体: 'serif',
+  'source han serif': 'serif',
+  'source han serif hw': 'serif',
 
   // ---- 楷体 ----
   楷体: 'kai',
@@ -156,22 +162,75 @@ function cleanFontName(raw: string | undefined | null): string {
   return first.trim().replace(/^['"]+|['"]+$/g, '');
 }
 
+// Region suffixes appended to CJK font display names (Source Han / Noto family etc).
+// Trailing space-delimited tokens — checked case-insensitively.
+const REGION_SUFFIXES = new Set([
+  'cn', 'sc', 'tc', 'hc', 'hk', 'jp', 'kr', 'k',
+  'simplified', 'traditional', 'japanese', 'korean',
+  'gb', 'gb2312', 'gbk', 'big5',
+]);
+
+// Weight tokens that appear as trailing tokens on font display names. They do
+// not change the family identity, only the weight axis — strip them so e.g.
+// `思源宋体 CN Light` matches the `思源宋体` alias and maps to SourceHanSerif.
+// (Faux-bold/light is the renderer's job, not the resolver's.)
+const WEIGHT_SUFFIXES = new Set([
+  'thin', 'extralight', 'ultralight', 'light', 'normal', 'regular', 'book',
+  'medium', 'demibold', 'semibold', 'bold', 'extrabold', 'ultrabold',
+  'heavy', 'black', 'ultra', 'extra',
+  'italic', 'oblique',
+  'condensed', 'extended',
+]);
+
+/**
+ * Trailing-token stripper for cleaned font names: pops region/weight tokens
+ * from the end and returns the base family identifier. Leaves whitespace-only
+ * or single-token names alone so we never collapse `Light` (a brand name) to
+ * empty. Operates on a tokens-from-the-end basis so embedded tokens in the
+ * middle of a name are preserved.
+ */
+function stripTrailingFontSuffixes(name: string): string {
+  if (!name) return name;
+  const tokens = name.split(/\s+/);
+  while (tokens.length > 1) {
+    const last = tokens[tokens.length - 1].toLowerCase();
+    if (REGION_SUFFIXES.has(last) || WEIGHT_SUFFIXES.has(last)) {
+      tokens.pop();
+      continue;
+    }
+    break;
+  }
+  return tokens.join(' ');
+}
+
 export function resolveFont(rawName: string | undefined | null): ResolvedFont {
   const cleaned = cleanFontName(rawName);
   if (!cleaned) {
     return { original: '', resolved: '', source: 'whitelist' };
   }
 
-  // 1. Already a self-hosted font — keep, canonicalize casing.
-  const canonical = SELF_HOSTED_LOOKUP.get(cleaned.toLowerCase());
+  // 1. Already a self-hosted font — keep, canonicalize casing. Try the cleaned
+  //    name first, then with trailing region/weight suffixes stripped, so
+  //    `SourceHanSerif Bold` still resolves to the SourceHanSerif master.
+  const stripped = stripTrailingFontSuffixes(cleaned);
+  const canonical =
+    SELF_HOSTED_LOOKUP.get(cleaned.toLowerCase()) ??
+    (stripped !== cleaned ? SELF_HOSTED_LOOKUP.get(stripped.toLowerCase()) : undefined);
   if (canonical) {
     return { original: cleaned, resolved: canonical, source: 'whitelist' };
   }
 
   // 2. Common PPT/system font → category → primary self-hosted font.
+  //    Try the cleaned name first, then progressively strip region/weight
+  //    suffixes ("思源宋体 CN Light" → "思源宋体") so brand families with
+  //    regional + weight variants don't each need a dedicated alias entry.
   const category =
     FONT_ALIAS_TO_CATEGORY[cleaned] ??
-    FONT_ALIAS_TO_CATEGORY[cleaned.toLowerCase()];
+    FONT_ALIAS_TO_CATEGORY[cleaned.toLowerCase()] ??
+    (stripped !== cleaned
+      ? FONT_ALIAS_TO_CATEGORY[stripped] ??
+        FONT_ALIAS_TO_CATEGORY[stripped.toLowerCase()]
+      : undefined);
   if (category) {
     return {
       original: cleaned,

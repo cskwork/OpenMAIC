@@ -47,6 +47,15 @@ export interface SlideCanvasProps {
   className?: string;
   /** Inline style on the outer container. */
   style?: CSSProperties;
+  /**
+   * Card-style chrome on the inner slide container (drop shadow + rounded
+   * corners). Defaults to `true` for on-screen previews. Snapshot pipelines
+   * pass `false` so the captured PNG matches the source PPT's edges exactly
+   * — html2canvas would otherwise bake the 1px shadow outline and the
+   * 0.5rem corner radius into the output and the comparator reads them as
+   * a thin border + rounded corners that the original PPT does not have.
+   */
+  chrome?: boolean;
 }
 
 export function SlideCanvas(props: SlideCanvasProps) {
@@ -65,6 +74,7 @@ export function SlideCanvas(props: SlideCanvasProps) {
   const renderVideo = props.renderVideo ?? ctx?.renderVideo;
   const onElementClick = props.onElementClick ?? ctx?.onElementClick;
   const { className, style } = props;
+  const chrome = props.chrome ?? true;
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const elements = slide.elements;
@@ -110,9 +120,13 @@ export function SlideCanvas(props: SlideCanvasProps) {
       <div
         style={{
           position: 'absolute',
-          boxShadow:
-            '0 0 0 1px rgba(0, 0, 0, 0.01), 0 0 12px 0 rgba(0, 0, 0, 0.1)',
-          borderRadius: '0.5rem',
+          ...(chrome
+            ? {
+                boxShadow:
+                  '0 0 0 1px rgba(0, 0, 0, 0.01), 0 0 12px 0 rgba(0, 0, 0, 0.1)',
+                borderRadius: '0.5rem',
+              }
+            : {}),
           overflow: 'hidden',
           transitionProperty: 'transform',
           transitionDuration: '700ms',
@@ -133,7 +147,7 @@ export function SlideCanvas(props: SlideCanvasProps) {
             width: '100%',
             height: '100%',
             backgroundPosition: 'center',
-            borderRadius: '0.5rem',
+            ...(chrome ? { borderRadius: '0.5rem' } : {}),
             ...backgroundStyle,
           }}
         />

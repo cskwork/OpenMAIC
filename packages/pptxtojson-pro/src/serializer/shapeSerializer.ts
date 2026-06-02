@@ -530,11 +530,10 @@ async function fillToJson(
   }
 
   const grpFill = spPr.child('grpFill');
-  if (grpFill.exists() && ctx.groupFillNode) {
-    const g = ctx.groupFillNode;
-    const innerCss = resolveFill(g, ctx);
-    const innerGrad = resolveGradientFill(g, ctx);
-    return fillToJson(g, ctx, innerCss, innerGrad, false);
+  if (grpFill.exists()) {
+    // PowerPoint composites grpFill children with the group; painting the parent
+    // fill on each child (e.g. master logo dot row) draws duplicate visible shapes.
+    return { type: 'color', value: 'transparent' };
   }
 
   const noFill = spPr.child('noFill');
@@ -855,7 +854,10 @@ export async function renderShape(node: ShapeNodeData, ctx: RenderContext, _orde
       if (colorChild?.exists()) fillCss = resolveColorToCss(colorChild, ctx);
     }
   }
-  if (!fillCss && fillRef && fillRef.exists()) {
+  // grpFill without a parent group context must stay unfilled — do not fall back to
+  // fillRef (master logo dots use grpFill + ln/noFill; fillRef would draw hollow rings).
+  const hasGrpFill = spPr.child('grpFill').exists();
+  if (!fillCss && fillRef && fillRef.exists() && !hasGrpFill) {
     const resolvedThemeFill = resolveThemeFillReference(fillRef, ctx);
     fillCss = resolvedThemeFill.fillCss;
     if (!gradientFillData) gradientFillData = resolvedThemeFill.gradientFillData;
@@ -873,6 +875,10 @@ export async function renderShape(node: ShapeNodeData, ctx: RenderContext, _orde
     fillCss = '';
     gradientFillData = null;
   }
+  if (hasGrpFill) {
+    fillCss = '';
+    gradientFillData = null;
+  }
 
   let strokeColor = 'none';
   let strokeWidth = 0;
@@ -886,11 +892,16 @@ export async function renderShape(node: ShapeNodeData, ctx: RenderContext, _orde
     lnRef?.exists() &&
     (lnRef.numAttr('idx') ?? 0) > 0 &&
     (ctx.theme.lineStyles?.length ?? 0) >= (lnRef.numAttr('idx') ?? 0);
-  // When <a:ln> only declares <a:noFill/> without explicit width/dash and lnRef
-  // is present, WPS falls back to the theme line style (lnRef).
-  const noFillSuppressed = lineIsNoFill && !lnRefAvailable;
+  // Spec-correct PowerPoint behavior: an explicit <a:ln><a:noFill/></a:ln>
+  // is authoritative — the author said "no line", so the <p:style><a:lnRef>
+  // theme fallback must NOT re-introduce a border. WPS used to fall back to
+  // lnRef here, which is wrong for PowerPoint-authored masters (e.g. the
+  // 5-dot decorations in this deck's master have <a:ln><a:noFill/></a:ln>
+  // but inherit a green lnRef — PowerPoint hides them, WPS-style logic
+  // would draw a green hollow ring).
+  const noFillSuppressed = lineIsNoFill;
   const themeLineFromLnRef =
-    (!hasExplicitLine) && lnRefAvailable
+    (!hasExplicitLine) && !lineIsNoFill && lnRefAvailable
       ? ctx.theme.lineStyles![(lnRef!.numAttr('idx') ?? 1) - 1]
       : undefined;
   let effectiveLine = hasExplicitLine ? node.line! : themeLineFromLnRef;

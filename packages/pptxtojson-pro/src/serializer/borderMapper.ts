@@ -63,6 +63,10 @@ function ensureHex(color: string): string {
   const s = color.trim();
   if (s === 'transparent') return '#000000';
   if (s.startsWith('#')) return s;
+  // resolveLineStyle can hand back CSS functions like `rgba(...)` / `hsl(...)`
+  // when alpha is involved. Prefixing `#` to those produces `#rgba(...)`, which
+  // browsers silently drop, so the border disappears entirely.
+  if (/^(rgba?|hsla?)\(/i.test(s)) return s;
   return `#${s}`;
 }
 

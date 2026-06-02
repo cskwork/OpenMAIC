@@ -367,9 +367,10 @@ const calculateRotatedPosition = (
   return { x: graphicX, y: graphicY };
 };
 
-// 文本元素安全放大系数，用来吸收字体回退后字形宽度的细微差异（1.05 ~ 1.2 都可）
-// 当字体白名单覆盖到 PingFang / 微软雅黑 等常见中文字体后，可以考虑去掉
-const SAFE_PADDING = 1.1;
+// 文本元素宽高放大系数。曾经设为 1.1 用来"吸收字体回退后字形宽度差异"，
+// 但对绝大多数 deck 而言这 10% 反而让每行多塞了几个字，导致换行点与原稿大面积错位。
+// 现在字体白名单 + serializer 已经较好地保持宽度，恢复 1.0（严格按 PPT 文本框尺寸）。
+const SAFE_PADDING = 1.0;
 
 export async function transformParsedToSlides(
   json: ParsedPptxJson,
@@ -585,9 +586,9 @@ export async function transformParsedToSlides(
               defaultFontName: theme.fontName,
               defaultColor: theme.fontColor,
               content: replaceFontFamilyInHtml(convertPtToPx(el.content, ratio), replacedFonts),
-              lineHeight: 1,
               fill: el.fill?.type === "color" ? el.fill.value : "",
-              vertical: el.isVertical
+              vertical: el.isVertical,
+              vAlign: vAlignMap[el.vAlign]
             };
             if (el.borderWidth && el.borderWidth > 0) {
               textEl.outline = {

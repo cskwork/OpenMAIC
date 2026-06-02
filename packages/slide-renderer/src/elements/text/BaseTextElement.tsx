@@ -13,6 +13,10 @@ export interface BaseTextElementProps {
 export function BaseTextElement({ elementInfo, target }: BaseTextElementProps) {
   const { shadowStyle } = useElementShadow(elementInfo.shadow);
 
+  const vAlign = elementInfo.vAlign ?? 'top';
+  const justifyContent =
+    vAlign === 'middle' ? 'center' : vAlign === 'bottom' ? 'flex-end' : 'flex-start';
+
   return (
     <div
       className="base-element-text"
@@ -30,14 +34,17 @@ export function BaseTextElement({ elementInfo, target }: BaseTextElementProps) {
           width: '100%',
           height: '100%',
           transform: `rotate(${elementInfo.rotate}deg)`,
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent,
         }}
       >
         <div
           className="element-content slide-renderer-prose"
           style={{
             position: 'relative',
-            width: elementInfo.vertical ? 'auto' : `${elementInfo.width}px`,
-            height: elementInfo.vertical ? `${elementInfo.height}px` : 'auto',
+            width: elementInfo.vertical ? 'auto' : '100%',
+            height: elementInfo.vertical ? '100%' : 'auto',
             backgroundColor: elementInfo.fill,
             opacity: elementInfo.opacity,
             textShadow: shadowStyle,

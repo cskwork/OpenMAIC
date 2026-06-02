@@ -107,6 +107,12 @@ export interface PPTTextElement extends PPTBaseElement {
   paragraphSpace?: number;
   vertical?: boolean;
   textType?: TextType;
+  /**
+   * Vertical anchor of the text within the box, parsed from `<a:bodyPr anchor="...">`.
+   * `top` / undefined keeps the legacy top-anchored behavior. `middle` and `bottom`
+   * vertically center / bottom-align the content inside the box.
+   */
+  vAlign?: 'top' | 'middle' | 'bottom';
 }
 
 export interface ImageOrShapeFlip {

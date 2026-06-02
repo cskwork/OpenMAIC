@@ -337,6 +337,37 @@ interface MergedRunStyle {
   textOutlineColor?: string;
   /** Text outline CSS gradient (gradient fill on ln) — used as mask-image for fade effect. */
   textOutlineGradientCss?: string;
+  /** CSS text-shadow string from a:rPr > a:effectLst > a:outerShdw. */
+  textShadowCss?: string;
+}
+
+/**
+ * Compute CSS text-shadow from <a:effectLst><a:outerShdw> inside a rPr. PPT
+ * cover titles routinely use this for the soft drop shadow under big chapter
+ * text. Mirrors shapeSerializer.resolveShapeShadow but emits in px for
+ * text-shadow rather than the shape Shadow record.
+ */
+function resolveTextShadowCss(rPr: SafeXmlNode, ctx: RenderContext): string | undefined {
+  const effectLst = rPr.child('effectLst');
+  if (!effectLst.exists()) return undefined;
+  const shd = effectLst.child('outerShdw');
+  if (!shd.exists()) return undefined;
+  const dir = shd.numAttr('dir') ?? 0;
+  const dist = shd.numAttr('dist') ?? 0;
+  const blurRad = shd.numAttr('blurRad') ?? 0;
+  const dirDeg = dir / 60000;
+  const distPx = emuToPx(dist);
+  const blurPx = emuToPx(blurRad);
+  const x = distPx * Math.cos((dirDeg * Math.PI) / 180);
+  const y = distPx * Math.sin((dirDeg * Math.PI) / 180);
+  let color = 'rgba(0,0,0,0.4)';
+  const { color: shdColor, alpha: shdAlpha } = resolveColor(shd, ctx);
+  if (shdColor) {
+    const hex = shdColor.startsWith('#') ? shdColor : `#${shdColor}`;
+    const { r, g, b } = hexToRgbInternal(hex);
+    color = `rgba(${r},${g},${b},${shdAlpha.toFixed(3)})`;
+  }
+  return `${x.toFixed(2)}px ${y.toFixed(2)}px ${blurPx.toFixed(2)}px ${color}`;
 }
 
 function mergeRunProps(target: MergedRunStyle, rPr: SafeXmlNode, ctx: RenderContext): void {
@@ -462,6 +493,12 @@ function mergeRunProps(target: MergedRunStyle, rPr: SafeXmlNode, ctx: RenderCont
       target.textOutlineGradientCss = resolveGradientForText(lnGrad, ctx);
     }
   }
+
+  // Run-level drop shadow (a:effectLst > a:outerShdw on rPr). Cover-title
+  // decks rely on this for the soft halo under big chapter text — without it
+  // the title looks flat versus the original PPT render.
+  const textShadow = resolveTextShadowCss(rPr, ctx);
+  if (textShadow) target.textShadowCss = textShadow;
 }
 
 /**
@@ -735,6 +772,28 @@ export function renderTextBody(
     if (paragraph.runs.length > 0 && paragraph.runs[0].properties) {
       const sz = paragraph.runs[0].properties.numAttr('sz');
       if (sz !== undefined) effectiveFontSize = sz / 100;
+    }
+
+    // CSS line-height places the extra leading (lineHeight − 1) × fontSize
+    // half above and half below the glyph, while PowerPoint pushes ALL of it
+    // above the first line — most visible on cover titles that use a large
+    // lnSpc value like 220% to create a deliberate gap between chapter number
+    // and the chapter title. Without the compensation, that "deliberate gap"
+    // ends up half its intended size in the browser. We only top up the
+    // missing half on unitless line-heights > 1; absolute spcPts already
+    // encode the exact line height and shouldn't be double-counted.
+    if (
+      merged.lineHeight &&
+      !merged.lineHeightAbsolute &&
+      /^[\d.]+$/.test(merged.lineHeight)
+    ) {
+      const lh = parseFloat(merged.lineHeight);
+      if (lh > 1) {
+        const extraHalf = ((lh - 1) / 2) * effectiveFontSize;
+        if (extraHalf > 0.01) {
+          paraCssParts.push(`padding-top: ${extraHalf.toFixed(2)}pt`);
+        }
+      }
     }
 
     if (merged.spaceBefore !== undefined && merged.spaceBefore !== 0) {
@@ -1153,6 +1212,10 @@ function runStylesToCssString(
     if (Math.abs(shiftPct) >= 20) {
       parts.push(`font-size: ${fontSize * 0.65}pt`);
     }
+  }
+
+  if (runStyle.textShadowCss) {
+    parts.push(`text-shadow: ${runStyle.textShadowCss}`);
   }
 
   return parts.join(';') + (parts.length ? ';' : '');

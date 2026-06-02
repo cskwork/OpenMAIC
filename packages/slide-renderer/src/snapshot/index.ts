@@ -119,7 +119,7 @@ export async function slideToPng(
     // fire before the first render lands and the snapshot captures an empty
     // container.
     flushSync(() => {
-      root!.render(createElement(SlideCanvas, { slide }));
+      root!.render(createElement(SlideCanvas, { slide, chrome: false }));
     });
 
     // Give the SlideCanvas's ResizeObserver-driven `useViewportSize` a few
