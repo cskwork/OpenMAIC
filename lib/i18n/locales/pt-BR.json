@@ -200,6 +200,20 @@
       "deckLabel": "Cenas",
       "moreActions": "Mais ações",
       "rename": "Renomear"
+    },
+    "zorder": {
+      "toFront": "Trazer para a frente",
+      "toBack": "Enviar para trás"
+    },
+    "image": {
+      "replace": "Substituir imagem",
+      "flipH": "Inverter horizontalmente",
+      "flipV": "Inverter verticalmente"
+    },
+    "background": {
+      "label": "Fundo",
+      "solid": "Cor sólida",
+      "image": "Imagem"
     }
   },
   "stage": {
