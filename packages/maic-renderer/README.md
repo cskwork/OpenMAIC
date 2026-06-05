@@ -1,4 +1,4 @@
-# slide-renderer
+# maic-renderer
 
 React component for rendering PPTist-style `Slide` JSON. Extracted from [OpenMAIC](https://github.com/THU-MAIC/OpenMAIC).
 
@@ -7,9 +7,9 @@ React component for rendering PPTist-style `Slide` JSON. Extracted from [OpenMAI
 ## Install
 
 ```bash
-pnpm add slide-renderer
+pnpm add maic-renderer
 # or
-npm install slide-renderer
+npm install maic-renderer
 ```
 
 Required peers:
@@ -27,7 +27,7 @@ Optional peers (install only if your slides use the corresponding element type):
 ## Quickstart
 
 ```tsx
-import { SlideCanvas, type Slide } from 'slide-renderer';
+import { SlideCanvas, type Slide } from 'maic-renderer';
 
 const slide: Slide = {
   id: 'demo-1',
@@ -123,7 +123,7 @@ The package's `BaseImageElement` and `BaseVideoElement` render plain `<img>` / `
 Optional high-order pattern when sibling overlays need the same slide data:
 
 ```tsx
-import { SlideRendererProvider, SlideCanvas, useSlideContext } from 'slide-renderer';
+import { SlideRendererProvider, SlideCanvas, useSlideContext } from 'maic-renderer';
 
 function MyAnnotationLayer() {
   const { slide } = useSlideContext();
@@ -136,7 +136,7 @@ function MyAnnotationLayer() {
 </SlideRendererProvider>
 ```
 
-### Granular components — `slide-renderer/elements`
+### Granular components — `maic-renderer/elements`
 
 If you want to compose your own layout instead of using `SlideCanvas`, the 9 base elements are exported individually:
 
@@ -146,12 +146,12 @@ import {
   BaseLineElement, BaseChartElement, BaseLatexElement,
   BaseTableElement, BaseVideoElement, BaseCodeElement,
   ElementOutline,
-} from 'slide-renderer/elements';
+} from 'maic-renderer/elements';
 ```
 
 Each accepts `{ elementInfo: PPTXxxElement }`. Image/Video also take a render slot.
 
-### Types — `slide-renderer/types`
+### Types — `maic-renderer/types`
 
 ```ts
 import type {
@@ -163,7 +163,7 @@ import type {
   Gradient, GradientType, PPTElementOutline, PPTElementShadow,
   SlideEffects, LaserEffectOptions, SpotlightEffectOptions,
   HighlightEffectOptions, ZoomEffectOptions,
-} from 'slide-renderer/types';
+} from 'maic-renderer/types';
 ```
 
 ## Tailwind 4 setup
@@ -174,14 +174,14 @@ Ensure your `tailwind.config.{ts,js}` includes the package source:
 export default {
   content: [
     './src/**/*.{ts,tsx}',
-    './node_modules/slide-renderer/dist/**/*.{js,cjs}',
+    './node_modules/maic-renderer/dist/**/*.{js,cjs}',
   ],
 };
 ```
 
 ## Companion package
 
-[`pptxtojson-pro`](../pptxtojson-pro) converts `.pptx` files to the same `Slide[]` shape, so you can do `.pptx → slide-renderer` end-to-end.
+[`maic-import`](../maic-import) converts `.pptx` files to the same `Slide[]` shape, so you can do `.pptx → maic-renderer` end-to-end.
 
 ## See also
 

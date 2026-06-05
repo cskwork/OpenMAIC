@@ -1,13 +1,13 @@
 /**
  * Self-hosted Chinese font set for slides imported from PPTX. The 22 names
  * here are the target whitelist that the import pipeline maps unknown PPT
- * fonts onto (see pptxtojson-pro/src/openmaic/configs/font.ts).
+ * fonts onto (see maic-import/src/openmaic/configs/font.ts).
  *
  * Each woff2 is a single Regular master; bold runs are synthesized by the
  * browser (faux-bold) rather than mapped to a real heavy weight.
  *
  * Consumers import this once at the app shell:
- *     import 'slide-renderer/fonts.css';
+ *     import 'maic-renderer/fonts.css';
  *
  * The relative `./fonts/<name>.woff2` paths are resolved by the consumer's
  * bundler (Next.js/Turbopack/webpack/Vite/etc.) and emitted as static assets.

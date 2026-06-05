@@ -2,7 +2,7 @@
 
 
 
-`pptxtojson-pro` 开发规范。请先读 `DESIGN.md` 了解架构。
+`maic-import` 开发规范。请先读 `DESIGN.md` 了解架构。
 
 
 
@@ -16,7 +16,7 @@
 
 - `iteration-<version>-report.md`（仓库根目录）
 
-- 针对本包的解析侧修复（渲染问题在 `packages/slide-renderer`）
+- 针对本包的解析侧修复（渲染问题在 `packages/maic-renderer`）
 
 
 

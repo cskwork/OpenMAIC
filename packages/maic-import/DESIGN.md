@@ -1,6 +1,6 @@
 # DESIGN
 
-`pptxtojson-pro`：将 `.pptx` 文件解析为结构化 JSON，供 PPTist 等下游渲染器消费。
+`maic-import`：将 `.pptx` 文件解析为结构化 JSON，供 PPTist 等下游渲染器消费。
 
 ## 解析管线
 

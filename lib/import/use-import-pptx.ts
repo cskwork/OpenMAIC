@@ -6,14 +6,14 @@ import { useI18n } from '@/lib/hooks/use-i18n';
 import { createLogger } from '@/lib/logger';
 import type { Slide } from '@/lib/types/slides';
 // Type-only import: stripped at compile time, never reaches the bundler.
-// pdfjs-dist (transitively pulled by `pptxtojson-pro/src`) uses dynamic
+// pdfjs-dist (transitively pulled by `maic-import/src`) uses dynamic
 // `require()` patterns Turbopack refuses to bundle, so values flow through
 // the URL-loaded dist instead. The workspace package only contributes types.
-import type * as PptxtojsonPro from 'pptxtojson-pro';
+import type * as MaicImport from 'maic-import';
 
 const log = createLogger('ImportPptx');
 
-export type PptxUpload = NonNullable<PptxtojsonPro.ImportPptxOptions['upload']>;
+export type PptxUpload = NonNullable<MaicImport.ImportPptxOptions['upload']>;
 
 export interface UseImportPptxOptions {
   /**
@@ -32,7 +32,7 @@ export interface UseImportPptxOptions {
 
 /**
  * PPTX import flow: parse + convert + (optionally) upload media, all inside
- * the bundled `pptxtojson-pro` dist that we load by URL to bypass
+ * the bundled `maic-import` dist that we load by URL to bypass
  * Turbopack's hard rejection of pdfjs-dist's dynamic require.
  */
 export function useImportPptx(options: UseImportPptxOptions = {}) {
@@ -57,15 +57,15 @@ export function useImportPptx(options: UseImportPptxOptions = {}) {
 
       try {
         // Static URL → bundler never sees the import target.
-        // `scripts/sync-pptxtojson-pro.mjs` copies the prebuilt dist into
+        // `scripts/sync-maic-import.mjs` copies the prebuilt dist into
         // `public/vendor/` after every `pnpm install`.
-        const url = '/vendor/pptxtojson-pro/index.js';
+        const url = '/vendor/maic-import/index.js';
         const mod = (await import(
           /* webpackIgnore: true */
           /* turbopackIgnore: true */
           /* @vite-ignore */
           url
-        )) as typeof PptxtojsonPro;
+        )) as typeof MaicImport;
 
         const slides = (await mod.importPptx(file, { upload })) as Slide[];
 

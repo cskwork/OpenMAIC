@@ -2,7 +2,7 @@ import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
   output: process.env.VERCEL ? undefined : 'standalone',
-  transpilePackages: ['mathml2omml', 'pptxgenjs', 'pptxtojson-pro'],
+  transpilePackages: ['mathml2omml', 'pptxgenjs', 'maic-import'],
   serverExternalPackages: [],
   experimental: {
     proxyClientMaxBodySize: '200mb',

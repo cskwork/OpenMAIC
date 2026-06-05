@@ -1,11 +1,11 @@
-# slide-renderer 设计稿（v1：只读画布）
+# maic-renderer 设计稿（v1：只读画布）
 
-> 配套计划：`docs/superpowers/plans/2026-05-28-slide-renderer-package.md`
-> 原始 spec：`docs/superpowers/specs/2026-05-28-slide-renderer-package-design.md`
+> 配套计划：`docs/superpowers/plans/2026-05-28-maic-renderer-package.md`
+> 原始 spec：`docs/superpowers/specs/2026-05-28-maic-renderer-package-design.md`
 
 ## 1. 目标
 
-把 OpenMAIC 主仓 `components/slide-renderer/` 中的只读画布部分抽成独立 workspace 包，让任意 React + Tailwind 4 项目都能"装包 → 传 Slide → 直接渲染"。
+把 OpenMAIC 主仓 `components/maic-renderer/` 中的只读画布部分抽成独立 workspace 包，让任意 React + Tailwind 4 项目都能"装包 → 传 Slide → 直接渲染"。
 
 **v1 范围限定为只读画布**（对应主仓 `Editor/ScreenCanvas.tsx` 子树）。编辑能力（`Editor/Canvas/*`、`Operate/*`、ProseMirror live editor）留给 v2。
 
@@ -25,14 +25,14 @@
 | D5 | 业务耦合元素 | **暴露 renderImage / renderVideo 插槽**，包内默认渲原生标签 | 包不感知业务，消费者按需注入 |
 | D6 | i18n | 包不带文案 | UI 文案下放给消费者 |
 | D7 | ProseMirror | v1 不依赖 | 只读用 dangerouslySetInnerHTML 就够，体积大幅缩小 |
-| D8 | 包发布 | workspace 包，未来可发 npm；当前名 `slide-renderer`（同 `pptxtojson-pro` 风格） | 一致性 |
+| D8 | 包发布 | workspace 包，未来可发 npm；当前名 `maic-renderer`（同 `pptxtojson-pro` 风格） | 一致性 |
 
 ## 3. 对外 API
 
 ### 3.1 主入口
 
 ```ts
-import { SlideCanvas, type SlideCanvasProps } from 'slide-renderer';
+import { SlideCanvas, type SlideCanvasProps } from 'maic-renderer';
 
 interface SlideCanvasProps {
   /** 单页幻灯片数据（PPTist 风格） */
@@ -63,7 +63,7 @@ interface SlideCanvasProps {
 ### 3.2 Provider 高阶模式（可选）
 
 ```tsx
-import { SlideRendererProvider, useSlideContext } from 'slide-renderer';
+import { SlideRendererProvider, useSlideContext } from 'maic-renderer';
 
 <SlideRendererProvider slide={slide} scale={0.9}>
   <SlideCanvas />
@@ -78,7 +78,7 @@ import {
   BaseTextElement, BaseShapeElement, BaseImageElement,
   BaseLineElement, BaseChartElement, BaseLatexElement,
   BaseTableElement, BaseVideoElement, BaseCodeElement,
-} from 'slide-renderer/elements';
+} from 'maic-renderer/elements';
 ```
 
 ### 3.4 类型
@@ -91,13 +91,13 @@ import type {
   PPTTableElement, PPTVideoElement, PPTCodeElement,
   ImageElementClip, ImageElementFilters,
   Gradient, GradientType, PPTElementOutline, PPTElementShadow,
-} from 'slide-renderer/types';
+} from 'maic-renderer/types';
 ```
 
 ## 4. 包结构
 
 ```
-packages/slide-renderer/
+packages/maic-renderer/
 ├── package.json
 ├── README.md
 ├── DESIGN.md
@@ -225,8 +225,8 @@ dist/
 
 ## 8. 验收标准
 
-1. `pnpm --filter slide-renderer build` 通过，产出干净 dist
-2. 主仓 `/slide-renderer-demo` 路由用包渲染一份手写 Slide，目视与原 `ScreenCanvas` 一致
+1. `pnpm --filter maic-renderer build` 通过，产出干净 dist
+2. 主仓 `/maic-renderer-demo` 路由用包渲染一份手写 Slide，目视与原 `ScreenCanvas` 一致
 3. v1 **不替换主仓既有调用**
 
 ## 9. v2 预告

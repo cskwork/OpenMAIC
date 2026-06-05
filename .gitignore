@@ -33,8 +33,8 @@ CLAUDE.local.md
 /build
 /dist
 
-# generated: synced from packages/pptxtojson-pro/dist for runtime URL import
-/public/vendor/pptxtojson-pro
+# generated: synced from packages/maic-import/dist for runtime URL import
+/public/vendor/maic-import
 
 # misc
 .DS_Store

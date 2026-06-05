@@ -102,7 +102,7 @@ import {
   type OssUpload,
   type ImportPptxOptions,
   type CanvasSlide,
-} from 'pptxtojson-pro';
+} from 'maic-import';
 
 export type OssUpload = (
   blob: Blob,
@@ -137,7 +137,7 @@ export function parsedToSlides(
 媒体留在内存，slide 可以直接在当前 tab 里渲染，但**刷新就失效**（音视频）/ **JSON 体积大**（图片）。
 
 ```ts
-import { importPptx } from 'pptxtojson-pro';
+import { importPptx } from 'maic-import';
 
 const slides = await importPptx(file);
 // slides[*].elements 里的 image.src 还是 data:image/png;base64,…
@@ -149,7 +149,7 @@ const slides = await importPptx(file);
 把媒体上传到你自己的 OSS / classroom-media / S3 / 任意存储，slide 里只剩 URL：
 
 ```ts
-import { importPptx, type OssUpload } from 'pptxtojson-pro';
+import { importPptx, type OssUpload } from 'maic-import';
 
 const upload: OssUpload = async (blob, filename, dir) => {
   const form = new FormData();
@@ -169,7 +169,7 @@ const slides = await importPptx(file, { upload });
 ### 3. 已经用 `parse()` 拿到 JSON 时
 
 ```ts
-import { parse, parsedToSlides } from 'pptxtojson-pro';
+import { parse, parsedToSlides } from 'maic-import';
 
 const json = await parse(buffer, { mediaMode: 'base64' });
 const slides = await parsedToSlides(json, { upload });
@@ -206,20 +206,20 @@ const slides = await parsedToSlides(json, { upload });
 
 ## 🧪 在 Next.js (Turbopack) 里用
 
-`pptxtojson-pro` 源码依赖 `pdfjs-dist`，其动态 `require()` 模式会被 Turbopack 拒绝。OpenMAIC 的做法：
+`maic-import` 源码依赖 `pdfjs-dist`，其动态 `require()` 模式会被 Turbopack 拒绝。OpenMAIC 的做法：
 
 1. `pnpm run build` 把整个包（含 importPptx）打成 `dist/`。
-2. `scripts/sync-pptxtojson-pro.mjs` 把 `dist/` 复制到 `public/vendor/pptxtojson-pro/`。
+2. `scripts/sync-maic-import.mjs` 把 `dist/` 复制到 `public/vendor/maic-import/`。
 3. 在客户端组件里用**静态 URL 动态 import**，bundler 完全看不到：
 
 ```ts
-import type * as PptxtojsonPro from 'pptxtojson-pro';
+import type * as PptxtojsonPro from 'maic-import';
 
 const mod = (await import(
   /* webpackIgnore: true */
   /* turbopackIgnore: true */
   /* @vite-ignore */
-  '/vendor/pptxtojson-pro/index.js'
+  '/vendor/maic-import/index.js'
 )) as typeof PptxtojsonPro;
 
 const slides = await mod.importPptx(file, { upload });
