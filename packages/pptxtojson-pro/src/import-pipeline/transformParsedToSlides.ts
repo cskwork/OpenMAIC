@@ -624,13 +624,24 @@ export async function transformParsedToSlides(
             flipV: el.isFlipV
           };
           const rawFilters = (el as any).filters as
-            | { brightness?: number; contrast?: number; saturation?: number }
+            | { brightness?: number; contrast?: number; saturation?: number; opacity?: number }
             | undefined;
           if (rawFilters) {
+            // The renderer's useFilter() appends '%' to brightness/contrast/saturate/opacity,
+            // so these must be percentage magnitudes (e.g. 170 → brightness(170%)), NOT ratios.
+            // OOXML lum bright/contrast & a14 saturation are stored as ±ratio (0.7 = +70%);
+            // map to (1 + ratio) × 100. alphaModFix opacity is a 0..1 ratio → × 100.
+            // Order matters: filters apply left-to-right. Contrast MUST come
+            // before brightness so the PPT "washout" (bright+, contrast−) keeps
+            // light areas light — contrast first flattens toward 0.5, then
+            // brightness lifts toward white. The reverse order clamps whites at
+            // 1.0 first, then contrast drags them down to mid-grey (whole slide
+            // turns grey instead of washing out to near-white).
             const cssFilters: ImageElementFilters = {};
-            if (rawFilters.brightness != null) cssFilters.brightness = `${(1 + rawFilters.brightness).toFixed(2)}`;
-            if (rawFilters.contrast != null) cssFilters.contrast = `${(1 + rawFilters.contrast).toFixed(2)}`;
-            if (rawFilters.saturation != null) cssFilters.saturate = `${(1 + rawFilters.saturation).toFixed(2)}`;
+            if (rawFilters.contrast != null) cssFilters.contrast = `${((1 + rawFilters.contrast) * 100).toFixed(0)}`;
+            if (rawFilters.brightness != null) cssFilters.brightness = `${((1 + rawFilters.brightness) * 100).toFixed(0)}`;
+            if (rawFilters.saturation != null) cssFilters.saturate = `${((1 + rawFilters.saturation) * 100).toFixed(0)}`;
+            if (rawFilters.opacity != null) cssFilters.opacity = `${(rawFilters.opacity * 100).toFixed(0)}`;
             if (Object.keys(cssFilters).length) element.filters = cssFilters;
           }
           if (el.borderWidth) {
@@ -669,6 +680,9 @@ export async function transformParsedToSlides(
               ]
             };
           }
+          // softEdge 已是原始 px（与最终框同尺度），不再 × ratio。
+          const softEdgePx = (el as any).softEdge as number | undefined;
+          if (softEdgePx && softEdgePx > 0) element.softEdge = softEdgePx;
           slide.elements.push(element);
           // 如果是 base64 图片：并发上传，成功后回填 URL
           if (el.src && el.src.startsWith("data:")) {
@@ -692,13 +706,21 @@ export async function transformParsedToSlides(
           let usedKatex = false;
           if (el.latex) {
             try {
-              katex.renderToString(el.latex, { throwOnError: true, displayMode: true });
+              // 渲染器 BaseLatexElement 优先读 `html`（KaTeX 输出），其次才是
+              // path+viewBox 的 SVG 回退。此前这里只把 renderToString 当作
+              // "能否渲染" 的探测、丢掉了 HTML，导致 latex 元素既无 html 又
+              // 是空 path → 渲染为空白（slide 27/29 的算式、公式整段不见）。
+              const html = katex.renderToString(el.latex, {
+                throwOnError: true,
+                displayMode: true,
+              });
               const latexElement: PPTLatexElement = {
                 type: "latex",
                 id: nanoid(10),
                 latex: el.latex,
+                html,
                 path: "",
-                color: "#000000",
+                color: (el as { color?: string }).color ?? "#000000",
                 strokeWidth: 2,
                 viewBox: [el.width, el.height],
                 width: el.width,
@@ -933,7 +955,25 @@ export async function transformParsedToSlides(
                 element.viewBox = [el.width, el.height];
 
                 const pathFormula = SHAPE_PATH_FORMULAS[shape.pathFormula];
-                if ("editable" in pathFormula && pathFormula.editable) {
+                // parser 已按源 XML 的 adj 算出 path（pixel 空间），直接用比走
+                // formula+defaultValue 更准确——后者会丢掉非默认 adj（典型例子：
+                // roundRect@adj=50% 应是圆，formula 默认 12.5% 会渲染成方）。
+                if (el.path && el.path.indexOf("NaN") === -1) {
+                  element.path = el.path;
+                  // parser 的 path 在 PT 坐标系里（pxToPt(node.size.*)），上面的
+                  // `element.viewBox = [el.width, el.height]` 此时已是 PX（× ratio
+                  // 之后），两者量纲对不上会让 SVG `<g scale="el.width/viewBox[0]">`
+                  // 算成 1 → path 只占 SVG 框的 ~75%（pt/px 比），cell 底色比文字
+                  // 区域明显小一截（典型例子：slide 4 "第一讲" 紫色 cell 装不下
+                  // "初识清华" 二行）。改用 originWidth/Height（PT 值）锁住 viewBox
+                  // 才能让 path 撑满 CSS 框。
+                  element.viewBox = [originWidth, originHeight];
+                  if (el.keypoints) {
+                    // parser 用 Record<string, number>（按 adj 名字），
+                    // slide 类型只要数组，按声明顺序取值即可。
+                    element.keypoints = Object.values(el.keypoints);
+                  }
+                } else if ("editable" in pathFormula && pathFormula.editable) {
                   element.path = pathFormula.formula(
                     el.width,
                     el.height,
@@ -1017,16 +1057,73 @@ export async function transformParsedToSlides(
 
               // 保留原始 <p> 段落结构（PPT 一个 <p> = 一段）
               // 段内 <span> 的内联样式不保留：cell.style 已统一收口尺寸/颜色/字体，避免 inline 样式（pt 单位）覆盖按 ratio 折算后的 px 值
-              // 段内 <br> 经 innerText 转成 \n，下游 formatText 再转回换行
-              const escapeHtml = (s: string) =>
+              // 但 **段级定位**（margin-left / text-indent）必须保留：它把标题推到
+              // 单元格左侧图标右边；丢掉它标题会贴到 cell 左沿、压在图标上
+              // （slide 5 "环境的概念" 标题压住图标）。文本里的空格/换行在这里就地
+              // 转成 &nbsp;/<br/>，这样 StaticTable 不必再跑 formatText（它会把
+              // style 里的 calc(... + ...) 空格也换成 &nbsp; 破坏 margin-left）。
+              const escapeText = (s: string) =>
                 s
                   .replace(/&/g, "&amp;")
                   .replace(/</g, "&lt;")
-                  .replace(/>/g, "&gt;");
+                  .replace(/>/g, "&gt;")
+                  .replace(/\n/g, "<br/>")
+                  .replace(/ /g, "&nbsp;");
+              // 保留整段 <p> 的内联样式（margin-left/text-indent/line-height/
+              // font-size/padding-top/margin-top/text-align）。其中 line-height
+              // 与空段的 font-size 决定标题/正文之间的间距——只保留 margin-left 会
+              // 让空白间隔段塌成默认行高，正文与标题间距变大（slide 5 正文偏靠下）。
+              const paraStyle = (p: HTMLElement): string => {
+                const s = p.getAttribute("style");
+                return s ? ` style="${s}"` : "";
+              };
+              // 段内 <span> 只保留 **run 强调**（color/font-weight/font-style/
+              // text-decoration）——正文"维护、改善和营造"等关键词是上色的，全部塌成
+              // cell.style 颜色会丢掉绿色关键词。其余一律丢弃，尤其是
+              // display:inline-block + width 的"占位间隔 span"（serializer 用它表示原
+              // PPT 的空格）——保留会在正文里凭空多出大段空白（slide 5 多余空地）；以及
+              // font-size/font-family（pt 会覆盖 cell.style 按 ratio 折算的 px）。
+              const keepRunStyle = (el: HTMLElement): string => {
+                const parts: string[] = [];
+                if (el.style.color) parts.push(`color:${el.style.color}`);
+                const fw = el.style.fontWeight;
+                if (fw === "bold" || (fw && parseInt(fw, 10) >= 600)) {
+                  parts.push("font-weight:bold");
+                }
+                if (el.style.fontStyle === "italic") parts.push("font-style:italic");
+                if (el.style.textDecoration && el.style.textDecoration !== "none") {
+                  parts.push(`text-decoration:${el.style.textDecoration}`);
+                }
+                return parts.join(";");
+              };
+              const serializeInline = (node: Node): string => {
+                let out = "";
+                node.childNodes.forEach(ch => {
+                  if (ch.nodeType === 3) {
+                    out += escapeText(ch.textContent || "");
+                    return;
+                  }
+                  const el = ch as HTMLElement;
+                  if (el.tagName === "BR") {
+                    out += "<br/>";
+                    return;
+                  }
+                  if (el.tagName === "SPAN") {
+                    const st = keepRunStyle(el);
+                    const inner = serializeInline(el);
+                    out += st ? `<span style="${st}">${inner}</span>` : inner;
+                    return;
+                  }
+                  out += serializeInline(el);
+                });
+                return out;
+              };
               const text =
                 ps.length > 0
-                  ? ps.map(p => `<p>${escapeHtml(p.innerText)}</p>`).join("")
-                  : textDiv.innerText;
+                  ? ps
+                      .map(p => `<p${paraStyle(p)}>${serializeInline(p) || "&nbsp;"}</p>`)
+                      .join("")
+                  : escapeText(textDiv.innerText);
 
               // 把 PPT 原生的 vAlign 词汇映射到 CSS-native 值，让 renderer 直接透传
               // 到 `vertical-align`，不再需要在渲染层做转换。
@@ -1040,6 +1137,47 @@ export async function transformParsedToSlides(
                   ? "bottom"
                   : undefined;
 
+              // hMerge / vMerge continuation 单元格只是 OOXML 用来占合并区位的
+              // 占位格——下游 SlideCanvas 的 getHiddenCells 期望 data[r] 只放真
+              // 实的 cell（top-left of each merge），通过 colspan/rowspan 自动算
+              // 出哪些 grid 格被遮住。继承格混进 data[r] 后，每个都会让 realColIdx
+              // 多前进 1，把后续 cell 推到错误的 grid 列；典型例子：slide 26 表
+              // 头的 "评价等级" 下面三个子格 "好/中/差"，"好" 被算成隐藏位置
+              // 整行文字被吞。直接 skip 继承格即可。
+              if ((cellData as any).hMerge || (cellData as any).vMerge) {
+                continue;
+              }
+
+              // Per-side borders (px-scaled). PPT 卡片式表格常只在单元格左/右
+              // 描边而不是整框，旧实现把它们塌成一条 outline 套在每个 cell 四边，
+              // 导致 slide 4 的左右青线被画成整框；这里逐边透传，缺省的边不画。
+              const toCellBorder = (b?: {
+                borderColor: string;
+                borderWidth: number;
+                borderType: string;
+              }) =>
+                b && b.borderWidth > 0
+                  ? {
+                      width: +(b.borderWidth * ratio).toFixed(2),
+                      style: (b.borderType || "solid") as
+                        | "solid"
+                        | "dashed"
+                        | "dotted",
+                      color: b.borderColor || "#000"
+                    }
+                  : undefined;
+              const cellBorderSides = {
+                top: toCellBorder(cellData.borders?.top),
+                bottom: toCellBorder(cellData.borders?.bottom),
+                left: toCellBorder(cellData.borders?.left),
+                right: toCellBorder(cellData.borders?.right)
+              };
+              const hasCellBorders =
+                cellBorderSides.top ||
+                cellBorderSides.bottom ||
+                cellBorderSides.left ||
+                cellBorderSides.right;
+
               rowCells.push({
                 id: nanoid(10),
                 colspan: cellData.colSpan || 1,
@@ -1047,6 +1185,7 @@ export async function transformParsedToSlides(
                 text,
                 vAlign,
                 padding: padding || undefined,
+                borders: hasCellBorders ? cellBorderSides : undefined,
                 style: {
                   ...style,
                   align: ["left", "right", "center"].includes(align)
@@ -1077,9 +1216,13 @@ export async function transformParsedToSlides(
             firstCell.borders.right ||
             el.borders.left ||
             el.borders.right;
+          // 没有任何边框时不要再凭空补一条 2px 灰线：原来 `|| 2` 让无边框表格
+          // （slide 10 的卡片）被画出一整张幽灵网格。width=0 时 renderer 不绘制。
           const borderWidth = border?.borderWidth || 0;
           const borderStyle = border?.borderType || "solid";
           const borderColor = border?.borderColor || "#eeece1";
+          const outlineWidth =
+            borderWidth > 0 ? +(borderWidth * ratio).toFixed(2) : 0;
 
           // rowHeights（pt → px）：
           // - 全 0：解析库在 PPT 自动行高场景下可能返回全 0，用 element.height 均分兜底
@@ -1107,7 +1250,7 @@ export async function transformParsedToSlides(
             rotate: 0,
             data,
             outline: {
-              width: +(borderWidth * ratio || 2).toFixed(2),
+              width: outlineWidth,
               style: borderStyle,
               color: borderColor
             },

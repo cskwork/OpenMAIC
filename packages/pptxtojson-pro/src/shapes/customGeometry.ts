@@ -55,6 +55,17 @@ export function renderCustomGeometry(
   const segments: string[] = [];
 
   for (const pathNode of paths) {
+    // OOXML sub-path 可以单独 opt-out shape 级别的 stroke / fill：
+    //   <a:path stroke="0">     → 这条子路径不画 stroke（但可填充）
+    //   <a:path fill="none">    → 这条子路径不填充（但可 stroke）
+    // 我们 serializer 用单个 SVG <path> + 单个 stroke + 单个 fill 没法分别表达，
+    // 把所有 sub-path 拼成一个 d 后再统一描边/填充，会让本该只填充的闭合子
+    // 路径被多余地描了一圈轮廓——典型例子：slide 5 中间灰色连接线（path 1
+    // stroke="0" 闭合外轮廓 + path 2 fill="none" 实际可见曲线），合并后把闭
+    // 合外轮廓也描成"竖线"。这里跳过显式 stroke="0" 的闭合子路径——它们既
+    // 没有 stroke，shape 又通常无填充（如 fillRef idx=0），整段不可见，跳过
+    // 不影响视觉。
+    if (pathNode.attr('stroke') === '0') continue;
     const fallbackExtent = inferPathExtent(pathNode);
     const pathW = pathNode.numAttr('w') ?? sourceExtent?.w ?? fallbackExtent.w;
     const pathH = pathNode.numAttr('h') ?? sourceExtent?.h ?? fallbackExtent.h;

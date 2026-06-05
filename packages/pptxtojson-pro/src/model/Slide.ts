@@ -303,6 +303,56 @@ function buildDiagramGroup(
 }
 
 /**
+ * True when an sp's txBody has at least one non-empty regular text run (`a:r > a:t`).
+ * Used to tell "text box that happens to contain inline formulas" (→ text shape)
+ * apart from "a box that is purely a formula" (→ Math node).
+ */
+function spHasTextRuns(sp: SafeXmlNode): boolean {
+  const txBody = sp.child('txBody');
+  if (!txBody.exists()) return false;
+  for (const p of txBody.children('p')) {
+    for (const r of p.children('r')) {
+      if (r.child('t').text().trim().length > 0) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * True when an sp is a visible "box" — has an explicit fill or a visible border
+ * (either directly in spPr or via a non-zero p:style fillRef/lnRef). Such a box
+ * whose only label is an inline formula (e.g. slide 26 的彩色 x / W₁ / σ 方框，
+ * 标签是 a14:m 公式而非文本 run) must be parsed as a SHAPE so its背景色/边框得以
+ * 保留——parseMathNode 只取公式、会把方框底色丢掉，渲染成透明。纯公式框（无填充、
+ * 无边框）仍走 parseMathNode 以获得正确的块级排版与缩放。
+ */
+function spHasVisibleFillOrLine(sp: SafeXmlNode): boolean {
+  const spPr = sp.child('spPr');
+  const spPrHasNoFill = spPr.exists() && spPr.child('noFill').exists();
+  if (spPr.exists()) {
+    for (const tag of ['solidFill', 'gradFill', 'blipFill', 'pattFill']) {
+      if (spPr.child(tag).exists()) return true;
+    }
+    const ln = spPr.child('ln');
+    if (ln.exists() && !ln.child('noFill').exists()) {
+      for (const tag of ['solidFill', 'gradFill', 'pattFill']) {
+        if (ln.child(tag).exists()) return true;
+      }
+    }
+  }
+  const style = sp.child('style');
+  if (style.exists()) {
+    if (!spPrHasNoFill) {
+      const fillRef = style.child('fillRef');
+      if (fillRef.exists() && (fillRef.attr('idx') ?? '0') !== '0') return true;
+    }
+    const lnRef = style.child('lnRef');
+    if (lnRef.exists() && (lnRef.attr('idx') ?? '0') !== '0') return true;
+  }
+  return false;
+}
+
+/**
  * Parse a single child node from spTree, dispatching to the appropriate parser.
  */
 export function parseChildNode(
@@ -346,6 +396,17 @@ export function parseChildNode(
       return undefined;
     case 'AlternateContent':
       if (isMathAlternateContent(child)) {
+        // A box that mixes real text runs with inline formulas (公式与正文混排，
+        // 如「设 N 为类别数量」) must be parsed as a TEXT shape — parseMathNode
+        // would keep only the formulas and drop all the Chinese. Only a box that
+        // is essentially just a formula (no text runs) stays a pure Math node.
+        const choiceSp = child.child('Choice').child('sp');
+        if (
+          choiceSp.exists() &&
+          (spHasTextRuns(choiceSp) || spHasVisibleFillOrLine(choiceSp))
+        ) {
+          return parseShapeNode(choiceSp);
+        }
         return parseMathNode(child);
       }
       return undefined;

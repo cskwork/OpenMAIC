@@ -5,11 +5,25 @@
 import { SafeXmlNode } from '../../parser/XmlParser';
 import { emuToPx, angleToDeg } from '../../parser/units';
 import { BaseNodeData, parseBaseProps } from './BaseNode';
+import { uniformMathColorNode } from './MathNode';
 
 export interface TextRun {
   text: string;
   /** @internal Raw XML node — opaque to consumers. Use serializePresentation() for JSON-safe data. */
   properties?: SafeXmlNode;
+  /**
+   * OOXML <a:fld type=""> 字段类型——常见 slidenum / datetime / footer。
+   * 渲染时需在拿到 slide context 后替换为动态值（slidenum → 当前页码等）。
+   */
+  fldType?: string;
+  /**
+   * Serialized OMML (`m:oMathPara`/`m:oMath`) for an INLINE formula run that sits
+   * inside a normal text paragraph (公式与中文混排，如「设 N 为类别数量」)。serializer
+   * 把它渲染成行内 KaTeX；`text` 同时存纯文本作为渲染失败时的兜底。
+   */
+  ommlXml?: string;
+  /** Uniform color node of an inline math run (OMML run color the converter drops). */
+  mathColorNode?: SafeXmlNode;
 }
 
 export interface TextParagraph {
@@ -61,6 +75,36 @@ export interface ShapeNodeData extends BaseNodeData {
   textBody?: TextBody;
   /** When set (e.g. diagram txXfrm), text is laid out in this rect instead of full shape. */
   textBoxBounds?: TextBoxBounds;
+}
+
+/** Recursively find the first OMML container (`m:oMathPara`/`m:oMath`). */
+function findOmmlNode(node: SafeXmlNode): SafeXmlNode | null {
+  if (node.localName === 'oMathPara' || node.localName === 'oMath') return node;
+  for (const child of node.allChildren()) {
+    const found = findOmmlNode(child);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Concatenate all `m:t` text inside an OMML node (plain-text fallback). */
+function collectMathPlainText(node: SafeXmlNode): string {
+  if (node.localName === 't') return node.text();
+  return node.allChildren().map(collectMathPlainText).join('');
+}
+
+/**
+ * Build an inline-math run from an OMML node (already located). Returns
+ * undefined if the node can't be serialized.
+ */
+function inlineMathRun(ommlNode: SafeXmlNode): TextRun | undefined {
+  const el = ommlNode.rawElement;
+  if (!el) return undefined;
+  return {
+    text: collectMathPlainText(ommlNode),
+    ommlXml: el.toString(),
+    mathColorNode: uniformMathColorNode(ommlNode),
+  };
 }
 
 /**
@@ -115,7 +159,15 @@ function parseParagraph(pNode: SafeXmlNode): TextParagraph {
       orderedRuns.push({
         text: tNode.text(),
         properties: rPr.exists() ? rPr : undefined,
+        fldType: child.attr('type') || undefined,
       });
+    } else if (ln === 'm' || ln === 'oMathPara' || ln === 'oMath') {
+      // Inline formula run: `<a14:m>`(localName 'm') wraps m:oMathPara/m:oMath,
+      // or the OMML sits directly in the paragraph. Capture it as a math run so
+      // 公式与中文混排不会丢正文（serializer 渲染成行内 KaTeX）。
+      const ommlNode = findOmmlNode(child);
+      const mathRun = ommlNode ? inlineMathRun(ommlNode) : undefined;
+      if (mathRun) orderedRuns.push(mathRun);
     }
   }
 

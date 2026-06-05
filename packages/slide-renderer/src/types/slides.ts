@@ -164,6 +164,9 @@ export interface PPTImageElement extends PPTBaseElement {
   radius?: number;
   colorMask?: string;
   imageType?: ImageType;
+  /** Soft-edge feather radius in px (a:softEdge@rad): fades image alpha to
+   *  transparent over this radius at every edge. */
+  softEdge?: number;
 }
 
 export type ShapeTextAlign = 'top' | 'middle' | 'bottom';
@@ -253,6 +256,12 @@ export interface TableCellStyle {
   align?: TextAlign;
 }
 
+export interface TableCellBorder {
+  width: number;
+  style: 'solid' | 'dashed' | 'dotted';
+  color: string;
+}
+
 export interface TableCell {
   id: string;
   colspan: number;
@@ -271,6 +280,18 @@ export interface TableCell {
    * baseline.
    */
   vAlign?: 'top' | 'middle' | 'bottom';
+  /**
+   * Per-side cell borders, already scaled to px. When any side is present
+   * the renderer draws each side independently (a side left undefined renders
+   * no border) instead of falling back to the table-level uniform `outline`.
+   * This preserves PPT tables whose cells only have e.g. left/right dividers.
+   */
+  borders?: {
+    top?: TableCellBorder;
+    bottom?: TableCellBorder;
+    left?: TableCellBorder;
+    right?: TableCellBorder;
+  };
 }
 
 export interface TableTheme {

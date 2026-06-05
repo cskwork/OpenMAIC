@@ -6,8 +6,8 @@ import { SafeXmlNode } from '../parser/XmlParser';
 
 export interface ThemeData {
   colorScheme: Map<string, string>;
-  majorFont: { latin: string; ea: string; cs: string };
-  minorFont: { latin: string; ea: string; cs: string };
+  majorFont: { latin: string; ea: string; cs: string; hans: string };
+  minorFont: { latin: string; ea: string; cs: string; hans: string };
   fillStyles: SafeXmlNode[]; // from a:fillStyleLst children (indexed 1-based)
   lineStyles: SafeXmlNode[]; // from a:lnStyleLst children (indexed 1-based)
   effectStyles: SafeXmlNode[]; // from a:effectStyleLst children (indexed 1-based)
@@ -47,13 +47,29 @@ function extractColor(node: SafeXmlNode): string | undefined {
 
 /**
  * Parse font info from a majorFont or minorFont node.
- * Extracts typeface attributes from latin, ea, and cs child elements.
+ * Extracts typeface attributes from latin, ea, and cs child elements, plus
+ * the Hans (Simplified Chinese) script fallback so callers can use it when
+ * `ea` is empty — Office decks routinely leave the `ea` slot blank and rely
+ * on the script-keyed `<a:font script="Hans" typeface="宋体"/>` row instead.
  */
-function parseFontInfo(fontNode: SafeXmlNode): { latin: string; ea: string; cs: string } {
+function parseFontInfo(fontNode: SafeXmlNode): {
+  latin: string;
+  ea: string;
+  cs: string;
+  hans: string;
+} {
+  let hans = '';
+  for (const child of fontNode.children('font')) {
+    if (child.attr('script') === 'Hans') {
+      hans = child.attr('typeface') ?? '';
+      break;
+    }
+  }
   return {
     latin: fontNode.child('latin').attr('typeface') ?? '',
     ea: fontNode.child('ea').attr('typeface') ?? '',
     cs: fontNode.child('cs').attr('typeface') ?? '',
+    hans,
   };
 }
 

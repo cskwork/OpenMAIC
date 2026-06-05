@@ -3831,6 +3831,30 @@ presetShapes.set('rightBracket', (w, h, adjustments) => {
   return [`M0,0`, a1.cmd, `L${w},${y2}`, a2.cmd].join(' ');
 });
 
+/**
+ * 把一段圆/椭圆弧采样成折线（degree-by-degree），用 L 命令续接到当前路径。
+ * brace（leftBrace/rightBrace）的曲臂半径极扁（rx≫ry，例如 rx≈8、ry≈1.3），
+ * 单条 SVG `A` 椭圆弧命令在这种近退化椭圆下渲染会失真/不对称（括号歪斜）。
+ * 逐度折线（与 PPTXjs shapeArc 同法）则稳定可靠。stAng/endAng 单位为「度」，
+ * 圆心 (cx,cy) 给定，点 = (cx+cos·rx, cy+sin·ry)。
+ */
+function braceArcPoly(
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
+  stAngDeg: number,
+  endAngDeg: number,
+): string {
+  const pts: string[] = [];
+  const step = endAngDeg >= stAngDeg ? 1 : -1;
+  for (let a = stAngDeg; step > 0 ? a <= endAngDeg : a >= endAngDeg; a += step) {
+    const r = (a * Math.PI) / 180;
+    pts.push(`L${(cx + Math.cos(r) * rx).toFixed(4)},${(cy + Math.sin(r) * ry).toFixed(4)}`);
+  }
+  return pts.join(' ');
+}
+
 presetShapes.set('leftBrace', (w, h, adjustments) => {
   const ss = Math.min(w, h);
   const a2 = Math.max(0, Math.min(adjustments?.get('adj2') ?? 50000, 100000));
@@ -3841,45 +3865,17 @@ presetShapes.set('leftBrace', (w, h, adjustments) => {
   const a1 = Math.max(0, Math.min(adjustments?.get('adj1') ?? 8333, maxAdj1));
   const y1 = (ss * a1) / 100000;
   const y3 = (h * a2) / 100000;
+  const y2 = y3 - y1;
   const y4 = y3 + y1;
-  const wd2 = w / 2;
   const hc = w / 2;
-  const toDeg = (ooxmlAng: number) => ooxmlAng / 60000;
-  const arcFrom = (
-    x0: number,
-    y0: number,
-    rx: number,
-    ry: number,
-    stAng: number,
-    swAng: number,
-  ) => {
-    const st = (toDeg(stAng) * Math.PI) / 180;
-    const sw = (toDeg(swAng) * Math.PI) / 180;
-    const cx = x0 - rx * Math.cos(st);
-    const cy = y0 - ry * Math.sin(st);
-    const x1 = cx + rx * Math.cos(st + sw);
-    const y1p = cy + ry * Math.sin(st + sw);
-    const large = Math.abs(toDeg(swAng)) > 180 ? 1 : 0;
-    const sweep = swAng >= 0 ? 1 : 0;
-    return { cmd: `A${rx},${ry} 0 ${large},${sweep} ${x1},${y1p}`, x: x1, y: y1p };
-  };
-
-  let x = w;
-  let y = h;
-  const aTop = arcFrom(x, y, wd2, y1, 5400000, 5400000); // cd4, cd4
-  x = aTop.x;
-  y = aTop.y;
-  const aMid1 = arcFrom(hc, y4, wd2, y1, 0, -5400000);
-  const aMid2 = arcFrom(aMid1.x, aMid1.y, wd2, y1, 5400000, -5400000);
-  const aBot = arcFrom(hc, y1, wd2, y1, 10800000, 5400000); // cd2, cd4
   return [
     `M${w},${h}`,
-    aTop.cmd,
+    braceArcPoly(w, h - y1, hc, y1, 90, 180),
     `L${hc},${y4}`,
-    aMid1.cmd,
-    aMid2.cmd,
+    braceArcPoly(0, y4, hc, y1, 0, -90),
+    braceArcPoly(0, y2, hc, y1, 90, 0),
     `L${hc},${y1}`,
-    aBot.cmd,
+    braceArcPoly(w, y1, hc, y1, 180, 270),
   ].join(' ');
 });
 
@@ -3895,35 +3891,16 @@ presetShapes.set('rightBrace', (w, h, adjustments) => {
   const y3 = (h * a2) / 100000;
   const y2 = y3 - y1;
   const y4 = h - y1;
-  const wd2 = w / 2;
   const hc = w / 2;
-  const toDeg = (ooxmlAng: number) => ooxmlAng / 60000;
-  const arcFrom = (
-    x0: number,
-    y0: number,
-    rx: number,
-    ry: number,
-    stAng: number,
-    swAng: number,
-  ) => {
-    const st = (toDeg(stAng) * Math.PI) / 180;
-    const sw = (toDeg(swAng) * Math.PI) / 180;
-    const cx = x0 - rx * Math.cos(st);
-    const cy = y0 - ry * Math.sin(st);
-    const x1 = cx + rx * Math.cos(st + sw);
-    const y1p = cy + ry * Math.sin(st + sw);
-    const large = Math.abs(toDeg(swAng)) > 180 ? 1 : 0;
-    const sweep = swAng >= 0 ? 1 : 0;
-    return { cmd: `A${rx},${ry} 0 ${large},${sweep} ${x1},${y1p}`, x: x1, y: y1p };
-  };
-
-  const aTop = arcFrom(0, 0, wd2, y1, 16200000, 5400000); // 3cd4, cd4
-  const aMid1 = arcFrom(hc, y2, wd2, y1, 10800000, -5400000); // cd2,-cd4
-  const aMid2 = arcFrom(aMid1.x, aMid1.y, wd2, y1, 16200000, -5400000); //3cd4,-cd4
-  const aBot = arcFrom(hc, y4, wd2, y1, 0, 5400000); //0,cd4
-  return [`M0,0`, aTop.cmd, `L${hc},${y2}`, aMid1.cmd, aMid2.cmd, `L${hc},${y4}`, aBot.cmd].join(
-    ' ',
-  );
+  return [
+    `M0,0`,
+    braceArcPoly(0, y1, hc, y1, 270, 360),
+    `L${hc},${y2}`,
+    braceArcPoly(w, y2, hc, y1, 180, 90),
+    braceArcPoly(w, y3 + y1, hc, y1, 270, 180),
+    `L${hc},${y4}`,
+    braceArcPoly(0, y4, hc, y1, 0, 90),
+  ].join(' ');
 });
 
 // ===== Action Buttons =====

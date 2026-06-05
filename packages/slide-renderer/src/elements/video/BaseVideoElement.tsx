@@ -38,13 +38,20 @@ export function BaseVideoElement({ elementInfo, renderVideo }: BaseVideoElementP
       >
         {renderVideo ? (
           renderVideo(elementInfo)
-        ) : elementInfo.src ? (
+        ) : elementInfo.src || elementInfo.poster ? (
+          // Render <video> when we have either a playable src OR just a
+          // poster/preview frame. A PPTX「视频」often has no decodable src in
+          // this pipeline but does carry a preview image; rendering
+          // <video poster> still shows that frame on the live canvas (instead
+          // of falling through to the gray play-icon placeholder — slide 34).
+          // Snapshot capture of the poster frame is handled in slideToPng
+          // (html2canvas can't draw <video> directly).
           <video
             style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-            src={elementInfo.src}
+            {...(elementInfo.src ? { src: elementInfo.src } : {})}
             poster={elementInfo.poster}
             preload="metadata"
-            controls
+            controls={!!elementInfo.src}
           />
         ) : (
           <div

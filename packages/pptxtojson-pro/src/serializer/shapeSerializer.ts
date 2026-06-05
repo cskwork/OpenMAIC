@@ -1093,8 +1093,18 @@ export async function renderShape(node: ShapeNodeData, ctx: RenderContext, _orde
   const hasFillOrBorder = !!fillCss || borderResult.border.borderWidth > 0;
 
   let outputAsText = false;
-  if (isTxBox || isPlaceholderText) {
+  if (isPlaceholderText) {
     outputAsText = true;
+  } else if (isTxBox) {
+    // 普通 txBox（rect 几何）按 text 输出；但若作者把 txBox 改成 roundRect /
+    // ellipse 等非 rect 几何用作徽章/胶囊（典型例子：本 deck 的圆形数字编号
+    // roundRect@adj=50%），需要保留 preset path，按 shape 输出，否则会渲染成
+    // 直角矩形。
+    if (isNonRectPreset || hasCustomGeom) {
+      outputAsText = false;
+    } else {
+      outputAsText = true;
+    }
   } else if (hasCustomGeom) {
     outputAsText = false;
   } else if (isNonRectPreset || noPlaceholderType) {
@@ -1140,13 +1150,18 @@ function textBodyRenderOptions(
   node: ShapeNodeData,
   ctx: RenderContext,
 ): RenderTextBodyOptions | undefined {
+  // Frame width is always useful (clamps the leading tab-fold indent for narrow
+  // boxes), independent of whether the shape carries a style/fontRef.
+  const frameWidthPx = node.size.w > 0 ? node.size.w : undefined;
   const shapeStyle = node.source.child('style');
-  if (!shapeStyle.exists()) return undefined;
-  const fontRef = shapeStyle.child('fontRef');
-  if (fontRef.exists() && fontRef.allChildren().length > 0) {
-    return { fontRefColor: resolveColorToCss(fontRef, ctx) };
-  }
-  return undefined;
+  const fontRef = shapeStyle.exists() ? shapeStyle.child('fontRef') : undefined;
+  const fontRefColor =
+    fontRef && fontRef.exists() && fontRef.allChildren().length > 0
+      ? resolveColorToCss(fontRef, ctx)
+      : undefined;
+
+  if (frameWidthPx === undefined && fontRefColor === undefined) return undefined;
+  return { frameWidthPx, fontRefColor };
 }
 
 /** @deprecated Use `renderShape` — same name as `ShapeRenderer` for diff-friendly comparison. */

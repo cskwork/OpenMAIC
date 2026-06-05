@@ -11,6 +11,7 @@ import type { RenderContext } from './RenderContext';
 import type { Math as MathElement } from '../adapter/types';
 import { resolveMediaToUrl } from '../utils/mediaWebConvert';
 import { resolveMediaPath } from '../utils/media';
+import { resolveColorToCss } from './StyleResolver';
 import { DOMParser } from '@xmldom/xmldom';
 import { parseDocxMathContent } from '../utils/eqFieldParser';
 import JSZip from 'jszip';
@@ -102,6 +103,20 @@ function normalizeMathCharToUnicode(cp: number): string | undefined {
   // Mathematical Bold Digits 0-9: U+1D7CE–U+1D7D7
   if (cp >= 0x1D7CE && cp <= 0x1D7D7) return String.fromCharCode(cp - 0x1D7CE + 0x30);
 
+  // --- Math Greek "extra" symbols that sit right after each style's letter run ---
+  // Each of the 4 styled Greek blocks (Bold/Italic/BoldItalic/SansBold) appends
+  // ∇ (before the caps), ∂ (after the small letters) and 6 variant glyphs
+  // (ϵ ϑ ϰ ϕ ϱ ϖ). These are OUTSIDE the α–ω ranges above, so without this they
+  // leak into the LaTeX as lone surrogates and KaTeX rejects them — breaks every
+  // ∂L/∂w gradient formula (反向传播页全中招).
+  if (cp === 0x1D6C1 || cp === 0x1D6FB || cp === 0x1D735 || cp === 0x1D76F) return '\u2207'; // ∇
+  if (cp === 0x1D6DB || cp === 0x1D715 || cp === 0x1D74F || cp === 0x1D789) return '\u2202'; // ∂
+  // ϵ ϑ ϰ ϕ ϱ ϖ (variant Greek) → BMP equivalents
+  const VARIANT_GREEK = [0x03F5, 0x03D1, 0x03F0, 0x03D5, 0x03F1, 0x03D6];
+  for (const start of [0x1D6DC, 0x1D716, 0x1D750, 0x1D78A]) {
+    if (cp >= start && cp <= start + 5) return String.fromCodePoint(VARIANT_GREEK[cp - start]);
+  }
+
   return undefined;
 }
 
@@ -178,6 +193,20 @@ function postProcessLatex(latex: string): string {
     if (cp === 0x00D7) { out.push('\\times '); continue; } // ×
     if (cp === 0x2026) { out.push('\\ldots '); continue; } // …
     if (cp === 0x221E) { out.push('\\infty '); continue; } // ∞
+    if (cp === 0x2202) { out.push('\\partial '); continue; } // ∂
+    if (cp === 0x2207) { out.push('\\nabla '); continue; }   // ∇
+
+    // Catch-all: any Mathematical Alphanumeric Symbol that slipped through
+    // (script/fraktur/double-struck etc. we don't special-case) → its base
+    // ASCII letter/digit, so KaTeX never receives a lone surrogate.
+    const mathAlnum = normalizeMathCharToUnicode(cp);
+    if (mathAlnum !== undefined) { out.push(mathAlnum); continue; }
+    if (cp >= 0x1D400 && cp <= 0x1D7FF) {
+      // Unhandled math-alnum (e.g. script/fraktur): fold to base by block math.
+      const base = ((cp - 0x1D400) % 52);
+      out.push(String.fromCharCode(base < 26 ? 0x41 + base : 0x61 + (base - 26)));
+      continue;
+    }
 
     out.push(ch);
   }
@@ -189,10 +218,77 @@ function postProcessLatex(latex: string): string {
 // Core conversion
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// texmath cache (server-side high-fidelity OMML→LaTeX)
+// ---------------------------------------------------------------------------
+// The in-browser JS path (omml2mathml + mathml-to-latex) is the fallback. When
+// available we prefer texmath via the app's /api/texmath endpoint (Pandoc's
+// math engine — much better structure/coverage). `prefetchTexmath` is an async
+// pre-pass that fills this cache BEFORE the (synchronous) serializer runs, so
+// `ommlToLatex` stays a sync cache lookup. In environments without the endpoint
+// (e.g. `transvert` in plain node) the fetch fails and we transparently fall
+// back to the JS conversion.
+
+const texmathCache = new Map<string, string>();
+
+function texmathEndpoint(): string {
+  if (typeof process !== 'undefined' && process.env && process.env.TEXMATH_ENDPOINT) {
+    return process.env.TEXMATH_ENDPOINT;
+  }
+  return '/api/texmath';
+}
+
 /**
- * Convert OMML XML string to LaTeX via omml2mathml + mathml-to-latex.
+ * Pre-convert a batch of OMML strings via /api/texmath and cache the results.
+ * Best-effort: any failure (no endpoint, texmath error) leaves that entry
+ * uncached so `ommlToLatex` falls back to the JS pipeline.
  */
-function ommlToLatex(ommlXml: string): string {
+export async function prefetchTexmath(ommlList: string[]): Promise<void> {
+  const endpoint = texmathEndpoint();
+  const uniq = [...new Set(ommlList)].filter((o) => o && !texmathCache.has(o));
+  if (uniq.length === 0) return;
+  const CONCURRENCY = 8;
+  const queue = [...uniq];
+  const worker = async () => {
+    while (queue.length) {
+      const omml = queue.shift();
+      if (omml === undefined) return;
+      try {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ input: omml, from: 'omml', to: 'tex', inline: true }),
+        });
+        if (res.ok) {
+          const json = (await res.json()) as { result?: string };
+          if (typeof json.result === 'string' && json.result.trim()) {
+            texmathCache.set(omml, json.result.trim());
+          }
+        }
+      } catch {
+        // no endpoint / network error → leave uncached, JS fallback applies
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker),
+  );
+}
+
+/**
+ * Convert OMML XML string to LaTeX. Prefers a cached texmath result (filled by
+ * {@link prefetchTexmath}); otherwise uses the in-browser omml2mathml +
+ * mathml-to-latex pipeline.
+ * Exported so textSerializer can render inline `m:oMath` runs (公式与正文混排)
+ * without going through the standalone Math element path.
+ */
+export function ommlToLatex(ommlXml: string): string {
+  const cached = texmathCache.get(ommlXml);
+  if (cached !== undefined) return cached;
+  return ommlToLatexJs(ommlXml);
+}
+
+function ommlToLatexJs(ommlXml: string): string {
   try {
     const normalized = normalizeOmmlXml(ommlXml);
     const parser = new DOMParser();
@@ -274,14 +370,37 @@ export async function mathToElement(
       latex = content.latex;
       plainText = content.plainText || plainText;
     }
-  } else if (node.ommlXml) {
-    latex = ommlToLatex(node.ommlXml);
+  } else {
+    // One OMML node per paragraph. Convert each to LaTeX; when a box holds
+    // several (slide 29 输入框 4 行 / 推理框多行), stack them as multiple
+    // display lines via KaTeX's `gathered` env so every line survives — the
+    // old code only kept the first.
+    const xmls =
+      node.ommlXmls && node.ommlXmls.length > 0
+        ? node.ommlXmls
+        : node.ommlXml
+          ? [node.ommlXml]
+          : [];
+    const lines = xmls.map(ommlToLatex).map((s) => s.trim()).filter(Boolean);
+    if (lines.length === 1) {
+      latex = lines[0];
+    } else if (lines.length > 1) {
+      latex = `\\begin{gathered}${lines.join(' \\\\ ')}\\end{gathered}`;
+    }
   }
 
   const picBase64 = await resolveFallbackImage(node.fallbackBlipEmbed, ctx);
 
+  // OMML→LaTeX drops drawingML run color; when the whole formula is one color
+  // (e.g. 蓝色权重), resolve it here so the renderer can apply it.
+  const color =
+    node.colorNode && node.colorNode.exists()
+      ? resolveColorToCss(node.colorNode, ctx)
+      : undefined;
+
   return {
     type: 'math',
+    color,
     left,
     top,
     width,

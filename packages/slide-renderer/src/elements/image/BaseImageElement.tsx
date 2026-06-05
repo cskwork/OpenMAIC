@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import type { PPTImageElement } from '../../types/slides';
 import { useElementShadow } from '../shared/useElementShadow';
 import { useElementFlip } from '../shared/useElementFlip';
@@ -26,6 +26,28 @@ export function BaseImageElement({ elementInfo, renderImage }: BaseImageElementP
   const { filter } = useFilter(elementInfo.filters);
 
   const src = elementInfo.src;
+
+  // Soft-edge feather (a:softEdge): fade the image alpha to transparent over
+  // `softEdge` px at every edge. Two intersecting linear-gradient masks feather
+  // all four sides (corners get both). html2canvas-pro ignores CSS masks, so
+  // slideToPng bakes the same feather into pixels via the data-soft-edge hook.
+  const softEdge =
+    elementInfo.softEdge && elementInfo.softEdge > 0 ? elementInfo.softEdge : undefined;
+  const softEdgeMaskStyle: CSSProperties = softEdge
+    ? (() => {
+        const grad = (dir: string) =>
+          `linear-gradient(${dir}, transparent 0, #000 ${softEdge}px, #000 calc(100% - ${softEdge}px), transparent 100%)`;
+        const mask = `${grad('to right')}, ${grad('to bottom')}`;
+        return {
+          maskImage: mask,
+          WebkitMaskImage: mask,
+          maskComposite: 'intersect',
+          WebkitMaskComposite: 'source-in',
+          maskRepeat: 'no-repeat',
+          WebkitMaskRepeat: 'no-repeat',
+        } as CSSProperties;
+      })()
+    : {};
 
   return (
     <div
@@ -72,6 +94,7 @@ export function BaseImageElement({ elementInfo, renderImage }: BaseImageElementP
                 <img
                   src={src}
                   draggable={false}
+                  data-soft-edge={softEdge || undefined}
                   style={{
                     position: 'absolute',
                     top: imgPosition.top,
@@ -81,6 +104,7 @@ export function BaseImageElement({ elementInfo, renderImage }: BaseImageElementP
                     maxWidth: 'none',
                     maxHeight: 'none',
                     filter,
+                    ...softEdgeMaskStyle,
                   }}
                   alt=""
                   onDragStart={(e) => e.preventDefault()}

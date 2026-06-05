@@ -4,11 +4,13 @@
  * output is an HTML string instead of a DOM container. See textSerializer.md (this folder).
  */
 
+import katex from 'katex';
 import type { RenderContext } from './RenderContext';
 import type { TextBody, TextParagraph, TextRun } from '../model/nodes/ShapeNode';
 import type { PlaceholderInfo } from '../model/nodes/BaseNode';
 import { SafeXmlNode } from '../parser/XmlParser';
 import { resolveColor, resolveColorToCss } from './StyleResolver';
+import { ommlToLatex } from './mathSerializer';
 import { emuToPx, pctToDecimal, angleToDeg } from '../parser/units';
 import { isAllowedExternalUrl } from '../utils/urlSafety';
 
@@ -187,6 +189,11 @@ interface MergedParagraphStyle {
   /** When set, bullet color is taken from this OOXML buClr node (a:buClr with srgbClr/schemeClr child). */
   bulletColorNode?: SafeXmlNode;
   defRPrs?: SafeXmlNode[];
+  /** Custom tab stop positions (a:tabLst/a:tab@pos) in px, measured from the text frame's
+   *  left inset, sorted ascending. PowerPoint uses these to align tabbed text (e.g. list
+   *  items / titles positioned to the right of an icon). Without them we fall back to the
+   *  OOXML default 96px tab grid, which pushes tabbed text far past its intended column. */
+  tabStopsPx?: number[];
 }
 
 function mergeParagraphProps(target: MergedParagraphStyle, pPr: SafeXmlNode): void {
@@ -200,6 +207,19 @@ function mergeParagraphProps(target: MergedParagraphStyle, pPr: SafeXmlNode): vo
 
   const indent = pPr.numAttr('indent');
   if (indent !== undefined) target.textIndent = emuToPx(indent);
+
+  // Custom tab stops (a:tabLst). A more specific level fully replaces the list —
+  // OOXML tabLst is not additive across inheritance levels.
+  const tabLst = pPr.child('tabLst');
+  if (tabLst.exists()) {
+    const stops = tabLst
+      .children('tab')
+      .map((t) => t.numAttr('pos'))
+      .filter((p): p is number => p !== undefined)
+      .map((p) => emuToPx(p))
+      .sort((a, b) => a - b);
+    if (stops.length > 0) target.tabStopsPx = stops;
+  }
 
   // Line spacing
   // OOXML spcPct: 100000 = "single spacing" = 1.0× the font's line height.
@@ -390,10 +410,12 @@ function mergeRunProps(target: MergedRunStyle, rPr: SafeXmlNode, ctx: RenderCont
   if (strike !== undefined && strike !== 'noStrike') target.strikethrough = true;
   if (strike === 'noStrike') target.strikethrough = false;
 
-  // Color from solidFill or gradFill child.
-  // solidFill and gradFill are mutually exclusive fill types in OOXML.
-  // When a more specific level sets one, it must clear the other to prevent
-  // an inherited gradient from overriding an explicit solid color (or vice versa).
+  // Color from solidFill / gradFill / noFill child.
+  // 这三种是 OOXML 里互斥的 fill 类型——后处理的 rPr 层级一旦显式声明
+  // 其中之一，必须把其它两种从上层继承下来的状态清掉。否则会出现
+  // master 给了 noFill、slide 给了 solidFill 这种"既要白色又要透明"的
+  // CSS 输出 `color:#FFF;color:transparent;`，浏览器取后者，文字直接看不见
+  // （slide #3 的"01"-"05" 编号即此类）。
   const solidFill = rPr.child('solidFill');
   if (solidFill.exists()) {
     const { color, alpha } = resolveColor(solidFill, ctx);
@@ -405,6 +427,7 @@ function mergeRunProps(target: MergedRunStyle, rPr: SafeXmlNode, ctx: RenderCont
       target.color = hex;
     }
     target.textGradientCss = undefined;
+    target.textNoFill = undefined;
   }
   const gradFill = rPr.child('gradFill');
   if (gradFill.exists()) {
@@ -412,6 +435,7 @@ function mergeRunProps(target: MergedRunStyle, rPr: SafeXmlNode, ctx: RenderCont
     if (css) {
       target.textGradientCss = css;
       target.color = undefined;
+      target.textNoFill = undefined;
     }
   }
 
@@ -471,9 +495,13 @@ function mergeRunProps(target: MergedRunStyle, rPr: SafeXmlNode, ctx: RenderCont
   const baseline = rPr.numAttr('baseline');
   if (baseline !== undefined) target.baseline = baseline;
 
-  // Text noFill: a:noFill on rPr makes text interior transparent
+  // Text noFill: a:noFill on rPr makes text interior transparent.
+  // 与 solidFill/gradFill 互斥——显式 noFill 必须把上层继承下来的颜色清掉，
+  // 否则会输出 `color:#xxx;color:transparent;` 这种"既继承又透明"的样式。
   if (rPr.child('noFill').exists()) {
     target.textNoFill = true;
+    target.color = undefined;
+    target.textGradientCss = undefined;
   }
 
   // Text outline: a:ln on rPr defines text stroke/outline
@@ -503,17 +531,31 @@ function mergeRunProps(target: MergedRunStyle, rPr: SafeXmlNode, ctx: RenderCont
 
 /**
  * Resolve theme font placeholder references like "+mj-lt" or "+mn-lt".
+ * For the EA (East Asian) slot we fall back to the theme's Hans script row
+ * when the explicit `ea` typeface is empty — Office decks routinely leave
+ * `<a:ea typeface=""/>` blank and rely on `<a:font script="Hans" .../>` to
+ * pick a Chinese face. Without that fallback the literal "+mj-ea" passes
+ * through unchanged and the browser substitutes a default sans, which then
+ * faux-bolds and visibly mismatches the deck's intended Songti rendering.
  */
 function resolveThemeFont(typeface: string, ctx: RenderContext): string {
   if (typeface === '+mj-lt' || typeface === '+mj-ea' || typeface === '+mj-cs') {
     const key = typeface.slice(4) as 'lt' | 'ea' | 'cs';
     const mapping: Record<string, 'latin' | 'ea' | 'cs'> = { lt: 'latin', ea: 'ea', cs: 'cs' };
-    return ctx.theme.majorFont[mapping[key] || 'latin'] || typeface;
+    const slot = mapping[key] || 'latin';
+    const direct = ctx.theme.majorFont[slot];
+    if (direct) return direct;
+    if (key === 'ea' && ctx.theme.majorFont.hans) return ctx.theme.majorFont.hans;
+    return typeface;
   }
   if (typeface === '+mn-lt' || typeface === '+mn-ea' || typeface === '+mn-cs') {
     const key = typeface.slice(4) as 'lt' | 'ea' | 'cs';
     const mapping: Record<string, 'latin' | 'ea' | 'cs'> = { lt: 'latin', ea: 'ea', cs: 'cs' };
-    return ctx.theme.minorFont[mapping[key] || 'latin'] || typeface;
+    const slot = mapping[key] || 'latin';
+    const direct = ctx.theme.minorFont[slot];
+    if (direct) return direct;
+    if (key === 'ea' && ctx.theme.minorFont.hans) return ctx.theme.minorFont.hans;
+    return typeface;
   }
   return typeface;
 }
@@ -637,11 +679,27 @@ function formatRunTextForHtml(raw: string): string {
   if (raw.includes('\t')) {
     return escapeHtml(raw);
   }
-  let t = escapeHtml(raw);
-  if (/ {2}/.test(raw)) {
+  // PowerPoint \u91cc\u4f5c\u8005\u5e38\u7528 N \u4e2a ASCII \u7a7a\u683c\u505a\u89c6\u89c9\u7f29\u8fdb\u2014\u2014\u5728 \u7b49\u7ebf/CJK \u5b57\u4f53\u91cc
+  // ASCII space \u662f\u56fa\u5b9a\u7684 half-width\uff080.5em\uff09\uff0c\u4f46\u6d4f\u89c8\u5668\u66ff\u6362\u6210 SourceHanSans
+  // \u540e\u7a7a\u683c\u5bbd\u5ea6\u504f\u5bbd\uff0c\u5bfc\u81f4 "\u6388\u8bfe\u56e2\u961f\uff1a" \u4e0b\u9762\u7528\u7a7a\u683c\u5bf9\u9f50\u7684\u51e0\u884c\u88ab\u63a8\u5230\u6bd4\u6e90 PPT
+  // \u6392\u7248\u610f\u56fe\u66f4\u9760\u53f3\u7684\u4f4d\u7f6e\u3002\u628a\u9996\u6bb5 >=2 \u4e2a\u8fde\u7eed\u7a7a\u683c\u6298\u7b97\u6210\u7b49\u5bbd inline-block\uff0c
+  // \u7f29\u8fdb\u5c31\u548c\u5b57\u4f53\u5ea6\u91cf\u89e3\u8026\uff0c\u5339\u914d CJK half-width \u4e60\u60ef\u3002
+  let leadingPrefix = '';
+  let remainder = raw;
+  const leadingMatch = remainder.match(/^( {2,})/);
+  if (leadingMatch) {
+    const count = leadingMatch[1].length;
+    remainder = remainder.slice(count);
+    // 0.25em/空格：自托管思源宋体/黑体实测 ASCII space advance ≈0.256em。早期用
+    // 0.5em 是 fonts.css 未 import 时空格落到偏宽系统 fallback 的补偿；字体注册修复
+    // 后 0.5em 反而把「图标+\t+空格+标题」窄框标题多撑约 1em 触发误换行（slide 6）。
+    leadingPrefix = `<span style="display:inline-block;width:${(count * 0.25).toFixed(2)}em"></span>`;
+  }
+  let t = escapeHtml(remainder);
+  if (/ {2}/.test(remainder)) {
     t = t.replace(/ {2}/g, ' \u00a0');
   }
-  return t;
+  return leadingPrefix + t;
 }
 
 // ---------------------------------------------------------------------------
@@ -672,6 +730,21 @@ export interface RenderTextBodyOptions {
   cellTextFontFamily?: string;
   /** fontRef color from shape style (e.g. SmartArt). Overrides inherited styles but yields to explicit run rPr color. */
   fontRefColor?: string;
+  /**
+   * When set, used as text insets (EMU) for table cells. tcPr cell margins
+   * (marL/marR/marT/marB) override the bodyPr defaults — in PowerPoint table
+   * cells, the tcPr margins are the source of truth for cell padding, not
+   * the OOXML shape bodyPr defaults (91440/45720 EMU).
+   */
+  cellMargins?: { lIns: number; rIns: number; tIns: number; bIns: number };
+  /**
+   * Text frame width in px (shape width). Used to clamp the leading tab-fold
+   * indent: a custom tab stop (a:tabLst) is an absolute column that can exceed
+   * a narrow box. Without a clamp the folded `margin-left` swallows the whole
+   * frame and CJK text wraps one char per line (slide 14 的三张窄卡片). When the
+   * stop overshoots the box we cap the indent so a usable text column remains.
+   */
+  frameWidthPx?: number;
 }
 
 /**
@@ -689,10 +762,22 @@ export function renderTextBody(
   const category = getPlaceholderCategory(placeholder);
   let bulletCounter = 0;
   const noWrap = textBody.bodyProperties?.attr('wrap') === 'none';
+  // ECMA-376: 默认状态下首段的 spcBef 与末段的 spcAft 都要丢掉，只有 bodyPr@spcFirstLastPara="1"
+  // 时才把它们当真。我们之前对所有段一律渲染成 margin-top，结果首段被多挤了 spcBef pt，
+  // 例如 slide 4 "第一讲 / 初识清华" cell 在 cy=63pt + 17.2pt 上下内边距下只剩 46pt 排两行
+  // 18pt 文字，被 6pt 的首段 spcBef 顶到溢出，最后一行被裁。
+  const spcFirstLastPara =
+    textBody.bodyProperties?.attr('spcFirstLastPara') === '1' ||
+    textBody.bodyProperties?.attr('spcFirstLastPara') === 'true';
+  const lastParaIdx = textBody.paragraphs.length - 1;
 
   let html = '';
 
+  let paraIdx = 0;
   for (const paragraph of textBody.paragraphs) {
+    const isFirstPara = paraIdx === 0;
+    const isLastPara = paraIdx === lastParaIdx;
+    paraIdx++;
     const level = paragraph.level;
 
     // ---- Build merged paragraph style (7-level inheritance) ----
@@ -751,15 +836,129 @@ export function renderTextBody(
       };
       paraCssParts.push(`text-align: ${alignMap[merged.align] || 'left'}`);
     }
-    if (merged.marginLeft !== undefined) {
-      paraCssParts.push(`margin-left: ${merged.marginLeft}px`);
+    // PowerPoint 的 hanging-indent 默认：`<a:pPr indent="-N">` 用于把首行
+    // 拉回，但作者通常省略 marL，因为 PPT 对带 bullet 的段默认套用 marL=N
+    // 让 bullet 落在元素左边沿、body 落在 +N 缩进。我们 marL 只在显式存在
+    // 时设置，缺省时 first-line 跑到 element 外，bullet 会和左侧编号圆
+    // (slide 3) 之类的相邻元素重叠。指标段（有 bullet 且 indent<0 且无
+    // 显式 marL）按 PPT 默认补 marL = -indent。
+    let effectiveMarginLeft = merged.marginLeft;
+    if (
+      (effectiveMarginLeft === undefined || effectiveMarginLeft === 0) &&
+      merged.textIndent !== undefined &&
+      merged.textIndent < 0 &&
+      (merged.bulletChar || merged.bulletAutoNum)
+    ) {
+      effectiveMarginLeft = -merged.textIndent;
     }
-    if (merged.textIndent !== undefined) {
+    // Tab stop width from a:tabLst (first stop): (firstStop − marginLeft), default
+    // OOXML 96px grid. Shared by the leading-indent fold and the tab-size fallback.
+    const resolveTabPx = (): number => {
+      let tabPx = 96;
+      const firstStop = merged.tabStopsPx?.[0];
+      if (firstStop !== undefined) {
+        const ml = effectiveMarginLeft ?? 0;
+        const derived = firstStop - ml;
+        if (derived >= 1) tabPx = derived;
+      }
+      return tabPx;
+    };
+
+    // ── 行首 tab/空格缩进折叠 ──────────────────────────────────────────
+    // PowerPoint 用「前导 \t (+a:tabLst) 和/或前导空格」把标题/列表行推到图标右侧。
+    // 裸 \t（white-space:pre + tab-size）和空格折出的空 inline-block 占位在原样吐
+    // HTML 的渲染器里没问题，但 a2m 编辑画布走 ProseMirror 重新解析：绝对行高那条路
+    // 产出的「外层 div + 行 wrapper div」嵌套里 text-indent 首行缩进继承不可靠（实测
+    // margin-left 生效、text-indent 丢失）。因此把行首空白折进 margin-left（整块右移）
+    // ——每条图标行都是单行，整块右移与首行缩进视觉等价，raw-HTML 也一致；取值复用既有
+    // tabPx / 0.25em。仅在「行首含 tab」时折叠，并把已折叠的行首空白从 run 剥掉（见下 run 循环）。
+    let leadingStripChars = 0;
+    let leadingFoldedTabs = 0;
+    let leadingFoldPx = 0;
+    let leadingFoldEm = 0;
+    let leadingSawTab = false;
+    let leadingFirstStop: number | undefined;
+    {
+      let spaceCount = 0;
+      let consumed = 0;
+      let sawTab = false;
+      let stop = false;
+      for (const run of paragraph.runs) {
+        if (stop) break;
+        const txt = run.text ?? '';
+        if (txt === '') continue;
+        let i = 0;
+        while (i < txt.length && (txt[i] === '\t' || txt[i] === ' ')) {
+          if (txt[i] === '\t') {
+            leadingFoldedTabs++;
+            sawTab = true;
+          } else spaceCount++;
+          i++;
+        }
+        consumed += i;
+        if (i < txt.length) stop = true;
+      }
+      if (sawTab) {
+        // A custom a:tabLst stop is an ABSOLUTE column. A leading tab advances
+        // the text to that stop; if the stop sits at/behind the paragraph marL
+        // it can't move text backwards, so the tab adds nothing to marginLeft.
+        // (slide 14 的窄卡片：tab pos≈35.5px < marL≈49px，旧逻辑 derived<1 退回
+        // 96px 默认网格，把首段错误推到 marL+96=145px。)只有「无自定义 tabLst」用 96。
+        const firstStop = merged.tabStopsPx?.[0];
+        const ml = effectiveMarginLeft ?? 0;
+        const tabAdvance =
+          firstStop !== undefined ? Math.max(0, firstStop - ml) : 96;
+        leadingFoldPx = leadingFoldedTabs * tabAdvance;
+        leadingFoldEm = spaceCount * 0.25;
+        leadingStripChars = consumed;
+        leadingSawTab = true;
+        leadingFirstStop = firstStop;
+      }
+    }
+
+    let finalMarginLeftPx: number | undefined;
+    if (effectiveMarginLeft !== undefined || leadingFoldPx > 0 || leadingFoldEm > 0) {
+      if (leadingFoldPx > 0 || leadingFoldEm > 0) {
+        let mlPx = (effectiveMarginLeft ?? 0) + leadingFoldPx;
+        // Clamp against the frame width: a tabLst stop is an absolute column
+        // that may sit past a narrow box (slide 14 的窄卡片 firstStop≈145px vs
+        // 宽 123px)。不裁剪的话 margin-left 吃光整框，CJK 文本逐字竖排。保留至少
+        // 半个框宽给文本列；宽框（如 388px）下不会触发，行为不变。
+        const frameW = options?.frameWidthPx;
+        if (frameW && frameW > 0) {
+          const maxMlPx = Math.max(0, frameW - frameW * 0.5);
+          if (mlPx > maxMlPx) mlPx = maxMlPx;
+        }
+        finalMarginLeftPx = mlPx;
+        paraCssParts.push(
+          `margin-left: ${leadingFoldEm > 0 ? `calc(${mlPx.toFixed(2)}px + ${leadingFoldEm.toFixed(2)}em)` : `${mlPx}px`}`,
+        );
+      } else {
+        finalMarginLeftPx = effectiveMarginLeft;
+        paraCssParts.push(`margin-left: ${effectiveMarginLeft}px`);
+      }
+    }
+    // text-indent: when a leading tab folded but its stop is at/behind marL
+    // (leadingFoldPx === 0), the tab still nudges the FIRST line forward to the
+    // stop — wrapped lines stay at marL. Position the first line at the stop so
+    // it clears a left-side icon (slide 14 图标与首字重叠). a2m drops text-indent
+    // → first line falls back to marL(≥stop here), still clearing the icon.
+    const tabStopBehindMargin =
+      leadingSawTab && leadingFirstStop !== undefined && leadingFoldPx === 0;
+    if (tabStopBehindMargin && finalMarginLeftPx !== undefined) {
+      const firstLineIndentPx = leadingFirstStop! - finalMarginLeftPx;
+      paraCssParts.push(`text-indent: ${firstLineIndentPx.toFixed(2)}px`);
+    } else if (merged.textIndent !== undefined) {
       paraCssParts.push(`text-indent: ${merged.textIndent}px`);
     }
-    if (merged.lineHeight) {
-      paraCssParts.push(`line-height: ${merged.lineHeight}`);
-    }
+    // OOXML: when <a:lnSpc> is absent at every level of the cascade, the
+    // implicit default is "single spacing" = 1.0. We fall back to that so
+    // the browser doesn't take over with `line-height: normal` (~1.2 for
+    // most fonts, sometimes much larger for CJK with tall typo metrics),
+    // which causes multi-paragraph body text to overflow its container
+    // and visibly stack/overlap.
+    const effectiveLineHeight = merged.lineHeight ?? '1';
+    paraCssParts.push(`line-height: ${effectiveLineHeight}`);
     // Determine effective font size for percentage-based spacing
     // Use defRPr or first run's font size, fallback to 12pt
     let effectiveFontSize = 12; // default 12pt
@@ -774,6 +973,28 @@ export function renderTextBody(
       if (sz !== undefined) effectiveFontSize = sz / 100;
     }
 
+    // Empty paragraph (no visible runs → renders as a bare <br/>): PowerPoint
+    // sizes the blank line from its end-of-paragraph mark (endParaRPr). Without
+    // a font-size the <br/> collapses to the container default and the blank
+    // line reserves too little height — e.g. slide 27 用两行空段为下方"浮"在
+    // 文本框上的独立公式预留高度，空段过矮会让后续正文上移、与公式重叠。
+    // Whitespace-only paragraphs (just tabs/spaces) are pure spacers: their
+    // glyphs get stripped by the leading-tab fold, so they must be sized like
+    // empty paragraphs (font-size at the <p>, from the run/endParaRPr) or the
+    // line-height collapses to the container default. slide 4 的绿块用一段
+    // sz=3600 + 仅含 \t 的空段把编号顶到图标下方；按 .length>0 判它"非空"会丢掉
+    // 36pt 行高，编号塌回去压在图标上。用 trim() 把纯空白段也当空段处理。
+    const paraHasVisibleRuns = paragraph.runs.some(
+      (r) => r.text != null && r.text.trim().length > 0,
+    );
+    if (!paraHasVisibleRuns && paragraph.endParaRPr) {
+      const epSz = paragraph.endParaRPr.numAttr('sz');
+      if (epSz !== undefined) effectiveFontSize = epSz / 100;
+    }
+    if (!paraHasVisibleRuns) {
+      paraCssParts.push(`font-size: ${effectiveFontSize}pt`);
+    }
+
     // CSS line-height places the extra leading (lineHeight − 1) × fontSize
     // half above and half below the glyph, while PowerPoint pushes ALL of it
     // above the first line — most visible on cover titles that use a large
@@ -782,12 +1003,18 @@ export function renderTextBody(
     // ends up half its intended size in the browser. We only top up the
     // missing half on unitless line-heights > 1; absolute spcPts already
     // encode the exact line height and shouldn't be double-counted.
+    // Only top up the leading for paragraphs that actually have glyphs. An EMPTY
+    // (blank) paragraph is a pure spacer — PowerPoint reserves exactly lnSpc ×
+    // fontSize for it, with no extra half-leading above. Adding padding-top to
+    // blank lines over-reserves height; on decks that stack several blank
+    // paragraphs to push a bottom block down (slide 10 绿色提示条) the drift
+    // accumulates and the bottom text slips below its box.
     if (
-      merged.lineHeight &&
+      paraHasVisibleRuns &&
       !merged.lineHeightAbsolute &&
-      /^[\d.]+$/.test(merged.lineHeight)
+      /^[\d.]+$/.test(effectiveLineHeight)
     ) {
-      const lh = parseFloat(merged.lineHeight);
+      const lh = parseFloat(effectiveLineHeight);
       if (lh > 1) {
         const extraHalf = ((lh - 1) / 2) * effectiveFontSize;
         if (extraHalf > 0.01) {
@@ -796,14 +1023,17 @@ export function renderTextBody(
       }
     }
 
-    if (merged.spaceBefore !== undefined && merged.spaceBefore !== 0) {
+    // 首段 spcBef / 末段 spcAft 仅在 bodyPr@spcFirstLastPara=1 时计入
+    const applySpaceBefore = !isFirstPara || spcFirstLastPara;
+    const applySpaceAfter = !isLastPara || spcFirstLastPara;
+    if (applySpaceBefore && merged.spaceBefore !== undefined && merged.spaceBefore !== 0) {
       paraCssParts.push(`margin-top: ${merged.spaceBefore}pt`);
-    } else if (merged.spaceBeforePct !== undefined && merged.spaceBeforePct !== 0) {
+    } else if (applySpaceBefore && merged.spaceBeforePct !== undefined && merged.spaceBeforePct !== 0) {
       paraCssParts.push(`margin-top: ${merged.spaceBeforePct * effectiveFontSize}pt`);
     }
-    if (merged.spaceAfter !== undefined && merged.spaceAfter !== 0) {
+    if (applySpaceAfter && merged.spaceAfter !== undefined && merged.spaceAfter !== 0) {
       paraCssParts.push(`margin-bottom: ${merged.spaceAfter}pt`);
-    } else if (merged.spaceAfterPct !== undefined && merged.spaceAfterPct !== 0) {
+    } else if (applySpaceAfter && merged.spaceAfterPct !== undefined && merged.spaceAfterPct !== 0) {
       paraCssParts.push(`margin-bottom: ${merged.spaceAfterPct * effectiveFontSize}pt`);
     }
 
@@ -837,10 +1067,13 @@ export function renderTextBody(
     // text frame. Using a fixed-height div with overflow: visible keeps each
     // line's layout footprint at exactly spcPts, matching PowerPoint behavior
     // even for single-line paragraphs.
-    // Set tab-size when paragraph contains tab characters (default OOXML tab spacing = 914400 EMU = 96px)
-    if (paragraph.runs.some((r) => r.text?.includes('\t'))) {
-      const defaultTabPx = 96; // 914400 EMU at 96 dpi
-      paraCssParts.push(`tab-size: ${defaultTabPx}px`);
+    // tab-size 仅服务于折叠之后仍剩余的 tab（非行首 tab，少见）；行首 tab 已折进 margin-left。
+    const totalTabs = paragraph.runs.reduce(
+      (n, r) => n + (r.text ? (r.text.match(/\t/g)?.length ?? 0) : 0),
+      0,
+    );
+    if (totalTabs - leadingFoldedTabs > 0) {
+      paraCssParts.push(`tab-size: ${resolveTabPx().toFixed(2)}px`);
     }
     if (noWrap) {
       paraCssParts.push('white-space: nowrap');
@@ -860,26 +1093,27 @@ export function renderTextBody(
     // would push the content onto the next line and shift the whole paragraph.
     let bulletHtml = '';
     if (bulletPrefix) {
-      // Bullet color: 1) explicit buClr from list style, 2) paragraph defRPr, 3) first run's color (so bullet matches text), 4) cell/fallback
+      // Compute the first-run effective style once so the bullet can inherit
+      // color, font-size, AND font-family from it. Without this, auto-number
+      // bullets like (1)/(2)/(3) on a dark slide rendered as tiny black text
+      // because the <span> had only color set and the inherited font-size
+      // from the BaseTextElement wrapper fell back to the browser default.
+      const firstRunStyle: MergedRunStyle = {};
+      if (merged.defRPrs) {
+        for (const drp of merged.defRPrs) mergeRunProps(firstRunStyle, drp, ctx);
+      }
+      if (paragraph.runs.length > 0 && paragraph.runs[0].properties) {
+        mergeRunProps(firstRunStyle, paragraph.runs[0].properties, ctx);
+      }
+
+      // Bullet color: 1) explicit buClr from list style, 2) first run effective color, 3) listStyle defRPr, 4) options fallback
       let bulletColor: string | undefined;
       if (merged.bulletColorNode && merged.bulletColorNode.exists()) {
         bulletColor = resolveColorToCss(merged.bulletColorNode, ctx);
       }
-      if (bulletColor === undefined && merged.defRPrs) {
-        const bulletRunStyle: MergedRunStyle = {};
-        for (const drp of merged.defRPrs) mergeRunProps(bulletRunStyle, drp, ctx);
-        bulletColor = bulletRunStyle.color;
+      if (bulletColor === undefined) {
+        bulletColor = firstRunStyle.color;
       }
-      if (bulletColor === undefined && paragraph.runs.length > 0) {
-        const runStyle: MergedRunStyle = {};
-        if (merged.defRPrs) {
-          for (const drp of merged.defRPrs) mergeRunProps(runStyle, drp, ctx);
-        }
-        if (paragraph.runs[0].properties)
-          mergeRunProps(runStyle, paragraph.runs[0].properties, ctx);
-        bulletColor = runStyle.color;
-      }
-      // Fallback: check shape's lstStyle defRPr for color (same as run fallback)
       if (bulletColor === undefined && textBody.listStyle) {
         const lstStyleLevel = findStyleAtLevel(textBody.listStyle, level);
         if (lstStyleLevel.exists()) {
@@ -898,26 +1132,79 @@ export function renderTextBody(
 
       let displayChar = bulletPrefix;
       let bFontCss = '';
-      if (merged.bulletFont && isSymbolFont(merged.bulletFont)) {
-        displayChar = symbolFontCharToUnicode(bulletPrefix, merged.bulletFont);
+      const isSymbolBullet = !!(merged.bulletFont && isSymbolFont(merged.bulletFont));
+      if (isSymbolBullet) {
+        displayChar = symbolFontCharToUnicode(bulletPrefix, merged.bulletFont!);
       } else if (merged.bulletFont) {
         bFontCss = `font-family: ${merged.bulletFont};`;
+      } else if (firstRunStyle.fontFamily) {
+        // Match the first run's resolved font so the bullet doesn't fall back
+        // to the browser's default serif on top of a slide that uses a sans
+        // body font (or vice versa).
+        bFontCss = `font-family: ${firstRunStyle.fontFamily};`;
       }
 
-      let bSizeCss = '';
-      if (merged.bulletSizePct !== undefined && merged.bulletSizePct !== 1) {
-        const runFontSize = effectiveFontSize;
-        const bulletPt = runFontSize * merged.bulletSizePct;
-        bSizeCss = `font-size: ${bulletPt.toFixed(1)}pt;`;
-      }
+      // Bullet font-size: always emit so the bullet sizes with the paragraph
+      // rather than the wrapper's inherited size. buSzPct (when present)
+      // scales relative to the run font-size — same semantics as PowerPoint.
+      const baseSize = firstRunStyle.fontSize ?? effectiveFontSize;
+      const bulletPt =
+        merged.bulletSizePct !== undefined && merged.bulletSizePct !== 1
+          ? baseSize * merged.bulletSizePct
+          : baseSize;
+      const bSizeCss = `font-size: ${bulletPt.toFixed(1)}pt;`;
 
-      bulletHtml = `<span style="${bFontCss}${bSizeCss}color: ${bColor};">${escapeHtml(displayChar)} </span>`;
+      // hanging-indent 段的 bullet 用 inline-block 占满 marL 宽度的"槽位"，
+      // ■ 在槽位左沿，槽位右侧留白把首行正文推到 element_x + marL，与 body
+      // 续行的左缩进对齐——这就是 PowerPoint 通过 bullet+tab 实现的视觉效果。
+      // 不用 inline-block 时正文紧贴 bullet 字形右侧（例如 slide 3 row 05
+      // "■" 紧挨 "传承"），与 body 续行形成台阶状错位。
+      const useBulletSlot =
+        effectiveMarginLeft !== undefined &&
+        effectiveMarginLeft > 0 &&
+        merged.textIndent !== undefined &&
+        merged.textIndent < 0;
+      if (useBulletSlot) {
+        // Wingdings/Symbol bullet (■ ◆ 等) 与左侧编号圆相邻时（slide 3 的 01-05
+        // 圆），source XML 把文本框摆在圆右沿仅 ~23 CSS px 处，bullet 字形落在
+        // 圆的粉色光晕里看着像"压"在圆上。PPT 靠 tab-stop auto-align 自动让开，
+        // 我们这层没有该机制，因此对 symbol bullet 在槽位内左侧补 padding 把字形
+        // 往右推、body 位置不变（box-sizing:border-box 让槽宽仍为 marL）。真 list
+        // bullet（•）不属于 symbol font，不受影响。
+        // 普通 list bullet（•/◦ 等非 symbol-font 字形）在槽位内靠右、贴近正文，
+        // 留一个 0.4em 的小间距——还原 PPT 里 bullet 紧挨首行正文的观感（如 slide 5
+        // marL=36px 时，左对齐会把 • 甩到槽位最左、离正文 ~28px 太远）。槽宽仍为
+        // marL、box-sizing:border-box，续行左缩进不变，仍与首行正文对齐。
+        // symbol bullet（■ ◆，slide 3 编号圆相邻）保持原左侧 padding 逻辑不动。
+        const slotPad = isSymbolBullet
+          ? 'padding-left:16px;box-sizing:border-box;'
+          : 'text-align:right;padding-right:0.4em;box-sizing:border-box;';
+        bulletHtml = `<span style="display:inline-block;width:${effectiveMarginLeft}px;${slotPad}${bFontCss}${bSizeCss}color: ${bColor};">${escapeHtml(displayChar)}</span>`;
+      } else {
+        bulletHtml = `<span style="${bFontCss}${bSizeCss}color: ${bColor};">${escapeHtml(displayChar)} </span>`;
+      }
     }
 
     let currentLineDivOpen = false;
     const openLineWrapper = () => {
       if (!useLineWrappers || !merged.lineHeight) return;
-      html += `<div style="height: ${merged.lineHeight};overflow: visible">`;
+      // Fixed `height` (not min-height) pins each line to exactly spcPts — the
+      // PowerPoint line pitch — regardless of the font's content area. CJK faces
+      // (self-hosted SourceHanSerif/Sans) report a content area noticeably taller
+      // than spcPts (e.g. 15pt glyphs ≈ 30px vs a 19.15pt≈25.5px pitch); with
+      // `min-height` Chrome grows the line box to that content area, so every
+      // absolute-spaced line is a few px too tall. Stacked over a column the drift
+      // pushes bottom blocks down — e.g. 后勤 slide 10/11 绿色提示框文字下溢/未居中。
+      // Trade-off: a single logical paragraph whose text SOFT-wraps to >1 visual
+      // line will overflow this fixed-height box (overlapping the next paragraph),
+      // since one wrapper == one logical line. Explicit line breaks are safe (each
+      // `\n` opens its own wrapper). Acceptable here: absolute-spaced paragraphs in
+      // these decks are single-line; matching the line pitch matters more.
+      // min-height(而非 height)：固定 height 能精确还原 PPT 行距，但被就地编辑(增删行)后
+      // 无法 reflow——多出的行 overflow 到盒外，且"实时编辑态"与"保存→重解析态"对不齐。
+      // a2m 是编辑器，编辑一致性优先：改用 min-height，编辑增删行时盒子能撑高、两态一致。
+      // 代价：CJK 字体内容区略高于 spcPts 时单行可能高几 px（行距漂移），由回归把关。
+      html += `<div style="min-height: ${merged.lineHeight};overflow: visible">`;
       currentLineDivOpen = true;
     };
     const closeLineWrapper = () => {
@@ -935,12 +1222,20 @@ export function renderTextBody(
       openLineWrapper();
       html += bulletHtml;
     } else {
-      // legacy <p> path: keep the original order — bullet first, then a <br/>
-      // when the paragraph is otherwise empty so it still collapses to one
-      // visible line.
+      // legacy <p> path: bullet first, then a blank-line filler for an otherwise
+      // empty paragraph. Use &nbsp; (NOT <br/>): a trailing <br/> renders as 1 line
+      // in raw-HTML renderers, but a2m 的 ProseMirror 会在末尾 hard_break 后再补一个
+      // trailingBreak（<br><br>）→ 空段变成 2 行，累积把下方正文/图标整体压下去
+      // （图标与行错位、绿框文字被挤出）。&nbsp; 在两端都恰好是 1 行
+      // （高度 = font-size × line-height），不会被 ProseMirror 加倍。
       html += bulletHtml;
-      if (paragraph.runs.length === 0) {
-        html += '<br/>';
+      // Blank-line filler: an empty <p> reserves NO height (height 0) regardless
+      // of font-size/line-height — it needs an inline box. Emit &nbsp; whenever
+      // the paragraph has no VISIBLE runs, which now also covers whitespace-only
+      // spacer paragraphs whose tab/space runs get stripped by the leading fold
+      // (slide 4 绿块的 sz=3600 空段：少了 &nbsp; 就塌成 0 高，编号顶回图标上)。
+      if (!paraHasVisibleRuns) {
+        html += '&nbsp;';
       }
     }
 
@@ -957,6 +1252,47 @@ export function renderTextBody(
     };
 
     for (const run of paragraph.runs) {
+      // Inline formula run (公式与正文混排): render as inline KaTeX so the
+      // surrounding 中文 isn't lost and the formula isn't pulled out into its
+      // own stacked block. Falls back to the formula's plain text on failure.
+      if (run.ommlXml) {
+        flushAccumulatedRun();
+        prevStyleStr = null;
+        const mStyle: MergedRunStyle = {};
+        if (merged.defRPrs) {
+          for (const drp of merged.defRPrs) mergeRunProps(mStyle, drp, ctx);
+        }
+        if (run.properties) mergeRunProps(mStyle, run.properties, ctx);
+        const mSizePt = mStyle.fontSize ?? effectiveFontSize;
+        // OMML run color (a:rPr>solidFill) is dropped by the latex conversion, so
+        // when the inline formula is one color, resolve it from the captured node.
+        const mathColorNode = (run as { mathColorNode?: SafeXmlNode }).mathColorNode;
+        const mColor =
+          mathColorNode && mathColorNode.exists()
+            ? resolveColorToCss(mathColorNode, ctx)
+            : mStyle.color ?? options?.fontRefColor ?? '#000000';
+        const latex = ommlToLatex(run.ommlXml);
+        let mathHtml = '';
+        if (latex) {
+          try {
+            // throwOnError:true so invalid LaTeX throws → we fall back to the
+            // formula's plain text below, instead of KaTeX printing the raw
+            // source in red (the "红色 LaTeX 乱码" reviewers flagged).
+            mathHtml = katex.renderToString(latex, {
+              displayMode: false,
+              throwOnError: true,
+            });
+          } catch {
+            mathHtml = '';
+          }
+        }
+        const inlineBody = mathHtml || formatRunTextForHtml(run.text ?? '');
+        if (inlineBody) {
+          html += `<span style="font-size: ${mSizePt.toFixed(1)}pt;color: ${mColor};">${inlineBody}</span>`;
+        }
+        prevIsLink = false;
+        continue;
+      }
       if (run.text === '\n') {
         flushAccumulatedRun();
         prevStyleStr = null;
@@ -998,6 +1334,33 @@ export function renderTextBody(
       }
 
       let runText = run.text ?? '';
+      // 剥掉已折叠进段落 text-indent 的行首空白（见上「行首缩进折叠」）；
+      // 完全由空白构成的行首 run 折叠后为空，直接跳过不再输出。
+      if (leadingStripChars > 0 && runText) {
+        let k = 0;
+        while (
+          k < runText.length &&
+          leadingStripChars > 0 &&
+          (runText[k] === '\t' || runText[k] === ' ')
+        ) {
+          k++;
+          leadingStripChars--;
+        }
+        if (k > 0) runText = runText.slice(k);
+        if (runText === '') continue;
+      }
+      // <a:fld type="..."> 动态字段——OOXML 里 fld 节点常没有 <a:t> 子节点
+      // (PPT 在显示时算出来塞进去)，导致 parser 拿到空字符串。常见的几种：
+      //   - slidenum: 当前页码（1-based）
+      //   - datetime / datetime1..n: 当前日期，先用占位 mm/dd/yyyy 跑通；
+      //     真要精确格式化交给上层
+      // 其它没识别的 fld 类型保留 parser 的原文本（多半也是空的）。
+      if ((run as { fldType?: string }).fldType) {
+        const type = (run as { fldType?: string }).fldType;
+        if (type === 'slidenum') {
+          if (!runText) runText = String(ctx.slide.index + 1);
+        }
+      }
       if (run.properties) {
         const symNode = run.properties.child('sym');
         if (symNode.exists()) {
@@ -1055,14 +1418,19 @@ export function renderTextBody(
   // Apply bodyPr text insets (lIns/rIns/tIns/bIns) as a wrapping div with padding.
   // OOXML defaults: lIns=91440, tIns=45720, rIns=91440, bIns=45720 (EMU).
   // Always emit the padding wrapper so the consumer doesn't need to know defaults.
+  // For table cells, `cellMargins` (from tcPr marL/marR/marT/marB) takes
+  // precedence — PowerPoint uses cell margins, not bodyPr defaults, for the
+  // padding inside table cells. Explicit bodyPr insets on the cell's txBody
+  // still win (rare but spec-allowed override).
   const bp = textBody.bodyProperties;
   if (bp?.exists()) {
+    const cm = options?.cellMargins;
     const DEFAULT_H_INSET = 91440;
     const DEFAULT_V_INSET = 45720;
-    const lIns = bp.numAttr('lIns') ?? DEFAULT_H_INSET;
-    const rIns = bp.numAttr('rIns') ?? DEFAULT_H_INSET;
-    const tIns = bp.numAttr('tIns') ?? DEFAULT_V_INSET;
-    const bIns = bp.numAttr('bIns') ?? DEFAULT_V_INSET;
+    const lIns = bp.numAttr('lIns') ?? cm?.lIns ?? DEFAULT_H_INSET;
+    const rIns = bp.numAttr('rIns') ?? cm?.rIns ?? DEFAULT_H_INSET;
+    const tIns = bp.numAttr('tIns') ?? cm?.tIns ?? DEFAULT_V_INSET;
+    const bIns = bp.numAttr('bIns') ?? cm?.bIns ?? DEFAULT_V_INSET;
     const pt = (emu: number) => parseFloat((emu / 12700).toFixed(2));
     html = `<div style="padding: ${pt(tIns)}pt ${pt(rIns)}pt ${pt(bIns)}pt ${pt(lIns)}pt;">${html}</div>`;
   }
@@ -1208,10 +1576,12 @@ function runStylesToCssString(
     // OOXML baseline is in 1000ths of percent; positive = superscript, negative = subscript
     const shiftPct = runStyle.baseline / 1000;
     parts.push(`vertical-align: ${shiftPct}%`);
-    // Reduce font size for super/subscript
-    if (Math.abs(shiftPct) >= 20) {
-      parts.push(`font-size: ${fontSize * 0.65}pt`);
-    }
+    // PowerPoint renders ANY baseline-shifted (super/subscript) run at a reduced
+    // size, regardless of how small the shift is. Some decks abuse a tiny shift
+    // (e.g. baseline=5000 → 5%) together with an inflated sz to fake normal text
+    // (slide 14 的标题首段 sz=2000+baseline=5000，PPT 实际按 ~0.65 缩到 13pt =
+    // 正文字号)。之前只在 |shift|≥20% 时缩，导致这类首段被放大成 20pt。
+    parts.push(`font-size: ${fontSize * 0.65}pt`);
   }
 
   if (runStyle.textShadowCss) {

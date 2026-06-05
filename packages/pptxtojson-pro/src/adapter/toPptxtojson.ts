@@ -8,6 +8,8 @@ import type { PresentationData } from '../model/Presentation';
 import type { PptxFiles } from '../parser/ZipParser';
 import type { Output, Slide, Size } from './types';
 import { slideToSlide } from '../serializer/slideSerializer';
+import { prefetchTexmath } from '../serializer/mathSerializer';
+import type { SlideNode } from '../model/Slide';
 import type { MediaMode } from '../serializer/RenderContext';
 
 const PX_TO_PT = 0.75;
@@ -27,6 +29,23 @@ function getThemeColors(presentation: PresentationData): string[] {
   return themeColors;
 }
 
+/** Collect every OMML string from a slide's top-level nodes (standalone math
+ *  elements + inline math runs inside text shapes). Group children are raw XML
+ *  parsed later in the serializer, so any (rare) group math falls back to the
+ *  JS conversion. */
+function collectOmml(nodes: SlideNode[], out: string[]): void {
+  for (const n of nodes) {
+    if (n.nodeType === 'math') {
+      if (n.ommlXmls && n.ommlXmls.length) out.push(...n.ommlXmls);
+      else if (n.ommlXml) out.push(n.ommlXml);
+    } else if (n.nodeType === 'shape' && n.textBody) {
+      for (const p of n.textBody.paragraphs) {
+        for (const r of p.runs) if (r.ommlXml) out.push(r.ommlXml);
+      }
+    }
+  }
+}
+
 export async function toPptxtojsonFormat(
   presentation: PresentationData,
   files: PptxFiles,
@@ -37,6 +56,14 @@ export async function toPptxtojsonFormat(
     height: pxToPt(presentation.height),
   };
   const themeColors = getThemeColors(presentation);
+
+  // High-fidelity math: pre-convert all OMML via texmath (/api/texmath) before
+  // the synchronous serializer runs. Best-effort — falls back to the JS
+  // omml2mathml pipeline where the endpoint isn't reachable.
+  const ommlAll: string[] = [];
+  for (const slide of presentation.slides) collectOmml(slide.nodes, ommlAll);
+  await prefetchTexmath(ommlAll);
+
   const slides: Slide[] = [];
   for (const slide of presentation.slides) {
     slides.push(await slideToSlide(presentation, slide, files, mediaMode));

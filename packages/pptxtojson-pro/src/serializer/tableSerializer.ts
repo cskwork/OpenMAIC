@@ -391,6 +391,9 @@ function applyStyleBorders(
 
 interface CellDirectProps {
   fillColor?: string;
+  // 显式 <a:noFill/> 时为 true：表格样式 firstRow/band/wholeTbl 的填充必须被清掉。
+  // 用单独 flag 而不是 fillColor='' 以便和 "没定义 tcPr 填充" 区分。
+  noFill?: boolean;
   vAlign?: 'up' | 'mid' | 'down';
   borders: Partial<Record<BorderSide, Border | null>>;
 }
@@ -408,10 +411,14 @@ function applyCellProperties(
   else if (anchor === 'b') result.vAlign = 'down';
   else if (anchor === 't') result.vAlign = 'up';
 
-  // Fill (overrides table style fill)
+  // Fill (overrides table style fill). solidFill 设色，noFill 清掉样式继承色——
+  // 本 deck slide 2 教师表每个 cell 显式 <a:noFill/> 但表格样式 firstRow=accent1，
+  // 不处理 noFill 会把整张表染成橙色。
   const solidFill = tcPr.child('solidFill');
   if (solidFill.exists()) {
     result.fillColor = resolveColorToHex(solidFill, ctx);
+  } else if (tcPr.child('noFill').exists()) {
+    result.noFill = true;
   }
 
   // Borders (override table style borders)
@@ -549,6 +556,22 @@ export function tableToElement(
       // Text props from tcTxStyle
       const textProps = sections.length > 0 ? getEffectiveTableStyleTextProps(sections, ctx) : undefined;
 
+      // Cell padding comes from tcPr marL/marR/marT/marB. OOXML defaults are
+      // 91440 EMU (L/R) and 45720 EMU (T/B), which happens to match the shape
+      // bodyPr defaults — but cells often set tighter margins (e.g. 9842 EMU)
+      // and the cell's inner bodyPr is empty, so without this the renderer
+      // applied 7.2pt padding instead of <1pt and text wrapped onto extra
+      // lines, growing rows beyond rowHeights and overflowing the slide.
+      const tcPr = cell.properties;
+      const cellMargins = tcPr?.exists()
+        ? {
+            lIns: tcPr.numAttr('marL') ?? 91440,
+            rIns: tcPr.numAttr('marR') ?? 91440,
+            tIns: tcPr.numAttr('marT') ?? 45720,
+            bIns: tcPr.numAttr('marB') ?? 45720,
+          }
+        : undefined;
+
       // Render HTML text with table style tcTxStyle applied as defaults
       // (run-level rPr still overrides — e.g. user-set red text on a white
       // header cell still shows red). This keeps HTML <span> color/bold in
@@ -558,17 +581,18 @@ export function tableToElement(
         ? renderTextBody(cell.textBody, undefined, ctx, {
             cellTextColor: textProps?.color,
             cellTextBold: textProps?.bold,
+            cellMargins,
           })
         : '';
 
       // Direct cell tcPr overrides (highest priority)
       // Mirrors TableRenderer.ts applyCellProperties (line 538)
       let vAlign: 'up' | 'mid' | 'down' | undefined;
-      const tcPr = cell.properties;
       if (tcPr?.exists()) {
         const cellProps = applyCellProperties(tcPr, ctx);
 
         if (cellProps.fillColor) fillColor = cellProps.fillColor;
+        else if (cellProps.noFill) fillColor = undefined;
         if (cellProps.vAlign) vAlign = cellProps.vAlign;
 
         for (const side of ['top', 'bottom', 'left', 'right'] as const) {

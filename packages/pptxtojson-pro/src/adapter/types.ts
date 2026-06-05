@@ -143,6 +143,9 @@ export interface Image {
     contrast?: number
   }
   link?: string
+  /** Soft-edge feather radius in px (a:effectLst>softEdge@rad). Fades the image
+   *  alpha to transparent over this radius at every edge. */
+  softEdge?: number
 }
 
 export interface TableCell {
@@ -283,6 +286,9 @@ export interface Diagram {
 
 export interface Math {
   type: 'math'
+  /** Resolved CSS color when the whole formula shares one explicit run color
+   *  (OMML→LaTeX drops drawingML run color). Undefined → renderer default. */
+  color?: string
   left: number
   top: number
   width: number

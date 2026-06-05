@@ -12,8 +12,22 @@ import { BaseNodeData, parseBaseProps } from './BaseNode';
 
 export interface MathNodeData extends BaseNodeData {
   nodeType: 'math';
-  /** Serialized OMML XML string (m:oMathPara or m:oMath element). */
+  /**
+   * When every math run shares one explicit color (a:rPr>solidFill), this is
+   * that color node — OMML→LaTeX converters drop drawingML run color, so the
+   * serializer resolves this and applies it to the whole formula (e.g. 蓝色
+   * 权重 W=(w₁,…,wₙ)). Mixed-color formulas leave it undefined (default color).
+   */
+  colorNode?: SafeXmlNode;
+  /** Serialized OMML XML string (first m:oMathPara or m:oMath element). */
   ommlXml: string;
+  /**
+   * One serialized OMML string per paragraph-level formula in the box. A
+   * PPTX 公式文本框 often holds several `<a:p>`, each with its own
+   * `m:oMathPara` (e.g. slide 29 的输入框 4 行算式)。Older code only kept the
+   * first (`ommlXml`); keep them all so the serializer can emit every line.
+   */
+  ommlXmls?: string[];
   /** r:embed of fallback image from mc:Fallback branch. */
   fallbackBlipEmbed?: string;
   /** Plain text extracted from m:t elements inside the OMML. */
@@ -32,6 +46,47 @@ function findOmmlNode(node: SafeXmlNode): SafeXmlNode | null {
     if (found) return found;
   }
   return null;
+}
+
+/**
+ * Collect every top-level OMML node (one per paragraph's formula). Stops
+ * descending once it hits an oMathPara/oMath so a paragraph's container is
+ * returned whole (and its inner oMath isn't double-counted).
+ */
+function collectOmmlNodes(node: SafeXmlNode): SafeXmlNode[] {
+  if (node.localName === 'oMathPara' || node.localName === 'oMath') return [node];
+  const out: SafeXmlNode[] = [];
+  for (const child of node.allChildren()) out.push(...collectOmmlNodes(child));
+  return out;
+}
+
+/**
+ * If every math run (`m:r`) carries the same explicit color
+ * (`a:rPr > a:solidFill > a:srgbClr|a:schemeClr`), return that color node so
+ * the serializer can resolve + apply it. Returns undefined when there's no
+ * explicit color or the runs use mixed colors (then the formula keeps the
+ * default color — partial per-run coloring isn't reconstructed).
+ */
+export function uniformMathColorNode(ommlNode: SafeXmlNode): SafeXmlNode | undefined {
+  const colors: SafeXmlNode[] = [];
+  const walk = (n: SafeXmlNode) => {
+    if (n.localName === 'r') {
+      const fill = n.child('rPr').child('solidFill');
+      if (fill.exists()) {
+        const srgb = fill.child('srgbClr');
+        const scheme = fill.child('schemeClr');
+        if (srgb.exists()) colors.push(srgb);
+        else if (scheme.exists()) colors.push(scheme);
+        else colors.push(fill); // some other fill child — still counts as "has color"
+      }
+    }
+    for (const child of n.allChildren()) walk(child);
+  };
+  walk(ommlNode);
+  if (colors.length === 0) return undefined;
+  const key = (x: SafeXmlNode) => `${x.localName}:${x.attr('val') ?? ''}`;
+  const first = key(colors[0]);
+  return colors.every((c) => key(c) === first) ? colors[0] : undefined;
 }
 
 /**
@@ -127,13 +182,14 @@ export function parseMathNode(altContent: SafeXmlNode): MathNodeData | undefined
   const txBody = sp.child('txBody');
   if (!txBody.exists()) return undefined;
 
-  const ommlNode = findOmmlNode(txBody);
-  if (!ommlNode) return undefined;
+  const ommlNodes = collectOmmlNodes(txBody);
+  if (ommlNodes.length === 0) return undefined;
 
   // Use the sp from Choice for position/size (it has the xfrm)
   const base = parseBaseProps(sp);
-  const ommlXml = serializeElement(ommlNode);
-  const plainText = collectMathText(ommlNode);
+  const ommlXmls = ommlNodes.map(serializeElement).filter(Boolean);
+  const ommlXml = ommlXmls[0] ?? '';
+  const plainText = ommlNodes.map(collectMathText).join('\n');
 
   // Extract fallback image embed from mc:Fallback > p:sp > p:spPr > a:blipFill > a:blip
   let fallbackBlipEmbed: string | undefined;
@@ -152,6 +208,8 @@ export function parseMathNode(altContent: SafeXmlNode): MathNodeData | undefined
     ...base,
     nodeType: 'math' as const,
     ommlXml,
+    ommlXmls,
+    colorNode: uniformMathColorNode(ommlNodes[0]),
     fallbackBlipEmbed,
     plainText,
   };

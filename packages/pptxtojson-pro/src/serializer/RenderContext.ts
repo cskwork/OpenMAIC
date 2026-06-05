@@ -66,8 +66,8 @@ export function createRenderContext(
 
   const theme: ThemeData = presentation.themes.get(themePath) || {
     colorScheme: new Map(),
-    majorFont: { latin: 'Calibri', ea: '', cs: '' },
-    minorFont: { latin: 'Calibri', ea: '', cs: '' },
+    majorFont: { latin: 'Calibri', ea: '', cs: '', hans: '' },
+    minorFont: { latin: 'Calibri', ea: '', cs: '', hans: '' },
     fillStyles: [],
     lineStyles: [],
     effectStyles: [],

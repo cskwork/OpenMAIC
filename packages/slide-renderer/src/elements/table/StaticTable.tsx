@@ -1,9 +1,15 @@
 'use client';
 
-import { useMemo } from 'react';
-import type { PPTTableElement } from '../../types/slides';
+import { useMemo, type CSSProperties } from 'react';
+import type { PPTTableElement, TableCellBorder } from '../../types/slides';
 import { getTableSubThemeColor } from '../../utils/element';
-import { getTextStyle, formatText, getHiddenCells } from './tableUtils';
+import { getTextStyle } from './tableUtils';
+
+function cellBorderCss(b?: TableCellBorder): string | undefined {
+  if (!b || b.width <= 0) return undefined;
+  const style = b.style === 'dashed' || b.style === 'dotted' ? b.style : 'solid';
+  return `${b.width}px ${style} ${b.color}`;
+}
 
 interface StaticTableProps {
   elementInfo: PPTTableElement;
@@ -11,8 +17,6 @@ interface StaticTableProps {
 
 export function StaticTable({ elementInfo }: StaticTableProps) {
   const { width, data, colWidths, cellMinHeight, rowHeights, outline, theme } = elementInfo;
-
-  const hiddenCells = useMemo(() => getHiddenCells(data), [data]);
 
   const [subThemeDark, subThemeLight] = useMemo(() => {
     if (!theme) return ['', ''];
@@ -78,8 +82,12 @@ export function StaticTable({ elementInfo }: StaticTableProps) {
             style={{ height: `${rowHeights?.[rowIdx] ?? cellMinHeight}px` }}
           >
             {row.map((cell, colIdx) => {
-              if (hiddenCells.has(`${rowIdx}_${colIdx}`)) return null;
-
+              // parser side (transformParsedToSlides) 已经把 hMerge/vMerge
+              // continuation 单元格剔除了，data[r] 只剩 top-left cells；浏览器
+              // 的 HTML table layout 通过 td.colSpan/rowSpan 自动算正确位置，
+              // 不需要再手动算 hiddenCells（旧实现用 data-index 比对 grid-coord
+              // key，混了两种坐标系，把 colspan 跨过的 grid-coord 等于另一格
+              // 的 data-index 时会误隐藏，slide 26 表头 "权重"/"好" 就是中招）。
               const bgColor = getCellBg(rowIdx, colIdx, cell.style?.backcolor);
               const headerColor = getHeaderTextColor(rowIdx);
               const textStyle = getTextStyle(cell.style);
@@ -88,13 +96,30 @@ export function StaticTable({ elementInfo }: StaticTableProps) {
                 textStyle.color = headerColor;
               }
 
+              // 单元格自带逐边描边时按边渲染（未定义的边不画）；否则回退到
+              // 表级 outline 套四边的旧行为，保留真·网格表格的表现。
+              const cellBorders = cell.borders;
+              const borderCss: CSSProperties =
+                cellBorders &&
+                (cellBorders.top ||
+                  cellBorders.bottom ||
+                  cellBorders.left ||
+                  cellBorders.right)
+                  ? {
+                      borderTop: cellBorderCss(cellBorders.top) ?? 'none',
+                      borderBottom: cellBorderCss(cellBorders.bottom) ?? 'none',
+                      borderLeft: cellBorderCss(cellBorders.left) ?? 'none',
+                      borderRight: cellBorderCss(cellBorders.right) ?? 'none',
+                    }
+                  : { border: borderStyle };
+
               return (
                 <td
                   key={cell.id}
                   colSpan={cell.colspan > 1 ? cell.colspan : undefined}
                   rowSpan={cell.rowspan > 1 ? cell.rowspan : undefined}
                   style={{
-                    border: borderStyle,
+                    ...borderCss,
                     backgroundColor: bgColor,
                     ...textStyle,
                   }}
@@ -116,7 +141,13 @@ export function StaticTable({ elementInfo }: StaticTableProps) {
                               ? 'center'
                               : undefined,
                     }}
-                    dangerouslySetInnerHTML={{ __html: formatText(cell.text) }}
+                    // cell.text is already final HTML (transformParsedToSlides
+                    // escapes text + converts \n/spaces and keeps <p> positioning
+                    // styles). Do NOT run formatText here — its space→&nbsp;
+                    // replacement corrupts style attributes like
+                    // `margin-left: calc(42px + 0.25em)` → the title indent is
+                    // lost and collides with the cell's left icon (slide 5).
+                    dangerouslySetInnerHTML={{ __html: cell.text }}
                   />
                 </td>
               );

@@ -129,6 +129,31 @@ export async function slideToPng(
     await nextFrame();
     await nextFrame();
 
+    // Explicitly force-load every (style, weight, family) the slide actually
+    // uses BEFORE snapshotting. `document.fonts.ready` alone is racy: it can
+    // resolve before the off-screen render has triggered a self-hosted woff2
+    // fetch, so html2canvas captures a fallback face. For mixed CJK+Latin text
+    // the fallback's Latin/digit advance widths differ from the intended font,
+    // shifting number/English runs (seen on cold single-slide exports). Loading
+    // each face up front makes the capture deterministic regardless of warmup.
+    if (document.fonts && typeof document.fonts.load === 'function') {
+      const fontSpecs = new Set<string>();
+      container.querySelectorAll<HTMLElement>('*').forEach((el) => {
+        if (!el.textContent || !el.textContent.trim()) return;
+        const cs = getComputedStyle(el);
+        if (!cs.fontFamily) return;
+        fontSpecs.add(`${cs.fontStyle} ${cs.fontWeight} 16px ${cs.fontFamily}`);
+      });
+      await Promise.race([
+        Promise.all(
+          [...fontSpecs].map((spec) =>
+            document.fonts.load(spec).catch(() => undefined),
+          ),
+        ),
+        new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+      ]);
+    }
+
     await Promise.race([
       Promise.all([
         document.fonts ? document.fonts.ready : Promise.resolve(),
@@ -143,6 +168,40 @@ export async function slideToPng(
       ]),
       new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
     ]);
+
+    // html2canvas-pro can't draw <video> elements (it ignores the `poster`
+    // attribute and renders nothing for an undecoded source), so a video that
+    // shows fine on the live canvas comes out白板 in the PNG. Convert every
+    // <video> in the throwaway off-screen tree into an <img> of its poster
+    // (or current decoded frame) BEFORE the snapshot so html2canvas captures
+    // the same preview frame the canvas shows.
+    await Promise.all(
+      Array.from(container.querySelectorAll('video')).map((video) =>
+        replaceVideoWithFrame(video),
+      ),
+    );
+
+    // html2canvas-pro doesn't implement CSS `filter` functions (brightness /
+    // contrast / saturate / opacity etc.), so PowerPoint picture corrections —
+    // washout via <a:lum bright/contrast> and transparency via <a:alphaModFix>
+    // — show on the live canvas but vanish from the exported PNG (the image
+    // comes out fully saturated/opaque). Bake each filtered <img> into its
+    // pixels with a Canvas2D pass (ctx.filter, which Chrome does support)
+    // BEFORE the snapshot so html2canvas captures the corrected bitmap.
+    await Promise.all(
+      Array.from(container.querySelectorAll('img')).map((img) =>
+        bakeImageFilter(img),
+      ),
+    );
+
+    // html2canvas-pro also ignores CSS masks, so the soft-edge feather
+    // (a:softEdge) set by BaseImageElement vanishes from the PNG. Bake the same
+    // feather (two destination-in alpha gradients) into the pixels.
+    await Promise.all(
+      Array.from(container.querySelectorAll<HTMLImageElement>('img[data-soft-edge]')).map(
+        (img) => bakeImageSoftEdge(img),
+      ),
+    );
 
     if (process.env.NODE_ENV !== 'production') {
       // eslint-disable-next-line no-console
@@ -218,6 +277,142 @@ export async function slideToPng(
 
 function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+/**
+ * Replace a <video> with an <img> showing its poster (or, if no poster is set,
+ * its current decoded frame drawn onto a canvas). Copies the video's inline
+ * style so layout is unchanged, then waits for the <img> to load so the
+ * subsequent html2canvas pass captures it. No-ops if there's nothing to draw.
+ */
+async function replaceVideoWithFrame(video: HTMLVideoElement): Promise<void> {
+  const parent = video.parentElement;
+  if (!parent) return;
+
+  let imgSrc: string | null = video.poster || video.getAttribute('poster') || null;
+
+  // No poster but the source decoded → grab the current frame.
+  if (!imgSrc && video.readyState >= 2 && video.videoWidth > 0) {
+    try {
+      const frame = document.createElement('canvas');
+      frame.width = video.videoWidth;
+      frame.height = video.videoHeight;
+      frame.getContext('2d')?.drawImage(video, 0, 0);
+      imgSrc = frame.toDataURL('image/png');
+    } catch {
+      // CORS-tainted frame — leave imgSrc null and bail below.
+    }
+  }
+  if (!imgSrc) return;
+
+  const img = document.createElement('img');
+  img.src = imgSrc;
+  img.style.cssText = video.style.cssText;
+  if (!img.style.width) img.style.width = '100%';
+  if (!img.style.height) img.style.height = '100%';
+  if (!img.style.objectFit) img.style.objectFit = 'contain';
+
+  await new Promise<void>((resolve) => {
+    if (img.complete && img.naturalWidth > 0) return resolve();
+    img.addEventListener('load', () => resolve(), { once: true });
+    img.addEventListener('error', () => resolve(), { once: true });
+  });
+
+  parent.replaceChild(img, video);
+}
+
+/**
+ * Bake an <img>'s CSS `filter` into its bitmap. html2canvas-pro ignores the
+ * `filter` property, so without this any brightness/contrast/saturate/opacity
+ * applied by the renderer (PPT lum/alphaModFix corrections) is lost in the PNG.
+ * Draws the image through a Canvas2D `ctx.filter` pass, swaps the src for the
+ * baked PNG, and clears the inline filter so the value isn't double-applied.
+ * No-ops when there's no filter, the image hasn't decoded, or the canvas is
+ * CORS-tainted (export would throw — leave the original img untouched).
+ */
+async function bakeImageFilter(img: HTMLImageElement): Promise<void> {
+  const filter = (img.style.filter || '').trim();
+  if (!filter || filter === 'none') return;
+  if (!img.complete || img.naturalWidth === 0) return;
+
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.filter = filter;
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const baked = canvas.toDataURL('image/png');
+
+    img.style.filter = '';
+    await new Promise<void>((resolve) => {
+      img.addEventListener('load', () => resolve(), { once: true });
+      img.addEventListener('error', () => resolve(), { once: true });
+      img.src = baked;
+    });
+  } catch {
+    // CORS-tainted source or unsupported ctx.filter — keep the original <img>.
+  }
+}
+
+/**
+ * Bake the soft-edge feather (a:softEdge) into an <img>'s bitmap. html2canvas-pro
+ * ignores CSS masks, so the feather BaseImageElement applies is lost in the PNG.
+ * The feather radius is read from `data-soft-edge` (px in the element's displayed
+ * box) and scaled to the image's natural pixels. Two `destination-in` linear
+ * gradient passes multiply the alpha down to 0 within `r` of each edge (corners
+ * get both axes), matching the live CSS mask. No-ops on undecoded/ CORS-tainted
+ * images or zero radius.
+ */
+async function bakeImageSoftEdge(img: HTMLImageElement): Promise<void> {
+  const rCss = parseFloat(img.dataset.softEdge || '');
+  if (!rCss || rCss <= 0) return;
+  if (!img.complete || img.naturalWidth === 0) return;
+
+  const displayedW = img.offsetWidth || img.naturalWidth;
+  const scale = img.naturalWidth / displayedW;
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+  const r = Math.min(rCss * scale, w / 2, h / 2);
+  if (r <= 0) return;
+
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(img, 0, 0, w, h);
+    ctx.globalCompositeOperation = 'destination-in';
+
+    const stops = (g: CanvasGradient, extent: number) => {
+      const f = r / extent;
+      g.addColorStop(0, 'rgba(0,0,0,0)');
+      g.addColorStop(f, 'rgba(0,0,0,1)');
+      g.addColorStop(1 - f, 'rgba(0,0,0,1)');
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      return g;
+    };
+    const gh = stops(ctx.createLinearGradient(0, 0, w, 0), w);
+    ctx.fillStyle = gh;
+    ctx.fillRect(0, 0, w, h);
+    const gv = stops(ctx.createLinearGradient(0, 0, 0, h), h);
+    ctx.fillStyle = gv;
+    ctx.fillRect(0, 0, w, h);
+
+    const baked = canvas.toDataURL('image/png');
+    img.removeAttribute('data-soft-edge');
+    img.style.maskImage = '';
+    (img.style as unknown as Record<string, string>).webkitMaskImage = '';
+    await new Promise<void>((resolve) => {
+      img.addEventListener('load', () => resolve(), { once: true });
+      img.addEventListener('error', () => resolve(), { once: true });
+      img.src = baked;
+    });
+  } catch {
+    // CORS-tainted source — keep the original <img>.
+  }
 }
 
 function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {

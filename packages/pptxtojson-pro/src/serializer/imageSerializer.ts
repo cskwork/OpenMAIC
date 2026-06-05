@@ -141,6 +141,26 @@ function resolvePresetGeom(node: PicNodeData): string {
   return 'rect';
 }
 
+/** EMU per CSS pixel at 96 DPI. */
+const EMU_PER_PX = 9525;
+
+/**
+ * Resolve the picture soft-edge feather radius (px) from
+ * `spPr > effectLst > softEdge@rad`. PowerPoint feathers the image's alpha to
+ * transparent over this radius at every edge; without it we draw a hard rect.
+ * Returned in the same raw-px scale as `node.size` (no ratio applied), so the
+ * transform passes it straight through.
+ */
+function resolveSoftEdgePx(node: PicNodeData): number | undefined {
+  const spPr = node.source.child('spPr');
+  if (!spPr.exists()) return undefined;
+  const softEdge = spPr.child('effectLst').child('softEdge');
+  if (!softEdge.exists()) return undefined;
+  const rad = softEdge.numAttr('rad');
+  if (rad === undefined || rad <= 0) return undefined;
+  return Number((rad / EMU_PER_PX).toFixed(2));
+}
+
 /**
  * Resolve image-level hyperlink from hlinkClick on cNvPr.
  * Mirrors link resolution logic in ShapeRenderer / ImageRenderer.
@@ -536,6 +556,7 @@ function buildImage(
 
   const geom = resolvePresetGeom(node);
   const link = resolvePicLink(node, ctx);
+  const softEdge = resolveSoftEdgePx(node);
 
   // Blip opacity (alphaModFix / alphaMod / alphaOff) — same as ImageRenderer.resolveBlipOpacity.
   // When opacity < 1, ImageRenderer sets wrapper.style.opacity; here we store in filters.
@@ -566,6 +587,7 @@ function buildImage(
     borderStrokeDasharray: borderResult.borderStrokeDasharray || '0',
     ...(hasFilters ? { filters: mergedFilters } : {}),
     ...(link ? { link } : {}),
+    ...(softEdge ? { softEdge } : {}),
   };
 }
 

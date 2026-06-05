@@ -14,8 +14,18 @@ export interface GroupNodeData extends BaseNodeData {
   children: SafeXmlNode[];
 }
 
-/** Tag names of elements that can be children in a group's spTree. */
-const GROUP_CHILD_TAGS = new Set(['sp', 'pic', 'grpSp', 'graphicFrame', 'cxnSp']);
+/** Tag names of elements that can be children in a group's spTree.
+ *  `AlternateContent` is included so inline formulas/labels inside a grouped
+ *  diagram (e.g. 神经元图里的 x₁/σ/b/wᵢ 标注与 y=σ(…) 公式) aren't dropped —
+ *  parseChildNode routes them to the math/text parser. */
+const GROUP_CHILD_TAGS = new Set([
+  'sp',
+  'pic',
+  'grpSp',
+  'graphicFrame',
+  'cxnSp',
+  'AlternateContent',
+]);
 
 /**
  * Parse a group shape XML node (`p:grpSp`) into GroupNodeData.

@@ -744,7 +744,15 @@ export function resolveThemeFillReference(
   ctx: RenderContext,
 ): { fillCss: string; gradientFillData: GradientFillData | null } {
   const idx = fillRef.numAttr('idx') ?? 0;
-  if (idx <= 0 || (ctx.theme.fillStyles?.length ?? 0) < idx) {
+  // ECMA-376: idx=0 (或 1000) 表示 "不应用 style matrix 中的填充"。
+  // 内部 <a:schemeClr> 只是 phClr 替换用的占位色——当没有引用样式时它
+  // 没有应用对象，不能当作实际填充返回（否则会把本应无填充的描边形状
+  // 当成实心色块渲染，例如本 deck slide 5 中间那段 custGeom 灰色连接线
+  // 被错染成大块橙色）。
+  if (idx <= 0) {
+    return { fillCss: '', gradientFillData: null };
+  }
+  if ((ctx.theme.fillStyles?.length ?? 0) < idx) {
     return { fillCss: resolveColorToCss(fillRef, ctx), gradientFillData: null };
   }
 

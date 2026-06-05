@@ -312,6 +312,8 @@ export interface PPTImageElement extends PPTBaseElement {
   radius?: number;
   colorMask?: string;
   imageType?: ImageType;
+  /** 柔化边缘羽化半径（px）：a:effectLst>softEdge@rad，把图片边缘 alpha 渐隐到透明。 */
+  softEdge?: number;
 }
 
 export type ShapeTextAlign = 'top' | 'middle' | 'bottom';
@@ -536,6 +538,12 @@ export interface TableCellStyle {
  *
  * style?: 单元格样式
  */
+export interface TableCellBorder {
+  width: number;
+  style: 'solid' | 'dashed' | 'dotted';
+  color: string;
+}
+
 export interface TableCell {
   id: string;
   colspan: number;
@@ -546,6 +554,17 @@ export interface TableCell {
   vAlign?: 'up' | 'mid' | 'down' | 'top' | 'middle' | 'bottom';
   /** Cell padding as a CSS shorthand string (e.g. `"5px 10px"`), parsed from the embedded HTML. */
   padding?: string;
+  /**
+   * Per-side cell borders (px-scaled). Lets the renderer draw only the sides
+   * the source PPT defines (e.g. left/right dividers) instead of boxing every
+   * cell with the table-level uniform outline.
+   */
+  borders?: {
+    top?: TableCellBorder;
+    bottom?: TableCellBorder;
+    left?: TableCellBorder;
+    right?: TableCellBorder;
+  };
 }
 
 /**

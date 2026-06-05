@@ -29,7 +29,14 @@ export function BaseLatexElement({ elementInfo }: BaseLatexElementProps) {
       >
         <div
           className="element-content"
-          style={{ position: 'relative', width: '100%', height: '100%' }}
+          style={{
+            position: 'relative',
+            width: '100%',
+            height: '100%',
+            // KaTeX glyphs inherit `color`; apply the formula's resolved color
+            // (e.g. 蓝色权重) so it isn't forced to the browser default.
+            ...(elementInfo.color ? { color: elementInfo.color } : {}),
+          }}
         >
           {elementInfo.html ? (
             <KatexContent
@@ -90,7 +97,10 @@ function KatexContent({
     const naturalW = innerRef.current.scrollWidth;
     const naturalH = innerRef.current.scrollHeight;
     if (naturalW > 0 && naturalH > 0) {
-      setScale(Math.min(width / naturalW, height / naturalH));
+      // Cap at 1: only ever shrink the formula to fit its box, never enlarge.
+      // A short formula sitting in a large frame (e.g. slide 29 的右侧推理框)
+      // would otherwise get scaled up to fill the box and render huge.
+      setScale(Math.min(width / naturalW, height / naturalH, 1));
     }
   }, [html, width, height]);
 
