@@ -80,3 +80,6 @@ eval/outline-language/results/
 
 # e2e screenshot artifacts
 e2e/screenshots/
+
+# local-only sandbox/demo pages (do not ship)
+/app/slide-renderer-demo
