@@ -1,5 +1,5 @@
 /**
- * MAIC Agent PoC — SSE transport endpoint.
+ * MAIC Agent — SSE transport endpoint.
  *
  * Hosts a server-side pi Agent and streams its `AgentEvent`s to the editor
  * sidebar as Server-Sent Events. The whole feature is gated behind the master
@@ -10,10 +10,12 @@ import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import { isMaicEditorEnabled } from '@/lib/config/feature-flags';
 import { resolveModelFromRequest } from '@/lib/server/resolve-model';
 import { createCallLlmStreamFn } from '@/lib/agent/runtime/stream-fn';
-import { buildAgent, buildSystemPrompt } from '@/lib/agent/poc/build-agent';
+import { buildAgent, buildSystemPrompt } from '@/lib/agent/runtime/build-agent';
+import { buildToolset } from '@/lib/agent/tools/registry';
+import { callLLM } from '@/lib/ai/llm';
 import { createLogger } from '@/lib/logger';
 
-const log = createLogger('MAIC Agent PoC');
+const log = createLogger('MAIC Agent');
 
 export const maxDuration = 60;
 
@@ -34,14 +36,29 @@ export async function POST(req: NextRequest) {
   }
 
   const { model, modelInfo, thinkingConfig, modelString } = await resolveModelFromRequest(req, body);
+
+  const aiCall = async (system: string, prompt: string): Promise<string> => {
+    const r = await callLLM(
+      { model, system, prompt, maxOutputTokens: modelInfo?.outputWindow },
+      'maic-agent-regen',
+      undefined,
+      thinkingConfig,
+    );
+    return r.text;
+  };
+
+  const tools = buildToolset({ aiCall });
+
+  const abortController = new AbortController();
   const streamFn = createCallLlmStreamFn({
     languageModel: model,
     maxOutputTokens: modelInfo?.outputWindow,
     thinkingConfig,
-    source: 'maic-agent-poc',
+    source: 'maic-agent',
+    abortSignal: abortController.signal,
   });
 
-  const agent = buildAgent({ streamFn, systemPrompt: buildSystemPrompt(body.scene) });
+  const agent = buildAgent({ streamFn, systemPrompt: buildSystemPrompt(body.scene), tools });
   log.info(`agent edit turn [model=${modelString}] scene=${body.scene?.id ?? 'none'}`);
 
   const encoder = new TextEncoder();
@@ -74,6 +91,7 @@ export async function POST(req: NextRequest) {
     },
     cancel() {
       agent.abort();
+      abortController.abort();
     },
   });
 
