@@ -6,6 +6,9 @@ export type ToolCallProviderMetadata = Record<string, Record<string, unknown>>;
 interface ToolCallPartLike {
   providerMetadata?: ToolCallProviderMetadata;
   providerOptions?: ToolCallProviderMetadata;
+  // AI SDK fullStream tool-call parts carry many other fields (type, toolCallId,
+  // toolName, input, ...); accept them so callers can pass a part literal.
+  [key: string]: unknown;
 }
 
 /** Ingest: capture providerMetadata from an AI SDK fullStream tool-call part. */
