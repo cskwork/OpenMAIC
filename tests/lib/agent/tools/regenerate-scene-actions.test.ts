@@ -1,11 +1,13 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@/lib/generation/generation-pipeline', () => ({
   generateSceneActions: vi.fn(async () => [{ type: 'speech', id: 'a1', title: 'hi', text: 'hi' }]),
 }));
 
 import { makeRegenerateSceneActionsTool, type SceneContext } from '@/lib/agent/tools/regenerate-scene-actions';
+import { generateSceneActions } from '@/lib/generation/generation-pipeline';
 import type { SlideContent } from '@/lib/types/stage';
+import type { PPTElement, Slide } from '@/lib/types/slides';
 
 /** Minimal SceneOutline stub */
 const stubOutline = (id: string, title: string, order = 1) => ({
@@ -17,15 +19,26 @@ const stubOutline = (id: string, title: string, order = 1) => ({
   order,
 });
 
-/** Minimal SlideContent stub */
-const stubContent: SlideContent = { type: 'slide', canvas: {} as never };
+/** Minimal SlideContent stub — runtime DSL shape with canvas wrapping elements */
+const stubSlideContent: SlideContent = {
+  type: 'slide',
+  canvas: {
+    id: 'slide1',
+    viewportSize: 1000,
+    viewportRatio: 0.5625,
+    elements: [
+      { id: 'el1', type: 'text', content: 'Hello', left: 0, top: 0, width: 100, height: 50 } as unknown as PPTElement,
+    ],
+    background: { type: 'solid', color: '#ffffff' },
+  } as unknown as Slide,
+};
 
 /** Build a deps object with a single scene context entry */
 function makeDeps(sceneId: string, extra?: Partial<SceneContext>) {
   const ctx: SceneContext = {
     outline: stubOutline(sceneId, 'T'),
     allOutlines: [stubOutline(sceneId, 'T')],
-    content: stubContent,
+    content: stubSlideContent,
     stageId: 'stage1',
     ...extra,
   };
@@ -35,12 +48,37 @@ function makeDeps(sceneId: string, extra?: Partial<SceneContext>) {
   };
 }
 
+const mockGen = vi.mocked(generateSceneActions);
+
 describe('regenerate_scene_actions', () => {
+  beforeEach(() => {
+    mockGen.mockReset();
+    mockGen.mockResolvedValue([{ type: 'speech', id: 'a1', title: 'hi', text: 'hi' } as never]);
+  });
+
   it('returns regenerated actions for the scene in details', async () => {
     const tool = makeRegenerateSceneActionsTool(makeDeps('s1'));
     const res = await tool.execute('tc1', { sceneId: 's1' });
     expect(res.details).toMatchObject({ sceneId: 's1' });
     expect(Array.isArray((res.details as { actions: unknown[] }).actions)).toBe(true);
+  });
+
+  // ── Bug 1 regression: SlideContent shape conversion ──────────────────────────
+  // The runtime scene stores SlideContent = { type:'slide', canvas: Slide }
+  // but generateSceneActions expects GeneratedSlideContent = { elements, background? }.
+  // Without conversion, 'elements' in content is false → returns [] immediately.
+  it('converts SlideContent (runtime) to GeneratedSlideContent before calling the generator', async () => {
+    const tool = makeRegenerateSceneActionsTool(makeDeps('s1'));
+    await tool.execute('tc-shape', { sceneId: 's1' });
+
+    expect(mockGen).toHaveBeenCalledOnce();
+    const [, passedContent] = mockGen.mock.lastCall ?? [];
+    // The generator must receive the flattened shape with 'elements' at top level
+    expect(passedContent).toHaveProperty('elements');
+    expect(Array.isArray((passedContent as { elements: unknown }).elements)).toBe(true);
+    // Must NOT receive the raw canvas wrapper
+    expect(passedContent).not.toHaveProperty('canvas');
+    expect(passedContent).not.toHaveProperty('type');
   });
 
   it('includes the action count in the content text', async () => {
@@ -61,10 +99,6 @@ describe('regenerate_scene_actions', () => {
   });
 
   it('passes previousSpeeches to the generator', async () => {
-    const { generateSceneActions } = await import('@/lib/generation/generation-pipeline');
-    const mockGen = vi.mocked(generateSceneActions);
-    mockGen.mockClear();
-
     const tool = makeRegenerateSceneActionsTool(makeDeps('s1'));
     await tool.execute('tc3', { sceneId: 's1', previousSpeeches: ['hello'] });
 
@@ -80,6 +114,19 @@ describe('regenerate_scene_actions', () => {
     // Should return isError and empty actions, not throw
     expect((res as { isError?: boolean }).isError).toBe(true);
     expect((res.details as { actions: unknown[] }).actions).toHaveLength(0);
+  });
+
+  // ── Bug 1 & Bug 2: empty generation is surfaced as an error ──────────────────
+  it('returns isError when generateSceneActions yields an empty array', async () => {
+    mockGen.mockResolvedValueOnce([]);
+
+    const tool = makeRegenerateSceneActionsTool(makeDeps('s1'));
+    const res = await tool.execute('tc-empty', { sceneId: 's1' });
+
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect((res.details as { actions: unknown[] }).actions).toHaveLength(0);
+    const text = (res.content[0] as { type: string; text: string }).text;
+    expect(text).toMatch(/no actions|no action|0 action/i);
   });
 
   it('tool has expected metadata', () => {

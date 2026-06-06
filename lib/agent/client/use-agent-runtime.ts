@@ -101,7 +101,14 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
           const e = event as { toolCallId: string; result?: { details?: unknown }; isError?: boolean };
           toolResultsRef.current.set(e.toolCallId, { result: e.result, isError: !!e.isError });
           const details = (e.result?.details ?? {}) as { sceneId?: string; actions?: unknown };
-          if (details.sceneId && Array.isArray(details.actions)) {
+          // Only apply actions when the array is non-empty.  Applying an empty
+          // array would destructively wipe the scene's existing narration — we
+          // guard here so a failed generation never silently clears actions.
+          if (
+            details.sceneId &&
+            Array.isArray(details.actions) &&
+            details.actions.length > 0
+          ) {
             useStageStore.getState().updateScene(details.sceneId, { actions: details.actions });
           }
           refresh();

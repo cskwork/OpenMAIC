@@ -26,7 +26,13 @@ import {
   type AgentInfo,
 } from '@/lib/generation/generation-pipeline';
 import type { Action } from '@/lib/types/action';
-import type { SceneOutline } from '@/lib/types/generation';
+import type {
+  SceneOutline,
+  GeneratedSlideContent,
+  GeneratedQuizContent,
+  GeneratedInteractiveContent,
+  GeneratedPBLContent,
+} from '@/lib/types/generation';
 import type { SceneContent } from '@/lib/types/stage';
 
 // ── Scene context shape (client-sourced, injected via deps) ──────────────────
@@ -62,6 +68,44 @@ export interface RegenerateActionsDeps {
    * model never has to fabricate outlines or content.
    */
   getSceneContext: (sceneId: string) => SceneContext | undefined;
+}
+
+// ── Content shape conversion ─────────────────────────────────────────────────
+//
+// The client sends `scene.content` (runtime `SceneContent` DSL) but
+// `generateSceneActions` expects the generation-time types:
+//   GeneratedSlideContent    { elements, background?, remark? }
+//   GeneratedQuizContent     { questions }
+//   GeneratedInteractiveContent { html, ... }
+//   GeneratedPBLContent      { projectConfig }
+//
+// The ONLY mismatch is `SlideContent` (runtime) vs `GeneratedSlideContent`:
+//   SlideContent  = { type: 'slide', canvas: Slide }  — elements at canvas.elements
+//   GeneratedSlide = { elements, background?, remark? } — elements at top level
+//
+// `generateSceneActions` checks `'elements' in content` for the slide branch.
+// If we pass SlideContent directly, that check is FALSE → falls through → returns [].
+//
+// For quiz/interactive/pbl the runtime shapes already have the discriminant field
+// at the top level ('questions', 'html', 'projectConfig'), so they pass through as-is.
+
+function toGenerationContent(
+  content: SceneContent,
+):
+  | GeneratedSlideContent
+  | GeneratedQuizContent
+  | GeneratedInteractiveContent
+  | GeneratedPBLContent {
+  if (content.type === 'slide') {
+    // Convert SlideContent → GeneratedSlideContent
+    return {
+      elements: content.canvas.elements ?? [],
+      background: content.canvas.background,
+      // remark is not stored in the runtime canvas; omit it
+    } satisfies GeneratedSlideContent;
+  }
+  // quiz, interactive, pbl runtime shapes already satisfy the generation type
+  return content as GeneratedQuizContent | GeneratedInteractiveContent | GeneratedPBLContent;
 }
 
 // ── Typebox parameter schema ─────────────────────────────────────────────────
@@ -150,12 +194,36 @@ export function makeRegenerateSceneActionsTool(
       ): Promise<string> => deps.aiCall(systemPrompt, userPrompt);
 
       // ── Generate actions ───────────────────────────────────────────────
-      const actions = await generateSceneActions(outline, content as never, aiCallFn, {
+      // Convert the runtime SceneContent shape to the generation-time shape that
+      // generateSceneActions expects.  The critical case is SlideContent:
+      //   runtime:    { type: 'slide', canvas: Slide }   → elements at canvas.elements
+      //   generation: { elements, background?, remark? } → elements at top level
+      // Without this conversion the 'elements' in content check is FALSE and the
+      // function returns [] immediately.
+      const generationContent = toGenerationContent(content);
+
+      const actions = await generateSceneActions(outline, generationContent, aiCallFn, {
         ctx,
         agents,
         userProfile,
         languageDirective,
       });
+
+      if (actions.length === 0) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text:
+                `Warning: action generation produced no actions for scene "${outline.title}". ` +
+                `The scene content may be empty or in an unexpected format. ` +
+                `The existing actions have NOT been changed.`,
+            },
+          ],
+          details: { sceneId, actions: [] },
+          isError: true,
+        };
+      }
 
       return {
         content: [
