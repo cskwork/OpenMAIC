@@ -8,7 +8,7 @@
  * minimally with Tailwind so it sits inside the editor chrome.
  */
 import { AssistantRuntimeProvider, ComposerPrimitive, MessagePrimitive, ThreadPrimitive } from '@assistant-ui/react';
-import { useAgentRuntime } from '@/lib/agent/poc/client/use-agent-runtime';
+import { useAgentRuntime } from '@/lib/agent/client/use-agent-runtime';
 
 function TextPart({ text }: { text: string }) {
   return <p className="whitespace-pre-wrap text-sm leading-relaxed">{text}</p>;

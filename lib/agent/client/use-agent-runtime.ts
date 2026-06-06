@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * MAIC Agent PoC — client runtime.
+ * MAIC Agent v0 — client runtime.
  *
  * Drives an assistant-ui ExternalStore from the server's pi `AgentEvent` SSE
  * stream. This is the second integration seam of option B: assistant-ui's
@@ -12,17 +12,15 @@
  * then a wrap-up turn). We ACCUMULATE across turns into one assistant message:
  * tool calls are upserted by id (so the tool card from the first turn survives
  * the wrap-up turn), the latest non-empty assistant text wins, and a turn error
- * surfaces as text. When a `set_slide_title` tool result arrives, its op
- * (`details`) is applied to the editor's Dexie-backed stage store.
+ * surfaces as text. When a `regenerate_scene_actions` tool result arrives, its
+ * `details` payload is applied to the editor's Dexie-backed stage store.
  */
 import { useCallback, useRef, useState } from 'react';
 import { useExternalStoreRuntime, type AppendMessage, type ThreadMessageLike } from '@assistant-ui/react';
 import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import { useStageStore } from '@/lib/store/stage';
-
-type AssistantPart =
-  | { type: 'text'; text: string }
-  | { type: 'tool-call'; toolCallId: string; toolName: string; args: Record<string, unknown>; result?: unknown; isError?: boolean };
+import { mergeAssistantParts } from './merge-assistant-parts';
+export type { AssistantPart } from './merge-assistant-parts';
 
 interface PiAssistantContent {
   type: string;
@@ -56,22 +54,13 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
   const errorRef = useRef<string>('');
 
   const buildAssistant = useCallback((id: string): ThreadMessageLike => {
-    const parts: AssistantPart[] = [];
-    const text = textRef.current || errorRef.current;
-    if (text) parts.push({ type: 'text', text });
-    for (const tcId of toolOrderRef.current) {
-      const tc = toolCallsRef.current.get(tcId);
-      if (!tc) continue;
-      const tr = toolResultsRef.current.get(tcId);
-      parts.push({
-        type: 'tool-call',
-        toolCallId: tcId,
-        toolName: tc.name,
-        args: tc.args,
-        ...(tr ? { result: tr.result, isError: tr.isError } : {}),
-      });
-    }
-    if (parts.length === 0) parts.push({ type: 'text', text: '' });
+    const parts = mergeAssistantParts({
+      text: textRef.current,
+      error: errorRef.current,
+      toolOrder: toolOrderRef.current,
+      toolCalls: toolCallsRef.current,
+      toolResults: toolResultsRef.current,
+    });
     return { role: 'assistant', id, content: parts as ThreadMessageLike['content'] };
   }, []);
 
@@ -106,9 +95,9 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
         case 'tool_execution_end': {
           const e = event as { toolCallId: string; result?: { details?: unknown }; isError?: boolean };
           toolResultsRef.current.set(e.toolCallId, { result: e.result, isError: !!e.isError });
-          const details = (e.result?.details ?? {}) as { sceneId?: string; title?: string };
-          if (details.sceneId && typeof details.title === 'string') {
-            useStageStore.getState().updateScene(details.sceneId, { title: details.title });
+          const details = (e.result?.details ?? {}) as { sceneId?: string; actions?: unknown };
+          if (details.sceneId && Array.isArray(details.actions)) {
+            useStageStore.getState().updateScene(details.sceneId, { actions: details.actions });
           }
           refresh();
           break;
