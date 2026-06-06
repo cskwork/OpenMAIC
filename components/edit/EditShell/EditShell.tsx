@@ -28,6 +28,12 @@ interface EditShellProps {
    * is hidden, so the entire top chrome reduces to a single bar.
    */
   readonly commandTrailing?: ReactNode;
+  /**
+   * Optional right-side panel slot. Used by the MAIC Agent PoC to mount the
+   * AI sidebar. Like `leftRail`, it is a pure chrome handoff — surface code
+   * never imports it. Collapses to zero width when absent.
+   */
+  readonly rightRail?: ReactNode;
 }
 
 const CHROME_TRANSITION = { duration: CHROME_DURATION, ease: CHROME_EASE } as const;
@@ -63,7 +69,7 @@ const LEFT_RAIL_DELAY = CHROME_STAGGER * 2;
  * never remount during scene navigation, removing the chrome flicker that
  * the previous two-branch design caused (PR3a rearch).
  */
-export function EditShell({ scene, leftRail, commandTrailing }: EditShellProps) {
+export function EditShell({ scene, leftRail, commandTrailing, rightRail }: EditShellProps) {
   const surface = sceneEditorRegistry.resolve(scene.type) ?? NOOP_SURFACE;
   // Surface state is published from a child runner (keyed by sceneType so it
   // remounts when the surface identity changes — that's the boundary at which
@@ -89,6 +95,7 @@ export function EditShell({ scene, leftRail, commandTrailing }: EditShellProps) 
         history={state?.history}
         commands={state?.commands}
         trailing={commandTrailing}
+        rightRail={rightRail}
       >
         <SurfaceComponent />
         {state?.insertItems && state.insertItems.length > 0 && (
@@ -210,10 +217,11 @@ interface FrameProps {
   readonly history?: React.ComponentProps<typeof CommandBar>['history'];
   readonly commands?: React.ComponentProps<typeof CommandBar>['commands'];
   readonly trailing?: ReactNode;
+  readonly rightRail?: ReactNode;
   readonly children: ReactNode;
 }
 
-function Frame({ title, leftRail, history, commands, trailing, children }: FrameProps) {
+function Frame({ title, leftRail, history, commands, trailing, rightRail, children }: FrameProps) {
   const prefersReducedMotion = useReducedMotion();
 
   // Chrome layers fade in (opacity only) — deliberately NO transform (x/y)
@@ -271,6 +279,7 @@ function Frame({ title, leftRail, history, commands, trailing, children }: Frame
           </div>
         </div>
       }
+      rightSlot={rightRail ? <div className="h-full shrink-0">{rightRail}</div> : null}
     />
   );
 }

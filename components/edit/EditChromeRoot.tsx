@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import { EditShell } from '@/components/edit/EditShell';
 import { SlideNavRail } from '@/components/edit/SlideNavRail';
+import { AgentPanel } from '@/components/edit/AgentPanel/AgentPanel';
 import { HeaderControls } from '@/components/stage/header-controls';
 import { isMaicEditorEnabled } from '@/lib/config/feature-flags';
 import { preloadEditor } from '@/lib/edit/preload-editor';
@@ -63,6 +64,7 @@ export function EditChromeRoot({ scene, isEditable, onToggleEditMode }: EditChro
     <EditShell
       scene={scene}
       leftRail={<SlideNavRail />}
+      rightRail={<AgentPanel scene={{ id: scene.id, title: scene.title }} />}
       commandTrailing={
         <HeaderControls
           mode="edit"
