@@ -1,5 +1,5 @@
 /**
- * MAIC Agent PoC — pi StreamFn adapter.
+ * MAIC Agent — pi StreamFn adapter (promoted from PoC).
  *
  * Bridges the pi agent loop's LLM call to OpenMAIC's existing AI-SDK-based
  * connector (`streamLLM`). pi's `StreamFn` is `(model, context, options) =>
@@ -25,6 +25,7 @@ import type { StreamFn } from '@earendil-works/pi-agent-core';
 import { jsonSchema, stepCountIs, tool as aiTool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { streamLLM } from '@/lib/ai/llm';
 import type { ThinkingConfig } from '@/lib/types/provider';
+import { captureToolCallMetadata, emitToolCallProviderOptions, type ToolCallProviderMetadata } from './provider-metadata';
 
 /**
  * Local re-implementation of pi-ai's `AssistantMessageEventStream` queue. pi
@@ -93,6 +94,8 @@ export interface CallLlmStreamFnOptions {
   maxOutputTokens?: number;
   thinkingConfig?: ThinkingConfig;
   source?: string;
+  /** Optional abort signal forwarded to the underlying streamLLM call. */
+  abortSignal?: AbortSignal;
 }
 
 /** Build a pi `StreamFn` that calls OpenMAIC's connector instead of pi-ai providers. */
@@ -131,8 +134,9 @@ async function pump(
         // pi's loop owns multi-step; one LLM turn per streamFn call.
         stopWhen: stepCountIs(1),
         maxOutputTokens: opts.maxOutputTokens,
+        abortSignal: opts.abortSignal,
       },
-      opts.source ?? 'maic-agent-poc',
+      opts.source ?? 'maic-agent',
       opts.thinkingConfig,
     );
 
@@ -162,11 +166,10 @@ async function pump(
           name: (part.toolName ?? part.name) as string,
           arguments: (part.input ?? part.args ?? {}) as Record<string, unknown>,
         };
-        // Gemini 3 requires the tool call's thought_signature to be echoed back
-        // on the next turn, else the wrap-up turn errors. Capture it here.
-        const sig = (part.providerMetadata as { google?: { thoughtSignature?: string } } | undefined)?.google
-          ?.thoughtSignature;
-        if (sig) (toolCall as { thoughtSignature?: string }).thoughtSignature = sig;
+        // Capture provider-specific metadata (e.g. Gemini thought_signature) via
+        // the typed seam so it can be re-emitted on the next turn.
+        const meta = captureToolCallMetadata(part as never);
+        if (meta) (toolCall as { providerMetadata?: ToolCallProviderMetadata }).providerMetadata = meta;
         partial.content.push(toolCall);
         stream.push({ type: 'toolcall_start', contentIndex: idx, partial });
         stream.push({ type: 'toolcall_end', contentIndex: idx, toolCall, partial });
@@ -191,7 +194,7 @@ async function pump(
 }
 
 /** pi Message[] -> AI SDK ModelMessage[]. */
-function toModelMessages(messages: PiMessage[]): ModelMessage[] {
+export function toModelMessages(messages: PiMessage[]): ModelMessage[] {
   const out: ModelMessage[] = [];
   for (const m of messages) {
     if (m.role === 'user') {
@@ -214,8 +217,8 @@ function toModelMessages(messages: PiMessage[]): ModelMessage[] {
             toolName: c.name,
             input: c.arguments,
           };
-          const sig = (c as { thoughtSignature?: string }).thoughtSignature;
-          if (sig) part.providerOptions = { google: { thoughtSignature: sig } };
+          const meta = emitToolCallProviderOptions((c as { providerMetadata?: ToolCallProviderMetadata }).providerMetadata);
+          if (meta) part.providerOptions = meta;
           parts.push(part);
         }
       }

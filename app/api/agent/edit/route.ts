@@ -9,7 +9,7 @@ import type { NextRequest } from 'next/server';
 import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import { isMaicEditorEnabled } from '@/lib/config/feature-flags';
 import { resolveModelFromRequest } from '@/lib/server/resolve-model';
-import { createCallLlmStreamFn } from '@/lib/agent/poc/pi-streamfn-adapter';
+import { createCallLlmStreamFn } from '@/lib/agent/runtime/stream-fn';
 import { buildAgent, buildSystemPrompt } from '@/lib/agent/poc/build-agent';
 import { createLogger } from '@/lib/logger';
 
