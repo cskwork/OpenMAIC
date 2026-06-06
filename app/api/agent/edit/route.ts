@@ -14,14 +14,29 @@ import { buildAgent, buildSystemPrompt } from '@/lib/agent/runtime/build-agent';
 import { buildToolset } from '@/lib/agent/tools/registry';
 import { callLLM } from '@/lib/ai/llm';
 import { createLogger } from '@/lib/logger';
+import type { SceneContext } from '@/lib/agent/tools/regenerate-scene-actions';
 
 const log = createLogger('MAIC Agent');
 
 export const maxDuration = 60;
 
+/**
+ * Scene/stage context map sent by the client.
+ * Keyed by scene id; the client reads `useStageStore` to build this so the
+ * server never has to access a (non-existent) server-side scene store.
+ */
+export type SceneContextMap = Record<string, SceneContext>;
+
 interface AgentEditBody {
   message: string;
   scene?: { id: string; title: string };
+  /**
+   * Trusted scene/stage context for every scene the agent may act on.
+   * The client includes the active scene (and all sibling scenes) so the
+   * `regenerate_scene_actions` tool can resolve outline + content without
+   * relying on model-fabricated arguments.
+   */
+  sceneContextMap?: SceneContextMap;
 }
 
 export async function POST(req: NextRequest) {
@@ -47,7 +62,11 @@ export async function POST(req: NextRequest) {
     return r.text;
   };
 
-  const tools = buildToolset({ aiCall });
+  const sceneContextMap: SceneContextMap = body.sceneContextMap ?? {};
+  const tools = buildToolset({
+    aiCall,
+    getSceneContext: (sceneId) => sceneContextMap[sceneId],
+  });
 
   const abortController = new AbortController();
   const streamFn = createCallLlmStreamFn({

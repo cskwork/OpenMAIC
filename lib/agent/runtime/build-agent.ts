@@ -58,7 +58,7 @@ export function buildSystemPrompt(scene?: { id: string; title: string }): string
     'You are the MAIC Editor assistant.',
     'You help the user edit the slide they are currently viewing.',
     sceneLine,
-    'When the user asks to regenerate or re-sync the actions/narration for the current scene after editing its content, call the `regenerate_scene_actions` tool with the appropriate scene data.',
+    'When the user asks to regenerate or re-sync the actions/narration for the current scene after editing its content, call the `regenerate_scene_actions` tool with only the sceneId. You do NOT need to supply outline, content, or any other scene data — those are resolved automatically.',
     'For anything else, reply briefly in one or two sentences.',
   ].join(' ');
 }

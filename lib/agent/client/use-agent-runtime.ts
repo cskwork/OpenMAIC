@@ -14,11 +14,16 @@
  * the wrap-up turn), the latest non-empty assistant text wins, and a turn error
  * surfaces as text. When a `regenerate_scene_actions` tool result arrives, its
  * `details` payload is applied to the editor's Dexie-backed stage store.
+ *
+ * Scene/stage context (outline, allOutlines, content, stageId) is read from
+ * `useStageStore` at send-time and included in the POST body so the
+ * `regenerate_scene_actions` tool never needs to rely on model-fabricated data.
  */
 import { useCallback, useRef, useState } from 'react';
 import { useExternalStoreRuntime, type AppendMessage, type ThreadMessageLike } from '@assistant-ui/react';
 import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import { useStageStore } from '@/lib/store/stage';
+import type { SceneContextMap } from '@/app/api/agent/edit/route';
 import { mergeAssistantParts } from './merge-assistant-parts';
 export type { AssistantPart } from './merge-assistant-parts';
 
@@ -134,10 +139,44 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
         });
 
       try {
+        // Build trusted scene context map from the client store.
+        // This lets the route inject outline/content into the tool without the
+        // model having to fabricate those large structures.
+        const storeState = useStageStore.getState();
+        const { scenes, outlines, stage } = storeState;
+        const sceneContextMap: SceneContextMap = {};
+        for (const scene of scenes) {
+          // Match outline by order (outlines are ordered 1-based, scene.order is the same)
+          const outline = outlines.find((o) => o.order === scene.order) ?? {
+            id: scene.id,
+            type: scene.type,
+            title: scene.title,
+            description: '',
+            keyPoints: [],
+            order: scene.order,
+          };
+          sceneContextMap[scene.id] = {
+            outline,
+            allOutlines: outlines.length > 0
+              ? outlines
+              : scenes.map((s) => ({
+                  id: s.id,
+                  type: s.type,
+                  title: s.title,
+                  description: '',
+                  keyPoints: [],
+                  order: s.order,
+                })),
+            content: scene.content,
+            stageId: scene.stageId,
+            languageDirective: stage?.languageDirective,
+          };
+        }
+
         const res = await fetch('/api/agent/edit', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: userText, scene: opts.scene }),
+          body: JSON.stringify({ message: userText, scene: opts.scene, sceneContextMap }),
         });
         if (!res.ok || !res.body) throw new Error(`agent request failed: ${res.status}`);
 

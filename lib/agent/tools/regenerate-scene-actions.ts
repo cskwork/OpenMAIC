@@ -9,6 +9,11 @@
  * factory (`makeRegenerateSceneActionsTool`) — the route will supply `deps.aiCall`
  * built from the already-resolved model.
  *
+ * Scene/stage context (outline, allOutlines, content, stageId) is injected via
+ * `deps.getSceneContext` — sourced from the client's `useStageStore` and sent in
+ * the POST body — so the model never needs to fabricate these large structures.
+ * The model only needs to supply the `sceneId` (or rely on the active scene).
+ *
  * The tool returns the regenerated actions in `details`; a later client task
  * reads `tool_execution_end` and applies the actions to the scene in the store.
  */
@@ -21,6 +26,25 @@ import {
   type AgentInfo,
 } from '@/lib/generation/generation-pipeline';
 import type { Action } from '@/lib/types/action';
+import type { SceneOutline } from '@/lib/types/generation';
+import type { SceneContent } from '@/lib/types/stage';
+
+// ── Scene context shape (client-sourced, injected via deps) ──────────────────
+
+export interface SceneContext {
+  /** The SceneOutline for the target scene. */
+  outline: SceneOutline;
+  /** All scene outlines in the stage, in order (for cross-scene context). */
+  allOutlines: SceneOutline[];
+  /** The current scene content. */
+  content: SceneContent;
+  /** The stage id that owns this scene. */
+  stageId: string;
+  /** Optional agent info for multi-agent stages. */
+  agents?: AgentInfo[];
+  /** Optional language directive forwarded to the generator. */
+  languageDirective?: string;
+}
 
 // ── Deps injection interface ─────────────────────────────────────────────────
 
@@ -31,28 +55,25 @@ export interface RegenerateActionsDeps {
    * optional images arg (actions generation doesn't use vision).
    */
   aiCall: (systemPrompt: string, userPrompt: string) => Promise<string>;
+
+  /**
+   * Returns the trusted scene/stage context for a given scene id.
+   * This is populated from the client POST body (useStageStore state) so the
+   * model never has to fabricate outlines or content.
+   */
+  getSceneContext: (sceneId: string) => SceneContext | undefined;
 }
 
 // ── Typebox parameter schema ─────────────────────────────────────────────────
+// Minimal: the model only needs to identify WHICH scene to regenerate.
+// All heavy context (outline, allOutlines, content, stageId) comes from deps.
 
 export const RegenerateSceneActionsParams = Type.Object({
   sceneId: Type.String({
-    description: 'The id of the scene whose actions should be regenerated.',
-  }),
-  outline: Type.Any({
-    description: 'SceneOutline for the target scene (mirrors route POST body).',
-  }),
-  allOutlines: Type.Array(Type.Any(), {
-    description: 'All scene outlines in the stage, in order (for cross-scene context).',
-  }),
-  content: Type.Any({
     description:
-      'The current scene content (GeneratedSlideContent | GeneratedQuizContent | GeneratedInteractiveContent | GeneratedPBLContent).',
+      'The id of the scene whose actions should be regenerated. ' +
+      'Use the id of the current scene shown in the system prompt.',
   }),
-  stageId: Type.String({ description: 'The stage id that owns this scene.' }),
-  agents: Type.Optional(
-    Type.Array(Type.Any(), { description: 'Agent info for multi-agent stages.' }),
-  ),
   previousSpeeches: Type.Optional(
     Type.Array(Type.String(), {
       description: 'Speech texts from the previous scene for cross-scene coherence.',
@@ -60,9 +81,6 @@ export const RegenerateSceneActionsParams = Type.Object({
   ),
   userProfile: Type.Optional(
     Type.String({ description: 'Free-text user profile for personalised narration.' }),
-  ),
-  languageDirective: Type.Optional(
-    Type.String({ description: 'Language/locale directive forwarded to the generator.' }),
   ),
 });
 
@@ -86,26 +104,37 @@ export function makeRegenerateSceneActionsTool(
     description:
       'Re-generates the narration/playback actions for a scene to match its (edited) content. ' +
       'Use this after the scene content has been modified (e.g. slide elements changed, quiz questions updated) ' +
-      'so that the actions stay in sync with what is actually on screen.',
+      'so that the actions stay in sync with what is actually on screen. ' +
+      'Only supply the sceneId — the scene data is loaded automatically.',
     parameters: RegenerateSceneActionsParams,
 
     execute: async (_toolCallId, params) => {
-      const {
-        sceneId,
-        outline,
-        allOutlines,
-        content,
-        agents,
-        previousSpeeches,
-        userProfile,
-        languageDirective,
-      } = params;
+      const { sceneId, previousSpeeches, userProfile } = params;
+
+      // ── Resolve trusted scene context from deps (not from model args) ──
+      const ctx_data = deps.getSceneContext(sceneId);
+      if (!ctx_data) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Error: scene context not found for sceneId "${sceneId}". Cannot regenerate actions.`,
+            },
+          ],
+          details: { sceneId, actions: [] },
+          isError: true,
+        };
+      }
+
+      const { outline, allOutlines, content, stageId, agents, languageDirective } = ctx_data;
+
+      // Suppress unused variable — stageId is part of the context contract and
+      // may be needed by future tool logic (e.g. quota checks, audit logging).
+      void stageId;
 
       // ── Build cross-scene context (mirrors route.ts logic) ─────────────
-      const allTitles: string[] = (allOutlines as Array<{ title: string }>).map((o) => o.title);
-      const pageIndex = (allOutlines as Array<{ id: string }>).findIndex(
-        (o) => o.id === (outline as { id: string }).id,
-      );
+      const allTitles: string[] = allOutlines.map((o) => o.title);
+      const pageIndex = allOutlines.findIndex((o) => o.id === outline.id);
       const ctx: SceneGenerationContext = {
         pageIndex: (pageIndex >= 0 ? pageIndex : 0) + 1,
         totalPages: allOutlines.length,
@@ -121,9 +150,9 @@ export function makeRegenerateSceneActionsTool(
       ): Promise<string> => deps.aiCall(systemPrompt, userPrompt);
 
       // ── Generate actions ───────────────────────────────────────────────
-      const actions = await generateSceneActions(outline as never, content as never, aiCallFn, {
+      const actions = await generateSceneActions(outline, content as never, aiCallFn, {
         ctx,
-        agents: agents as AgentInfo[] | undefined,
+        agents,
         userProfile,
         languageDirective,
       });
