@@ -29,6 +29,7 @@
     "@ai-sdk/openai": "^3.0.53",
     "@ai-sdk/react": "^3.0.170",
     "@assistant-ui/react": "^0.14.14",
+    "@assistant-ui/react-markdown": "^0.14.1",
     "@base-ui/react": "^1.1.0",
     "@copilotkit/backend": "^0.37.0",
     "@copilotkit/runtime": "^1.51.2",
