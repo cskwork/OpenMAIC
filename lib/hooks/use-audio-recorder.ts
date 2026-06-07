@@ -9,9 +9,10 @@ const log = createLogger('AudioRecorder');
 declare global {
   interface Window {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Web Speech API not typed in lib.dom
-    SpeechRecognition: any;
+    // optional `?` to match @assistant-ui/core's global Window augmentation (identical modifiers)
+    SpeechRecognition?: any;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Web Speech API not typed in lib.dom
-    webkitSpeechRecognition: any;
+    webkitSpeechRecognition?: any;
   }
 }
 
