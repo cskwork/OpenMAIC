@@ -33,8 +33,8 @@ CLAUDE.local.md
 /build
 /dist
 
-# generated: synced from packages/maic-import/dist for runtime URL import
-/public/vendor/maic-import
+# generated: synced from packages/maic-importer/dist for runtime URL import
+/public/vendor/maic-importer
 
 # misc
 .DS_Store

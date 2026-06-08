@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Copy maic-import's built bundle to public/vendor/ so the app can
+ * Copy maic-importer's built bundle to public/vendor/ so the app can
  * load it at runtime via a URL-based dynamic import.
  *
  * Why: the bundle contains dynamic `require()` patterns (from pdfjs-dist)
@@ -14,14 +14,14 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
-const srcDir = path.join(root, 'packages/maic-import/dist');
-const destDir = path.join(root, 'public/vendor/maic-import');
+const srcDir = path.join(root, 'packages/maic-importer/dist');
+const destDir = path.join(root, 'public/vendor/maic-importer');
 
 try {
   await stat(srcDir);
 } catch {
-  console.error(`[sync-maic-import] missing dist: ${srcDir}`);
-  console.error('Run `cd packages/maic-import && pnpm run build` first.');
+  console.error(`[sync-maic-importer] missing dist: ${srcDir}`);
+  console.error('Run `cd packages/maic-importer && pnpm run build` first.');
   process.exit(1);
 }
 
@@ -29,4 +29,4 @@ await rm(destDir, { recursive: true, force: true });
 await mkdir(destDir, { recursive: true });
 await cp(srcDir, destDir, { recursive: true });
 
-console.log(`[sync-maic-import] copied ${path.relative(root, srcDir)} → ${path.relative(root, destDir)}`);
+console.log(`[sync-maic-importer] copied ${path.relative(root, srcDir)} → ${path.relative(root, destDir)}`);

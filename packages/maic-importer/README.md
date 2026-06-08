@@ -206,10 +206,10 @@ const slides = await parsedToSlides(json, { upload });
 
 ## 🧪 在 Next.js (Turbopack) 里用
 
-`maic-import` 源码依赖 `pdfjs-dist`，其动态 `require()` 模式会被 Turbopack 拒绝。OpenMAIC 的做法：
+`maic-importer` 源码依赖 `pdfjs-dist`，其动态 `require()` 模式会被 Turbopack 拒绝。OpenMAIC 的做法：
 
 1. `pnpm run build` 把整个包（含 importPptx）打成 `dist/`。
-2. `scripts/sync-maic-import.mjs` 把 `dist/` 复制到 `public/vendor/maic-import/`。
+2. `scripts/sync-maic-importer.mjs` 把 `dist/` 复制到 `public/vendor/maic-importer/`。
 3. 在客户端组件里用**静态 URL 动态 import**，bundler 完全看不到：
 
 ```ts
@@ -219,7 +219,7 @@ const mod = (await import(
   /* webpackIgnore: true */
   /* turbopackIgnore: true */
   /* @vite-ignore */
-  '/vendor/maic-import/index.js'
+  '/vendor/maic-importer/index.js'
 )) as typeof PptxtojsonPro;
 
 const slides = await mod.importPptx(file, { upload });
@@ -231,14 +231,14 @@ const slides = await mod.importPptx(file, { upload });
 
 ### ⚠️ 部署依赖（必读）
 
-`public/vendor/maic-import/` 是 **gitignored 的构建产物**，不进仓库，由 `postinstall`
-现生成（`pnpm --filter @maic/importer build` + `node scripts/sync-maic-import.mjs`）。
+`public/vendor/maic-importer/` 是 **gitignored 的构建产物**，不进仓库，由 `postinstall`
+现生成（`pnpm --filter @maic/importer build` + `node scripts/sync-maic-importer.mjs`）。
 因此部署流水线**必须执行 `postinstall`**（或显式跑这两步），否则运行时
-`/vendor/maic-import/index.js` 会 404，PPTX 导入功能失效。
+`/vendor/maic-importer/index.js` 会 404，PPTX 导入功能失效。
 
 两道防护已就位：
 
-- **构建期断言**：根 `build` 脚本前置 `node scripts/assert-vendor-maic-import.mjs`，
+- **构建期断言**：根 `build` 脚本前置 `node scripts/assert-vendor-maic-importer.mjs`，
   若 vendor 产物缺失则**构建直接失败**并给出修复提示，避免把必崩版本部署上线。
 - **运行期守卫**：`use-import-pptx.ts` 在动态 import 前先 `HEAD` 预检该 URL，
   404 时抛出明确错误并提示 `import.error.parserUnavailable`，而不是把 404 HTML

@@ -181,7 +181,7 @@ export default {
 
 ## Companion package
 
-[`@maic/importer`](../maic-import) converts `.pptx` files to the same `Slide[]` shape, so you can do `.pptx → @maic/renderer` end-to-end.
+[`@maic/importer`](../maic-importer) converts `.pptx` files to the same `Slide[]` shape, so you can do `.pptx → @maic/renderer` end-to-end.
 
 ## See also
 

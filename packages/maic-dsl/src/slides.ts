@@ -5,7 +5,7 @@
  * had drifted apart before @maic/dsl existed:
  *   - app:      lib/types/slides.ts
  *   - renderer: packages/maic-renderer/src/types/slides.ts
- *   - importer: packages/maic-import/src/openmaic/types/slides.ts
+ *   - importer: packages/maic-importer/src/openmaic/types/slides.ts
  *
  * It is a *superset*: every field that appeared in any of the three copies is
  * kept here so that the renderer and the importer can adopt this contract

@@ -2,7 +2,7 @@
 
 
 
-`maic-import` 开发规范。请先读 `DESIGN.md` 了解架构。
+`maic-importer` 开发规范。请先读 `DESIGN.md` 了解架构。
 
 
 

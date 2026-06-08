@@ -6,7 +6,7 @@ import { useI18n } from '@/lib/hooks/use-i18n';
 import { createLogger } from '@/lib/logger';
 import type { Slide } from '@/lib/types/slides';
 // Type-only import: stripped at compile time, never reaches the bundler.
-// pdfjs-dist (transitively pulled by `maic-import/src`) uses dynamic
+// pdfjs-dist (transitively pulled by `maic-importer/src`) uses dynamic
 // `require()` patterns Turbopack refuses to bundle, so values flow through
 // the URL-loaded dist instead. The workspace package only contributes types.
 import type * as MaicImport from '@maic/importer';
@@ -32,7 +32,7 @@ export interface UseImportPptxOptions {
 
 /**
  * PPTX import flow: parse + convert + (optionally) upload media, all inside
- * the bundled `maic-import` dist that we load by URL to bypass
+ * the bundled `maic-importer` dist that we load by URL to bypass
  * Turbopack's hard rejection of pdfjs-dist's dynamic require.
  */
 export function useImportPptx(options: UseImportPptxOptions = {}) {
@@ -57,9 +57,9 @@ export function useImportPptx(options: UseImportPptxOptions = {}) {
 
       try {
         // Static URL → bundler never sees the import target.
-        // `scripts/sync-maic-import.mjs` copies the prebuilt dist into
+        // `scripts/sync-maic-importer.mjs` copies the prebuilt dist into
         // `public/vendor/` after every `pnpm install`.
-        const url = '/vendor/maic-import/index.js';
+        const url = '/vendor/maic-importer/index.js';
 
         // Runtime guard: the bundle is a gitignored artifact synced into
         // public/vendor during postinstall. If a deploy skipped that step the
