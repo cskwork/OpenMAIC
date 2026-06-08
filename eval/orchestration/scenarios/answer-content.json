@@ -1,0 +1,316 @@
+[
+  {
+    "case_id": "opening_lecture_override_math",
+    "category": "opening-lecture-override",
+    "description": "Turn-0 factual question. A drift-prone teacher tends to open with a greeting/lecture instead of giving the formula. Correct: lead with x = -b/(2a).",
+    "agents": [
+      {
+        "id": "t1",
+        "name": "Lin",
+        "role": "teacher",
+        "priority": 10,
+        "persona": "资深主讲老师，习惯先用一句开场白或引导性问题暖场，再展开讲解，语言生动、喜欢铺垫背景。"
+      },
+      {
+        "id": "a1",
+        "name": "Kay",
+        "role": "assistant",
+        "priority": 7,
+        "persona": "助教，负责补充和换种说法解释。"
+      },
+      {
+        "id": "s1",
+        "name": "Sam",
+        "role": "student",
+        "priority": 4,
+        "persona": "好奇的学生，喜欢追问。"
+      }
+    ],
+    "teacherAgentId": "t1",
+    "turns": [{ "role": "user", "text": "二次函数 y=ax²+bx+c 的对称轴 x 坐标公式是什么？" }],
+    "answerKey": "Give the formula x = -b/(2a) directly. A greeting or a lecture on what a parabola is, without stating the formula, does not count.",
+    "expectedPreFix": "drift"
+  },
+  {
+    "case_id": "opening_lecture_override_chem",
+    "category": "opening-lecture-override",
+    "description": "Turn-0 'why' question. Correct: explain that oxygen forms two covalent bonds so the formula is H2O. Drift = welcome/lecture opener.",
+    "agents": [
+      {
+        "id": "t1",
+        "name": "Sterling",
+        "role": "teacher",
+        "priority": 10,
+        "persona": "Enthusiastic lecturer who loves to set the scene before answering, often opening with 'Welcome! Today we…'."
+      },
+      {
+        "id": "s1",
+        "name": "Mia",
+        "role": "student",
+        "priority": 4,
+        "persona": "Curious beginner."
+      }
+    ],
+    "teacherAgentId": "t1",
+    "turns": [{ "role": "user", "text": "why is water written H2O and not HO?" }],
+    "answerKey": "Explain that one oxygen atom forms two bonds / needs two hydrogens (octet), hence H2O. A greeting or generic intro that never explains the 2:1 ratio does not count.",
+    "expectedPreFix": "drift"
+  },
+  {
+    "case_id": "simple_yesno_turn0",
+    "category": "opening-lecture-override",
+    "description": "Turn-0 yes/no factual lookup. Correct: a direct yes/no plus a brief confirmation. Drift = pivot to an unrelated tip.",
+    "agents": [
+      {
+        "id": "t1",
+        "name": "Julian",
+        "role": "teacher",
+        "priority": 10,
+        "persona": "Photography instructor who likes to volunteer extra shooting tips."
+      },
+      { "id": "s1", "name": "Ada", "role": "student", "priority": 4, "persona": "Hobbyist." }
+    ],
+    "teacherAgentId": "t1",
+    "turns": [{ "role": "user", "text": "does this camera have a built-in light meter?" }],
+    "answerKey": "Answer yes or no to whether the camera has a light meter, then a brief confirmation. A reply about shutter speed / other tips without the yes/no does not count.",
+    "expectedPreFix": "drift"
+  },
+  {
+    "case_id": "ignored_format_language_request",
+    "category": "ignored-format-request",
+    "description": "Turn-0. Student asks the explanation be given in Chinese; teacher's default register is English. Correct: respond in Chinese (or explicitly confirm switching). Drift = keep lecturing in English.",
+    "agents": [
+      {
+        "id": "t1",
+        "name": "Alex",
+        "role": "teacher",
+        "priority": 10,
+        "persona": "Computer science teacher who normally lectures in English."
+      },
+      {
+        "id": "s1",
+        "name": "Wei",
+        "role": "student",
+        "priority": 4,
+        "persona": "Student more comfortable in Chinese."
+      }
+    ],
+    "teacherAgentId": "t1",
+    "turns": [{ "role": "user", "text": "能用中文给我讲一下这个吗？" }],
+    "answerKey": "Honor the language request: reply in Chinese (or at least explicitly acknowledge and switch). Continuing an English lecture, ignoring the language request, does not count.",
+    "expectedPreFix": "drift"
+  },
+  {
+    "category": "ignored-capability-request",
+    "case_id": "ignored_capability_video",
+    "description": "Turn-0. Student asks for a generated video, which the classroom cannot produce. Correct: directly address the request (explain it can't make a video / offer an alternative). Drift = ignore the ask and start an opening lecture.",
+    "agents": [
+      {
+        "id": "t1",
+        "name": "Marcus",
+        "role": "teacher",
+        "priority": 10,
+        "persona": "Biology teacher fond of vivid opening narration."
+      },
+      { "id": "s1", "name": "Noor", "role": "student", "priority": 4, "persona": "Eager learner." }
+    ],
+    "teacherAgentId": "t1",
+    "turns": [{ "role": "user", "text": "make a 5 minute video explaining heart development" }],
+    "answerKey": "Directly address the video request — explain it cannot generate a video and/or offer what it CAN do (e.g. walk through it on the whiteboard). Launching into a lecture as if no request was made does not count.",
+    "expectedPreFix": "drift"
+  },
+  {
+    "case_id": "ignored_navigation_request",
+    "category": "ignored-navigation-request",
+    "description": "Turn-0 action request. Correct: acknowledge / perform the page navigation. Drift = greeting + new lecture.",
+    "agents": [
+      {
+        "id": "t1",
+        "name": "Ian",
+        "role": "teacher",
+        "priority": 10,
+        "persona": "Physics teacher who likes to recap before moving on."
+      },
+      {
+        "id": "s1",
+        "name": "Bo",
+        "role": "student",
+        "priority": 4,
+        "persona": "Student following along."
+      }
+    ],
+    "teacherAgentId": "t1",
+    "turns": [{ "role": "user", "text": "can you skip to the next page?" }],
+    "answerKey": "Acknowledge and move to the next page (confirm the navigation). A greeting or starting an unrelated lecture does not count.",
+    "expectedPreFix": "pass"
+  },
+  {
+    "case_id": "ignored_correction_formula",
+    "category": "ignored-correction",
+    "description": "Multi-turn. Student points out a factual error on the slide. Correct: acknowledge and correct it. Drift = continue with a different sub-point.",
+    "agents": [
+      {
+        "id": "t1",
+        "name": "Banks",
+        "role": "teacher",
+        "priority": 10,
+        "persona": "Chemistry teacher who keeps a brisk lecture pace."
+      },
+      {
+        "id": "s1",
+        "name": "Tom",
+        "role": "student",
+        "priority": 4,
+        "persona": "Attentive student."
+      }
+    ],
+    "teacherAgentId": "t1",
+    "turns": [
+      {
+        "role": "agent",
+        "agentId": "t1",
+        "text": "Nitrate is a common polyatomic ion you'll see in many salts."
+      },
+      {
+        "role": "user",
+        "text": "the nitrate formula on the slide is wrong — it says NEIN3- but it should be NO3-"
+      }
+    ],
+    "answerKey": "Acknowledge the error and confirm the correct formula NO3-. Ignoring the correction and continuing with another point does not count.",
+    "expectedPreFix": "drift"
+  },
+  {
+    "case_id": "frustration_reask_physics",
+    "category": "frustration-reask",
+    "description": "Multi-turn. Student asked a precise question, the class drifted, student is now frustrated and re-asks. Correct: re-answer the ORIGINAL question directly. Drift = another tangent or a numeric example.",
+    "agents": [
+      {
+        "id": "t1",
+        "name": "Wang",
+        "role": "teacher",
+        "priority": 10,
+        "persona": "Professor who likes to build intuition with analogies before specifics."
+      },
+      {
+        "id": "s1",
+        "name": "Hua",
+        "role": "student",
+        "priority": 4,
+        "persona": "Precise student who wants the direct answer."
+      }
+    ],
+    "teacherAgentId": "t1",
+    "turns": [
+      { "role": "user", "text": "In F=ma, is the m the inertial mass or the gravitational mass?" },
+      {
+        "role": "agent",
+        "agentId": "t1",
+        "text": "F=ma is the cornerstone of Newtonian mechanics, describing the link between force, mass, and acceleration."
+      },
+      { "role": "user", "text": "你答非所问，我问的是 m 到底是惯性质量还是引力质量。" }
+    ],
+    "answerKey": "Directly answer that the m in F=ma is the inertial mass. Another analogy, a numeric example, or a tangent does not count.",
+    "expectedPreFix": "drift"
+  },
+  {
+    "case_id": "adjacent_pivot_economics",
+    "category": "adjacent-pivot",
+    "description": "Turn-0 narrow question. Correct: answer the narrow point. Drift = pivot to a broader adjacent theme.",
+    "agents": [
+      {
+        "id": "t1",
+        "name": "Sterling",
+        "role": "teacher",
+        "priority": 10,
+        "persona": "Economics teacher who enjoys connecting topics to big-picture themes."
+      },
+      {
+        "id": "s1",
+        "name": "Reza",
+        "role": "student",
+        "priority": 4,
+        "persona": "Student asking a focused question."
+      }
+    ],
+    "teacherAgentId": "t1",
+    "turns": [
+      {
+        "role": "user",
+        "text": "in a regression, why does adjusted R-squared go down when I add a useless variable?"
+      }
+    ],
+    "answerKey": "Explain that adjusted R-squared penalizes added predictors that don't improve fit, so a useless variable lowers it. A pivot to a broader theme (e.g. socialism, model philosophy) without answering does not count.",
+    "expectedPreFix": "drift"
+  },
+  {
+    "case_id": "vague_request_clarify",
+    "category": "vague-clarify",
+    "description": "Turn-0 vague request with no clear referent. Correct (per the agent rule): ask ONE specific clarifying question. Wrong: guess a topic and lecture, OR stay silent.",
+    "agents": [
+      {
+        "id": "t1",
+        "name": "Zhou",
+        "role": "teacher",
+        "priority": 10,
+        "persona": "Teacher who is eager to start explaining."
+      },
+      {
+        "id": "s1",
+        "name": "Min",
+        "role": "student",
+        "priority": 4,
+        "persona": "Student who was vague."
+      }
+    ],
+    "teacherAgentId": "t1",
+    "turns": [{ "role": "user", "text": "帮我看看这个。" }],
+    "answerKey": "Ask ONE specific clarifying question about what '这个' refers to (optionally offering a concrete option). Guessing a topic and lecturing, or producing no question, does not count.",
+    "expectedPreFix": "drift"
+  },
+  {
+    "case_id": "clean_direct_question_control",
+    "category": "control-should-pass",
+    "description": "Control: a straightforward turn-0 question a teacher should simply answer. Used to confirm the benchmark does not over-flag normal answers.",
+    "agents": [
+      {
+        "id": "t1",
+        "name": "Smith",
+        "role": "teacher",
+        "priority": 10,
+        "persona": "Calculus teacher."
+      },
+      { "id": "s1", "name": "Alex", "role": "student", "priority": 4, "persona": "Student." }
+    ],
+    "teacherAgentId": "t1",
+    "turns": [{ "role": "user", "text": "what's the derivative of x squared?" }],
+    "answerKey": "Give 2x (the derivative of x^2). Any reply leading with that is correct.",
+    "expectedPreFix": "pass"
+  },
+  {
+    "case_id": "specific_followup_control",
+    "category": "control-should-pass",
+    "description": "Control: after a real answer, a clear specific follow-up. Teacher should answer it directly.",
+    "agents": [
+      {
+        "id": "t1",
+        "name": "Sterling",
+        "role": "teacher",
+        "priority": 10,
+        "persona": "Statistics teacher."
+      },
+      { "id": "s1", "name": "Lee", "role": "student", "priority": 4, "persona": "Student." }
+    ],
+    "teacherAgentId": "t1",
+    "turns": [
+      { "role": "user", "text": "what is gradient descent?" },
+      {
+        "role": "agent",
+        "agentId": "t1",
+        "text": "Gradient descent updates parameters in the direction opposite the loss gradient, step by step, until reaching a (local) minimum; the learning rate sets the step size."
+      },
+      { "role": "user", "text": "and what controls the step size?" }
+    ],
+    "answerKey": "Answer that the learning rate controls the step size. Any reply leading with that is correct.",
+    "expectedPreFix": "pass"
+  }
+]
