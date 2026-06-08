@@ -40,10 +40,10 @@ importers:
         version: 1.2.2(@langchain/core@1.1.31(@opentelemetry/api@1.9.0)(openai@4.104.0(ws@8.19.0)(zod@4.3.6)))(zod-to-json-schema@3.25.1(zod@4.3.6))(zod@4.3.6)
       '@maic/importer':
         specifier: workspace:*
-        version: link:packages/maic-importer
+        version: link:packages/@maic/importer
       '@maic/renderer':
         specifier: workspace:*
-        version: link:packages/maic-renderer
+        version: link:packages/@maic/renderer
       '@modelcontextprotocol/sdk':
         specifier: ^1.27.1
         version: 1.27.1(@cfworker/json-schema@4.1.1)(zod@4.3.6)
@@ -325,17 +325,17 @@ importers:
         specifier: ^1.0.0
         version: 1.0.0
 
-  packages/maic-dsl:
+  packages/@maic/dsl:
     devDependencies:
       typescript:
         specifier: ^5
         version: 5.9.3
 
-  packages/maic-importer:
+  packages/@maic/importer:
     dependencies:
       '@maic/dsl':
         specifier: workspace:*
-        version: link:../maic-dsl
+        version: link:../dsl
       '@xmldom/xmldom':
         specifier: ^0.9.9
         version: 0.9.10
@@ -425,11 +425,11 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
-  packages/maic-renderer:
+  packages/@maic/renderer:
     dependencies:
       '@maic/dsl':
         specifier: workspace:*
-        version: link:../maic-dsl
+        version: link:../dsl
       clsx:
         specifier: ^2.1.1
         version: 2.1.1

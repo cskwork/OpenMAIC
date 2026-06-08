@@ -16,7 +16,7 @@
 
 - `iteration-<version>-report.md`（仓库根目录）
 
-- 针对本包的解析侧修复（渲染问题在 `packages/maic-renderer`）
+- 针对本包的解析侧修复（渲染问题在 `packages/@maic/renderer`）
 
 
 
