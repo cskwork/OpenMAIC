@@ -35,18 +35,21 @@ import { isTextElement, DSL_VERSION } from '@maic/dsl';
 
 ## Status
 
-- **`maic-import` is wired up**: it depends on `@maic/dsl`, imports all slide
-  types from it, and its vendored `openmaic/types/slides.ts` copy has been
-  deleted. The importer now emits complete DSL `Slide` objects directly (the old
-  partial "draft slide" + post-fill step is gone — see below).
-- **`@maic/renderer` is not wired yet**: it still vendors its own copy of the
-  slide types. Re-pointing it at `@maic/dsl` is the next step.
+Both consumers are now wired to `@maic/dsl` and no longer vendor their own copy
+of the slide types:
+
+- **`@maic/importer`**: imports all slide types from `@maic/dsl`; vendored
+  `openmaic/types/slides.ts` deleted. The importer emits complete DSL `Slide`
+  objects directly (the old partial "draft slide" + post-fill step is gone).
+- **`@maic/renderer`**: imports all slide types from `@maic/dsl`; vendored
+  `types/slides.ts` deleted. `@maic/dsl` is a regular dependency, kept external
+  in the rollup build so consumers share one copy. The public
+  `@maic/renderer/types` surface now re-exports the DSL types.
 
 ### Roadmap
 
-- [x] Wire `@maic/importer` (`maic-import`) to import types from `@maic/dsl`
-      (vendored `slides.ts` copy deleted).
-- [ ] Wire `@maic/renderer` (`maic-renderer`) the same way.
+- [x] Wire `@maic/importer` to import types from `@maic/dsl` (vendored copy deleted).
+- [x] Wire `@maic/renderer` to import types from `@maic/dsl` (vendored copy deleted).
 - [ ] Add the JSON Schema for the slide contract + a pure schema validator.
 - [ ] Promote the `stage` / `scene` / `scene-content` types into the DSL (these
       currently live in `lib/types/stage.ts` and carry deps on `Action`, PBL,
@@ -73,9 +76,10 @@ annotated `@since-merge` in `slides.ts`.
 | `Slide.viewportSize/viewportRatio/theme`|    required     |   required    |   optional    | canonical = **required**; importer now fills them at construction in `transformParsedToSlides` (no partial/draft stage) |
 | `SlideData` (deprecated)                |        ✓        |       —       |       ✓       | kept, `@deprecated` |
 
-The importer already conforms to the canonical contract: it normalizes cell
-`vAlign` aliases and emits the required `Slide` fields on output. When the
-renderer is re-pointed at the DSL it will additionally gain `script`.
+The importer conforms to the canonical contract: it normalizes cell `vAlign`
+aliases and emits the required `Slide` fields on output. The renderer consumes
+the same superset (it gains access to `script` and the importer-origin fields it
+didn't previously declare).
 
 ## Build
 

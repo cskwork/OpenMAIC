@@ -427,6 +427,9 @@ importers:
 
   packages/maic-renderer:
     dependencies:
+      '@maic/dsl':
+        specifier: workspace:*
+        version: link:../maic-dsl
       clsx:
         specifier: ^2.1.1
         version: 2.1.1

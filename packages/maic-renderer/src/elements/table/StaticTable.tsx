@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, type CSSProperties } from 'react';
-import type { PPTTableElement, TableCellBorder } from '../../types/slides';
+import type { PPTTableElement, TableCellBorder } from '@maic/dsl';
 import { getTableSubThemeColor } from '../../utils/element';
 import { getTextStyle } from './tableUtils';
 

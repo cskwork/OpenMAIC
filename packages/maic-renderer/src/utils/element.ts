@@ -1,5 +1,5 @@
 import tinycolor from 'tinycolor2';
-import type { PPTElement, PPTLineElement } from '../types/slides';
+import type { PPTElement, PPTLineElement } from '@maic/dsl';
 
 interface RotatedElementData {
   left: number;

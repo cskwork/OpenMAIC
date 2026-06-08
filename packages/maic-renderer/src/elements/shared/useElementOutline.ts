@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { PPTElementOutline } from '../../types/slides';
+import type { PPTElementOutline } from '@maic/dsl';
 
 export function useElementOutline(outline?: PPTElementOutline) {
   const outlineWidth = useMemo(() => outline?.width ?? 0, [outline?.width]);

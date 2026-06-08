@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import type { PPTVideoElement } from '../../types/slides';
+import type { PPTVideoElement } from '@maic/dsl';
 
 export interface BaseVideoElementProps {
   elementInfo: PPTVideoElement;

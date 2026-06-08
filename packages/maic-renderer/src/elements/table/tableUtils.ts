@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import type { TableCell, TableCellStyle } from '../../types/slides';
+import type { TableCell, TableCellStyle } from '@maic/dsl';
 
 export function getTextStyle(style?: TableCellStyle): CSSProperties {
   if (!style) return {};

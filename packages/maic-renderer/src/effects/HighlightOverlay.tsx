@@ -1,6 +1,6 @@
 'use client';
 
-import type { PPTElement } from '../types/slides';
+import type { PPTElement } from '@maic/dsl';
 import type { HighlightEffectOptions } from '../types/effects';
 
 export interface HighlightOverlayProps {

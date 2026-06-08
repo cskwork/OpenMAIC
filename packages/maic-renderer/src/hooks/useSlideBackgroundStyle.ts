@@ -1,5 +1,5 @@
 import { useMemo, type CSSProperties } from 'react';
-import type { SlideBackground } from '../types/slides';
+import type { SlideBackground } from '@maic/dsl';
 
 export function useSlideBackgroundStyle(background: SlideBackground | undefined) {
   const backgroundStyle = useMemo<CSSProperties>(() => {

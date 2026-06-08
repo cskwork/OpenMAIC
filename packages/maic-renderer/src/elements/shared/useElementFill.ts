@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { PPTShapeElement } from '../../types/slides';
+import type { PPTShapeElement } from '@maic/dsl';
 
 export function useElementFill(element: PPTShapeElement, source: string) {
   const fill = useMemo(() => {

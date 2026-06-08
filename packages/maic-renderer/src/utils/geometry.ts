@@ -1,4 +1,4 @@
-import type { PPTElement } from '../types/slides';
+import type { PPTElement } from '@maic/dsl';
 
 /**
  * Percentage-based geometry (0-100 coordinate system)

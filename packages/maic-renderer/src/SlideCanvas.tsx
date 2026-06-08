@@ -9,7 +9,7 @@ import type {
   PPTVideoElement,
   Slide,
   SlideBackground,
-} from './types/slides';
+} from '@maic/dsl';
 import type { SlideEffects } from './types/effects';
 import { findElementGeometry, type PercentageGeometry } from './utils/geometry';
 import { useSlideBackgroundStyle } from './hooks/useSlideBackgroundStyle';

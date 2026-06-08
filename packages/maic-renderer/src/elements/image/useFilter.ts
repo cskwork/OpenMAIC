@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { ImageElementFilters } from '../../types/slides';
+import type { ImageElementFilters } from '@maic/dsl';
 
 const FILTER_UNITS: Record<keyof ImageElementFilters, string> = {
   blur: 'px',

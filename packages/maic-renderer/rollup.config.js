@@ -3,6 +3,7 @@ import commonjs from '@rollup/plugin-commonjs'
 import typescript from '@rollup/plugin-typescript'
 
 const external = [
+  /^@maic\/dsl($|\/)/,
   /^react($|\/)/,
   /^react-dom($|\/)/,
   /^motion($|\/)/,

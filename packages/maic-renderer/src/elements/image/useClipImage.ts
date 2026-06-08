@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { PPTImageElement } from '../../types/slides';
+import type { PPTImageElement } from '@maic/dsl';
 import { CLIPPATHS, ClipPathTypes } from './clipPaths';
 
 export function useClipImage(element: PPTImageElement) {

@@ -1,6 +1,6 @@
 'use client';
 
-import type { PPTElementOutline } from '../../types/slides';
+import type { PPTElementOutline } from '@maic/dsl';
 import { useElementOutline } from './useElementOutline';
 
 export interface ElementOutlineProps {

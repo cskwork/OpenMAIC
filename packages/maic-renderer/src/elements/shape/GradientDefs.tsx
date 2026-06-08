@@ -1,4 +1,4 @@
-import type { GradientColor, GradientType } from '../../types/slides';
+import type { GradientColor, GradientType } from '@maic/dsl';
 
 interface GradientDefsProps {
   id: string;

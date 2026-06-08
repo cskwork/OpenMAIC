@@ -1,7 +1,7 @@
 'use client';
 
 import type { CSSProperties, ReactNode } from 'react';
-import type { PPTImageElement } from '../../types/slides';
+import type { PPTImageElement } from '@maic/dsl';
 import { useElementShadow } from '../shared/useElementShadow';
 import { useElementFlip } from '../shared/useElementFlip';
 import { useClipImage } from './useClipImage';

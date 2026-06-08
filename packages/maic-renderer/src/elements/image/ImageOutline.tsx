@@ -1,6 +1,6 @@
 'use client';
 
-import type { PPTElementOutline, PPTImageElement } from '../../types/slides';
+import type { PPTElementOutline, PPTImageElement } from '@maic/dsl';
 import { useElementOutline } from '../shared/useElementOutline';
 import { useClipImage } from './useClipImage';
 

@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { PPTElementShadow } from '../../types/slides';
+import type { PPTElementShadow } from '@maic/dsl';
 
 export function useElementShadow(shadow?: PPTElementShadow) {
   const shadowStyle = useMemo(() => {

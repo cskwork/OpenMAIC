@@ -69,6 +69,7 @@
     }
   },
   "dependencies": {
+    "@maic/dsl": "workspace:*",
     "clsx": "^2.1.1",
     "html-to-image": "^1.11.13",
     "html2canvas-pro": "^2.0.4",

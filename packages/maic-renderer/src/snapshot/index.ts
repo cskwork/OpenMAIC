@@ -26,7 +26,7 @@ import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import html2canvas from 'html2canvas-pro';
 import { SlideCanvas } from '../SlideCanvas';
-import type { Slide } from '../types/slides';
+import type { Slide } from '@maic/dsl';
 
 export interface SlideToPngOptions {
   /**

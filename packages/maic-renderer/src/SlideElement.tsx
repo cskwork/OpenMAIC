@@ -7,7 +7,7 @@ import {
   type PPTImageElement,
   type PPTVideoElement,
   type SlideTheme,
-} from './types/slides';
+} from '@maic/dsl';
 
 import { BaseImageElement } from './elements/image/BaseImageElement';
 import { BaseTextElement } from './elements/text/BaseTextElement';
