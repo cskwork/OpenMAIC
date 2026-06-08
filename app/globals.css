@@ -132,16 +132,14 @@
   body {
     @apply bg-background text-foreground;
   }
-  /* Radix overlays wrap with `react-remove-scroll`, which compensates for
-     the removed page scrollbar by adding right-side body spacing. Classroom
-     playback/edit shells are fixed-height inner-scroll layouts and <html>
-     already reserves the scrollbar gutter (above), so that compensation
-     creates a visible horizontal layout shift. Keep Radix's modal focus and
-     interaction locking, but neutralize only the gap compensation in
-     classroom/editor chrome. */
+  /* Radix modal overlays wrap with `react-remove-scroll`, which compensates
+     for the removed page scrollbar by adding right-side body spacing. This
+     app already reserves the scrollbar gutter on <html> (above), so that
+     extra compensation creates a visible horizontal layout shift when opening
+     Settings on the homepage/classroom shells. Keep Radix's modal focus and
+     interaction locking, but neutralize only the redundant gap compensation. */
   body[data-maic-editor='true'],
-  body[data-maic-editor='true'][data-scroll-locked],
-  body[data-maic-classroom='true'][data-scroll-locked] {
+  body[data-scroll-locked] {
     padding-right: 0 !important;
     margin-right: 0 !important;
   }
