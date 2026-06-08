@@ -57,6 +57,9 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
   const toolResultsRef = useRef<Map<string, { result: unknown; isError: boolean }>>(new Map());
   const textRef = useRef<string>('');
   const errorRef = useRef<string>('');
+  // Drives the assistant message's `status` so assistant-ui renders a proper
+  // streaming lifecycle (running → complete/error) rather than a static blob.
+  const phaseRef = useRef<'running' | 'complete' | 'error'>('complete');
 
   const buildAssistant = useCallback((id: string): ThreadMessageLike => {
     const parts = mergeAssistantParts({
@@ -66,7 +69,13 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
       toolCalls: toolCallsRef.current,
       toolResults: toolResultsRef.current,
     });
-    return { role: 'assistant', id, content: parts as ThreadMessageLike['content'] };
+    const status: ThreadMessageLike['status'] =
+      phaseRef.current === 'running'
+        ? { type: 'running' }
+        : phaseRef.current === 'error'
+          ? { type: 'incomplete', reason: 'error' }
+          : { type: 'complete', reason: 'stop' };
+    return { role: 'assistant', id, content: parts as ThreadMessageLike['content'], status };
   }, []);
 
   const handleEvent = useCallback(
@@ -133,6 +142,7 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
       toolResultsRef.current = new Map();
       textRef.current = '';
       errorRef.current = '';
+      phaseRef.current = 'running';
 
       const userMsg: ThreadMessageLike = { role: 'user', id: `u-${turnId}`, content: [{ type: 'text', text: userText }] };
       setMessages((prev) => [...prev, userMsg, buildAssistant(assistantId)]);
@@ -212,13 +222,16 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
         }
       } catch (err) {
         errorRef.current = `⚠️ ${err instanceof Error ? err.message : String(err)}`;
+        phaseRef.current = 'error';
+      } finally {
+        if (phaseRef.current === 'running') phaseRef.current = 'complete';
+        setIsRunning(false);
+        // Final rebuild so the closing status (complete/error) is rendered.
         setMessages((prev) => {
           const next = prev.slice();
           next[next.length - 1] = buildAssistant(assistantId);
           return next;
         });
-      } finally {
-        setIsRunning(false);
       }
     },
     [buildAssistant, handleEvent, opts.scene],
