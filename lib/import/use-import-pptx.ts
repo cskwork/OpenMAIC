@@ -60,6 +60,21 @@ export function useImportPptx(options: UseImportPptxOptions = {}) {
         // `scripts/sync-maic-import.mjs` copies the prebuilt dist into
         // `public/vendor/` after every `pnpm install`.
         const url = '/vendor/maic-import/index.js';
+
+        // Runtime guard: the bundle is a gitignored artifact synced into
+        // public/vendor during postinstall. If a deploy skipped that step the
+        // URL 404s and `import()` fails with an opaque SyntaxError (404 HTML
+        // parsed as JS). Probe first so we can report a clear, actionable error.
+        let probe: Response | undefined;
+        try {
+          probe = await fetch(url, { method: 'HEAD' });
+        } catch {
+          // Network/HEAD unsupported — don't block; let import() report instead.
+        }
+        if (probe && !probe.ok) {
+          throw new Error(`PARSER_NOT_DEPLOYED: ${url} → HTTP ${probe.status}`);
+        }
+
         const mod = (await import(
           /* webpackIgnore: true */
           /* turbopackIgnore: true */
@@ -81,7 +96,12 @@ export function useImportPptx(options: UseImportPptxOptions = {}) {
         );
       } catch (error) {
         log.error('PPTX import failed:', error);
-        toast.error(t('import.error.invalidPptx'), { id: toastId });
+        const notDeployed =
+          error instanceof Error && error.message.startsWith('PARSER_NOT_DEPLOYED');
+        toast.error(
+          t(notDeployed ? 'import.error.parserUnavailable' : 'import.error.invalidPptx'),
+          { id: toastId },
+        );
       } finally {
         setImporting(false);
       }

@@ -229,6 +229,24 @@ const slides = await mod.importPptx(file, { upload });
 
 参考：`lib/import/use-import-pptx.ts`。
 
+### ⚠️ 部署依赖（必读）
+
+`public/vendor/maic-import/` 是 **gitignored 的构建产物**，不进仓库，由 `postinstall`
+现生成（`pnpm --filter @maic/importer build` + `node scripts/sync-maic-import.mjs`）。
+因此部署流水线**必须执行 `postinstall`**（或显式跑这两步），否则运行时
+`/vendor/maic-import/index.js` 会 404，PPTX 导入功能失效。
+
+两道防护已就位：
+
+- **构建期断言**：根 `build` 脚本前置 `node scripts/assert-vendor-maic-import.mjs`，
+  若 vendor 产物缺失则**构建直接失败**并给出修复提示，避免把必崩版本部署上线。
+- **运行期守卫**：`use-import-pptx.ts` 在动态 import 前先 `HEAD` 预检该 URL，
+  404 时抛出明确错误并提示 `import.error.parserUnavailable`，而不是把 404 HTML
+  当 JS 解析出诡异的 `SyntaxError`。
+
+> 另注：`git pull` 后若未重新 `pnpm install`，workspace 类型会更新但 URL 加载的
+> 仍是旧 `dist`，二者可能静默漂移——拉取后请重新安装。
+
 ---
 
 ### 输出示例（`parse()`，未走 import pipeline）
