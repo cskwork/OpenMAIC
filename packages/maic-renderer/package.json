@@ -27,12 +27,10 @@
       "import": "./dist/snapshot/index.js",
       "require": "./dist/snapshot/index.cjs"
     },
-    "./fonts.css": "./fonts.css",
-    "./fonts/*": "./fonts/*"
+    "./fonts.css": "./fonts.css"
   },
   "files": [
     "dist",
-    "fonts",
     "fonts.css",
     "README.md",
     "DESIGN.md",
@@ -40,7 +38,8 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "rm -rf dist && rollup -c && tsc --emitDeclarationOnly --declarationDir dist",
+    "genfonts": "node scripts/generate-fonts-css.mjs",
+    "build": "node scripts/generate-fonts-css.mjs && rm -rf dist && rollup -c && tsc --emitDeclarationOnly --declarationDir dist",
     "dev": "rollup -c -w",
     "typecheck": "tsc --noEmit"
   },
