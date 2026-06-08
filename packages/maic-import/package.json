@@ -19,7 +19,7 @@
     "pptx",
     "json"
   ],
-  "license": "MIT",
+  "license": "AGPL-3.0",
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
     "access": "public"

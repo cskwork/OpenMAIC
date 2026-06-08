@@ -92,7 +92,6 @@ pnpm --filter @maic/dsl typecheck
 
 ## License
 
-MIT. (The family-wide license policy is still being decided — `@maic/renderer`
-is currently AGPL-3.0 and `@maic/importer` is MIT. A pure contract keystone is most
-useful under a permissive license so anything can depend on it; revisit if the
-family standardizes on a single policy.)
+AGPL-3.0, matching the rest of the family (`@maic/dsl`, `@maic/importer`,
+`@maic/renderer`) and the OpenMAIC root, so the license policy is uniform
+across the SDK.
