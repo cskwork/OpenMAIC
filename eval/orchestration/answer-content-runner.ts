@@ -22,7 +22,7 @@
  * clarify) plus clean controls. No real user data is included.
  *
  * A/B (mirrors answering-runner's rule-13 strip):
- *   - baseline  : agent-system with the "Answering the User's Question" section stripped
+ *   - baseline  : agent-system with the "Responding to the User's Turn" section stripped
  *   - with_rule : agent-system as-shipped
  *
  * Pass criterion: with_rule mean leads_with_answer rate >= EVAL_PASS_THRESHOLD
@@ -98,8 +98,12 @@ interface ContentScenario {
   expectedPreFix?: string;
   /** Classroom context so the assembled prompt matches the live shape/bulk:
    * a topical slide scene, the stage (incl. languageDirective), and the
-   * student profile. Shapes mirror StatelessChatRequest.storeState. */
+   * student profile. Shapes mirror StatelessChatRequest.storeState. Use `scenes`
+   * + `currentSceneId` for a multi-slide deck (e.g. so "skip to next page" is
+   * well-posed); `scene` is the single-slide shorthand. */
   scene?: unknown;
+  scenes?: unknown[];
+  currentSceneId?: string;
   stage?: unknown;
   userProfile?: { nickname?: string; bio?: string };
   mode?: 'autonomous' | 'playback';
@@ -157,12 +161,13 @@ function buildTeacherConfig(scenario: ContentScenario): AgentConfig {
  * the live agent-generate path. Falls back to an empty state if a scenario
  * omits context. */
 function buildStoreState(scenario: ContentScenario): StatelessChatRequest['storeState'] {
-  const scene = scenario.scene;
-  const sceneId = scene ? ((scene as { id?: string }).id ?? null) : null;
+  const scenes = scenario.scenes ?? (scenario.scene ? [scenario.scene] : []);
+  const currentSceneId =
+    scenario.currentSceneId ?? (scenes[0] ? ((scenes[0] as { id?: string }).id ?? null) : null);
   return {
     stage: scenario.stage ?? null,
-    scenes: scene ? [scene] : [],
-    currentSceneId: sceneId,
+    scenes,
+    currentSceneId,
     mode: scenario.mode ?? 'playback',
     whiteboardOpen: false,
   } as unknown as StatelessChatRequest['storeState'];
@@ -209,15 +214,14 @@ function buildAgentResponses(scenario: ContentScenario): AgentTurnSummary[] {
 }
 
 /**
- * Remove the "# Answering the User's Question" section from an assembled agent
- * system prompt to build the pre-fix baseline. Decoupled from the heading
- * wording beyond the stable leading phrase; bounded by the next section header.
+ * Remove the "# Responding to the User's Turn" section from an assembled agent
+ * system prompt to build the pre-fix baseline. Bounded by the next section header.
  */
 function stripAnsweringSection(prompt: string): string {
-  const re = /\n# Answering the User's Question[\s\S]*?(?=\n# Current State)/;
+  const re = /\n# Responding to the User's Turn[\s\S]*?(?=\n# Current State)/;
   if (!re.test(prompt)) {
     throw new Error(
-      'answer-content-runner: "# Answering the User\'s Question" section not found in agent prompt; baseline cannot be constructed',
+      'answer-content-runner: "# Responding to the User\'s Turn" section not found in agent prompt; baseline cannot be constructed',
     );
   }
   return prompt.replace(re, '\n');

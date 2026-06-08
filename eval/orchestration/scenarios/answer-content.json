@@ -309,7 +309,7 @@
         "text": "能用中文给我讲一下这个吗？"
       }
     ],
-    "answerKey": "Honor the language request: reply in Chinese (or at least explicitly acknowledge and switch). Continuing an English lecture, ignoring the language request, does not count.",
+    "answerKey": "Honor the language request: reply PRIMARILY in Chinese (briefly acknowledging the switch is fine). Keeping technical terms in their standard (English) form is acceptable. Continuing in mostly English / ignoring the request does not count.",
     "expectedPreFix": "drift",
     "scene": {
       "id": "scene-py",
@@ -487,57 +487,8 @@
         "text": "can you skip to the next page?"
       }
     ],
-    "answerKey": "Acknowledge and move to the next page (confirm the navigation). A greeting or starting an unrelated lecture does not count.",
+    "answerKey": "Acknowledge the request and transition to the next slide's content (a verbal move counts; no page-turn action is required). Continuing to narrate the current slide, or starting an unrelated lecture, does not count.",
     "expectedPreFix": "pass",
-    "scene": {
-      "id": "scene-kin",
-      "title": "Kinematics: Speed vs Velocity",
-      "type": "slide",
-      "content": {
-        "type": "slide",
-        "canvas": {
-          "elements": [
-            {
-              "id": "t-title",
-              "type": "text",
-              "textType": "title",
-              "content": "<p><b>Kinematics: Speed vs Velocity</b></p>",
-              "left": 80,
-              "top": 50,
-              "width": 780,
-              "height": 80
-            },
-            {
-              "id": "t-b1",
-              "type": "text",
-              "content": "<p>Speed is a scalar magnitude</p>",
-              "left": 100,
-              "top": 175,
-              "width": 720,
-              "height": 60
-            },
-            {
-              "id": "t-b2",
-              "type": "text",
-              "content": "<p>Velocity is a vector with direction</p>",
-              "left": 100,
-              "top": 245,
-              "width": 720,
-              "height": 60
-            },
-            {
-              "id": "t-b3",
-              "type": "text",
-              "content": "<p>Acceleration changes velocity</p>",
-              "left": 100,
-              "top": 315,
-              "width": 720,
-              "height": 60
-            }
-          ]
-        }
-      }
-    },
     "stage": {
       "name": "Physics: Motion",
       "description": "Kinematics basics",
@@ -547,7 +498,139 @@
       "nickname": "Bo",
       "bio": "10th-grade physics student."
     },
-    "mode": "playback"
+    "mode": "playback",
+    "scenes": [
+      {
+        "id": "scene-kin-1",
+        "title": "Motion: Position & Frames",
+        "type": "slide",
+        "content": {
+          "type": "slide",
+          "canvas": {
+            "elements": [
+              {
+                "id": "scene-kin-1-t",
+                "type": "text",
+                "textType": "title",
+                "content": "<p><b>Motion: Position & Frames</b></p>",
+                "left": 80,
+                "top": 50,
+                "width": 780,
+                "height": 80
+              },
+              {
+                "id": "scene-kin-1-b1",
+                "type": "text",
+                "content": "<p>Position is measured from a reference point</p>",
+                "left": 100,
+                "top": 175,
+                "width": 720,
+                "height": 60
+              },
+              {
+                "id": "scene-kin-1-b2",
+                "type": "text",
+                "content": "<p>Frames of reference matter</p>",
+                "left": 100,
+                "top": 245,
+                "width": 720,
+                "height": 60
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "scene-kin-2",
+        "title": "Kinematics: Speed vs Velocity",
+        "type": "slide",
+        "content": {
+          "type": "slide",
+          "canvas": {
+            "elements": [
+              {
+                "id": "scene-kin-2-t",
+                "type": "text",
+                "textType": "title",
+                "content": "<p><b>Kinematics: Speed vs Velocity</b></p>",
+                "left": 80,
+                "top": 50,
+                "width": 780,
+                "height": 80
+              },
+              {
+                "id": "scene-kin-2-b1",
+                "type": "text",
+                "content": "<p>Speed is a scalar magnitude</p>",
+                "left": 100,
+                "top": 175,
+                "width": 720,
+                "height": 60
+              },
+              {
+                "id": "scene-kin-2-b2",
+                "type": "text",
+                "content": "<p>Velocity is a vector with direction</p>",
+                "left": 100,
+                "top": 245,
+                "width": 720,
+                "height": 60
+              },
+              {
+                "id": "scene-kin-2-b3",
+                "type": "text",
+                "content": "<p>Acceleration changes velocity</p>",
+                "left": 100,
+                "top": 315,
+                "width": 720,
+                "height": 60
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "scene-kin-3",
+        "title": "Worked Example: A Car Trip",
+        "type": "slide",
+        "content": {
+          "type": "slide",
+          "canvas": {
+            "elements": [
+              {
+                "id": "scene-kin-3-t",
+                "type": "text",
+                "textType": "title",
+                "content": "<p><b>Worked Example: A Car Trip</b></p>",
+                "left": 80,
+                "top": 50,
+                "width": 780,
+                "height": 80
+              },
+              {
+                "id": "scene-kin-3-b1",
+                "type": "text",
+                "content": "<p>Average speed = distance / time</p>",
+                "left": 100,
+                "top": 175,
+                "width": 720,
+                "height": 60
+              },
+              {
+                "id": "scene-kin-3-b2",
+                "type": "text",
+                "content": "<p>Displacement can be zero on a round trip</p>",
+                "left": 100,
+                "top": 245,
+                "width": 720,
+                "height": 60
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "currentSceneId": "scene-kin-2"
   },
   {
     "case_id": "ignored_correction_formula",

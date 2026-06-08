@@ -37,7 +37,11 @@ You are given:
 
 A reply "addresses" the message when it does what the answer key asks: gives the specific value/formula/yes-no/definition/steps; OR for a vague request, asks ONE specific clarifying question; OR for an error report, acknowledges/corrects it; OR for a format/capability request (e.g. "in Chinese", "make a video", "skip the page"), honors it or directly says it cannot / what it will do instead.
 
-A reply does NOT address it when it instead: greets ("Welcome!"), launches an opening lecture ("Today we examine…"), pivots to an adjacent topic, reacts to peers, asks a rhetorical lead-in unrelated to the question, or answers a different question than the one asked.
+Fairness for specific request types:
+- LANGUAGE / FORMAT requests are satisfied when the reply is PRIMARILY in the requested language/format. Keeping individual technical terms, proper nouns, or formulas in their standard (often English) form is normal and still counts as honoring the request — do not penalize that code-switching.
+- NAVIGATION / PACING requests ("skip to the next page", "move on") are satisfied when the reply acknowledges the request AND transitions to the next slide's content/topic. A verbal transition counts; an explicit page-turn action is NOT required. Only continuing to narrate the SAME current slide, or ignoring the request, counts as not addressing it.
+
+A reply does NOT address it when it instead: greets ("Welcome!"), launches an opening lecture ("Today we examine…"), pivots to an adjacent (non-requested) topic, reacts to peers, asks a rhetorical lead-in unrelated to the request, or answers a different question than the one asked.
 
 Judge TWO things independently:
 - leads_with_answer: is the literal question/request addressed in the FIRST sentence(s) (field 3)?
