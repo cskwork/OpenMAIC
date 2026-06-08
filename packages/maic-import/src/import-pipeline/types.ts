@@ -1,4 +1,4 @@
-import type { Slide, SlideTheme } from "../openmaic/types/slides";
+import type { Slide, SlideTheme } from "@maic/dsl";
 import type { ShapePoolItem } from "../openmaic/configs/shapes";
 
 export type FontReplacementBucket = {

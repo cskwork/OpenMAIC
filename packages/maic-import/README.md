@@ -102,7 +102,7 @@ import {
   type OssUpload,
   type ImportPptxOptions,
   type CanvasSlide,
-} from 'maic-import';
+} from '@maic/importer';
 
 export type OssUpload = (
   blob: Blob,
@@ -137,7 +137,7 @@ export function parsedToSlides(
 媒体留在内存，slide 可以直接在当前 tab 里渲染，但**刷新就失效**（音视频）/ **JSON 体积大**（图片）。
 
 ```ts
-import { importPptx } from 'maic-import';
+import { importPptx } from '@maic/importer';
 
 const slides = await importPptx(file);
 // slides[*].elements 里的 image.src 还是 data:image/png;base64,…
@@ -149,7 +149,7 @@ const slides = await importPptx(file);
 把媒体上传到你自己的 OSS / classroom-media / S3 / 任意存储，slide 里只剩 URL：
 
 ```ts
-import { importPptx, type OssUpload } from 'maic-import';
+import { importPptx, type OssUpload } from '@maic/importer';
 
 const upload: OssUpload = async (blob, filename, dir) => {
   const form = new FormData();
@@ -169,7 +169,7 @@ const slides = await importPptx(file, { upload });
 ### 3. 已经用 `parse()` 拿到 JSON 时
 
 ```ts
-import { parse, parsedToSlides } from 'maic-import';
+import { parse, parsedToSlides } from '@maic/importer';
 
 const json = await parse(buffer, { mediaMode: 'base64' });
 const slides = await parsedToSlides(json, { upload });
@@ -213,7 +213,7 @@ const slides = await parsedToSlides(json, { upload });
 3. 在客户端组件里用**静态 URL 动态 import**，bundler 完全看不到：
 
 ```ts
-import type * as PptxtojsonPro from 'maic-import';
+import type * as PptxtojsonPro from '@maic/importer';
 
 const mod = (await import(
   /* webpackIgnore: true */

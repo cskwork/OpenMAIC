@@ -1,4 +1,28 @@
-export const enum ShapePathFormulasKeys {
+/**
+ * The MAIC slide object model — the canonical, dependency-free contract.
+ *
+ * This file is the single source of truth that supersedes the three copies that
+ * had drifted apart before @maic/dsl existed:
+ *   - app:      lib/types/slides.ts
+ *   - renderer: packages/maic-renderer/src/types/slides.ts
+ *   - importer: packages/maic-import/src/openmaic/types/slides.ts
+ *
+ * It is a *superset*: every field that appeared in any of the three copies is
+ * kept here so that the renderer and the importer can adopt this contract
+ * without losing data. Fields that only existed in one copy are annotated with
+ * `@since-merge` so the reconciliation history stays explicit. See README.md
+ * (the "Divergence reconciled" section) for the full list.
+ *
+ * Pure types only — no runtime imports, no React/pptx/echarts.
+ */
+
+/**
+ * Regular (not `const`) enum on purpose: consumers compile with
+ * `isolatedModules`, under which importing an ambient `const enum` across the
+ * package boundary is an error (TS2748). A regular enum emits a runtime object
+ * that bundles cleanly and is usable as both a value and a type.
+ */
+export enum ShapePathFormulasKeys {
   ROUND_RECT = 'roundRect',
   ROUND_RECT_DIAGONAL = 'roundRectDiagonal',
   ROUND_RECT_SINGLE = 'roundRectSingle',
@@ -22,7 +46,7 @@ export const enum ShapePathFormulasKeys {
   DIAGSTRIPE = 'diagStripe',
 }
 
-export const enum ElementTypes {
+export enum ElementTypes {
   TEXT = 'text',
   IMAGE = 'image',
   SHAPE = 'shape',
@@ -127,7 +151,7 @@ export interface PPTElementLink {
  *
  * name?: 元素名
  */
-interface PPTBaseElement {
+export interface PPTBaseElement {
   id: string;
   left: number;
   top: number;
@@ -196,6 +220,7 @@ export interface PPTTextElement extends PPTBaseElement {
   vertical?: boolean;
   textType?: TextType;
   /**
+   * @since-merge renderer + importer
    * Vertical anchor of the text within the box, parsed from `<a:bodyPr anchor="...">`.
    * `top` / undefined keeps the legacy top-anchored behavior. `middle` and `bottom`
    * vertically center / bottom-align the content inside the box.
@@ -312,7 +337,11 @@ export interface PPTImageElement extends PPTBaseElement {
   radius?: number;
   colorMask?: string;
   imageType?: ImageType;
-  /** 柔化边缘羽化半径（px）：a:effectLst>softEdge@rad，把图片边缘 alpha 渐隐到透明。 */
+  /**
+   * @since-merge renderer + importer
+   * Soft-edge feather radius in px (`a:effectLst>softEdge@rad`): fades image
+   * alpha to transparent over this radius at every edge.
+   */
   softEdge?: number;
 }
 
@@ -492,6 +521,7 @@ export interface PPTChartElement extends PPTBaseElement {
 }
 
 export type TextAlign = 'left' | 'center' | 'right' | 'justify';
+
 /**
  * 表格单元格样式
  *
@@ -526,6 +556,16 @@ export interface TableCellStyle {
 }
 
 /**
+ * @since-merge renderer + importer
+ * Single side of a per-cell border, already scaled to px.
+ */
+export interface TableCellBorder {
+  width: number;
+  style: 'solid' | 'dashed' | 'dotted';
+  color: string;
+}
+
+/**
  * 表格单元格
  *
  * id: 单元格ID
@@ -538,26 +578,34 @@ export interface TableCellStyle {
  *
  * style?: 单元格样式
  */
-export interface TableCellBorder {
-  width: number;
-  style: 'solid' | 'dashed' | 'dotted';
-  color: string;
-}
-
 export interface TableCell {
   id: string;
   colspan: number;
   rowspan: number;
   text: string;
   style?: TableCellStyle;
-  /** Vertical anchor parsed from `<a:tcPr anchor="...">`. PPTist uses up/mid/down; OpenMAIC uses top/middle/bottom; both accepted here. */
-  vAlign?: 'up' | 'mid' | 'down' | 'top' | 'middle' | 'bottom';
-  /** Cell padding as a CSS shorthand string (e.g. `"5px 10px"`), parsed from the embedded HTML. */
+  /**
+   * @since-merge renderer + importer
+   * CSS padding string (e.g. "3.6pt 7.2pt") applied to the cell. When undefined
+   * the renderer applies no padding — data is the single source of truth for
+   * cell inner spacing.
+   */
   padding?: string;
   /**
-   * Per-side cell borders (px-scaled). Lets the renderer draw only the sides
-   * the source PPT defines (e.g. left/right dividers) instead of boxing every
-   * cell with the table-level uniform outline.
+   * @since-merge renderer + importer
+   * CSS-native `vertical-align` value applied to the cell. When undefined the
+   * renderer applies no vertical alignment (browser baseline).
+   *
+   * NOTE: the importer currently also emits the PPTist aliases `up | mid | down`.
+   * Those are *not* part of this canonical contract — the importer must
+   * normalize them to `top | middle | bottom` before producing DSL output.
+   */
+  vAlign?: 'top' | 'middle' | 'bottom';
+  /**
+   * @since-merge renderer + importer
+   * Per-side cell borders, already scaled to px. When any side is present the
+   * renderer draws each side independently (a side left undefined renders no
+   * border) instead of falling back to the table-level uniform `outline`.
    */
   borders?: {
     top?: TableCellBorder;
@@ -608,9 +656,14 @@ export interface PPTTableElement extends PPTBaseElement {
   outline: PPTElementOutline;
   theme?: TableTheme;
   colWidths: number[];
-  /** Optional per-row heights (PPTist-compatible). Falls back to `cellMinHeight` distribution when absent. */
-  rowHeights?: number[];
   cellMinHeight: number;
+  /**
+   * @since-merge renderer + importer
+   * Optional per-row heights in CSS pixels. Acts as a min-height — content
+   * exceeding the value still expands the row. When omitted the renderer falls
+   * back to `cellMinHeight` for every row.
+   */
+  rowHeights?: number[];
   data: TableCell[][];
 }
 
@@ -818,6 +871,26 @@ export interface SectionTag {
 export type SlideType = 'cover' | 'contents' | 'transition' | 'content' | 'end';
 
 /**
+ * 幻灯片主题
+ *
+ * backgroundColor: 页面背景颜色
+ *
+ * themeColor: 主题色，用于默认创建的形状颜色等
+ *
+ * fontColor: 字体颜色
+ *
+ * fontName: 字体
+ */
+export interface SlideTheme {
+  backgroundColor: string;
+  themeColors: string[];
+  fontColor: string;
+  fontName: string;
+  outline?: PPTElementOutline;
+  shadow?: PPTElementShadow;
+}
+
+/**
  * 幻灯片页面
  *
  * id: 页面ID
@@ -839,43 +912,28 @@ export type SlideType = 'cover' | 'contents' | 'transition' | 'content' | 'end';
  * sectionTag?: 章节标签
  *
  * type?: 页面类型
+ *
+ * NOTE on `viewportSize` / `viewportRatio` / `theme`: these are *required* in
+ * the canonical contract (matching the app + renderer). The importer parses
+ * partial slides and only fills these defaults in `parsedToSlides`; that is an
+ * importer-internal staging concern and must not leak into the DSL output.
  */
 export interface Slide {
   id: string;
-  /** Optional in transform; `parsedToSlides` fills it with the canvas default (1000 px). */
-  viewportSize?: number;
-  /** Optional in transform; `parsedToSlides` derives it from the parsed presentation `size`. */
-  viewportRatio?: number;
-  /** Optional in transform; `parsedToSlides` fills a minimal default if not set. */
-  theme?: SlideTheme;
+  viewportSize: number;
+  viewportRatio: number;
+  theme: SlideTheme;
   elements: PPTElement[];
   background?: SlideBackground;
   animations?: PPTAnimation[];
   turningMode?: TurningMode;
   sectionTag?: SectionTag;
   type?: SlideType;
-  /** Speaker notes carried over from the source .pptx. */
+  /**
+   * @since-merge importer
+   * Speaker notes carried over from the source .pptx.
+   */
   script?: string;
-}
-
-/**
- * 幻灯片主题
- *
- * backgroundColor: 页面背景颜色
- *
- * themeColor: 主题色，用于默认创建的形状颜色等
- *
- * fontColor: 字体颜色
- *
- * fontName: 字体
- */
-export interface SlideTheme {
-  backgroundColor: string;
-  themeColors: string[];
-  fontColor: string;
-  fontName: string;
-  outline?: PPTElementOutline;
-  shadow?: PPTElementShadow;
 }
 
 export interface SlideTemplate {
@@ -886,7 +944,8 @@ export interface SlideTemplate {
 }
 
 /**
- * @deprecated SlideData is deprecated, use Slide instead
+ * @deprecated SlideData is deprecated, use {@link Slide} instead. Retained only
+ * for backward compatibility with persisted/legacy payloads.
  */
 export interface SlideData {
   id: string;

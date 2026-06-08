@@ -1,5 +1,5 @@
 {
-  "name": "maic-import",
+  "name": "@maic/importer",
   "version": "0.3.0",
   "description": "A javascript tool for parsing .pptx file",
   "type": "module",
@@ -21,9 +21,11 @@
   ],
   "license": "MIT",
   "publishConfig": {
-    "registry": "https://registry.npmjs.org"
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
   },
   "dependencies": {
+    "@maic/dsl": "workspace:*",
     "@xmldom/xmldom": "^0.9.9",
     "jpegxr": "^0.3.0",
     "jszip": "^3.10.1",

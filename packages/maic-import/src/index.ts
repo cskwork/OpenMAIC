@@ -48,4 +48,4 @@ export type {
   ImportContext,
   TransformResult,
 } from './import-pipeline'
-export type { Slide as CanvasSlide } from './openmaic/types/slides'
+export type { Slide as CanvasSlide } from '@maic/dsl'

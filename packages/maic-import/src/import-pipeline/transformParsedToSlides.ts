@@ -11,6 +11,7 @@ import { nanoid } from "nanoid";
 import katex from "katex";
 import type {
   Slide,
+  SlideTheme,
   TableCellStyle,
   TableCell,
   ChartType,
@@ -24,7 +25,7 @@ import type {
   ChartOptions,
   Gradient,
   ImageElementFilters
-} from "../openmaic/types/slides";
+} from "@maic/dsl";
 import { SHAPE_PATH_FORMULAS } from "../openmaic/configs/shapes";
 import { getSvgPathRange } from "../openmaic/utils/svgPathParser";
 import { parseVideoCodec, isVideoCodecSupported } from "../openmaic/utils/videoCodec";
@@ -384,6 +385,19 @@ export async function transformParsedToSlides(
   const sizeRatio = json.size.height / json.size.width;
   const viewportHeight = viewportWidth * sizeRatio;
 
+  // Canvas-required slide fields, resolved once per deck so every emitted slide
+  // is a complete DSL `Slide` (no partial/"draft" stage). `themeColors` prefers
+  // the parsed deck colors, falling back to the import context theme.
+  const slideViewportRatio = json.size.width > 0 ? json.size.height / json.size.width : 0.5625;
+  const slideTheme: SlideTheme = {
+    backgroundColor: theme.backgroundColor,
+    themeColors: (json as { themeColors?: string[] }).themeColors ?? theme.themeColors,
+    fontColor: theme.fontColor,
+    fontName: theme.fontName,
+    outline: theme.outline,
+    shadow: theme.shadow
+  };
+
   const slides: Slide[] = [];
   // base64 图片上传改为并发
   const limitUpload = createConcurrencyLimiter(6);
@@ -439,6 +453,9 @@ export async function transformParsedToSlides(
 
     const slide: Slide = {
       id: nanoid(10),
+      viewportSize: viewportWidth,
+      viewportRatio: slideViewportRatio,
+      theme: slideTheme,
       elements: [],
       background,
       script: item.note || ""

@@ -15,7 +15,7 @@
  * `Promise.allSettled` here so a missing inner `.catch` cannot fail the
  * whole import either.
  */
-import type { Slide, SlideTheme } from "../openmaic/types/slides";
+import type { Slide } from "@maic/dsl";
 import type { Output } from "../adapter/types";
 import { parseZip } from "../parser/ZipParser";
 import { buildPresentation } from "../model/Presentation";
@@ -81,25 +81,9 @@ export async function parsedToSlides(
 
   await Promise.allSettled(uploadTasks);
 
-  // `transformParsedToSlides` only sets a minimal subset of Slide fields
-  // (id, elements, background, script). Fill in the canvas-required fields
-  // from the parsed presentation + import context so the result is a
-  // ready-to-render `Slide[]`.
-  const viewportRatio = json.size.width > 0 ? json.size.height / json.size.width : 0.5625;
-  const theme: SlideTheme = {
-    backgroundColor: ctx.theme.backgroundColor,
-    themeColors: json.themeColors ?? ctx.theme.themeColors,
-    fontColor: ctx.theme.fontColor,
-    fontName: ctx.theme.fontName,
-    outline: ctx.theme.outline,
-    shadow: ctx.theme.shadow,
-  };
-  for (const slide of slides) {
-    if (slide.viewportSize === undefined) slide.viewportSize = deckViewportWidth;
-    if (slide.viewportRatio === undefined) slide.viewportRatio = viewportRatio;
-    if (slide.theme === undefined) slide.theme = theme;
-  }
-
+  // `transformParsedToSlides` already emits complete DSL `Slide` objects
+  // (viewportSize / viewportRatio / theme are filled at construction), so the
+  // result is a ready-to-render `Slide[]` with no post-processing.
   return slides;
 }
 

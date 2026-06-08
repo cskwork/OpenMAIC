@@ -9,7 +9,7 @@ import type { Slide } from '@/lib/types/slides';
 // pdfjs-dist (transitively pulled by `maic-import/src`) uses dynamic
 // `require()` patterns Turbopack refuses to bundle, so values flow through
 // the URL-loaded dist instead. The workspace package only contributes types.
-import type * as MaicImport from 'maic-import';
+import type * as MaicImport from '@maic/importer';
 
 const log = createLogger('ImportPptx');
 

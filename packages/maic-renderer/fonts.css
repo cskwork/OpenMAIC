@@ -7,7 +7,7 @@
  * browser (faux-bold) rather than mapped to a real heavy weight.
  *
  * Consumers import this once at the app shell:
- *     import 'maic-renderer/fonts.css';
+ *     import '@maic/renderer/fonts.css';
  *
  * The relative `./fonts/<name>.woff2` paths are resolved by the consumer's
  * bundler (Next.js/Turbopack/webpack/Vite/etc.) and emitted as static assets.
