@@ -132,15 +132,18 @@
   body {
     @apply bg-background text-foreground;
   }
-  /* Radix Select / Popover wrap with `react-remove-scroll`, which adds a
-     compensation `padding-right` to <body> when they open. Our <html>
+  /* Radix overlays wrap with `react-remove-scroll`, which compensates for
+     the removed page scrollbar by adding right-side body spacing. Classroom
+     playback/edit shells are fixed-height inner-scroll layouts and <html>
      already reserves the scrollbar gutter (above), so that compensation
-     creates a visible layout shift on every dropdown open. Scope the
-     override to editor mode — the SlideCanvas sets `data-maic-editor` on
-     the body while mounted — so Radix's compensation still works on the
-     rest of the app (modals, sheets, etc. on non-editor pages). */
-  body[data-maic-editor='true'] {
+     creates a visible horizontal layout shift. Keep Radix's modal focus and
+     interaction locking, but neutralize only the gap compensation in
+     classroom/editor chrome. */
+  body[data-maic-editor='true'],
+  body[data-maic-editor='true'][data-scroll-locked],
+  body[data-maic-classroom='true'][data-scroll-locked] {
     padding-right: 0 !important;
+    margin-right: 0 !important;
   }
 }
 /* ProseMirror Editor Styles */

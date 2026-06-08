@@ -28,6 +28,13 @@ export default function ClassroomDetailPage() {
 
   const generationStartedRef = useRef(false);
 
+  useEffect(() => {
+    document.body.dataset.maicClassroom = 'true';
+    return () => {
+      delete document.body.dataset.maicClassroom;
+    };
+  }, []);
+
   const { generateRemaining, retrySingleOutline, stop } = useSceneGenerator({
     onComplete: () => {
       log.info('[Classroom] All scenes generated');
