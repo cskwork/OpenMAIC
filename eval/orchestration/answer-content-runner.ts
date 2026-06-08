@@ -96,6 +96,13 @@ interface ContentScenario {
   turns: ScenarioTurn[];
   answerKey: string;
   expectedPreFix?: string;
+  /** Classroom context so the assembled prompt matches the live shape/bulk:
+   * a topical slide scene, the stage (incl. languageDirective), and the
+   * student profile. Shapes mirror StatelessChatRequest.storeState. */
+  scene?: unknown;
+  stage?: unknown;
+  userProfile?: { nickname?: string; bio?: string };
+  mode?: 'autonomous' | 'playback';
 }
 
 type Variant = 'baseline' | 'with_rule';
@@ -145,14 +152,18 @@ function buildTeacherConfig(scenario: ContentScenario): AgentConfig {
   };
 }
 
-/** Minimal store state: no slides, whiteboard closed — keeps the prompt focused
- * on the conversation while still exercising the real builder. */
-function buildStoreState(): StatelessChatRequest['storeState'] {
+/** Store state from the scenario's classroom context (slide scene + stage),
+ * so buildStructuredPrompt produces the same "# Current State" shape/bulk as
+ * the live agent-generate path. Falls back to an empty state if a scenario
+ * omits context. */
+function buildStoreState(scenario: ContentScenario): StatelessChatRequest['storeState'] {
+  const scene = scenario.scene;
+  const sceneId = scene ? ((scene as { id?: string }).id ?? null) : null;
   return {
-    stage: null,
-    scenes: [],
-    currentSceneId: null,
-    mode: 'autonomous',
+    stage: scenario.stage ?? null,
+    scenes: scene ? [scene] : [],
+    currentSceneId: sceneId,
+    mode: scenario.mode ?? 'playback',
     whiteboardOpen: false,
   } as unknown as StatelessChatRequest['storeState'];
 }
@@ -425,14 +436,14 @@ async function main() {
     process.stdout.write(`  - ${sc.case_id} ... `);
 
     const teacher = buildTeacherConfig(sc);
-    const storeState = buildStoreState();
+    const storeState = buildStoreState(sc);
     const agentResponses = buildAgentResponses(sc);
     const withRulePrompt = buildStructuredPrompt(
       teacher,
       storeState,
       undefined,
       [],
-      undefined,
+      sc.userProfile,
       agentResponses,
     );
     const baselinePrompt = stripAnsweringSection(withRulePrompt);

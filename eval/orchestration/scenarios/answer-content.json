@@ -27,9 +27,82 @@
       }
     ],
     "teacherAgentId": "t1",
-    "turns": [{ "role": "user", "text": "二次函数 y=ax²+bx+c 的对称轴 x 坐标公式是什么？" }],
+    "turns": [
+      {
+        "role": "user",
+        "text": "二次函数 y=ax²+bx+c 的对称轴 x 坐标公式是什么？"
+      }
+    ],
     "answerKey": "Give the formula x = -b/(2a) directly. A greeting or a lecture on what a parabola is, without stating the formula, does not count.",
-    "expectedPreFix": "drift"
+    "expectedPreFix": "drift",
+    "scene": {
+      "id": "scene-quad",
+      "title": "二次函数 y = ax² + bx + c",
+      "type": "slide",
+      "content": {
+        "type": "slide",
+        "canvas": {
+          "elements": [
+            {
+              "id": "t-title",
+              "type": "text",
+              "textType": "title",
+              "content": "<p><b>二次函数 y = ax² + bx + c</b></p>",
+              "left": 80,
+              "top": 50,
+              "width": 780,
+              "height": 80
+            },
+            {
+              "id": "t-b1",
+              "type": "text",
+              "content": "<p>开口方向由 a 的正负决定</p>",
+              "left": 100,
+              "top": 175,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b2",
+              "type": "text",
+              "content": "<p>顶点是抛物线的最高或最低点</p>",
+              "left": 100,
+              "top": 245,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b3",
+              "type": "text",
+              "content": "<p>对称轴是过顶点的竖直线</p>",
+              "left": 100,
+              "top": 315,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "l-1",
+              "type": "latex",
+              "latex": "y = ax^2 + bx + c",
+              "left": 540,
+              "top": 380,
+              "width": 300,
+              "height": 80
+            }
+          ]
+        }
+      }
+    },
+    "stage": {
+      "name": "高中数学 · 二次函数",
+      "description": "抛物线的性质与对称轴",
+      "languageDirective": "主要用中文授课；公式与专业术语保留标准写法。"
+    },
+    "userProfile": {
+      "nickname": "小明",
+      "bio": "高一学生，正在准备期中考试，几何直觉一般。"
+    },
+    "mode": "playback"
   },
   {
     "case_id": "opening_lecture_override_chem",
@@ -52,9 +125,73 @@
       }
     ],
     "teacherAgentId": "t1",
-    "turns": [{ "role": "user", "text": "why is water written H2O and not HO?" }],
+    "turns": [
+      {
+        "role": "user",
+        "text": "why is water written H2O and not HO?"
+      }
+    ],
     "answerKey": "Explain that one oxygen atom forms two bonds / needs two hydrogens (octet), hence H2O. A greeting or generic intro that never explains the 2:1 ratio does not count.",
-    "expectedPreFix": "drift"
+    "expectedPreFix": "drift",
+    "scene": {
+      "id": "scene-bond",
+      "title": "Chemical Bonding: Why H₂O?",
+      "type": "slide",
+      "content": {
+        "type": "slide",
+        "canvas": {
+          "elements": [
+            {
+              "id": "t-title",
+              "type": "text",
+              "textType": "title",
+              "content": "<p><b>Chemical Bonding: Why H₂O?</b></p>",
+              "left": 80,
+              "top": 50,
+              "width": 780,
+              "height": 80
+            },
+            {
+              "id": "t-b1",
+              "type": "text",
+              "content": "<p>Atoms bond to reach a stable electron shell</p>",
+              "left": 100,
+              "top": 175,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b2",
+              "type": "text",
+              "content": "<p>Oxygen has 6 valence electrons</p>",
+              "left": 100,
+              "top": 245,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b3",
+              "type": "text",
+              "content": "<p>A covalent bond shares one pair of electrons</p>",
+              "left": 100,
+              "top": 315,
+              "width": 720,
+              "height": 60
+            }
+          ]
+        }
+      }
+    },
+    "stage": {
+      "name": "Introductory Chemistry",
+      "description": "Chemical bonding and molecular formulas",
+      "languageDirective": "Teach primarily in English; keep formulas and technical terms in standard notation."
+    },
+    "userProfile": {
+      "nickname": "Mia",
+      "bio": "9th grader, new to chemistry, likes clear examples."
+    },
+    "mode": "playback"
   },
   {
     "case_id": "simple_yesno_turn0",
@@ -68,12 +205,82 @@
         "priority": 10,
         "persona": "Photography instructor who likes to volunteer extra shooting tips."
       },
-      { "id": "s1", "name": "Ada", "role": "student", "priority": 4, "persona": "Hobbyist." }
+      {
+        "id": "s1",
+        "name": "Ada",
+        "role": "student",
+        "priority": 4,
+        "persona": "Hobbyist."
+      }
     ],
     "teacherAgentId": "t1",
-    "turns": [{ "role": "user", "text": "does this camera have a built-in light meter?" }],
+    "turns": [
+      {
+        "role": "user",
+        "text": "does this camera have a built-in light meter?"
+      }
+    ],
     "answerKey": "Answer yes or no to whether the camera has a light meter, then a brief confirmation. A reply about shutter speed / other tips without the yes/no does not count.",
-    "expectedPreFix": "drift"
+    "expectedPreFix": "drift",
+    "scene": {
+      "id": "scene-meter",
+      "title": "Exposure & Metering",
+      "type": "slide",
+      "content": {
+        "type": "slide",
+        "canvas": {
+          "elements": [
+            {
+              "id": "t-title",
+              "type": "text",
+              "textType": "title",
+              "content": "<p><b>Exposure & Metering</b></p>",
+              "left": 80,
+              "top": 50,
+              "width": 780,
+              "height": 80
+            },
+            {
+              "id": "t-b1",
+              "type": "text",
+              "content": "<p>The light meter measures scene brightness</p>",
+              "left": 100,
+              "top": 175,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b2",
+              "type": "text",
+              "content": "<p>Shutter speed controls motion blur</p>",
+              "left": 100,
+              "top": 245,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b3",
+              "type": "text",
+              "content": "<p>Aperture controls depth of field</p>",
+              "left": 100,
+              "top": 315,
+              "width": 720,
+              "height": 60
+            }
+          ]
+        }
+      }
+    },
+    "stage": {
+      "name": "Photography 101",
+      "description": "Exposure fundamentals",
+      "languageDirective": "Teach primarily in English; keep formulas and technical terms in standard notation."
+    },
+    "userProfile": {
+      "nickname": "Ada",
+      "bio": "Hobbyist photographer, just bought a mirrorless camera."
+    },
+    "mode": "playback"
   },
   {
     "case_id": "ignored_format_language_request",
@@ -96,9 +303,73 @@
       }
     ],
     "teacherAgentId": "t1",
-    "turns": [{ "role": "user", "text": "能用中文给我讲一下这个吗？" }],
+    "turns": [
+      {
+        "role": "user",
+        "text": "能用中文给我讲一下这个吗？"
+      }
+    ],
     "answerKey": "Honor the language request: reply in Chinese (or at least explicitly acknowledge and switch). Continuing an English lecture, ignoring the language request, does not count.",
-    "expectedPreFix": "drift"
+    "expectedPreFix": "drift",
+    "scene": {
+      "id": "scene-py",
+      "title": "Introduction to Python",
+      "type": "slide",
+      "content": {
+        "type": "slide",
+        "canvas": {
+          "elements": [
+            {
+              "id": "t-title",
+              "type": "text",
+              "textType": "title",
+              "content": "<p><b>Introduction to Python</b></p>",
+              "left": 80,
+              "top": 50,
+              "width": 780,
+              "height": 80
+            },
+            {
+              "id": "t-b1",
+              "type": "text",
+              "content": "<p>Variables store values</p>",
+              "left": 100,
+              "top": 175,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b2",
+              "type": "text",
+              "content": "<p>Functions group reusable logic</p>",
+              "left": 100,
+              "top": 245,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b3",
+              "type": "text",
+              "content": "<p>Loops repeat work</p>",
+              "left": 100,
+              "top": 315,
+              "width": 720,
+              "height": 60
+            }
+          ]
+        }
+      }
+    },
+    "stage": {
+      "name": "Programming Basics",
+      "description": "Getting started with Python",
+      "languageDirective": "Teach primarily in English; keep formulas and technical terms in standard notation."
+    },
+    "userProfile": {
+      "nickname": "Wei",
+      "bio": "更习惯用中文学习，英文阅读吃力。"
+    },
+    "mode": "playback"
   },
   {
     "category": "ignored-capability-request",
@@ -112,12 +383,82 @@
         "priority": 10,
         "persona": "Biology teacher fond of vivid opening narration."
       },
-      { "id": "s1", "name": "Noor", "role": "student", "priority": 4, "persona": "Eager learner." }
+      {
+        "id": "s1",
+        "name": "Noor",
+        "role": "student",
+        "priority": 4,
+        "persona": "Eager learner."
+      }
     ],
     "teacherAgentId": "t1",
-    "turns": [{ "role": "user", "text": "make a 5 minute video explaining heart development" }],
+    "turns": [
+      {
+        "role": "user",
+        "text": "make a 5 minute video explaining heart development"
+      }
+    ],
     "answerKey": "Directly address the video request — explain it cannot generate a video and/or offer what it CAN do (e.g. walk through it on the whiteboard). Launching into a lecture as if no request was made does not count.",
-    "expectedPreFix": "drift"
+    "expectedPreFix": "drift",
+    "scene": {
+      "id": "scene-heart",
+      "title": "Embryonic Heart Development",
+      "type": "slide",
+      "content": {
+        "type": "slide",
+        "canvas": {
+          "elements": [
+            {
+              "id": "t-title",
+              "type": "text",
+              "textType": "title",
+              "content": "<p><b>Embryonic Heart Development</b></p>",
+              "left": 80,
+              "top": 50,
+              "width": 780,
+              "height": 80
+            },
+            {
+              "id": "t-b1",
+              "type": "text",
+              "content": "<p>The heart tube forms around week 3</p>",
+              "left": 100,
+              "top": 175,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b2",
+              "type": "text",
+              "content": "<p>Looping establishes the chambers</p>",
+              "left": 100,
+              "top": 245,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b3",
+              "type": "text",
+              "content": "<p>Septation divides the heart</p>",
+              "left": 100,
+              "top": 315,
+              "width": 720,
+              "height": 60
+            }
+          ]
+        }
+      }
+    },
+    "stage": {
+      "name": "Embryology",
+      "description": "Cardiac development",
+      "languageDirective": "Teach primarily in English; keep formulas and technical terms in standard notation."
+    },
+    "userProfile": {
+      "nickname": "Noor",
+      "bio": "Pre-med student, visual learner."
+    },
+    "mode": "playback"
   },
   {
     "case_id": "ignored_navigation_request",
@@ -140,9 +481,73 @@
       }
     ],
     "teacherAgentId": "t1",
-    "turns": [{ "role": "user", "text": "can you skip to the next page?" }],
+    "turns": [
+      {
+        "role": "user",
+        "text": "can you skip to the next page?"
+      }
+    ],
     "answerKey": "Acknowledge and move to the next page (confirm the navigation). A greeting or starting an unrelated lecture does not count.",
-    "expectedPreFix": "pass"
+    "expectedPreFix": "pass",
+    "scene": {
+      "id": "scene-kin",
+      "title": "Kinematics: Speed vs Velocity",
+      "type": "slide",
+      "content": {
+        "type": "slide",
+        "canvas": {
+          "elements": [
+            {
+              "id": "t-title",
+              "type": "text",
+              "textType": "title",
+              "content": "<p><b>Kinematics: Speed vs Velocity</b></p>",
+              "left": 80,
+              "top": 50,
+              "width": 780,
+              "height": 80
+            },
+            {
+              "id": "t-b1",
+              "type": "text",
+              "content": "<p>Speed is a scalar magnitude</p>",
+              "left": 100,
+              "top": 175,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b2",
+              "type": "text",
+              "content": "<p>Velocity is a vector with direction</p>",
+              "left": 100,
+              "top": 245,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b3",
+              "type": "text",
+              "content": "<p>Acceleration changes velocity</p>",
+              "left": 100,
+              "top": 315,
+              "width": 720,
+              "height": 60
+            }
+          ]
+        }
+      }
+    },
+    "stage": {
+      "name": "Physics: Motion",
+      "description": "Kinematics basics",
+      "languageDirective": "Teach primarily in English; keep formulas and technical terms in standard notation."
+    },
+    "userProfile": {
+      "nickname": "Bo",
+      "bio": "10th-grade physics student."
+    },
+    "mode": "playback"
   },
   {
     "case_id": "ignored_correction_formula",
@@ -177,7 +582,66 @@
       }
     ],
     "answerKey": "Acknowledge the error and confirm the correct formula NO3-. Ignoring the correction and continuing with another point does not count.",
-    "expectedPreFix": "drift"
+    "expectedPreFix": "drift",
+    "scene": {
+      "id": "scene-ions",
+      "title": "Polyatomic Ions",
+      "type": "slide",
+      "content": {
+        "type": "slide",
+        "canvas": {
+          "elements": [
+            {
+              "id": "t-title",
+              "type": "text",
+              "textType": "title",
+              "content": "<p><b>Polyatomic Ions</b></p>",
+              "left": 80,
+              "top": 50,
+              "width": 780,
+              "height": 80
+            },
+            {
+              "id": "t-b1",
+              "type": "text",
+              "content": "<p>Sulfate: SO₄²⁻</p>",
+              "left": 100,
+              "top": 175,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b2",
+              "type": "text",
+              "content": "<p>Nitrate: NEIN3-</p>",
+              "left": 100,
+              "top": 245,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b3",
+              "type": "text",
+              "content": "<p>Carbonate: CO₃²⁻</p>",
+              "left": 100,
+              "top": 315,
+              "width": 720,
+              "height": 60
+            }
+          ]
+        }
+      }
+    },
+    "stage": {
+      "name": "Chemistry: Ions",
+      "description": "Common polyatomic ions",
+      "languageDirective": "Teach primarily in English; keep formulas and technical terms in standard notation."
+    },
+    "userProfile": {
+      "nickname": "Tom",
+      "bio": "Attentive student who proofreads the slides."
+    },
+    "mode": "playback"
   },
   {
     "case_id": "frustration_reask_physics",
@@ -201,16 +665,90 @@
     ],
     "teacherAgentId": "t1",
     "turns": [
-      { "role": "user", "text": "In F=ma, is the m the inertial mass or the gravitational mass?" },
+      {
+        "role": "user",
+        "text": "In F=ma, is the m the inertial mass or the gravitational mass?"
+      },
       {
         "role": "agent",
         "agentId": "t1",
         "text": "F=ma is the cornerstone of Newtonian mechanics, describing the link between force, mass, and acceleration."
       },
-      { "role": "user", "text": "你答非所问，我问的是 m 到底是惯性质量还是引力质量。" }
+      {
+        "role": "user",
+        "text": "你答非所问，我问的是 m 到底是惯性质量还是引力质量。"
+      }
     ],
     "answerKey": "Directly answer that the m in F=ma is the inertial mass. Another analogy, a numeric example, or a tangent does not count.",
-    "expectedPreFix": "drift"
+    "expectedPreFix": "drift",
+    "scene": {
+      "id": "scene-newton",
+      "title": "Newton's Second Law",
+      "type": "slide",
+      "content": {
+        "type": "slide",
+        "canvas": {
+          "elements": [
+            {
+              "id": "t-title",
+              "type": "text",
+              "textType": "title",
+              "content": "<p><b>Newton's Second Law</b></p>",
+              "left": 80,
+              "top": 50,
+              "width": 780,
+              "height": 80
+            },
+            {
+              "id": "t-b1",
+              "type": "text",
+              "content": "<p>Force, mass and acceleration are linked</p>",
+              "left": 100,
+              "top": 175,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b2",
+              "type": "text",
+              "content": "<p>Force is measured in newtons</p>",
+              "left": 100,
+              "top": 245,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b3",
+              "type": "text",
+              "content": "<p>Mass resists changes in motion</p>",
+              "left": 100,
+              "top": 315,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "l-1",
+              "type": "latex",
+              "latex": "F = ma",
+              "left": 540,
+              "top": 380,
+              "width": 300,
+              "height": 80
+            }
+          ]
+        }
+      }
+    },
+    "stage": {
+      "name": "Classical Mechanics",
+      "description": "Newton's laws",
+      "languageDirective": "Teach primarily in English; keep formulas and technical terms in standard notation."
+    },
+    "userProfile": {
+      "nickname": "Hua",
+      "bio": "大学物理学生，喜欢刨根问底、要精确答案。"
+    },
+    "mode": "playback"
   },
   {
     "case_id": "adjacent_pivot_economics",
@@ -240,7 +778,66 @@
       }
     ],
     "answerKey": "Explain that adjusted R-squared penalizes added predictors that don't improve fit, so a useless variable lowers it. A pivot to a broader theme (e.g. socialism, model philosophy) without answering does not count.",
-    "expectedPreFix": "drift"
+    "expectedPreFix": "drift",
+    "scene": {
+      "id": "scene-reg",
+      "title": "Regression Diagnostics",
+      "type": "slide",
+      "content": {
+        "type": "slide",
+        "canvas": {
+          "elements": [
+            {
+              "id": "t-title",
+              "type": "text",
+              "textType": "title",
+              "content": "<p><b>Regression Diagnostics</b></p>",
+              "left": 80,
+              "top": 50,
+              "width": 780,
+              "height": 80
+            },
+            {
+              "id": "t-b1",
+              "type": "text",
+              "content": "<p>R² measures explained variance</p>",
+              "left": 100,
+              "top": 175,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b2",
+              "type": "text",
+              "content": "<p>Adjusted R² penalizes extra predictors</p>",
+              "left": 100,
+              "top": 245,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b3",
+              "type": "text",
+              "content": "<p>Overfitting inflates plain R²</p>",
+              "left": 100,
+              "top": 315,
+              "width": 720,
+              "height": 60
+            }
+          ]
+        }
+      }
+    },
+    "stage": {
+      "name": "Econometrics",
+      "description": "Regression diagnostics",
+      "languageDirective": "Teach primarily in English; keep formulas and technical terms in standard notation."
+    },
+    "userProfile": {
+      "nickname": "Reza",
+      "bio": "Grad student comfortable with stats."
+    },
+    "mode": "playback"
   },
   {
     "case_id": "vague_request_clarify",
@@ -263,9 +860,73 @@
       }
     ],
     "teacherAgentId": "t1",
-    "turns": [{ "role": "user", "text": "帮我看看这个。" }],
+    "turns": [
+      {
+        "role": "user",
+        "text": "帮我看看这个。"
+      }
+    ],
     "answerKey": "Ask ONE specific clarifying question about what '这个' refers to (optionally offering a concrete option). Guessing a topic and lecturing, or producing no question, does not count.",
-    "expectedPreFix": "drift"
+    "expectedPreFix": "drift",
+    "scene": {
+      "id": "scene-opt",
+      "title": "最优化基础",
+      "type": "slide",
+      "content": {
+        "type": "slide",
+        "canvas": {
+          "elements": [
+            {
+              "id": "t-title",
+              "type": "text",
+              "textType": "title",
+              "content": "<p><b>最优化基础</b></p>",
+              "left": 80,
+              "top": 50,
+              "width": 780,
+              "height": 80
+            },
+            {
+              "id": "t-b1",
+              "type": "text",
+              "content": "<p>损失函数衡量误差</p>",
+              "left": 100,
+              "top": 175,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b2",
+              "type": "text",
+              "content": "<p>梯度指向上升最快的方向</p>",
+              "left": 100,
+              "top": 245,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b3",
+              "type": "text",
+              "content": "<p>步长即学习率</p>",
+              "left": 100,
+              "top": 315,
+              "width": 720,
+              "height": 60
+            }
+          ]
+        }
+      }
+    },
+    "stage": {
+      "name": "ML Foundations",
+      "description": "Optimization",
+      "languageDirective": "主要用中文授课；公式与专业术语保留标准写法。"
+    },
+    "userProfile": {
+      "nickname": "小敏",
+      "bio": "研究生，刚开始接触最优化。"
+    },
+    "mode": "playback"
   },
   {
     "case_id": "clean_direct_question_control",
@@ -279,12 +940,82 @@
         "priority": 10,
         "persona": "Calculus teacher."
       },
-      { "id": "s1", "name": "Alex", "role": "student", "priority": 4, "persona": "Student." }
+      {
+        "id": "s1",
+        "name": "Alex",
+        "role": "student",
+        "priority": 4,
+        "persona": "Student."
+      }
     ],
     "teacherAgentId": "t1",
-    "turns": [{ "role": "user", "text": "what's the derivative of x squared?" }],
+    "turns": [
+      {
+        "role": "user",
+        "text": "what's the derivative of x squared?"
+      }
+    ],
     "answerKey": "Give 2x (the derivative of x^2). Any reply leading with that is correct.",
-    "expectedPreFix": "pass"
+    "expectedPreFix": "pass",
+    "scene": {
+      "id": "scene-deriv",
+      "title": "Derivatives",
+      "type": "slide",
+      "content": {
+        "type": "slide",
+        "canvas": {
+          "elements": [
+            {
+              "id": "t-title",
+              "type": "text",
+              "textType": "title",
+              "content": "<p><b>Derivatives</b></p>",
+              "left": 80,
+              "top": 50,
+              "width": 780,
+              "height": 80
+            },
+            {
+              "id": "t-b1",
+              "type": "text",
+              "content": "<p>The derivative is an instantaneous rate of change</p>",
+              "left": 100,
+              "top": 175,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b2",
+              "type": "text",
+              "content": "<p>Power rule: d/dx xⁿ = n·xⁿ⁻¹</p>",
+              "left": 100,
+              "top": 245,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b3",
+              "type": "text",
+              "content": "<p>It gives the slope of the tangent line</p>",
+              "left": 100,
+              "top": 315,
+              "width": 720,
+              "height": 60
+            }
+          ]
+        }
+      }
+    },
+    "stage": {
+      "name": "Calculus I",
+      "description": "Differentiation",
+      "languageDirective": "Teach primarily in English; keep formulas and technical terms in standard notation."
+    },
+    "userProfile": {
+      "nickname": "Alex",
+      "bio": "First-year calculus student."
+    },
+    "mode": "playback"
   },
   {
     "case_id": "specific_followup_control",
@@ -298,19 +1029,90 @@
         "priority": 10,
         "persona": "Statistics teacher."
       },
-      { "id": "s1", "name": "Lee", "role": "student", "priority": 4, "persona": "Student." }
+      {
+        "id": "s1",
+        "name": "Lee",
+        "role": "student",
+        "priority": 4,
+        "persona": "Student."
+      }
     ],
     "teacherAgentId": "t1",
     "turns": [
-      { "role": "user", "text": "what is gradient descent?" },
+      {
+        "role": "user",
+        "text": "what is gradient descent?"
+      },
       {
         "role": "agent",
         "agentId": "t1",
         "text": "Gradient descent updates parameters in the direction opposite the loss gradient, step by step, until reaching a (local) minimum; the learning rate sets the step size."
       },
-      { "role": "user", "text": "and what controls the step size?" }
+      {
+        "role": "user",
+        "text": "and what controls the step size?"
+      }
     ],
     "answerKey": "Answer that the learning rate controls the step size. Any reply leading with that is correct.",
-    "expectedPreFix": "pass"
+    "expectedPreFix": "pass",
+    "scene": {
+      "id": "scene-gd",
+      "title": "Gradient Descent",
+      "type": "slide",
+      "content": {
+        "type": "slide",
+        "canvas": {
+          "elements": [
+            {
+              "id": "t-title",
+              "type": "text",
+              "textType": "title",
+              "content": "<p><b>Gradient Descent</b></p>",
+              "left": 80,
+              "top": 50,
+              "width": 780,
+              "height": 80
+            },
+            {
+              "id": "t-b1",
+              "type": "text",
+              "content": "<p>Update parameters against the gradient</p>",
+              "left": 100,
+              "top": 175,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b2",
+              "type": "text",
+              "content": "<p>Learning rate sets the step size</p>",
+              "left": 100,
+              "top": 245,
+              "width": 720,
+              "height": 60
+            },
+            {
+              "id": "t-b3",
+              "type": "text",
+              "content": "<p>It converges to a local minimum</p>",
+              "left": 100,
+              "top": 315,
+              "width": 720,
+              "height": 60
+            }
+          ]
+        }
+      }
+    },
+    "stage": {
+      "name": "ML Foundations",
+      "description": "Gradient descent",
+      "languageDirective": "Teach primarily in English; keep formulas and technical terms in standard notation."
+    },
+    "userProfile": {
+      "nickname": "Lee",
+      "bio": "CS undergrad."
+    },
+    "mode": "playback"
   }
 ]
