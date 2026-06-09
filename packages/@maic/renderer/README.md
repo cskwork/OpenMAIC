@@ -179,6 +179,30 @@ export default {
 };
 ```
 
+## Fonts (optional, CDN-hosted)
+
+Slides imported from PowerPoint often reference Chinese faces that aren't
+installed on the viewer's machine. The package ships a `fonts.css` with
+`@font-face` rules for a small whitelist of self-hosted CJK faces — import it
+once at your app shell to make those faces available:
+
+```ts
+import '@maic/renderer/fonts.css';
+```
+
+> **Runtime dependency — read this.** The `@font-face` `src` URLs point at an
+> external font host (`https://file.maic.chat/fonts/<name>.woff2`); the woff2
+> files are **not** bundled in the package. So this is a hard runtime dependency:
+> the host must be **reachable and CORS-enabled** from the consumer's app, or the
+> browser will **silently fall back to system fonts** (no error, just different
+> glyphs/metrics). If you need a different origin (self-hosting, air-gapped, a
+> private CDN), change `FONT_CDN_BASE_URL` in `fonts.config.mjs` and regenerate
+> with `pnpm run genfonts`.
+>
+> The import is **optional** — slides render fine without it, using whatever
+> fonts the system provides. See [FONTS.md](./FONTS.md) for the face list and
+> their licenses.
+
 ## Companion package
 
 [`@maic/importer`](../importer) converts `.pptx` files to the same `Slide[]` shape, so you can do `.pptx → @maic/renderer` end-to-end.
