@@ -45,13 +45,18 @@ import { fileURLToPath } from 'url';
 import { callLLM } from '@/lib/ai/llm';
 import { buildStructuredPrompt } from '@/lib/orchestration/prompt-builder';
 import { convertMessagesToOpenAI } from '@/lib/orchestration/summarizers/message-converter';
-import { createParserState, parseStructuredChunk } from '@/lib/orchestration/stateless-generate';
+import {
+  createParserState,
+  parseStructuredChunk,
+  finalizeParser,
+} from '@/lib/orchestration/stateless-generate';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import type { AgentTurnSummary } from '@/lib/orchestration/types';
 import type { StatelessChatRequest } from '@/lib/types/chat';
 import { resolveEvalModel } from '../shared/resolve-model';
 import { createRunDir } from '../shared/run-dir';
 import { judgeAnswer, type AnswerVerdict } from './answer-content-judge';
+import type { ScenarioAgent } from './types';
 
 const OUTPUT_DIR = 'eval/orchestration/results-answer-content';
 
@@ -73,11 +78,7 @@ const TEACHER_ACTIONS = [
 
 // ==================== Types ====================
 
-interface ScenarioAgentSpec {
-  id: string;
-  name: string;
-  role: string;
-  priority: number;
+interface ScenarioAgentSpec extends ScenarioAgent {
   persona: string;
 }
 
@@ -129,7 +130,6 @@ interface ScenarioResult {
   case_id: string;
   category: string;
   description: string;
-  expectedPreFix?: string;
   baseline: VariantAgg;
   withRule: VariantAgg;
   delta: number;
@@ -230,22 +230,11 @@ function stripAnsweringSection(prompt: string): string {
 /** Extract ordered text blocks from a structured agent response. */
 function extractTexts(raw: string): string[] {
   const state = createParserState();
-  const result = parseStructuredChunk(raw, state);
-  if (result.textChunks.length > 0) return result.textChunks;
-
-  // Fallback: strip fences and JSON.parse the array directly.
-  try {
-    const cleaned = raw.replace(/```json\s*|\s*```/g, '').trim();
-    const start = cleaned.indexOf('[');
-    const end = cleaned.lastIndexOf(']');
-    if (start === -1 || end === -1) return [];
-    const arr = JSON.parse(cleaned.slice(start, end + 1)) as Array<Record<string, unknown>>;
-    return arr
-      .filter((it) => it.type === 'text' && typeof it.content === 'string')
-      .map((it) => it.content as string);
-  } catch {
-    return [];
-  }
+  const streamed = parseStructuredChunk(raw, state);
+  if (streamed.textChunks.length > 0) return streamed.textChunks;
+  // No structured text parsed (e.g. the model emitted plain prose, or never
+  // closed the array). Recover it the same way the app's stream finalizer does.
+  return finalizeParser(state).textChunks;
 }
 
 // ==================== Sampling ====================
@@ -493,7 +482,6 @@ async function main() {
       case_id: sc.case_id,
       category: sc.category,
       description: sc.description,
-      expectedPreFix: sc.expectedPreFix,
       baseline,
       withRule,
       delta,
