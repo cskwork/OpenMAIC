@@ -1,10 +1,13 @@
 'use client';
 
 /**
- * ActionsBar — Pro-mode bottom bar that shows the active scene's playback
- * `actions` (the narration/effect timeline) so editors can see what the agent
- * generated. Reads reactively from the stage store, so regenerating actions
- * (via the MAIC Agent) updates it live. Collapsible to reclaim canvas height.
+ * ActionsBar — Pro-mode "narration script" of the active scene's playback
+ * `actions`, so an editor can read at a glance what the agent will say + do on
+ * this page. Speech reads as flowing read-only text; non-speech cues
+ * (spotlight / laser / whiteboard) sit inline as badges. Hovering a badge shows
+ * its properties and spotlights the bound element on the canvas (reusing the
+ * editor's SpotlightOverlay via the canvas store). Reads reactively from the
+ * stage store, so regenerating actions updates it live. Collapsible.
  */
 import { useState } from 'react';
 import {
@@ -12,10 +15,9 @@ import {
   Circle,
   Crosshair,
   Focus,
-  ListMusic,
-  MessageSquareText,
   PenLine,
   Presentation,
+  ScrollText,
   Shapes,
   Sigma,
   Table2,
@@ -23,148 +25,136 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import { useStageStore } from '@/lib/store/stage';
+import { useCanvasStore } from '@/lib/store/canvas';
 import type { Action } from '@/lib/types/action';
 
-// Stable empty reference so the zustand selector doesn't churn re-renders.
 const EMPTY: Action[] = [];
 
 interface TypeMeta {
   icon: LucideIcon;
   label: string;
-  /** text + ring accent classes */
-  accent: string;
-  preview: (a: Action) => string;
+  /** chip surface classes (bg + text + ring) */
+  chip: string;
 }
 
 const META: Record<string, TypeMeta> = {
-  speech: {
-    icon: MessageSquareText,
-    label: '讲解',
-    accent: 'text-violet-600 ring-violet-200 dark:text-violet-400 dark:ring-violet-900',
-    preview: (a) => (a as { text?: string }).text ?? '',
-  },
-  spotlight: {
-    icon: Focus,
-    label: '聚光',
-    accent: 'text-amber-600 ring-amber-200 dark:text-amber-400 dark:ring-amber-900',
-    preview: (a) => `#${(a as { elementId?: string }).elementId ?? ''}`,
-  },
-  laser: {
-    icon: Crosshair,
-    label: '激光',
-    accent: 'text-rose-600 ring-rose-200 dark:text-rose-400 dark:ring-rose-900',
-    preview: (a) => `#${(a as { elementId?: string }).elementId ?? ''}`,
-  },
-  wb_open: {
-    icon: Presentation,
-    label: '画板',
-    accent: 'text-sky-600 ring-sky-200 dark:text-sky-400 dark:ring-sky-900',
-    preview: () => '打开画板',
-  },
-  wb_draw_text: {
-    icon: PenLine,
-    label: '板书',
-    accent: 'text-sky-600 ring-sky-200 dark:text-sky-400 dark:ring-sky-900',
-    preview: (a) => (a as { content?: string }).content ?? '',
-  },
-  wb_draw_shape: {
-    icon: Shapes,
-    label: '图形',
-    accent: 'text-sky-600 ring-sky-200 dark:text-sky-400 dark:ring-sky-900',
-    preview: () => '绘制图形',
-  },
-  wb_draw_latex: {
-    icon: Sigma,
-    label: '公式',
-    accent: 'text-sky-600 ring-sky-200 dark:text-sky-400 dark:ring-sky-900',
-    preview: (a) => (a as { latex?: string }).latex ?? '',
-  },
-  wb_draw_table: {
-    icon: Table2,
-    label: '表格',
-    accent: 'text-sky-600 ring-sky-200 dark:text-sky-400 dark:ring-sky-900',
-    preview: () => '绘制表格',
-  },
-};
-
-const FALLBACK: TypeMeta = {
-  icon: Circle,
-  label: 'action',
-  accent: 'text-muted-foreground ring-border',
-  preview: () => '',
+  spotlight: { icon: Focus, label: '聚光', chip: 'bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:ring-amber-900' },
+  laser: { icon: Crosshair, label: '激光', chip: 'bg-rose-50 text-rose-700 ring-rose-200 dark:bg-rose-950/40 dark:text-rose-400 dark:ring-rose-900' },
+  wb_open: { icon: Presentation, label: '画板', chip: 'bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-950/40 dark:text-sky-400 dark:ring-sky-900' },
+  wb_draw_text: { icon: PenLine, label: '板书', chip: 'bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-950/40 dark:text-sky-400 dark:ring-sky-900' },
+  wb_draw_shape: { icon: Shapes, label: '图形', chip: 'bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-950/40 dark:text-sky-400 dark:ring-sky-900' },
+  wb_draw_latex: { icon: Sigma, label: '公式', chip: 'bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-950/40 dark:text-sky-400 dark:ring-sky-900' },
+  wb_draw_table: { icon: Table2, label: '表格', chip: 'bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-950/40 dark:text-sky-400 dark:ring-sky-900' },
 };
 
 function metaFor(type: string): TypeMeta {
-  return META[type] ?? { ...FALLBACK, label: type };
+  return META[type] ?? { icon: Circle, label: type, chip: 'bg-muted text-muted-foreground ring-border' };
+}
+
+/** Human-readable property rows for a cue's hover tooltip. */
+function propsOf(a: Action): Array<[string, string]> {
+  const rows: Array<[string, string]> = [['类型', a.type]];
+  const el = (a as { elementId?: string }).elementId;
+  if (el) rows.push(['元素', el]);
+  const color = (a as { color?: string }).color;
+  if (color) rows.push(['颜色', color]);
+  const content = (a as { content?: string }).content;
+  if (content) rows.push(['内容', content.length > 40 ? `${content.slice(0, 40)}…` : content]);
+  const latex = (a as { latex?: string }).latex;
+  if (latex) rows.push(['公式', latex]);
+  if (a.title) rows.push(['标题', a.title]);
+  return rows;
+}
+
+function CueBadge({ action }: { action: Action }) {
+  const m = metaFor(action.type);
+  const Icon = m.icon;
+  const elementId = (action as { elementId?: string }).elementId;
+
+  const enter = () => {
+    if (elementId) useCanvasStore.getState().setSpotlight(elementId);
+  };
+  const leave = () => {
+    // clear (empty id makes SpotlightOverlay drop the rect)
+    useCanvasStore.getState().setSpotlight('');
+  };
+
+  return (
+    <span
+      className="group/badge relative mx-0.5 inline-flex translate-y-px cursor-default select-none items-center"
+      onMouseEnter={enter}
+      onMouseLeave={leave}
+    >
+      <span
+        className={cn(
+          'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 align-middle text-[11px] font-medium ring-1 transition-shadow',
+          m.chip,
+          elementId && 'group-hover/badge:shadow-sm',
+        )}
+      >
+        <Icon className="size-3" />
+        {m.label}
+      </span>
+
+      {/* hover tooltip — properties (opens upward; bar sits at screen bottom) */}
+      <span className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-1.5 hidden w-max max-w-[260px] -translate-x-1/2 group-hover/badge:block">
+        <span className="block rounded-lg border border-border bg-popover px-2.5 py-1.5 text-popover-foreground shadow-md">
+          {propsOf(action).map(([k, v]) => (
+            <span key={k} className="flex gap-2 text-[11px] leading-relaxed">
+              <span className="shrink-0 text-muted-foreground">{k}</span>
+              <span className="font-mono [overflow-wrap:anywhere]">{v}</span>
+            </span>
+          ))}
+          {elementId && <span className="mt-0.5 block text-[10px] text-muted-foreground">悬停高亮画布元素</span>}
+        </span>
+      </span>
+    </span>
+  );
 }
 
 export function ActionsBar({ sceneId }: { sceneId: string }) {
   const actions = useStageStore((s) => s.scenes.find((x) => x.id === sceneId)?.actions ?? EMPTY);
   const [open, setOpen] = useState(true);
 
-  // Per-type counts for the header summary.
   const counts = new Map<string, number>();
   for (const a of actions) counts.set(a.type, (counts.get(a.type) ?? 0) + 1);
-  const summary = [...counts.entries()].map(([t, n]) => `${n} ${metaFor(t).label}`).join(' · ');
+  const speechCount = counts.get('speech') ?? 0;
+  const cueCount = actions.length - speechCount;
 
   return (
-    <section className="flex max-h-[42vh] flex-col border-t border-border bg-background">
+    <section className="flex max-h-[36vh] flex-col border-t border-border bg-background">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         className="flex h-9 shrink-0 items-center gap-2 px-4 text-left transition-colors hover:bg-accent/50"
       >
-        <ListMusic className="size-4 text-primary" />
-        <span className="text-[13px] font-medium text-foreground">动作时间线</span>
-        <span className="rounded-full bg-muted px-1.5 font-mono text-[11px] tabular-nums text-muted-foreground">
-          {actions.length}
+        <ScrollText className="size-4 text-primary" />
+        <span className="text-[13px] font-medium text-foreground">讲解脚本</span>
+        <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+          {speechCount} 段讲解 · {cueCount} 个提示
         </span>
-        {summary && <span className="truncate font-mono text-[11px] text-muted-foreground">{summary}</span>}
         <ChevronDown
           className={cn('ml-auto size-4 text-muted-foreground transition-transform', open && 'rotate-180')}
         />
       </button>
 
-      {open &&
-        (actions.length === 0 ? (
-          <div className="px-4 pb-3 pt-1 text-[12px] text-muted-foreground">
-            暂无动作 — 让 MAIC Agent 为这一页生成讲解动作。
-          </div>
-        ) : (
-          <ol className="flex gap-2 overflow-x-auto px-4 pb-3 pt-1">
-            {actions.map((a, i) => {
-              const m = metaFor(a.type);
-              const Icon = m.icon;
-              const text = m.preview(a);
-              return (
-                <li
-                  key={a.id ?? i}
-                  className="flex min-w-[176px] max-w-[260px] shrink-0 flex-col gap-1 rounded-lg border border-border bg-card px-2.5 py-2"
-                >
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-mono text-[10px] tabular-nums text-muted-foreground/70">
-                      {String(i + 1).padStart(2, '0')}
-                    </span>
-                    <span className={cn('grid size-5 place-items-center rounded ring-1', m.accent)}>
-                      <Icon className="size-3" />
-                    </span>
-                    <span className="text-[11px] font-medium text-foreground">{m.label}</span>
-                  </div>
-                  {text && (
-                    <p
-                      className={cn(
-                        'line-clamp-2 text-[12px] leading-snug [overflow-wrap:anywhere]',
-                        a.type === 'speech' ? 'text-foreground' : 'font-mono text-muted-foreground',
-                      )}
-                    >
-                      {text}
-                    </p>
-                  )}
-                </li>
-              );
-            })}
-          </ol>
-        ))}
+      {open && (
+        <div className="px-4 pb-3">
+          {actions.length === 0 ? (
+            <p className="text-[12px] text-muted-foreground">暂无动作 — 让 MAIC Agent 为这一页生成讲解动作。</p>
+          ) : (
+            <div className="max-h-[26vh] overflow-y-auto rounded-lg border border-border bg-muted/30 px-3.5 py-3 text-sm leading-7 text-foreground">
+              {actions.map((a, i) =>
+                a.type === 'speech' ? (
+                  <span key={a.id ?? i}>{(a as { text?: string }).text ?? ''} </span>
+                ) : (
+                  <CueBadge key={a.id ?? i} action={a} />
+                ),
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }
