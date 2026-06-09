@@ -2,8 +2,9 @@
  * GENERATED FILE — do not edit by hand.
  * Source of truth: fonts.config.mjs (run `pnpm run genfonts` to regenerate).
  *
- * Self-hosted Chinese font whitelist for slides imported from PPTX. The names
- * here are the targets the import pipeline maps unknown PPT fonts onto.
+ * Self-hosted Chinese faces for slides imported from PPTX. The importer passes
+ * original font-family names through unchanged; a name renders here only if it
+ * matches one of these families.
  *
  * Consumers import this once at the app shell:
  *     import '@maic/renderer/fonts.css';
@@ -24,28 +25,8 @@
 }
 @font-face {
   font-display: swap;
-  font-family: 'FangZhengHeiTi';
-  src: url('https://file.maic.chat/fonts/FangZhengHeiTi.woff2') format('woff2');
-}
-@font-face {
-  font-display: swap;
-  font-family: 'FangZhengKaiTi';
-  src: url('https://file.maic.chat/fonts/FangZhengKaiTi.woff2') format('woff2');
-}
-@font-face {
-  font-display: swap;
-  font-family: 'FangZhengShuSong';
-  src: url('https://file.maic.chat/fonts/FangZhengShuSong.woff2') format('woff2');
-}
-@font-face {
-  font-display: swap;
-  font-family: 'FangZhengFangSong';
-  src: url('https://file.maic.chat/fonts/FangZhengFangSong.woff2') format('woff2');
-}
-@font-face {
-  font-display: swap;
-  font-family: 'AlibabaPuHuiTi';
-  src: url('https://file.maic.chat/fonts/AlibabaPuHuiTi.woff2') format('woff2');
+  font-family: 'LXGWWenKai';
+  src: url('https://file.maic.chat/fonts/LXGWWenKai.woff2') format('woff2');
 }
 @font-face {
   font-display: swap;
@@ -54,71 +35,11 @@
 }
 @font-face {
   font-display: swap;
-  font-family: 'LXGWWenKai';
-  src: url('https://file.maic.chat/fonts/LXGWWenKai.woff2') format('woff2');
-}
-@font-face {
-  font-display: swap;
   font-family: 'WenDingPLKaiTi';
   src: url('https://file.maic.chat/fonts/WenDingPLKaiTi.woff2') format('woff2');
 }
 @font-face {
   font-display: swap;
-  font-family: 'DeYiHei';
-  src: url('https://file.maic.chat/fonts/DeYiHei.woff2') format('woff2');
-}
-@font-face {
-  font-display: swap;
-  font-family: 'MiSans';
-  src: url('https://file.maic.chat/fonts/MiSans.woff2') format('woff2');
-}
-@font-face {
-  font-display: swap;
-  font-family: 'CangerXiaowanzi';
-  src: url('https://file.maic.chat/fonts/CangerXiaowanzi.woff2') format('woff2');
-}
-@font-face {
-  font-display: swap;
-  font-family: 'YousheTitleBlack';
-  src: url('https://file.maic.chat/fonts/YousheTitleBlack.woff2') format('woff2');
-}
-@font-face {
-  font-display: swap;
-  font-family: 'FengguangMingrui';
-  src: url('https://file.maic.chat/fonts/FengguangMingrui.woff2') format('woff2');
-}
-@font-face {
-  font-display: swap;
-  font-family: 'ShetuModernSquare';
-  src: url('https://file.maic.chat/fonts/ShetuModernSquare.woff2') format('woff2');
-}
-@font-face {
-  font-display: swap;
   font-family: 'ZcoolHappy';
   src: url('https://file.maic.chat/fonts/ZcoolHappy.woff2') format('woff2');
-}
-@font-face {
-  font-display: swap;
-  font-family: 'ZizhiQuXiMai';
-  src: url('https://file.maic.chat/fonts/ZizhiQuXiMai.woff2') format('woff2');
-}
-@font-face {
-  font-display: swap;
-  font-family: 'SucaiJishiKangkang';
-  src: url('https://file.maic.chat/fonts/SucaiJishiKangkang.woff2') format('woff2');
-}
-@font-face {
-  font-display: swap;
-  font-family: 'SucaiJishiCoolSquare';
-  src: url('https://file.maic.chat/fonts/SucaiJishiCoolSquare.woff2') format('woff2');
-}
-@font-face {
-  font-display: swap;
-  font-family: 'TuniuRounded';
-  src: url('https://file.maic.chat/fonts/TuniuRounded.woff2') format('woff2');
-}
-@font-face {
-  font-display: swap;
-  font-family: 'RuiziZhenyan';
-  src: url('https://file.maic.chat/fonts/RuiziZhenyan.woff2') format('woff2');
 }

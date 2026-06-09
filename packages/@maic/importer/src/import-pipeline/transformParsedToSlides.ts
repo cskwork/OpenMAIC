@@ -29,37 +29,9 @@ import type {
 import { SHAPE_PATH_FORMULAS } from "../openmaic/configs/shapes";
 import { getSvgPathRange } from "../openmaic/utils/svgPathParser";
 import { parseVideoCodec, isVideoCodecSupported } from "../openmaic/utils/videoCodec";
-import { resolveFont } from "../openmaic/configs/font";
-import type { FontReplacementBucket, ImportContext, TransformResult } from "./types";
+import type { ImportContext, TransformResult } from "./types";
 
 type ParsedPptxJson = Awaited<ReturnType<typeof parsePptxDefault>>;
-
-/**
- * 解析单个原字体名为可渲染的内部字体 value，并把"非白名单命中"的情况累计到 bucket。
- * 返回值始终是可直接写入元素 / HTML 的字体名（白名单命中时为 cleaned 原值）。
- */
-const resolveAndRecord = (
-  rawName: string | undefined | null,
-  bucket: FontReplacementBucket
-): string => {
-  const r = resolveFont(rawName);
-  if (r.original && r.source !== "whitelist") {
-    const targetMap = r.source === "fallback" ? bucket.fallback : bucket.styled;
-    if (!targetMap.has(r.original)) targetMap.set(r.original, r.resolved);
-  }
-  return r.resolved;
-};
-
-/** 把 HTML 中所有 font-family 声明替换为风格匹配后的开源字体 */
-const replaceFontFamilyInHtml = (
-  html: string,
-  bucket: FontReplacementBucket
-): string => {
-  return html.replace(
-    /font-family:\s*([^;"]+)/g,
-    (_match, families: string) => `font-family: ${resolveAndRecord(families, bucket)}`
-  );
-};
 
 const convertPtToPx = (html: string, ratio: number) => {
   return html.replace(/([\d.]+)pt\b/g, (_match, p1) => {
@@ -380,7 +352,6 @@ export async function transformParsedToSlides(
   const ratio = ctx.ratio;
   const theme = ctx.theme;
   const shapeList = ctx.shapeList;
-  const replacedFonts = ctx.replacedFonts;
   const viewportWidth = ctx.viewportWidth;
   const sizeRatio = json.size.height / json.size.width;
   const viewportHeight = viewportWidth * sizeRatio;
@@ -510,7 +481,7 @@ export async function transformParsedToSlides(
               gradient,
               fixedRatio: false,
               text: {
-                content: replaceFontFamilyInHtml(convertPtToPx(el.content, fontScale), replacedFonts),
+                content: convertPtToPx(el.content, fontScale),
                 defaultFontName: theme.fontName,
                 defaultColor: theme.fontColor,
                 align: vAlignMap[el.vAlign] || "middle"
@@ -565,7 +536,7 @@ export async function transformParsedToSlides(
               pattern,
               fixedRatio: false,
               text: {
-                content: replaceFontFamilyInHtml(convertPtToPx(el.content, ratio), replacedFonts),
+                content: convertPtToPx(el.content, ratio),
                 defaultFontName: theme.fontName,
                 defaultColor: theme.fontColor,
                 align: vAlignMap[el.vAlign] || "middle"
@@ -602,7 +573,7 @@ export async function transformParsedToSlides(
               rotate: el.rotate,
               defaultFontName: theme.fontName,
               defaultColor: theme.fontColor,
-              content: replaceFontFamilyInHtml(convertPtToPx(el.content, ratio), replacedFonts),
+              content: convertPtToPx(el.content, ratio),
               fill: el.fill?.type === "color" ? el.fill.value : "",
               vertical: el.isVertical,
               vAlign: vAlignMap[el.vAlign]
@@ -938,7 +909,7 @@ export async function transformParsedToSlides(
               fixedRatio: false,
               rotate: el.rotate,
               text: {
-                content: replaceFontFamilyInHtml(convertPtToPx(el.content, ratio), replacedFonts),
+                content: convertPtToPx(el.content, ratio),
                 defaultFontName: theme.fontName,
                 defaultColor: theme.fontColor,
                 align: vAlignMap[el.vAlign] || "middle"
@@ -1069,7 +1040,7 @@ export async function transformParsedToSlides(
               const fontsize = span?.style.fontSize
                 ? (parseInt(span?.style.fontSize) * ratio).toFixed(1) + "px"
                 : "";
-              const fontname = resolveAndRecord(span?.style.fontFamily, replacedFonts);
+              const fontname = span?.style.fontFamily || "";
               const color = span?.style.color || cellData.fontColor;
 
               // 保留原始 <p> 段落结构（PPT 一个 <p> = 一段）

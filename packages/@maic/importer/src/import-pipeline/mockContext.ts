@@ -22,7 +22,6 @@ export function createMockImportContext(overrides: Partial<ImportContext> = {}):
     viewportWidth: 960,
     theme,
     shapeList,
-    replacedFonts: { styled: new Map(), fallback: new Map() },
     uploadBase64Image: async (base64) => base64,
     uploadBlobMedia: async (blob) => URL.createObjectURL(blob),
     extractVideoFirstFrame: async () => null,

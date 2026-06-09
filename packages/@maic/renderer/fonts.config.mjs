@@ -4,8 +4,9 @@
  * `scripts/generate-fonts-css.mjs` — edit the config here, then run
  * `pnpm run genfonts` (the build does this automatically).
  *
- * The 22 families are the target whitelist that the import pipeline maps
- * unknown PPT fonts onto (see @maic/importer's openmaic/configs/font.ts).
+ * These are the self-hosted CJK faces the renderer ships @font-face rules for.
+ * The importer passes a slide's original font-family names through unchanged
+ * (no remapping); a name only renders in one of these faces if it matches.
  */
 
 /** Object-storage origin that serves the woff2 files. */
@@ -18,26 +19,10 @@ export const FONT_DIR = 'fonts';
 export const FONT_FAMILIES = [
   'SourceHanSans',
   'SourceHanSerif',
-  'FangZhengHeiTi',
-  'FangZhengKaiTi',
-  'FangZhengShuSong',
-  'FangZhengFangSong',
-  'AlibabaPuHuiTi',
-  'ZhuQueFangSong',
   'LXGWWenKai',
+  'ZhuQueFangSong',
   'WenDingPLKaiTi',
-  'DeYiHei',
-  'MiSans',
-  'CangerXiaowanzi',
-  'YousheTitleBlack',
-  'FengguangMingrui',
-  'ShetuModernSquare',
   'ZcoolHappy',
-  'ZizhiQuXiMai',
-  'SucaiJishiKangkang',
-  'SucaiJishiCoolSquare',
-  'TuniuRounded',
-  'RuiziZhenyan',
 ];
 
 /** Build the woff2 URL for a given family. */

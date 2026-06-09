@@ -21,8 +21,9 @@ const header = `/**
  * GENERATED FILE — do not edit by hand.
  * Source of truth: fonts.config.mjs (run \`pnpm run genfonts\` to regenerate).
  *
- * Self-hosted Chinese font whitelist for slides imported from PPTX. The names
- * here are the targets the import pipeline maps unknown PPT fonts onto.
+ * Self-hosted Chinese faces for slides imported from PPTX. The importer passes
+ * original font-family names through unchanged; a name renders here only if it
+ * matches one of these families.
  *
  * Consumers import this once at the app shell:
  *     import '@maic/renderer/fonts.css';
