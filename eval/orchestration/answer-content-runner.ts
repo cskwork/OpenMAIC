@@ -431,6 +431,15 @@ async function main() {
   );
   const { model: judgeModel } = await resolveEvalModel('EVAL_JUDGE_MODEL');
   const scenarios = loadScenarios();
+  if (scenarios.length === 0) {
+    const filter = process.env.EVAL_SCENARIO;
+    console.error(
+      filter
+        ? `No scenario matches EVAL_SCENARIO="${filter}".`
+        : 'No scenarios found in scenarios/answer-content.json.',
+    );
+    process.exit(1);
+  }
   console.log(`Loaded ${scenarios.length} scenario(s)`);
   const runDir = createRunDir(OUTPUT_DIR, modelStr);
   console.log(`Output: ${runDir}`);
