@@ -29,4 +29,6 @@ await rm(destDir, { recursive: true, force: true });
 await mkdir(destDir, { recursive: true });
 await cp(srcDir, destDir, { recursive: true });
 
-console.log(`[sync-maic-importer] copied ${path.relative(root, srcDir)} → ${path.relative(root, destDir)}`);
+console.log(
+  `[sync-maic-importer] copied ${path.relative(root, srcDir)} → ${path.relative(root, destDir)}`,
+);

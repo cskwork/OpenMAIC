@@ -90,10 +90,7 @@ export function useImportPptx(options: UseImportPptxOptions = {}) {
 
         onImported?.(slides);
 
-        toast.success(
-          t('import.pptxSuccess', { count: slides.length }),
-          { id: toastId },
-        );
+        toast.success(t('import.pptxSuccess', { count: slides.length }), { id: toastId });
       } catch (error) {
         log.error('PPTX import failed:', error);
         const notDeployed =

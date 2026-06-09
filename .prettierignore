@@ -6,6 +6,10 @@ node_modules/
 packages/pptxgenjs/
 packages/mathml2omml/
 
+# Workspace SDK packages (own rollup/tsc/eslint toolchains; dist is generated,
+# importer/src1 is a vendored reference oracle)
+packages/@maic/
+
 # Docs site (separate Fumadocs app with its own toolchain)
 packages/docs/
 
