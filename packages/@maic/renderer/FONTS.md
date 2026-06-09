@@ -22,7 +22,7 @@ the fonts.
 | `LXGWWenKai`      | 霞鹜文楷     | SIL OFL 1.1            | ✅ | © 2021 The LXGW WenKai Project Authors — https://github.com/lxgw/LxgwWenKai |
 | `ZhuQueFangSong`  | 朱雀仿宋     | SIL OFL 1.1            | ✅ | © 2023 Zhejiang JadeFoci Technology Co. LTD — https://www.jadefoci.com/ |
 | `ZcoolHappy`      | 站酷快乐体   | 站酷 (ZCOOL) free-use license (永久免费授权所有人使用，可免费商用) | ✅ (conditions) | © ZCOOL (站酷), designers retain attribution — [license](./font-licenses/ZcoolHappy-LICENSE.txt) |
-| `WenDingPLKaiTi`  | 文鼎PL简中楷 (AR PL KaitiM GB) | Arphic Public License (1999) | ✅ | © 1999 Arphic Technology Co., Ltd., Taipei, Taiwan — [license](./font-licenses/ARPHIC-PL.txt) |
+| `WenDingPLKaiTi`  | 文鼎PL简中楷 (AR PL KaitiM GB) | Arphic Public License (1999) | ✅ | © 1994–1999 Arphic Technology Co., Ltd. — [license](./font-licenses/ARPHIC-PL.txt) |
 
 ✅ = free to redistribute (bundle/embed/serve) as long as its conditions are met
 (notice/license travels with it; not sold on its own). The four OFL faces are
@@ -54,6 +54,20 @@ and distribute verbatim copies of this Font in any medium, without restriction,
 provided that you retain this license file (ARPHICPL.TXT) unaltered in all
 copies"). Arphic reconfirmed in 2022 that these four 1999 faces remain free for
 commercial use (distinct from the 2010 non-commercial license).
+
+**Identity verified from the woff2's embedded `name` table** (so the
+`WenDingPLKaiTi` ⇄ `AR PL KaitiM GB` correspondence is provable, not asserted):
+
+```
+nameID 1/4 Family/Full   : AR PL KaitiM GB
+nameID 0   Copyright      : (c) Copyright 1994-1999, Arphic Technology Co., Ltd.
+nameID 7   Trademark      : Arphic is a registered trademark of Arphic Technology Co., Ltd.
+nameID 8/9 Manufacturer/Designer : Arphic Technology Co., Ltd.
+nameID 11  Vendor URL     : http://www.arphic.com.tw
+nameID 13  License         : ARPHIC PUBLIC LICENSE (full text embedded)
+```
+
+(Reproduce with `fc-scan` or `python -m fontTools.ttx -t name <file>`.)
 
 **Modification notice (Arphic PL §2.a):** the only changes from the original
 `AR PL KaitiM GB` are (1) format conversion from TrueType to WOFF2 and (2) the
