@@ -18,9 +18,23 @@ import { parseEmfContent } from './emfParser';
 import { rgbaToPngDataUrl } from './rgbaToPng';
 import { getMimeType, toDataUrl, getOrCreateBlobUrl } from './media';
 
-const PDFJS_CDN_VERSION = (pdfjsLib as any).version || '4.8.69';
-(pdfjsLib as any).GlobalWorkerOptions.workerSrc =
-  `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_CDN_VERSION}/legacy/build/pdf.worker.min.mjs`;
+type PdfViewport = { width: number; height: number };
+type PdfPage = {
+  getViewport(opts: { scale: number }): PdfViewport;
+  render(args: { canvasContext: CanvasRenderingContext2D; viewport: PdfViewport }): {
+    promise: Promise<void>;
+  };
+};
+type PdfDocument = { getPage(n: number): Promise<PdfPage>; destroy(): Promise<void> };
+type PdfjsLib = {
+  version?: string;
+  GlobalWorkerOptions: { workerSrc: string };
+  getDocument(args: { data: Uint8Array; verbosity?: number }): { promise: Promise<PdfDocument> };
+};
+const pdfjs = pdfjsLib as unknown as PdfjsLib;
+
+const PDFJS_CDN_VERSION = pdfjs.version || '4.8.69';
+pdfjs.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_CDN_VERSION}/legacy/build/pdf.worker.min.mjs`;
 
 type UtifPage = {
   width: number;
@@ -79,7 +93,7 @@ const TRANSPARENT_PNG_DATA_URL =
 
 async function wdpToPngDataUrl(data: Uint8Array): Promise<string> {
   try {
-    const mod: any = await new (JpegXR as any)();
+    const mod = await new JpegXR();
     const result = mod.decode(data);
     const { width, height, bytes, pixelInfo } = result;
     if (!width || !height || !bytes) return TRANSPARENT_PNG_DATA_URL;
@@ -106,7 +120,7 @@ async function wdpToPngDataUrl(data: Uint8Array): Promise<string> {
 
 async function emfPdfToPngDataUrl(pdfData: Uint8Array, targetWidth = 1024): Promise<string> {
   try {
-    const doc = await (pdfjsLib as any).getDocument({ data: pdfData, verbosity: 0 }).promise;
+    const doc = await pdfjs.getDocument({ data: pdfData, verbosity: 0 }).promise;
     const page = await doc.getPage(1);
     const baseViewport = page.getViewport({ scale: 1 });
     const scale = Math.max(1, targetWidth / baseViewport.width);

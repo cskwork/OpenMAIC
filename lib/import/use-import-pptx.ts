@@ -85,8 +85,6 @@ export function useImportPptx(options: UseImportPptxOptions = {}) {
         const slides = (await mod.importPptx(file, { upload })) as Slide[];
 
         log.info('pptx imported', { slideCount: slides.length });
-        // eslint-disable-next-line no-console
-        console.log('[importPptx] slides:', slides);
 
         onImported?.(slides);
 

@@ -233,7 +233,7 @@ function sizeScaleForChild(c: ChildEl, ws: number, hs: number): { sw: number; sh
 }
 
 /** 把 baked transform 的 rotate/flip 字段写到 scaled 对象上（仅当 child 本身有该字段）。 */
-function assignBakedRotFlip(scaled: any, child: ChildEl, baked: BakedTransform): void {
+function assignBakedRotFlip(scaled: ChildEl, child: ChildEl, baked: BakedTransform): void {
   if ('rotate' in child) scaled.rotate = toFixed(baked.rotate);
   if ('isFlipH' in child) scaled.isFlipH = baked.isFlipH;
   if ('isFlipV' in child) scaled.isFlipV = baked.isFlipV;
@@ -295,7 +295,7 @@ export async function groupToElement(
           const localLeft = baked ? baked.left : c.left;
           const localTop = baked ? baked.top : c.top;
           const sxsy = sizeScaleForChild(c, ws, hs);
-          const scaled: any = {
+          const scaled: ChildEl = {
             ...c,
             left: toFixed(gLeft + localLeft * ws),
             top: toFixed(gTop + localTop * hs),
@@ -303,23 +303,25 @@ export async function groupToElement(
             height: toFixed(c.height * sxsy.sh),
           };
           if (baked) assignBakedRotFlip(scaled, c, baked);
-          if (isShape(c) && (c as any).path) {
-            scaled.path = scaleSvgPath((c as any).path, sxsy.sw, sxsy.sh);
+          const cPath = (c as { path?: string }).path;
+          if (isShape(c) && cPath) {
+            scaled.path = scaleSvgPath(cPath, sxsy.sw, sxsy.sh);
           }
           elements.push(scaled as BaseElement);
         }
       } else {
         const be = el as BaseElement & { left: number; top: number; width: number; height: number };
         const sxsy = sizeScaleForChild(be as ChildEl, ws, hs);
-        const scaled: any = {
+        const scaled: ChildEl = {
           ...be,
           left: toFixed((be.left - chOffX) * ws),
           top: toFixed((be.top - chOffY) * hs),
           width: toFixed(be.width * sxsy.sw),
           height: toFixed(be.height * sxsy.sh),
         };
-        if (isShape(el) && (el as any).path) {
-          scaled.path = scaleSvgPath((el as any).path, sxsy.sw, sxsy.sh);
+        const elPath = (el as { path?: string }).path;
+        if (isShape(el) && elPath) {
+          scaled.path = scaleSvgPath(elPath, sxsy.sw, sxsy.sh);
         }
         elements.push(scaled as BaseElement);
       }

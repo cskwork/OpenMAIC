@@ -182,7 +182,7 @@ function normalizeOmmlXml(xml: string): string {
 
 function postProcessLatex(latex: string): string {
   // Replace HTML entities and known wrong ASCII expansions from mathml-to-latex
-  let result = latex
+  const result = latex
     .replace(/&nbsp;/g, '\\,')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')

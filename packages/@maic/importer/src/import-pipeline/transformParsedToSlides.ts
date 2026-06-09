@@ -22,6 +22,8 @@ import type {
   PPTLatexElement,
   ShapeTextAlign,
   PPTTextElement,
+  PPTVideoElement,
+  PPTAudioElement,
   ChartOptions,
   Gradient,
   ImageElementFilters,
@@ -143,8 +145,8 @@ const parseCubicFromPath = (
 
   if (firstNums.length < 2 || lastNums.length < 6) return null;
 
-  let cp1: [number, number] = [firstNums[0] * ratio, firstNums[1] * ratio];
-  let cp2: [number, number] = [lastNums[2] * ratio, lastNums[3] * ratio];
+  const cp1: [number, number] = [firstNums[0] * ratio, firstNums[1] * ratio];
+  const cp2: [number, number] = [lastNums[2] * ratio, lastNums[3] * ratio];
 
   if (flipH) {
     cp1[0] = w - cp1[0];
@@ -232,9 +234,8 @@ const parseLineElement = (el: Shape, ratio: number) => {
     end = [0, el.height];
   }
 
-  const [headArrow, tailArrow] = (el as any).path
-    ? detectArrowsFromPath((el as any).path)
-    : [false, false];
+  const elPath = (el as { path?: string }).path;
+  const [headArrow, tailArrow] = elPath ? detectArrowsFromPath(elPath) : [false, false];
 
   // 不再用 "isConnector ? arrow : empty" 作为 tail 的兜底：OOXML preset
   // connector (straightConnector/curvedConnector) 默认就是无箭头的，
@@ -271,9 +272,10 @@ const parseLineElement = (el: Shape, ratio: number) => {
   }
   if (/curvedConnector/.test(el.shapType)) {
     let cubicResolved = false;
-    if ((el as any).path) {
+    const curvedPath = (el as { path?: string }).path;
+    if (curvedPath) {
       const cubic = parseCubicFromPath(
-        (el as any).path,
+        curvedPath,
         el.width,
         el.height,
         !!el.isFlipH,
@@ -452,8 +454,9 @@ export async function transformParsedToSlides(
 
           // autoFit.type === 'text'：文字缩小适应容器，容器尺寸固定
           // 转为 shape 元素，使填充色严格覆盖 width × height 区域
-          if ((el as any).autoFit && (el as any).autoFit.type === 'text') {
-            const fontScale = (ratio * ((el as any).autoFit.fontScale || 100)) / 100;
+          const autoFit = (el as { autoFit?: { type?: string; fontScale?: number } }).autoFit;
+          if (autoFit && autoFit.type === 'text') {
+            const fontScale = (ratio * (autoFit.fontScale || 100)) / 100;
             const gradient: Gradient | undefined =
               el.fill?.type === 'gradient'
                 ? {
@@ -609,9 +612,16 @@ export async function transformParsedToSlides(
             flipH: el.isFlipH,
             flipV: el.isFlipV,
           };
-          const rawFilters = (el as any).filters as
-            | { brightness?: number; contrast?: number; saturation?: number; opacity?: number }
-            | undefined;
+          const rawFilters = (
+            el as {
+              filters?: {
+                brightness?: number;
+                contrast?: number;
+                saturation?: number;
+                opacity?: number;
+              };
+            }
+          ).filters;
           if (rawFilters) {
             // The renderer's useFilter() appends '%' to brightness/contrast/saturate/opacity,
             // so these must be percentage magnitudes (e.g. 170 → brightness(170%)), NOT ratios.
@@ -671,7 +681,7 @@ export async function transformParsedToSlides(
             };
           }
           // softEdge 已是原始 px（与最终框同尺度），不再 × ratio。
-          const softEdgePx = (el as any).softEdge as number | undefined;
+          const softEdgePx = (el as { softEdge?: number }).softEdge;
           if (softEdgePx && softEdgePx > 0) element.softEdge = softEdgePx;
           slide.elements.push(element);
           // 如果是 base64 图片：并发上传，成功后回填 URL
@@ -749,7 +759,7 @@ export async function transformParsedToSlides(
           }
         } else if (el.type === 'audio') {
           console.log('🔍 音频元素完整信息:', JSON.stringify(el, null, 2));
-          const audioElement: any = {
+          const audioElement: PPTAudioElement = {
             type: 'audio' as const,
             id: nanoid(10),
             src: el.blob || '',
@@ -787,7 +797,7 @@ export async function transformParsedToSlides(
             console.warn('⚠️ 音频 blob 不是有效的 blob URL，实际值:', el.blob);
           }
         } else if (el.type === 'video') {
-          const videoElement: any = {
+          const videoElement: PPTVideoElement & { codecError?: boolean } = {
             type: 'video' as const,
             id: nanoid(10),
             src: el.blob || '',
@@ -1105,7 +1115,8 @@ export async function transformParsedToSlides(
               // 多前进 1，把后续 cell 推到错误的 grid 列；典型例子：slide 26 表
               // 头的 "评价等级" 下面三个子格 "好/中/差"，"好" 被算成隐藏位置
               // 整行文字被吞。直接 skip 继承格即可。
-              if ((cellData as any).hMerge || (cellData as any).vMerge) {
+              const cellMerge = cellData as { hMerge?: boolean; vMerge?: boolean };
+              if (cellMerge.hMerge || cellMerge.vMerge) {
                 continue;
               }
 

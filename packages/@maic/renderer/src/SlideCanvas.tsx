@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, type CSSProperties, type ReactNode } from 'react';
+import { useRef, type CSSProperties, type ReactNode } from 'react';
 import { AnimatePresence } from 'motion/react';
 
 import type {
@@ -88,20 +88,19 @@ export function SlideCanvas(props: SlideCanvasProps) {
   const resolvedBackground = background ?? slide.background;
   const { backgroundStyle } = useSlideBackgroundStyle(resolvedBackground);
 
-  const laserGeometry = useMemo<PercentageGeometry | null>(() => {
-    if (!effects?.laser) return null;
-    return findElementGeometry(elements, effects.laser.elementId, slide.viewportSize);
-  }, [effects?.laser, elements, slide.viewportSize]);
+  // Plain derivations: when this package is consumed in a React Compiler build
+  // these are auto-memoized; otherwise the cost (O(elements) lookups) is trivial.
+  const laserGeometry: PercentageGeometry | null = effects?.laser
+    ? findElementGeometry(elements, effects.laser.elementId, slide.viewportSize)
+    : null;
 
-  const zoomGeometry = useMemo<PercentageGeometry | null>(() => {
-    if (!effects?.zoom) return null;
-    return findElementGeometry(elements, effects.zoom.elementId, slide.viewportSize);
-  }, [effects?.zoom, elements, slide.viewportSize]);
+  const zoomGeometry: PercentageGeometry | null = effects?.zoom
+    ? findElementGeometry(elements, effects.zoom.elementId, slide.viewportSize)
+    : null;
 
-  const highlightElement = useMemo(() => {
-    if (!effects?.highlight) return null;
-    return elements.find((el) => el.id === effects.highlight!.elementId) ?? null;
-  }, [effects?.highlight, elements]);
+  const highlightElement = effects?.highlight
+    ? (elements.find((el) => el.id === effects.highlight!.elementId) ?? null)
+    : null;
 
   return (
     <div
