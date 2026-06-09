@@ -12,9 +12,20 @@ import { PicNodeData, parsePicNode } from './nodes/PicNode';
 import { TableNodeData, parseTableNode } from './nodes/TableNode';
 import { GroupNodeData, parseGroupNode } from './nodes/GroupNode';
 import { ChartNodeData, parseChartNode } from './nodes/ChartNode';
-import { MathNodeData, parseMathNode, parseOleDocxMathNode, isMathAlternateContent } from './nodes/MathNode';
+import {
+  MathNodeData,
+  parseMathNode,
+  parseOleDocxMathNode,
+  isMathAlternateContent,
+} from './nodes/MathNode';
 
-export type SlideNode = ShapeNodeData | PicNodeData | TableNodeData | GroupNodeData | ChartNodeData | MathNodeData;
+export type SlideNode =
+  | ShapeNodeData
+  | PicNodeData
+  | TableNodeData
+  | GroupNodeData
+  | ChartNodeData
+  | MathNodeData;
 
 export interface SlideData {
   index: number;
@@ -401,10 +412,7 @@ export function parseChildNode(
         // would keep only the formulas and drop all the Chinese. Only a box that
         // is essentially just a formula (no text runs) stays a pure Math node.
         const choiceSp = child.child('Choice').child('sp');
-        if (
-          choiceSp.exists() &&
-          (spHasTextRuns(choiceSp) || spHasVisibleFillOrLine(choiceSp))
-        ) {
+        if (choiceSp.exists() && (spHasTextRuns(choiceSp) || spHasVisibleFillOrLine(choiceSp))) {
           return parseShapeNode(choiceSp);
         }
         return parseMathNode(child);

@@ -97,7 +97,9 @@ function pickVisibleGradientStop(stops: Array<{ position: number; color: string 
     if (rgbaMatch) {
       const a = rgbaMatch[4] !== undefined ? parseFloat(rgbaMatch[4]) : 1;
       if (a < 0.3) continue;
-      const r = parseInt(rgbaMatch[1]), g = parseInt(rgbaMatch[2]), b = parseInt(rgbaMatch[3]);
+      const r = parseInt(rgbaMatch[1]),
+        g = parseInt(rgbaMatch[2]),
+        b = parseInt(rgbaMatch[3]);
       if (r > 250 && g > 250 && b > 250) continue;
       return c;
     }
@@ -107,9 +109,7 @@ function pickVisibleGradientStop(stops: Array<{ position: number; color: string 
         const aa = parseInt(c.slice(7, 9), 16);
         if (aa < 77) continue; // ~30% alpha
       }
-      const hex = c.length === 4
-        ? c[1] + c[1] + c[2] + c[2] + c[3] + c[3]
-        : c.slice(1, 7);
+      const hex = c.length === 4 ? c[1] + c[1] + c[2] + c[2] + c[3] + c[3] : c.slice(1, 7);
       if (hex === 'ffffff' || hex === 'fff') continue;
       return c;
     }
@@ -122,7 +122,10 @@ function pickVisibleGradientStop(stops: Array<{ position: number; color: string 
 // Line End Marker (Arrowhead) → SVG path helpers
 // ---------------------------------------------------------------------------
 
-interface Vec2 { x: number; y: number }
+interface Vec2 {
+  x: number;
+  y: number;
+}
 
 /** Size multiplier: sm=0.5, med=1, lg=1.5 */
 function sizeMultiplier(s?: string): number {
@@ -135,14 +138,22 @@ function sizeMultiplier(s?: string): number {
  * Build a filled-triangle arrowhead path at `tip` pointing in `dir`.
  * Returns SVG sub-path string (M...L...L...Z).
  */
-function triangleArrowPath(tip: Vec2, dir: Vec2, strokeW: number, w?: string, len?: string): string {
+function triangleArrowPath(
+  tip: Vec2,
+  dir: Vec2,
+  strokeW: number,
+  w?: string,
+  len?: string,
+): string {
   const baseW = strokeW * 3;
   const halfW = (baseW * sizeMultiplier(w)) / 2;
   const length = baseW * sizeMultiplier(len);
   const mag = Math.sqrt(dir.x * dir.x + dir.y * dir.y);
   if (mag < 1e-9) return '';
-  const ux = dir.x / mag, uy = dir.y / mag;
-  const px = -uy, py = ux;
+  const ux = dir.x / mag,
+    uy = dir.y / mag;
+  const px = -uy,
+    py = ux;
   const base = { x: tip.x - ux * length, y: tip.y - uy * length };
   const p1 = { x: base.x + px * halfW, y: base.y + py * halfW };
   const p2 = { x: base.x - px * halfW, y: base.y - py * halfW };
@@ -158,8 +169,10 @@ function openArrowPath(tip: Vec2, dir: Vec2, strokeW: number, w?: string, len?: 
   const length = baseW * sizeMultiplier(len);
   const mag = Math.sqrt(dir.x * dir.x + dir.y * dir.y);
   if (mag < 1e-9) return '';
-  const ux = dir.x / mag, uy = dir.y / mag;
-  const px = -uy, py = ux;
+  const ux = dir.x / mag,
+    uy = dir.y / mag;
+  const px = -uy,
+    py = ux;
   const base = { x: tip.x - ux * length, y: tip.y - uy * length };
   const p1 = { x: base.x + px * halfW, y: base.y + py * halfW };
   const p2 = { x: base.x - px * halfW, y: base.y - py * halfW };
@@ -175,8 +188,10 @@ function diamondArrowPath(tip: Vec2, dir: Vec2, strokeW: number, w?: string, len
   const length = baseW * sizeMultiplier(len);
   const mag = Math.sqrt(dir.x * dir.x + dir.y * dir.y);
   if (mag < 1e-9) return '';
-  const ux = dir.x / mag, uy = dir.y / mag;
-  const px = -uy, py = ux;
+  const ux = dir.x / mag,
+    uy = dir.y / mag;
+  const px = -uy,
+    py = ux;
   const mid = { x: tip.x - ux * (length / 2), y: tip.y - uy * (length / 2) };
   const back = { x: tip.x - ux * length, y: tip.y - uy * length };
   return `M${tip.x},${tip.y}L${mid.x + px * halfW},${mid.y + py * halfW}L${back.x},${back.y}L${mid.x - px * halfW},${mid.y - py * halfW}Z`;
@@ -191,21 +206,34 @@ function ovalArrowPath(tip: Vec2, dir: Vec2, strokeW: number, w?: string, len?: 
   const rl = (baseW * sizeMultiplier(len)) / 2;
   const mag = Math.sqrt(dir.x * dir.x + dir.y * dir.y);
   if (mag < 1e-9) return '';
-  const ux = dir.x / mag, uy = dir.y / mag;
-  const cx = tip.x - ux * rl, cy = tip.y - uy * rl;
+  const ux = dir.x / mag,
+    uy = dir.y / mag;
+  const cx = tip.x - ux * rl,
+    cy = tip.y - uy * rl;
   return `M${cx + rw},${cy}A${rw},${rl} 0 1,1 ${cx - rw},${cy}A${rw},${rl} 0 1,1 ${cx + rw},${cy}Z`;
 }
 
 function buildArrowPath(
-  type: string, tip: Vec2, dir: Vec2, strokeW: number, w?: string, len?: string,
+  type: string,
+  tip: Vec2,
+  dir: Vec2,
+  strokeW: number,
+  w?: string,
+  len?: string,
 ): string {
   switch (type) {
-    case 'triangle': return triangleArrowPath(tip, dir, strokeW, w, len);
-    case 'arrow': return openArrowPath(tip, dir, strokeW, w, len);
-    case 'stealth': return triangleArrowPath(tip, dir, strokeW, w, len);
-    case 'diamond': return diamondArrowPath(tip, dir, strokeW, w, len);
-    case 'oval': return ovalArrowPath(tip, dir, strokeW, w, len);
-    default: return triangleArrowPath(tip, dir, strokeW, w, len);
+    case 'triangle':
+      return triangleArrowPath(tip, dir, strokeW, w, len);
+    case 'arrow':
+      return openArrowPath(tip, dir, strokeW, w, len);
+    case 'stealth':
+      return triangleArrowPath(tip, dir, strokeW, w, len);
+    case 'diamond':
+      return diamondArrowPath(tip, dir, strokeW, w, len);
+    case 'oval':
+      return ovalArrowPath(tip, dir, strokeW, w, len);
+    default:
+      return triangleArrowPath(tip, dir, strokeW, w, len);
   }
 }
 
@@ -214,7 +242,8 @@ function buildArrowPath(
  * Handles M...L (lines) and M...A (arcs).
  */
 function extractPathEndpoints(d: string): {
-  start: Vec2; end: Vec2;
+  start: Vec2;
+  end: Vec2;
   startDir: Vec2;
   endDir: Vec2;
 } | null {
@@ -224,7 +253,8 @@ function extractPathEndpoints(d: string): {
   const cmds = d.match(/[MLAQCSTHVZ]/gi) || [];
   const allNums = nums.map(Number);
 
-  const startX = allNums[0], startY = allNums[1];
+  const startX = allNums[0],
+    startY = allNums[1];
 
   if (/A/i.test(d)) {
     // Arc: M sx,sy A rx,ry rotation largeArc sweep ex,ey
@@ -232,30 +262,38 @@ function extractPathEndpoints(d: string): {
     const afterA = d.slice(aIdx + 1);
     const aNums = afterA.match(/[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g);
     if (!aNums || aNums.length < 7) return null;
-    const rx = Number(aNums[0]), ry = Number(aNums[1]);
+    const rx = Number(aNums[0]),
+      ry = Number(aNums[1]);
     const sweep = Number(aNums[4]);
-    const ex = Number(aNums[5]), ey = Number(aNums[6]);
+    const ex = Number(aNums[5]),
+      ey = Number(aNums[6]);
     // For circle (rx≈ry), tangent ⊥ radius.  For ellipse, approximate.
-    const cx = (startX + ex) / 2, cy = (startY + ey) / 2;
+    const cx = (startX + ex) / 2,
+      cy = (startY + ey) / 2;
     // Better: compute actual center from arc parameters
     const arcCenter = computeArcCenter(startX, startY, ex, ey, rx, ry, 0, Number(aNums[3]), sweep);
-    const acx = arcCenter?.cx ?? cx, acy = arcCenter?.cy ?? cy;
+    const acx = arcCenter?.cx ?? cx,
+      acy = arcCenter?.cy ?? cy;
 
     // startDir points BACKWARD (opposite travel) — consistent with line convention.
     // endDir points FORWARD (travel direction).
-    const rsx = startX - acx, rsy = startY - acy;
+    const rsx = startX - acx,
+      rsy = startY - acy;
     const startDir = sweep ? { x: rsy, y: -rsx } : { x: -rsy, y: rsx };
-    const rex = ex - acx, rey = ey - acy;
+    const rex = ex - acx,
+      rey = ey - acy;
     const endDir = sweep ? { x: -rey, y: rex } : { x: rey, y: -rex };
 
     return { start: { x: startX, y: startY }, end: { x: ex, y: ey }, startDir, endDir };
   }
 
   // Simple line: M sx,sy L ex,ey (possibly with more L points)
-  const ex = allNums[allNums.length - 2], ey = allNums[allNums.length - 1];
+  const ex = allNums[allNums.length - 2],
+    ey = allNums[allNums.length - 1];
   const dir = { x: ex - startX, y: ey - startY };
   return {
-    start: { x: startX, y: startY }, end: { x: ex, y: ey },
+    start: { x: startX, y: startY },
+    end: { x: ex, y: ey },
     startDir: { x: -dir.x, y: -dir.y },
     endDir: dir,
   };
@@ -266,17 +304,27 @@ function extractPathEndpoints(d: string): {
  * Simplified: works well for circular arcs and reasonable ellipses.
  */
 function computeArcCenter(
-  x1: number, y1: number, x2: number, y2: number,
-  rx: number, ry: number, _rotation: number, largeArc: number, sweep: number,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  rx: number,
+  ry: number,
+  _rotation: number,
+  largeArc: number,
+  sweep: number,
 ): { cx: number; cy: number } | null {
   // Normalize to unit circle space
-  const dx = (x1 - x2) / 2, dy = (y1 - y2) / 2;
-  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
-  const dxn = dx / rx, dyn = dy / ry;
+  const dx = (x1 - x2) / 2,
+    dy = (y1 - y2) / 2;
+  const mx = (x1 + x2) / 2,
+    my = (y1 + y2) / 2;
+  const dxn = dx / rx,
+    dyn = dy / ry;
   const dsq = dxn * dxn + dyn * dyn;
   if (dsq >= 1) return null;
   const s = Math.sqrt(Math.max(0, (1 - dsq) / dsq));
-  const sign = (largeArc === sweep) ? -1 : 1;
+  const sign = largeArc === sweep ? -1 : 1;
   const cxn = sign * s * (dy / ry);
   const cyn = -sign * s * (dx / rx);
   return { cx: mx + cxn * rx, cy: my + cyn * ry };
@@ -309,10 +357,7 @@ function appendArrowsToPath(
   // 太小 (<10%) 会整段藏进 box 看不见；太大 (>30%) 又显得突兀。15% 经
   // 用户视觉验证最接近 PowerPoint / WPS 原生渲染。正常 px 量级的 path
   // 不会触发此分支 (baseArrowLen=3 远小于 pathSpan*0.15 当 pathSpan>20)。
-  const pathSpan = Math.max(
-    Math.abs(ep.end.x - ep.start.x),
-    Math.abs(ep.end.y - ep.start.y),
-  );
+  const pathSpan = Math.max(Math.abs(ep.end.x - ep.start.x), Math.abs(ep.end.y - ep.start.y));
   const baseArrowLen = strokeWidthPx * 3;
   let effectiveStrokeWidth = strokeWidthPx;
   if (pathSpan > 0 && baseArrowLen > pathSpan * 0.15) {
@@ -321,11 +366,25 @@ function appendArrowsToPath(
 
   const parts = [pathD];
   if (headEnd) {
-    const arrow = buildArrowPath(headEnd.type, ep.start, ep.startDir, effectiveStrokeWidth, headEnd.w ?? undefined, headEnd.len ?? undefined);
+    const arrow = buildArrowPath(
+      headEnd.type,
+      ep.start,
+      ep.startDir,
+      effectiveStrokeWidth,
+      headEnd.w ?? undefined,
+      headEnd.len ?? undefined,
+    );
     if (arrow) parts.push(' ' + arrow);
   }
   if (tailEnd) {
-    const arrow = buildArrowPath(tailEnd.type, ep.end, ep.endDir, effectiveStrokeWidth, tailEnd.w ?? undefined, tailEnd.len ?? undefined);
+    const arrow = buildArrowPath(
+      tailEnd.type,
+      ep.end,
+      ep.endDir,
+      effectiveStrokeWidth,
+      tailEnd.w ?? undefined,
+      tailEnd.len ?? undefined,
+    );
     if (arrow) parts.push(' ' + arrow);
   }
   return parts.join('');
@@ -548,7 +607,11 @@ async function fillToJson(
 // Shadow + link (mirror ShapeRenderer tail sections)
 // ---------------------------------------------------------------------------
 
-function resolveShapeShadow(node: ShapeNodeData, spPr: SafeXmlNode, ctx: RenderContext): Shadow | undefined {
+function resolveShapeShadow(
+  node: ShapeNodeData,
+  spPr: SafeXmlNode,
+  ctx: RenderContext,
+): Shadow | undefined {
   let effectiveEffectLst = spPr.child('effectLst');
   if (!effectiveEffectLst.exists()) {
     const effectRef = node.source.child('style').child('effectRef');
@@ -619,14 +682,19 @@ function getVAlignFromBodyPr(
   bodyPr: SafeXmlNode | undefined,
   fallbackBp: SafeXmlNode | undefined,
 ): string {
-  const anchor = (bodyPr ? bodyPr.attr('anchor') : null) || (fallbackBp ? fallbackBp.attr('anchor') : null);
+  const anchor =
+    (bodyPr ? bodyPr.attr('anchor') : null) || (fallbackBp ? fallbackBp.attr('anchor') : null);
   if (anchor === 'ctr' || anchor === 'mid' || anchor === 'middle') return 'mid';
   if (anchor === 'b' || anchor === 'bottom') return 'down';
   return 'up';
 }
 
-function getIsVertical(bodyPr: SafeXmlNode | undefined, fallbackBp: SafeXmlNode | undefined): boolean {
-  const vert = (bodyPr ? bodyPr.attr('vert') : null) || (fallbackBp ? fallbackBp.attr('vert') : null);
+function getIsVertical(
+  bodyPr: SafeXmlNode | undefined,
+  fallbackBp: SafeXmlNode | undefined,
+): boolean {
+  const vert =
+    (bodyPr ? bodyPr.attr('vert') : null) || (fallbackBp ? fallbackBp.attr('vert') : null);
   return vert === 'eaVert' || vert === 'vert' || vert === 'wordArtVert' || vert === 'vert270';
 }
 
@@ -725,7 +793,11 @@ function resolveInheritedPlaceholderFill(
  * Serialize a shape node to pptxtojson `Shape` or `Text`.
  * Control flow and identifiers follow `renderShape` in `ShapeRenderer.ts`; output is JSON, not DOM.
  */
-export async function renderShape(node: ShapeNodeData, ctx: RenderContext, _order: number): Promise<Shape | Text> {
+export async function renderShape(
+  node: ShapeNodeData,
+  ctx: RenderContext,
+  _order: number,
+): Promise<Shape | Text> {
   const order = node.xmlOrder;
   const left = pxToPt(node.position.x);
   const top = pxToPt(node.position.y);
@@ -749,8 +821,7 @@ export async function renderShape(node: ShapeNodeData, ctx: RenderContext, _orde
   const isConnectorShape = node.source.localName === 'cxnSp';
   // Treat sub-pixel extents as flat — some PPTX shapes use cx=1 EMU (≈0.0001px)
   // for nearly perfect vertical/horizontal lines, which still need a visible viewBox.
-  const flatExtent =
-    (node.size.w >= 1 && node.size.h < 1) || (node.size.w < 1 && node.size.h >= 1);
+  const flatExtent = (node.size.w >= 1 && node.size.h < 1) || (node.size.w < 1 && node.size.h >= 1);
   const isLineLike = presetIsLine || isConnectorShape || flatExtent;
   // 判定线段方向：水平 ('h')、垂直 ('v') 或对角线 (null)。
   // 仅对 line-like preset 生效；用于决定哪一轴需要 bump。
@@ -766,8 +837,10 @@ export async function renderShape(node: ShapeNodeData, ctx: RenderContext, _orde
   // 当两轴都 < 1 时（对角连接符在极小子坐标系中），不做 bump——
   // group 缩放会将其放大到正确尺寸；bump 反而会被放大几百倍。
   const bothSubPixel = node.size.w < 1 && node.size.h < 1;
-  const minH = isLineLike && node.size.h < 1 && !bothSubPixel && lineOrient !== 'v' ? 1 : node.size.h;
-  const minW = isLineLike && node.size.w < 1 && !bothSubPixel && lineOrient !== 'h' ? 1 : node.size.w;
+  const minH =
+    isLineLike && node.size.h < 1 && !bothSubPixel && lineOrient !== 'v' ? 1 : node.size.h;
+  const minW =
+    isLineLike && node.size.w < 1 && !bothSubPixel && lineOrient !== 'h' ? 1 : node.size.w;
   const width = pxToPt(minW);
   const height = pxToPt(minH);
 
@@ -901,7 +974,7 @@ export async function renderShape(node: ShapeNodeData, ctx: RenderContext, _orde
   // would draw a green hollow ring).
   const noFillSuppressed = lineIsNoFill;
   const themeLineFromLnRef =
-    (!hasExplicitLine) && !lineIsNoFill && lnRefAvailable
+    !hasExplicitLine && !lineIsNoFill && lnRefAvailable
       ? ctx.theme.lineStyles![(lnRef!.numAttr('idx') ?? 1) - 1]
       : undefined;
   let effectiveLine = hasExplicitLine ? node.line! : themeLineFromLnRef;
@@ -970,11 +1043,7 @@ export async function renderShape(node: ShapeNodeData, ctx: RenderContext, _orde
       border: { borderColor: '#000000', borderWidth: 0, borderType: 'solid' },
       borderStrokeDasharray: '0',
     };
-  } else if (
-    !mainPathStrokeSuppressed &&
-    gradientStroke &&
-    gradientStroke.stops.length > 0
-  ) {
+  } else if (!mainPathStrokeSuppressed && gradientStroke && gradientStroke.stops.length > 0) {
     const bestStop = pickVisibleGradientStop(gradientStroke.stops);
     borderResult = {
       border: {
@@ -984,7 +1053,11 @@ export async function renderShape(node: ShapeNodeData, ctx: RenderContext, _orde
       },
       borderStrokeDasharray: '0',
     };
-  } else if (!mainPathStrokeSuppressed && effectiveStrokeWidth > 0 && strokeColor !== 'transparent') {
+  } else if (
+    !mainPathStrokeSuppressed &&
+    effectiveStrokeWidth > 0 &&
+    strokeColor !== 'transparent'
+  ) {
     const lnNode = effectiveLine!;
     const br = lineStyleToBorder(lnNode, ctx, lnRef);
     const widthPx = effectiveStrokeWidth;
@@ -1165,6 +1238,10 @@ function textBodyRenderOptions(
 }
 
 /** @deprecated Use `renderShape` — same name as `ShapeRenderer` for diff-friendly comparison. */
-export async function shapeToElement(node: ShapeNodeData, ctx: RenderContext, order: number): Promise<Shape | Text> {
+export async function shapeToElement(
+  node: ShapeNodeData,
+  ctx: RenderContext,
+  order: number,
+): Promise<Shape | Text> {
   return renderShape(node, ctx, order);
 }

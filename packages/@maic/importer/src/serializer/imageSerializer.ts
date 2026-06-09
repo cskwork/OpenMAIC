@@ -67,15 +67,16 @@ function pathEndpoints(path: SafeXmlNode): Array<[number, number]> {
  * endpoints per edge. Coordinates inside the box are ignored — they're
  * bezier handles, not corners.
  */
-function looksLikeChamferedRect(
-  path: SafeXmlNode,
-  cx: number,
-  cy: number,
-): boolean {
+function looksLikeChamferedRect(path: SafeXmlNode, cx: number, cy: number): boolean {
   if (cx <= 0 || cy <= 0) return false;
   const tolX = cx * 0.02;
   const tolY = cy * 0.02;
-  const onEdge = { top: [] as number[], bottom: [] as number[], left: [] as number[], right: [] as number[] };
+  const onEdge = {
+    top: [] as number[],
+    bottom: [] as number[],
+    left: [] as number[],
+    right: [] as number[],
+  };
   for (const [x, y] of pathEndpoints(path)) {
     if (Math.abs(y) <= tolY) onEdge.top.push(x);
     else if (Math.abs(y - cy) <= tolY) onEdge.bottom.push(x);
@@ -256,7 +257,10 @@ function applyLumToFilters(blip: SafeXmlNode, out: NonNullable<Image['filters']>
 /**
  * `a:extLst` / `a14:img*` image adjustments (namespace-agnostic `localName` from DOM).
  */
-function applyExtLstImageEffectsToFilters(blip: SafeXmlNode, out: NonNullable<Image['filters']>): void {
+function applyExtLstImageEffectsToFilters(
+  blip: SafeXmlNode,
+  out: NonNullable<Image['filters']>,
+): void {
   const extLst = blip.child('extLst');
   if (!extLst.exists()) return;
 
@@ -315,7 +319,10 @@ function applyExtLstImageEffectsToFilters(blip: SafeXmlNode, out: NonNullable<Im
 /**
  * Resolve a media blob URL from a relationship ID.
  */
-async function resolveMediaUrl(rId: string | undefined, ctx: RenderContext): Promise<string | undefined> {
+async function resolveMediaUrl(
+  rId: string | undefined,
+  ctx: RenderContext,
+): Promise<string | undefined> {
   if (!rId) return undefined;
 
   const rel = ctx.slide.rels.get(rId);
@@ -403,7 +410,9 @@ function bytesToDataUrl(bytes: Uint8Array, mediaPath: string): string {
   if (typeof btoa !== 'undefined') {
     base64 = btoa(binary);
   } else {
-    const NodeBuffer = (globalThis as unknown as { Buffer?: { from(a: Uint8Array): { toString(e: string): string } } }).Buffer;
+    const NodeBuffer = (
+      globalThis as unknown as { Buffer?: { from(a: Uint8Array): { toString(e: string): string } } }
+    ).Buffer;
     base64 = NodeBuffer ? NodeBuffer.from(bytes).toString('base64') : '';
   }
   return toDataUrl(base64, getMimeType(mediaPath));
@@ -532,10 +541,16 @@ function buildImage(
 ): Image {
   const spPr = node.source.child('spPr');
   const ln = spPr.exists() ? spPr.child('ln') : node.source.child('__none__');
-  const noBorder = { border: { borderColor: '#000000', borderWidth: 0, borderType: 'solid' as const }, borderStrokeDasharray: '0' };
+  const noBorder = {
+    border: { borderColor: '#000000', borderWidth: 0, borderType: 'solid' as const },
+    borderStrokeDasharray: '0',
+  };
   let borderResult: ReturnType<typeof lineStyleToBorder>;
   if (ln.exists()) {
-    const hasFill = ln.child('solidFill').exists() || ln.child('gradFill').exists() || ln.child('pattFill').exists();
+    const hasFill =
+      ln.child('solidFill').exists() ||
+      ln.child('gradFill').exists() ||
+      ln.child('pattFill').exists();
     borderResult = hasFill ? lineStyleToBorder(ln, ctx) : noBorder;
   } else {
     borderResult = noBorder;
@@ -561,7 +576,9 @@ function buildImage(
   // Blip opacity (alphaModFix / alphaMod / alphaOff) — same as ImageRenderer.resolveBlipOpacity.
   // When opacity < 1, ImageRenderer sets wrapper.style.opacity; here we store in filters.
   const blipFillNode = node.source.child('blipFill');
-  const blipNode = blipFillNode.exists() ? blipFillNode.child('blip') : node.source.child('__none__');
+  const blipNode = blipFillNode.exists()
+    ? blipFillNode.child('blip')
+    : node.source.child('__none__');
   const blipOpacity = blipNode.exists() ? resolveBlipOpacity(blipNode) : 1;
 
   const mergedFilters: Image['filters'] = { ...filters };

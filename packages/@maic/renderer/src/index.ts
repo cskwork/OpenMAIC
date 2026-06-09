@@ -1,8 +1,5 @@
 export { SlideCanvas, type SlideCanvasProps } from './SlideCanvas';
-export {
-  SlideElement,
-  type SlideElementProps,
-} from './SlideElement';
+export { SlideElement, type SlideElementProps } from './SlideElement';
 export {
   SlideRendererProvider,
   useSlideContext,
@@ -22,9 +19,7 @@ export {
   type ZoomWrapperProps,
 } from './effects';
 
-export {
-  useSlideBackgroundStyle,
-} from './hooks/useSlideBackgroundStyle';
+export { useSlideBackgroundStyle } from './hooks/useSlideBackgroundStyle';
 export {
   useViewportSize,
   type ViewportStyles,

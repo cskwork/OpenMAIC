@@ -49,19 +49,29 @@ function pathCoordBBox(
       addX(num());
       addY(num());
     } else if (c === 'C') {
-      addX(num()); addY(num());
-      addX(num()); addY(num());
-      addX(num()); addY(num());
+      addX(num());
+      addY(num());
+      addX(num());
+      addY(num());
+      addX(num());
+      addY(num());
     } else if (c === 'Q' || c === 'S') {
-      addX(num()); addY(num());
-      addX(num()); addY(num());
+      addX(num());
+      addY(num());
+      addX(num());
+      addY(num());
     } else if (c === 'H') {
       addX(num());
     } else if (c === 'V') {
       addY(num());
     } else if (c === 'A') {
-      num(); num(); num(); num(); num();
-      addX(num()); addY(num());
+      num();
+      num();
+      num();
+      num();
+      num();
+      addX(num());
+      addY(num());
     } else if (c === 'Z') {
       // no coords
     } else {

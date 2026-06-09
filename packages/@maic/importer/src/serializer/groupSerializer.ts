@@ -44,11 +44,16 @@ function detectLineOrientation(d: string): 'horizontal' | 'vertical' | 'diagonal
   let cmd = '';
   let argIdx = 0;
   for (const t of tokens) {
-    if (/^[A-Za-z]$/.test(t)) { cmd = t; argIdx = 0; continue; }
+    if (/^[A-Za-z]$/.test(t)) {
+      cmd = t;
+      argIdx = 0;
+      continue;
+    }
     const v = parseFloat(t);
     const upper = cmd.toUpperCase();
     if (upper === 'M' || upper === 'L' || upper === 'T') {
-      if (argIdx % 2 === 0) xs.push(v); else ys.push(v);
+      if (argIdx % 2 === 0) xs.push(v);
+      else ys.push(v);
     } else if (upper === 'H') {
       xs.push(v);
     } else if (upper === 'V') {
@@ -103,7 +108,7 @@ function scaleSvgPath(d: string, sx: number, sy: number): string {
       else scaled = v * sy;
     } else {
       // M, L, C, Q, S, T: alternating x, y
-      scaled = (argIdx % 2 === 0) ? v * sx : v * sy;
+      scaled = argIdx % 2 === 0 ? v * sx : v * sy;
     }
     out.push(String(toFixed(scaled)));
     argIdx++;
@@ -140,13 +145,23 @@ export type NodeToElement = (
 ) => Promise<Element>;
 
 type ChildEl = BaseElement & {
-  left: number; top: number; width: number; height: number;
-  rotate?: number; isFlipH?: boolean; isFlipV?: boolean;
-  shapType?: string; path?: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  rotate?: number;
+  isFlipH?: boolean;
+  isFlipV?: boolean;
+  shapType?: string;
+  path?: string;
 };
 
 type BakedTransform = {
-  left: number; top: number; rotate: number; isFlipH: boolean; isFlipV: boolean;
+  left: number;
+  top: number;
+  rotate: number;
+  isFlipH: boolean;
+  isFlipV: boolean;
 };
 
 /**
@@ -159,8 +174,11 @@ type BakedTransform = {
  */
 function bakeGroupTransform(
   child: ChildEl,
-  gW: number, gH: number,
-  gFlipH: boolean, gFlipV: boolean, gRot: number,
+  gW: number,
+  gH: number,
+  gFlipH: boolean,
+  gFlipV: boolean,
+  gRot: number,
 ): BakedTransform | null {
   if (!gFlipH && !gFlipV && gRot === 0) return null;
   let cLeft = child.left;
@@ -267,8 +285,12 @@ export async function groupToElement(
           // 先把内层 group 的 flip/rotation 烘焙到子元素的局部坐标系，再按外层
           // group 的 ws/hs 缩放并平移。
           const baked = bakeGroupTransform(
-            c, innerGroup.width, innerGroup.height,
-            !!innerGroup.isFlipH, !!innerGroup.isFlipV, innerGroup.rotate || 0,
+            c,
+            innerGroup.width,
+            innerGroup.height,
+            !!innerGroup.isFlipH,
+            !!innerGroup.isFlipV,
+            innerGroup.rotate || 0,
           );
           const localLeft = baked ? baked.left : c.left;
           const localTop = baked ? baked.top : c.top;
@@ -310,7 +332,12 @@ export async function groupToElement(
   for (const el2 of elements) {
     const c = el2 as ChildEl;
     const baked = bakeGroupTransform(
-      c, width, height, !!node.flipH, !!node.flipV, node.rotation || 0,
+      c,
+      width,
+      height,
+      !!node.flipH,
+      !!node.flipV,
+      node.rotation || 0,
     );
     if (!baked) continue;
     c.left = toFixed(baked.left);

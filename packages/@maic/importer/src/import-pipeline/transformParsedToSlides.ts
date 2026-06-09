@@ -5,10 +5,10 @@ import {
   type Shape,
   type Element,
   type ChartItem,
-  type BaseElement
-} from "pptxtojson";
-import { nanoid } from "nanoid";
-import katex from "katex";
+  type BaseElement,
+} from 'pptxtojson';
+import { nanoid } from 'nanoid';
+import katex from 'katex';
 import type {
   Slide,
   SlideTheme,
@@ -24,12 +24,12 @@ import type {
   PPTTextElement,
   ChartOptions,
   Gradient,
-  ImageElementFilters
-} from "@maic/dsl";
-import { SHAPE_PATH_FORMULAS } from "../openmaic/configs/shapes";
-import { getSvgPathRange } from "../openmaic/utils/svgPathParser";
-import { parseVideoCodec, isVideoCodecSupported } from "../openmaic/utils/videoCodec";
-import type { ImportContext, TransformResult } from "./types";
+  ImageElementFilters,
+} from '@maic/dsl';
+import { SHAPE_PATH_FORMULAS } from '../openmaic/configs/shapes';
+import { getSvgPathRange } from '../openmaic/utils/svgPathParser';
+import { parseVideoCodec, isVideoCodecSupported } from '../openmaic/utils/videoCodec';
+import type { ImportContext, TransformResult } from './types';
 
 type ParsedPptxJson = Awaited<ReturnType<typeof parsePptxDefault>>;
 
@@ -112,7 +112,7 @@ const rotateLine = (line: PPTLineElement, angleDeg: number) => {
   return {
     start: startAdjusted,
     end: endAdjusted,
-    offset
+    offset,
   };
 };
 
@@ -127,12 +127,16 @@ const parseCubicFromPath = (
   h: number,
   flipH: boolean,
   flipV: boolean,
-  ratio: number
+  ratio: number,
 ): [[number, number], [number, number]] | null => {
   const cSegments = [...path.matchAll(/[Cc]([\d.,\s-]+)/g)];
   if (cSegments.length === 0) return null;
 
-  const parseNums = (s: string) => s.trim().split(/[\s,]+/).map(Number);
+  const parseNums = (s: string) =>
+    s
+      .trim()
+      .split(/[\s,]+/)
+      .map(Number);
 
   const firstNums = parseNums(cSegments[0][1]);
   const lastNums = parseNums(cSegments[cSegments.length - 1][1]);
@@ -166,9 +170,7 @@ const detectArrowsFromPath = (path: string): [boolean, boolean] => {
   if (segments.length < 2) return [false, false];
 
   // 主路径起点：第一个 M 后的两个数字
-  const startMatch = segments[0].match(
-    /M\s*([\d.eE+-]+)\s*[,\s]\s*([\d.eE+-]+)/
-  );
+  const startMatch = segments[0].match(/M\s*([\d.eE+-]+)\s*[,\s]\s*([\d.eE+-]+)/);
   if (!startMatch) return [false, false];
 
   // 主路径终点：取主 segment 中的所有数字，最后一对就是终点。
@@ -179,11 +181,13 @@ const detectArrowsFromPath = (path: string): [boolean, boolean] => {
   const allNums = segments[0].match(/[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g);
   if (!allNums || allNums.length < 4) return [false, false];
 
-  const sx = Number(startMatch[1]), sy = Number(startMatch[2]);
+  const sx = Number(startMatch[1]),
+    sy = Number(startMatch[2]);
   const ex = Number(allNums[allNums.length - 2]);
   const ey = Number(allNums[allNums.length - 1]);
 
-  let head = false, tail = false;
+  let head = false,
+    tail = false;
   for (let i = 1; i < segments.length; i++) {
     // pptxtojson-pro 的 arrow 子路径有两种格式：
     //   - triangle / diamond / oval (含默认 stealth)：M..L..L..[L..]Z
@@ -191,12 +195,13 @@ const detectArrowsFromPath = (path: string): [boolean, boolean] => {
     // 原实现强制要求 Z，会漏掉 openArrow 类型。放宽为「含 Z」或「至少
     // 2 个 L」即视为 arrow（普通主路径不会有 ≥2 个 L）。
     const seg = segments[i];
-    const hasZ = seg.includes("Z");
+    const hasZ = seg.includes('Z');
     const lCount = (seg.match(/L/g) || []).length;
     if (!hasZ && lCount < 2) continue;
     const m = seg.match(/M\s*([\d.eE+-]+)\s*[,\s]\s*([\d.eE+-]+)/);
     if (!m) continue;
-    const ax = Number(m[1]), ay = Number(m[2]);
+    const ax = Number(m[1]),
+      ay = Number(m[2]);
     const distHead = Math.hypot(ax - sx, ay - sy);
     const distTail = Math.hypot(ax - ex, ay - ey);
     if (distHead <= distTail) head = true;
@@ -239,7 +244,7 @@ const parseLineElement = (el: Shape, ratio: number) => {
   // 显式 type="none" 的 case（典型：FP-tree 节点之间的实线连接）。
 
   const data: PPTLineElement = {
-    type: "line",
+    type: 'line',
     id: nanoid(10),
     width: +((el.borderWidth || 1) * ratio).toFixed(2),
     left: el.left,
@@ -248,10 +253,7 @@ const parseLineElement = (el: Shape, ratio: number) => {
     end,
     style: el.borderType,
     color: el.borderColor,
-    points: [
-      headArrow ? "arrow" : "",
-      tailArrow ? "arrow" : ""
-    ]
+    points: [headArrow ? 'arrow' : '', tailArrow ? 'arrow' : ''],
   };
   if (el.rotate) {
     const { start, end, offset } = rotateLine(data, el.rotate);
@@ -264,7 +266,7 @@ const parseLineElement = (el: Shape, ratio: number) => {
   if (/bentConnector/.test(el.shapType)) {
     data.broken2 = [
       Math.abs(data.start[0] - data.end[0]) / 2,
-      Math.abs(data.start[1] - data.end[1]) / 2
+      Math.abs(data.start[1] - data.end[1]) / 2,
     ];
   }
   if (/curvedConnector/.test(el.shapType)) {
@@ -276,7 +278,7 @@ const parseLineElement = (el: Shape, ratio: number) => {
         el.height,
         !!el.isFlipH,
         !!el.isFlipV,
-        ratio
+        ratio,
       );
       if (cubic) {
         data.cubic = cubic;
@@ -286,7 +288,7 @@ const parseLineElement = (el: Shape, ratio: number) => {
     if (!cubicResolved) {
       const cubic: [number, number] = [
         Math.abs(data.start[0] - data.end[0]) / 2,
-        Math.abs(data.start[1] - data.end[1]) / 2
+        Math.abs(data.start[1] - data.end[1]) / 2,
       ];
       data.cubic = [cubic, cubic];
     }
@@ -295,20 +297,20 @@ const parseLineElement = (el: Shape, ratio: number) => {
   return data;
 };
 
-const flipGroupElements = (elements: BaseElement[], axis: "x" | "y") => {
-  const minX = Math.min(...elements.map(el => el.left));
-  const maxX = Math.max(...elements.map(el => el.left + el.width));
-  const minY = Math.min(...elements.map(el => el.top));
-  const maxY = Math.max(...elements.map(el => el.top + el.height));
+const flipGroupElements = (elements: BaseElement[], axis: 'x' | 'y') => {
+  const minX = Math.min(...elements.map((el) => el.left));
+  const maxX = Math.max(...elements.map((el) => el.left + el.width));
+  const minY = Math.min(...elements.map((el) => el.top));
+  const maxY = Math.max(...elements.map((el) => el.top + el.height));
 
   const centerX = (minX + maxX) / 2;
   const centerY = (minY + maxY) / 2;
 
-  return elements.map(element => {
+  return elements.map((element) => {
     const newElement = { ...element };
 
-    if (axis === "y") newElement.left = 2 * centerX - element.left - element.width;
-    if (axis === "x") newElement.top = 2 * centerY - element.top - element.height;
+    if (axis === 'y') newElement.left = 2 * centerX - element.left - element.width;
+    if (axis === 'x') newElement.top = 2 * centerY - element.top - element.height;
 
     return newElement;
   });
@@ -321,7 +323,7 @@ const calculateRotatedPosition = (
   h: number,
   ox: number,
   oy: number,
-  k: number
+  k: number,
 ) => {
   const radians = k * (Math.PI / 180);
 
@@ -347,7 +349,7 @@ const SAFE_PADDING = 1.0;
 
 export async function transformParsedToSlides(
   json: ParsedPptxJson,
-  ctx: ImportContext
+  ctx: ImportContext,
 ): Promise<TransformResult> {
   const ratio = ctx.ratio;
   const theme = ctx.theme;
@@ -366,7 +368,7 @@ export async function transformParsedToSlides(
     fontColor: theme.fontColor,
     fontName: theme.fontName,
     outline: theme.outline,
-    shadow: theme.shadow
+    shadow: theme.shadow,
   };
 
   const slides: Slide[] = [];
@@ -376,49 +378,45 @@ export async function transformParsedToSlides(
   for (const item of json.slides) {
     const { type, value } = item.fill;
     let background: SlideBackground;
-    if (type === "image") {
+    if (type === 'image') {
       // 背景图片：先用 base64，占位并发上传，成功后回填 URL
       background = {
-        type: "image",
+        type: 'image',
         image: {
           src: value.picBase64,
-          size: "cover"
-        }
+          size: 'cover',
+        },
       };
-      if (value.picBase64 && value.picBase64.startsWith("data:")) {
+      if (value.picBase64 && value.picBase64.startsWith('data:')) {
         const bg = background.image!;
         uploadTasks.push(
           limitUpload(() =>
-            ctx.uploadBase64Image(
-              value.picBase64,
-              `background_${Date.now()}.png`,
-              "a2m"
-            )
+            ctx.uploadBase64Image(value.picBase64, `background_${Date.now()}.png`, 'a2m'),
           )
-            .then(url => {
+            .then((url) => {
               bg.src = url;
             })
-            .catch(error => {
-              console.error("背景图片上传失败:", error);
-            })
+            .catch((error) => {
+              console.error('背景图片上传失败:', error);
+            }),
         );
       }
-    } else if (type === "gradient") {
+    } else if (type === 'gradient') {
       background = {
-        type: "gradient",
+        type: 'gradient',
         gradient: {
-          type: value.path === "line" ? "linear" : "radial",
-          colors: value.colors.map(item => ({
+          type: value.path === 'line' ? 'linear' : 'radial',
+          colors: value.colors.map((item) => ({
             ...item,
-            pos: parseInt(item.pos)
+            pos: parseInt(item.pos),
           })),
-          rotate: value.rot + 90
-        }
+          rotate: value.rot + 90,
+        },
       };
     } else {
       background = {
-        type: "solid",
-        color: (value as string) || "#fff"
+        type: 'solid',
+        color: (value as string) || '#fff',
       };
     }
 
@@ -429,7 +427,7 @@ export async function transformParsedToSlides(
       theme: slideTheme,
       elements: [],
       background,
-      script: item.note || ""
+      script: item.note || '',
     };
 
     const parseElements = async (elements: Element[]) => {
@@ -445,30 +443,30 @@ export async function transformParsedToSlides(
         el.height = el.height * ratio;
         el.left = el.left * ratio;
         el.top = el.top * ratio;
-        if (el.type === "text") {
+        if (el.type === 'text') {
           const vAlignMap: { [key: string]: ShapeTextAlign } = {
-            mid: "middle",
-            down: "bottom",
-            up: "top"
+            mid: 'middle',
+            down: 'bottom',
+            up: 'top',
           };
 
           // autoFit.type === 'text'：文字缩小适应容器，容器尺寸固定
           // 转为 shape 元素，使填充色严格覆盖 width × height 区域
-          if ((el as any).autoFit && (el as any).autoFit.type === "text") {
-            const fontScale = ratio * ((el as any).autoFit.fontScale || 100) / 100;
+          if ((el as any).autoFit && (el as any).autoFit.type === 'text') {
+            const fontScale = (ratio * ((el as any).autoFit.fontScale || 100)) / 100;
             const gradient: Gradient | undefined =
-              el.fill?.type === "gradient"
+              el.fill?.type === 'gradient'
                 ? {
-                    type: el.fill.value.path === "line" ? "linear" : "radial",
-                    colors: el.fill.value.colors.map(item => ({
+                    type: el.fill.value.path === 'line' ? 'linear' : 'radial',
+                    colors: el.fill.value.colors.map((item) => ({
                       ...item,
-                      pos: parseInt(item.pos)
+                      pos: parseInt(item.pos),
                     })),
-                    rotate: el.fill.value.rot
+                    rotate: el.fill.value.rot,
                   }
                 : undefined;
             const shapeEl: PPTShapeElement = {
-              type: "shape",
+              type: 'shape',
               id: nanoid(10),
               width: el.width,
               height: el.height,
@@ -476,23 +474,23 @@ export async function transformParsedToSlides(
               top: el.top,
               rotate: el.rotate,
               viewBox: [200, 200],
-              path: "M 0 0 L 200 0 L 200 200 L 0 200 Z",
-              fill: el.fill?.type === "color" ? el.fill.value : "",
+              path: 'M 0 0 L 200 0 L 200 200 L 0 200 Z',
+              fill: el.fill?.type === 'color' ? el.fill.value : '',
               gradient,
               fixedRatio: false,
               text: {
                 content: convertPtToPx(el.content, fontScale),
                 defaultFontName: theme.fontName,
                 defaultColor: theme.fontColor,
-                align: vAlignMap[el.vAlign] || "middle"
-              }
+                align: vAlignMap[el.vAlign] || 'middle',
+              },
             };
             // 只有当 borderWidth 存在且大于 0 时才设置 outline
             if (el.borderWidth && el.borderWidth > 0) {
               shapeEl.outline = {
                 color: el.borderColor,
                 width: +(el.borderWidth * ratio).toFixed(2),
-                style: el.borderType
+                style: el.borderType,
               };
             }
             if (el.shadow) {
@@ -500,29 +498,29 @@ export async function transformParsedToSlides(
                 h: el.shadow.h * ratio,
                 v: el.shadow.v * ratio,
                 blur: el.shadow.blur * ratio,
-                color: el.shadow.color
+                color: el.shadow.color,
               };
             }
             slide.elements.push(shapeEl);
-          } else if (el.fill?.type === "gradient" || el.fill?.type === "image") {
+          } else if (el.fill?.type === 'gradient' || el.fill?.type === 'image') {
             // gradient / image fill 不被 PPTTextElement 支持，转为 shape 元素
             const gradient: Gradient | undefined =
-              el.fill.type === "gradient"
+              el.fill.type === 'gradient'
                 ? {
-                    type: el.fill.value.path === "line" ? "linear" : "radial",
-                    colors: el.fill.value.colors.map(item => ({
+                    type: el.fill.value.path === 'line' ? 'linear' : 'radial',
+                    colors: el.fill.value.colors.map((item) => ({
                       ...item,
-                      pos: parseInt(item.pos)
+                      pos: parseInt(item.pos),
                     })),
-                    rotate: el.fill.value.rot
+                    rotate: el.fill.value.rot,
                   }
                 : undefined;
             let pattern: string | undefined;
-            if (el.fill.type === "image") {
+            if (el.fill.type === 'image') {
               pattern = el.fill.value.picBase64;
             }
             const shapeEl: PPTShapeElement = {
-              type: "shape",
+              type: 'shape',
               id: nanoid(10),
               width: el.width,
               height: el.height,
@@ -530,8 +528,8 @@ export async function transformParsedToSlides(
               top: el.top,
               rotate: el.rotate,
               viewBox: [200, 200],
-              path: "M 0 0 L 200 0 L 200 200 L 0 200 Z",
-              fill: "",
+              path: 'M 0 0 L 200 0 L 200 200 L 0 200 Z',
+              fill: '',
               gradient,
               pattern,
               fixedRatio: false,
@@ -539,14 +537,14 @@ export async function transformParsedToSlides(
                 content: convertPtToPx(el.content, ratio),
                 defaultFontName: theme.fontName,
                 defaultColor: theme.fontColor,
-                align: vAlignMap[el.vAlign] || "middle"
-              }
+                align: vAlignMap[el.vAlign] || 'middle',
+              },
             };
             if (el.borderWidth && el.borderWidth > 0) {
               shapeEl.outline = {
                 color: el.borderColor,
                 width: +(el.borderWidth * ratio).toFixed(2),
-                style: el.borderType
+                style: el.borderType,
               };
             }
             if (el.shadow) {
@@ -554,7 +552,7 @@ export async function transformParsedToSlides(
                 h: el.shadow.h * ratio,
                 v: el.shadow.v * ratio,
                 blur: el.shadow.blur * ratio,
-                color: el.shadow.color
+                color: el.shadow.color,
               };
             }
             slide.elements.push(shapeEl);
@@ -564,7 +562,7 @@ export async function transformParsedToSlides(
             el.height = Math.min(el.height * SAFE_PADDING, viewportHeight - el.top);
 
             const textEl: PPTTextElement = {
-              type: "text",
+              type: 'text',
               id: nanoid(10),
               width: el.width,
               height: el.height,
@@ -574,15 +572,15 @@ export async function transformParsedToSlides(
               defaultFontName: theme.fontName,
               defaultColor: theme.fontColor,
               content: convertPtToPx(el.content, ratio),
-              fill: el.fill?.type === "color" ? el.fill.value : "",
+              fill: el.fill?.type === 'color' ? el.fill.value : '',
               vertical: el.isVertical,
-              vAlign: vAlignMap[el.vAlign]
+              vAlign: vAlignMap[el.vAlign],
             };
             if (el.borderWidth && el.borderWidth > 0) {
               textEl.outline = {
                 color: el.borderColor,
                 width: +(el.borderWidth * ratio).toFixed(2),
-                style: el.borderType
+                style: el.borderType,
               };
             }
             if (el.shadow) {
@@ -590,16 +588,16 @@ export async function transformParsedToSlides(
                 h: el.shadow.h * ratio,
                 v: el.shadow.v * ratio,
                 blur: el.shadow.blur * ratio,
-                color: el.shadow.color
+                color: el.shadow.color,
               };
             }
             slide.elements.push(textEl);
           }
-        } else if (el.type === "image") {
+        } else if (el.type === 'image') {
           const imageSrc = el.src;
 
           const element: PPTImageElement = {
-            type: "image",
+            type: 'image',
             id: nanoid(10),
             src: imageSrc,
             width: el.width,
@@ -609,7 +607,7 @@ export async function transformParsedToSlides(
             fixedRatio: true,
             rotate: el.rotate,
             flipH: el.isFlipH,
-            flipV: el.isFlipV
+            flipV: el.isFlipV,
           };
           const rawFilters = (el as any).filters as
             | { brightness?: number; contrast?: number; saturation?: number; opacity?: number }
@@ -626,46 +624,50 @@ export async function transformParsedToSlides(
             // 1.0 first, then contrast drags them down to mid-grey (whole slide
             // turns grey instead of washing out to near-white).
             const cssFilters: ImageElementFilters = {};
-            if (rawFilters.contrast != null) cssFilters.contrast = `${((1 + rawFilters.contrast) * 100).toFixed(0)}`;
-            if (rawFilters.brightness != null) cssFilters.brightness = `${((1 + rawFilters.brightness) * 100).toFixed(0)}`;
-            if (rawFilters.saturation != null) cssFilters.saturate = `${((1 + rawFilters.saturation) * 100).toFixed(0)}`;
-            if (rawFilters.opacity != null) cssFilters.opacity = `${(rawFilters.opacity * 100).toFixed(0)}`;
+            if (rawFilters.contrast != null)
+              cssFilters.contrast = `${((1 + rawFilters.contrast) * 100).toFixed(0)}`;
+            if (rawFilters.brightness != null)
+              cssFilters.brightness = `${((1 + rawFilters.brightness) * 100).toFixed(0)}`;
+            if (rawFilters.saturation != null)
+              cssFilters.saturate = `${((1 + rawFilters.saturation) * 100).toFixed(0)}`;
+            if (rawFilters.opacity != null)
+              cssFilters.opacity = `${(rawFilters.opacity * 100).toFixed(0)}`;
             if (Object.keys(cssFilters).length) element.filters = cssFilters;
           }
           if (el.borderWidth) {
             element.outline = {
               color: el.borderColor,
               width: +(el.borderWidth * ratio).toFixed(2),
-              style: el.borderType
+              style: el.borderType,
             };
           }
           const clipShapeTypes = [
-            "roundRect",
-            "ellipse",
-            "triangle",
-            "rhombus",
-            "pentagon",
-            "hexagon",
-            "heptagon",
-            "octagon",
-            "parallelogram",
-            "trapezoid"
+            'roundRect',
+            'ellipse',
+            'triangle',
+            'rhombus',
+            'pentagon',
+            'hexagon',
+            'heptagon',
+            'octagon',
+            'parallelogram',
+            'trapezoid',
           ];
           if (el.rect) {
             element.clip = {
-              shape: el.geom && clipShapeTypes.includes(el.geom) ? el.geom : "rect",
+              shape: el.geom && clipShapeTypes.includes(el.geom) ? el.geom : 'rect',
               range: [
                 [el.rect.l || 0, el.rect.t || 0],
-                [100 - (el.rect.r || 0), 100 - (el.rect.b || 0)]
-              ]
+                [100 - (el.rect.r || 0), 100 - (el.rect.b || 0)],
+              ],
             };
           } else if (el.geom && clipShapeTypes.includes(el.geom)) {
             element.clip = {
               shape: el.geom,
               range: [
                 [0, 0],
-                [100, 100]
-              ]
+                [100, 100],
+              ],
             };
           }
           // softEdge 已是原始 px（与最终框同尺度），不再 × ratio。
@@ -673,24 +675,18 @@ export async function transformParsedToSlides(
           if (softEdgePx && softEdgePx > 0) element.softEdge = softEdgePx;
           slide.elements.push(element);
           // 如果是 base64 图片：并发上传，成功后回填 URL
-          if (el.src && el.src.startsWith("data:")) {
+          if (el.src && el.src.startsWith('data:')) {
             uploadTasks.push(
-              limitUpload(() =>
-                ctx.uploadBase64Image(
-                  el.src,
-                  `image_${Date.now()}.png`,
-                  "a2m"
-                )
-              )
-                .then(url => {
+              limitUpload(() => ctx.uploadBase64Image(el.src, `image_${Date.now()}.png`, 'a2m'))
+                .then((url) => {
                   element.src = url;
                 })
-                .catch(error => {
-                  console.error("图片元素上传失败:", error);
-                })
+                .catch((error) => {
+                  console.error('图片元素上传失败:', error);
+                }),
             );
           }
-        } else if (el.type === "math") {
+        } else if (el.type === 'math') {
           let usedKatex = false;
           if (el.latex) {
             try {
@@ -703,12 +699,12 @@ export async function transformParsedToSlides(
                 displayMode: true,
               });
               const latexElement: PPTLatexElement = {
-                type: "latex",
+                type: 'latex',
                 id: nanoid(10),
                 latex: el.latex,
                 html,
-                path: "",
-                color: (el as { color?: string }).color ?? "#000000",
+                path: '',
+                color: (el as { color?: string }).color ?? '#000000',
                 strokeWidth: 2,
                 viewBox: [el.width, el.height],
                 width: el.width,
@@ -716,17 +712,17 @@ export async function transformParsedToSlides(
                 left: el.left,
                 top: el.top,
                 fixedRatio: true,
-                rotate: 0
+                rotate: 0,
               };
               slide.elements.push(latexElement);
               usedKatex = true;
             } catch (error) {
-              console.warn("[PPTX导入] KaTeX 无法渲染公式，回退为图片:", error);
+              console.warn('[PPTX导入] KaTeX 无法渲染公式，回退为图片:', error);
             }
           }
           if (!usedKatex) {
             const mathElement: PPTImageElement = {
-              type: "image",
+              type: 'image',
               id: nanoid(10),
               src: el.picBase64,
               width: el.width,
@@ -734,33 +730,29 @@ export async function transformParsedToSlides(
               left: el.left,
               top: el.top,
               fixedRatio: true,
-              rotate: 0
+              rotate: 0,
             };
             slide.elements.push(mathElement);
-            if (el.picBase64 && el.picBase64.startsWith("data:")) {
+            if (el.picBase64 && el.picBase64.startsWith('data:')) {
               uploadTasks.push(
                 limitUpload(() =>
-                  ctx.uploadBase64Image(
-                    el.picBase64,
-                    `math_${Date.now()}.png`,
-                    "a2m"
-                  )
+                  ctx.uploadBase64Image(el.picBase64, `math_${Date.now()}.png`, 'a2m'),
                 )
-                  .then(url => {
+                  .then((url) => {
                     mathElement.src = url;
                   })
-                  .catch(error => {
-                    console.error("数学公式图片上传失败:", error);
-                  })
+                  .catch((error) => {
+                    console.error('数学公式图片上传失败:', error);
+                  }),
               );
             }
           }
-        } else if (el.type === "audio") {
-          console.log("🔍 音频元素完整信息:", JSON.stringify(el, null, 2));
+        } else if (el.type === 'audio') {
+          console.log('🔍 音频元素完整信息:', JSON.stringify(el, null, 2));
           const audioElement: any = {
-            type: "audio" as const,
+            type: 'audio' as const,
             id: nanoid(10),
-            src: el.blob || "",
+            src: el.blob || '',
             width: el.width,
             height: el.height,
             left: el.left,
@@ -769,67 +761,63 @@ export async function transformParsedToSlides(
             fixedRatio: false,
             color: theme.themeColors[0],
             loop: false,
-            autoplay: false
+            autoplay: false,
           };
           slide.elements.push(audioElement);
 
           // 上传到 OSS
-          if (el.blob && el.blob.startsWith("blob:")) {
+          if (el.blob && el.blob.startsWith('blob:')) {
             uploadTasks.push(
               limitUpload(async () => {
                 const response = await fetch(el.blob!);
                 const blob = await response.blob();
-                return ctx.uploadBlobMedia(
-                  blob,
-                  `audio_${Date.now()}.mp3`,
-                  "a2m/audio"
-                );
+                return ctx.uploadBlobMedia(blob, `audio_${Date.now()}.mp3`, 'a2m/audio');
               })
-                .then(url => {
+                .then((url) => {
                   audioElement.src = url;
-                  audioElement.ext = "mp3";
+                  audioElement.ext = 'mp3';
                 })
-                .catch(error => {
-                  console.error("❌ 音频上传失败:", error);
-                })
+                .catch((error) => {
+                  console.error('❌ 音频上传失败:', error);
+                }),
             );
-          } else if (!el.blob || el.blob === "") {
-            console.warn("⚠️ 音频 blob 为空，将显示损坏音频图标");
+          } else if (!el.blob || el.blob === '') {
+            console.warn('⚠️ 音频 blob 为空，将显示损坏音频图标');
           } else {
-            console.warn("⚠️ 音频 blob 不是有效的 blob URL，实际值:", el.blob);
+            console.warn('⚠️ 音频 blob 不是有效的 blob URL，实际值:', el.blob);
           }
-        } else if (el.type === "video") {
+        } else if (el.type === 'video') {
           const videoElement: any = {
-            type: "video" as const,
+            type: 'video' as const,
             id: nanoid(10),
-            src: el.blob || "",
+            src: el.blob || '',
             width: el.width,
             height: el.height,
             left: el.left,
             top: el.top,
             rotate: 0,
             autoplay: false,
-            poster: el.src || ""
+            poster: el.src || '',
           };
           slide.elements.push(videoElement);
 
           // 上传到 OSS
-          if (el.blob && el.blob.startsWith("blob:")) {
+          if (el.blob && el.blob.startsWith('blob:')) {
             uploadTasks.push(
               limitUpload(async () => {
                 try {
                   const blobResp = await fetch(el.blob!);
                   const arrayBuffer = await blobResp.arrayBuffer();
                   const codecInfo = await parseVideoCodec(arrayBuffer);
-                  console.log("[PPTX导入] 视频编码解析结果:", codecInfo);
+                  console.log('[PPTX导入] 视频编码解析结果:', codecInfo);
 
                   if (!isVideoCodecSupported(codecInfo)) {
-                    console.warn("[PPTX导入] 视频编码不支持:", codecInfo?.videoCodec);
+                    console.warn('[PPTX导入] 视频编码不支持:', codecInfo?.videoCodec);
                     const iconSize = 120;
                     const origW = videoElement.width;
                     const origH = videoElement.height;
                     videoElement.codecError = true;
-                    videoElement.src = "";
+                    videoElement.src = '';
                     videoElement.width = iconSize;
                     videoElement.height = iconSize;
                     videoElement.left = videoElement.left + (origW - iconSize) / 2;
@@ -837,71 +825,65 @@ export async function transformParsedToSlides(
                     return null;
                   }
                 } catch (err) {
-                  console.warn("[PPTX导入] 视频编码解析失败:", err);
+                  console.warn('[PPTX导入] 视频编码解析失败:', err);
                 }
                 const response = await fetch(el.blob!);
                 const blob = await response.blob();
-                return ctx.uploadBlobMedia(
-                  blob,
-                  `video_${Date.now()}.mp4`,
-                  "a2m/video"
-                );
+                return ctx.uploadBlobMedia(blob, `video_${Date.now()}.mp4`, 'a2m/video');
               })
-                .then(result => {
+                .then((result) => {
                   if (result) {
                     videoElement.src = result;
-                    videoElement.ext = "mp4";
+                    videoElement.ext = 'mp4';
                   }
                 })
-                .catch(error => {
-                  console.error("视频上传失败:", error);
-                })
+                .catch((error) => {
+                  console.error('视频上传失败:', error);
+                }),
             );
           }
-        } else if (el.type === "shape") {
-          if (el.shapType === "line" || /Connector/.test(el.shapType)) {
+        } else if (el.type === 'shape') {
+          if (el.shapType === 'line' || /Connector/.test(el.shapType)) {
             const lineElement = parseLineElement(el, ratio);
             slide.elements.push(lineElement);
           } else {
-            const shape = shapeList.find(
-              item => item.pptxShapeType === el.shapType
-            );
+            const shape = shapeList.find((item) => item.pptxShapeType === el.shapType);
 
             const vAlignMap: { [key: string]: ShapeTextAlign } = {
-              mid: "middle",
-              down: "bottom",
-              up: "top"
+              mid: 'middle',
+              down: 'bottom',
+              up: 'top',
             };
 
             const gradient: Gradient | undefined =
-              el.fill?.type === "gradient"
+              el.fill?.type === 'gradient'
                 ? {
-                    type: el.fill.value.path === "line" ? "linear" : "radial",
-                    colors: el.fill.value.colors.map(item => ({
+                    type: el.fill.value.path === 'line' ? 'linear' : 'radial',
+                    colors: el.fill.value.colors.map((item) => ({
                       ...item,
-                      pos: parseInt(item.pos)
+                      pos: parseInt(item.pos),
                     })),
-                    rotate: el.fill.value.rot
+                    rotate: el.fill.value.rot,
                   }
                 : undefined;
 
             let pattern: string | undefined = undefined;
             let opacity: number = 1;
-            if (el.fill?.type === "image") {
+            if (el.fill?.type === 'image') {
               pattern = el.fill.value.picBase64;
               opacity = el.fill.value.opacity;
             }
-            const fill = el.fill?.type === "color" ? el.fill.value : "";
+            const fill = el.fill?.type === 'color' ? el.fill.value : '';
 
             const element: PPTShapeElement = {
-              type: "shape",
+              type: 'shape',
               id: nanoid(10),
               width: el.width,
               height: el.height,
               left: el.left,
               top: el.top,
               viewBox: [200, 200],
-              path: "M 0 0 L 200 0 L 200 200 L 0 200 Z",
+              path: 'M 0 0 L 200 0 L 200 200 L 0 200 Z',
               fill,
               gradient,
               pattern,
@@ -912,17 +894,17 @@ export async function transformParsedToSlides(
                 content: convertPtToPx(el.content, ratio),
                 defaultFontName: theme.fontName,
                 defaultColor: theme.fontColor,
-                align: vAlignMap[el.vAlign] || "middle"
+                align: vAlignMap[el.vAlign] || 'middle',
               },
               flipH: el.isFlipH,
-              flipV: el.isFlipV
+              flipV: el.isFlipV,
             };
             // 只有当 borderWidth 存在且大于 0 时才设置 outline
             if (el.borderWidth && el.borderWidth > 0) {
               element.outline = {
                 color: el.borderColor,
                 width: +(el.borderWidth * ratio).toFixed(2),
-                style: el.borderType
+                style: el.borderType,
               };
             }
             if (el.shadow) {
@@ -930,7 +912,7 @@ export async function transformParsedToSlides(
                 h: el.shadow.h * ratio,
                 v: el.shadow.v * ratio,
                 blur: el.shadow.blur * ratio,
-                color: el.shadow.color
+                color: el.shadow.color,
               };
             }
 
@@ -946,7 +928,7 @@ export async function transformParsedToSlides(
                 // parser 已按源 XML 的 adj 算出 path（pixel 空间），直接用比走
                 // formula+defaultValue 更准确——后者会丢掉非默认 adj（典型例子：
                 // roundRect@adj=50% 应是圆，formula 默认 12.5% 会渲染成方）。
-                if (el.path && el.path.indexOf("NaN") === -1) {
+                if (el.path && el.path.indexOf('NaN') === -1) {
                   element.path = el.path;
                   // parser 的 path 在 PT 坐标系里（pxToPt(node.size.*)），上面的
                   // `element.viewBox = [el.width, el.height]` 此时已是 PX（× ratio
@@ -961,24 +943,20 @@ export async function transformParsedToSlides(
                     // slide 类型只要数组，按声明顺序取值即可。
                     element.keypoints = Object.values(el.keypoints);
                   }
-                } else if ("editable" in pathFormula && pathFormula.editable) {
-                  element.path = pathFormula.formula(
-                    el.width,
-                    el.height,
-                    pathFormula.defaultValue
-                  );
+                } else if ('editable' in pathFormula && pathFormula.editable) {
+                  element.path = pathFormula.formula(el.width, el.height, pathFormula.defaultValue);
                   element.keypoints = pathFormula.defaultValue;
                 } else element.path = pathFormula.formula(el.width, el.height);
               }
-            } else if (el.path && el.path.indexOf("NaN") === -1) {
+            } else if (el.path && el.path.indexOf('NaN') === -1) {
               element.path = el.path;
               element.viewBox = [originWidth, originHeight];
             }
-            if (el.shapType === "custom") {
-              if (el.path!.indexOf("NaN") !== -1) {
+            if (el.shapType === 'custom') {
+              if (el.path!.indexOf('NaN') !== -1) {
                 if (element.width === 0) element.width = 0.1;
                 if (element.height === 0) element.height = 0.1;
-                element.path = el.path!.replace(/NaN/g, "0");
+                element.path = el.path!.replace(/NaN/g, '0');
               } else {
                 element.special = true;
                 element.path = el.path!;
@@ -990,34 +968,30 @@ export async function transformParsedToSlides(
             if (element.path) {
               slide.elements.push(element);
               // 形状填充图片：并发上传，成功后回填 URL
-              if (pattern && pattern.startsWith("data:")) {
+              if (pattern && pattern.startsWith('data:')) {
                 // TS 窄化：避免将 `let pattern: string | undefined` 捕获进异步闭包导致类型回退
                 const patternBase64 = pattern;
                 uploadTasks.push(
                   limitUpload(() =>
-                    ctx.uploadBase64Image(
-                      patternBase64,
-                      `pattern_${Date.now()}.png`,
-                      "a2m"
-                    )
+                    ctx.uploadBase64Image(patternBase64, `pattern_${Date.now()}.png`, 'a2m'),
                   )
-                    .then(url => {
+                    .then((url) => {
                       element.pattern = url;
                     })
-                    .catch(error => {
-                      console.error("形状填充图片上传失败:", error);
-                    })
+                    .catch((error) => {
+                      console.error('形状填充图片上传失败:', error);
+                    }),
                 );
               }
             }
           }
-        } else if (el.type === "table") {
+        } else if (el.type === 'table') {
           const row = el.data.length;
           const col = el.data[0].length;
 
           const style: TableCellStyle = {
             fontname: theme.fontName,
-            color: theme.fontColor
+            color: theme.fontColor,
           };
           const data: TableCell[][] = [];
           for (let i = 0; i < row; i++) {
@@ -1025,22 +999,21 @@ export async function transformParsedToSlides(
             for (let j = 0; j < col; j++) {
               const cellData = el.data[i][j];
 
-              let textDiv: HTMLDivElement | null = document.createElement("div");
+              let textDiv: HTMLDivElement | null = document.createElement('div');
               textDiv.innerHTML = cellData.text;
-              const ps = Array.from(textDiv.querySelectorAll("p"));
-              const align = ps[0]?.style.textAlign || "left";
+              const ps = Array.from(textDiv.querySelectorAll('p'));
+              const align = ps[0]?.style.textAlign || 'left';
               // 单元格 padding 从外层 <div style="padding: ..."> 上提取（pptxtojson 把 PPT 的 cell margin 写在这里）
               // 不能跟 text 一起留在 HTML 里，否则 formatText 的 &nbsp; 替换会破坏 style 属性
               const padding = (
-                (textDiv.firstElementChild as HTMLElement | null)?.style
-                  ?.padding || ""
+                (textDiv.firstElementChild as HTMLElement | null)?.style?.padding || ''
               ).trim();
 
-              const span = textDiv.querySelector("span");
+              const span = textDiv.querySelector('span');
               const fontsize = span?.style.fontSize
-                ? (parseInt(span?.style.fontSize) * ratio).toFixed(1) + "px"
-                : "";
-              const fontname = span?.style.fontFamily || "";
+                ? (parseInt(span?.style.fontSize) * ratio).toFixed(1) + 'px'
+                : '';
+              const fontname = span?.style.fontFamily || '';
               const color = span?.style.color || cellData.fontColor;
 
               // 保留原始 <p> 段落结构（PPT 一个 <p> = 一段）
@@ -1052,18 +1025,18 @@ export async function transformParsedToSlides(
               // style 里的 calc(... + ...) 空格也换成 &nbsp; 破坏 margin-left）。
               const escapeText = (s: string) =>
                 s
-                  .replace(/&/g, "&amp;")
-                  .replace(/</g, "&lt;")
-                  .replace(/>/g, "&gt;")
-                  .replace(/\n/g, "<br/>")
-                  .replace(/ /g, "&nbsp;");
+                  .replace(/&/g, '&amp;')
+                  .replace(/</g, '&lt;')
+                  .replace(/>/g, '&gt;')
+                  .replace(/\n/g, '<br/>')
+                  .replace(/ /g, '&nbsp;');
               // 保留整段 <p> 的内联样式（margin-left/text-indent/line-height/
               // font-size/padding-top/margin-top/text-align）。其中 line-height
               // 与空段的 font-size 决定标题/正文之间的间距——只保留 margin-left 会
               // 让空白间隔段塌成默认行高，正文与标题间距变大（slide 5 正文偏靠下）。
               const paraStyle = (p: HTMLElement): string => {
-                const s = p.getAttribute("style");
-                return s ? ` style="${s}"` : "";
+                const s = p.getAttribute('style');
+                return s ? ` style="${s}"` : '';
               };
               // 段内 <span> 只保留 **run 强调**（color/font-weight/font-style/
               // text-decoration）——正文"维护、改善和营造"等关键词是上色的，全部塌成
@@ -1075,28 +1048,28 @@ export async function transformParsedToSlides(
                 const parts: string[] = [];
                 if (el.style.color) parts.push(`color:${el.style.color}`);
                 const fw = el.style.fontWeight;
-                if (fw === "bold" || (fw && parseInt(fw, 10) >= 600)) {
-                  parts.push("font-weight:bold");
+                if (fw === 'bold' || (fw && parseInt(fw, 10) >= 600)) {
+                  parts.push('font-weight:bold');
                 }
-                if (el.style.fontStyle === "italic") parts.push("font-style:italic");
-                if (el.style.textDecoration && el.style.textDecoration !== "none") {
+                if (el.style.fontStyle === 'italic') parts.push('font-style:italic');
+                if (el.style.textDecoration && el.style.textDecoration !== 'none') {
                   parts.push(`text-decoration:${el.style.textDecoration}`);
                 }
-                return parts.join(";");
+                return parts.join(';');
               };
               const serializeInline = (node: Node): string => {
-                let out = "";
-                node.childNodes.forEach(ch => {
+                let out = '';
+                node.childNodes.forEach((ch) => {
                   if (ch.nodeType === 3) {
-                    out += escapeText(ch.textContent || "");
+                    out += escapeText(ch.textContent || '');
                     return;
                   }
                   const el = ch as HTMLElement;
-                  if (el.tagName === "BR") {
-                    out += "<br/>";
+                  if (el.tagName === 'BR') {
+                    out += '<br/>';
                     return;
                   }
-                  if (el.tagName === "SPAN") {
+                  if (el.tagName === 'SPAN') {
                     const st = keepRunStyle(el);
                     const inner = serializeInline(el);
                     out += st ? `<span style="${st}">${inner}</span>` : inner;
@@ -1109,21 +1082,21 @@ export async function transformParsedToSlides(
               const text =
                 ps.length > 0
                   ? ps
-                      .map(p => `<p${paraStyle(p)}>${serializeInline(p) || "&nbsp;"}</p>`)
-                      .join("")
+                      .map((p) => `<p${paraStyle(p)}>${serializeInline(p) || '&nbsp;'}</p>`)
+                      .join('')
                   : escapeText(textDiv.innerText);
 
               // 把 PPT 原生的 vAlign 词汇映射到 CSS-native 值，让 renderer 直接透传
               // 到 `vertical-align`，不再需要在渲染层做转换。
-              const vAlignRaw = (cellData as { vAlign?: "up" | "mid" | "down" }).vAlign;
-              const vAlign: "top" | "middle" | "bottom" | undefined =
-                vAlignRaw === "up"
-                  ? "top"
-                  : vAlignRaw === "mid"
-                  ? "middle"
-                  : vAlignRaw === "down"
-                  ? "bottom"
-                  : undefined;
+              const vAlignRaw = (cellData as { vAlign?: 'up' | 'mid' | 'down' }).vAlign;
+              const vAlign: 'top' | 'middle' | 'bottom' | undefined =
+                vAlignRaw === 'up'
+                  ? 'top'
+                  : vAlignRaw === 'mid'
+                    ? 'middle'
+                    : vAlignRaw === 'down'
+                      ? 'bottom'
+                      : undefined;
 
               // hMerge / vMerge continuation 单元格只是 OOXML 用来占合并区位的
               // 占位格——下游 SlideCanvas 的 getHiddenCells 期望 data[r] 只放真
@@ -1147,18 +1120,15 @@ export async function transformParsedToSlides(
                 b && b.borderWidth > 0
                   ? {
                       width: +(b.borderWidth * ratio).toFixed(2),
-                      style: (b.borderType || "solid") as
-                        | "solid"
-                        | "dashed"
-                        | "dotted",
-                      color: b.borderColor || "#000"
+                      style: (b.borderType || 'solid') as 'solid' | 'dashed' | 'dotted',
+                      color: b.borderColor || '#000',
                     }
                   : undefined;
               const cellBorderSides = {
                 top: toCellBorder(cellData.borders?.top),
                 bottom: toCellBorder(cellData.borders?.bottom),
                 left: toCellBorder(cellData.borders?.left),
-                right: toCellBorder(cellData.borders?.right)
+                right: toCellBorder(cellData.borders?.right),
               };
               const hasCellBorders =
                 cellBorderSides.top ||
@@ -1176,15 +1146,15 @@ export async function transformParsedToSlides(
                 borders: hasCellBorders ? cellBorderSides : undefined,
                 style: {
                   ...style,
-                  align: ["left", "right", "center"].includes(align)
-                    ? (align as "left" | "right" | "center")
-                    : "left",
+                  align: ['left', 'right', 'center'].includes(align)
+                    ? (align as 'left' | 'right' | 'center')
+                    : 'left',
                   fontsize,
                   fontname,
                   color,
                   bold: cellData.fontBold,
-                  backcolor: cellData.fillColor
-                }
+                  backcolor: cellData.fillColor,
+                },
               });
               textDiv = null;
             }
@@ -1192,7 +1162,7 @@ export async function transformParsedToSlides(
           }
 
           const allWidth = el.colWidths.reduce((a, b) => a + b, 0);
-          const colWidths: number[] = el.colWidths.map(item => item / allWidth);
+          const colWidths: number[] = el.colWidths.map((item) => item / allWidth);
 
           const firstCell = el.data[0][0];
           const border =
@@ -1207,10 +1177,9 @@ export async function transformParsedToSlides(
           // 没有任何边框时不要再凭空补一条 2px 灰线：原来 `|| 2` 让无边框表格
           // （slide 10 的卡片）被画出一整张幽灵网格。width=0 时 renderer 不绘制。
           const borderWidth = border?.borderWidth || 0;
-          const borderStyle = border?.borderType || "solid";
-          const borderColor = border?.borderColor || "#eeece1";
-          const outlineWidth =
-            borderWidth > 0 ? +(borderWidth * ratio).toFixed(2) : 0;
+          const borderStyle = border?.borderType || 'solid';
+          const borderColor = border?.borderColor || '#eeece1';
+          const outlineWidth = borderWidth > 0 ? +(borderWidth * ratio).toFixed(2) : 0;
 
           // rowHeights（pt → px）：
           // - 全 0：解析库在 PPT 自动行高场景下可能返回全 0，用 element.height 均分兜底
@@ -1224,11 +1193,11 @@ export async function transformParsedToSlides(
             if (sumRawPt <= 0) {
               rowHeightsPx = new Array(rowCount).fill(el.height / rowCount);
             } else {
-              rowHeightsPx = rawRowHeightsPt.map(h => h * ratio);
+              rowHeightsPx = rawRowHeightsPt.map((h) => h * ratio);
             }
           }
           slide.elements.push({
-            type: "table",
+            type: 'table',
             id: nanoid(10),
             width: el.width,
             height: el.height,
@@ -1240,73 +1209,73 @@ export async function transformParsedToSlides(
             outline: {
               width: outlineWidth,
               style: borderStyle,
-              color: borderColor
+              color: borderColor,
             },
             cellMinHeight: rowHeightsPx?.[0] || 36,
-            rowHeights: rowHeightsPx
+            rowHeights: rowHeightsPx,
           });
-        } else if (el.type === "chart") {
+        } else if (el.type === 'chart') {
           let labels: string[];
           let legends: string[];
           let series: number[][];
 
-          if (el.chartType === "scatterChart" || el.chartType === "bubbleChart") {
+          if (el.chartType === 'scatterChart' || el.chartType === 'bubbleChart') {
             labels = el.data[0].map((item, index) => `坐标${index + 1}`);
-            legends = ["X", "Y"];
+            legends = ['X', 'Y'];
             series = el.data;
           } else {
             const data = el.data as ChartItem[];
             labels = Object.values(data[0].xlabels);
-            legends = data.map(item => item.key);
-            series = data.map(item => item.values.map(v => v.y));
+            legends = data.map((item) => item.key);
+            series = data.map((item) => item.values.map((v) => v.y));
           }
 
           const options: ChartOptions = {};
 
-          let chartType: ChartType = "bar";
+          let chartType: ChartType = 'bar';
 
           switch (el.chartType) {
-            case "barChart":
-            case "bar3DChart":
-              chartType = "bar";
-              if (el.barDir === "bar") chartType = "column";
-              if (el.grouping === "stacked" || el.grouping === "percentStacked") {
+            case 'barChart':
+            case 'bar3DChart':
+              chartType = 'bar';
+              if (el.barDir === 'bar') chartType = 'column';
+              if (el.grouping === 'stacked' || el.grouping === 'percentStacked') {
                 options.stack = true;
               }
               break;
-            case "lineChart":
-            case "line3DChart":
-              if (el.grouping === "stacked" || el.grouping === "percentStacked") {
+            case 'lineChart':
+            case 'line3DChart':
+              if (el.grouping === 'stacked' || el.grouping === 'percentStacked') {
                 options.stack = true;
               }
-              chartType = "line";
+              chartType = 'line';
               break;
-            case "areaChart":
-            case "area3DChart":
-              if (el.grouping === "stacked" || el.grouping === "percentStacked") {
+            case 'areaChart':
+            case 'area3DChart':
+              if (el.grouping === 'stacked' || el.grouping === 'percentStacked') {
                 options.stack = true;
               }
-              chartType = "area";
+              chartType = 'area';
               break;
-            case "scatterChart":
-            case "bubbleChart":
-              chartType = "scatter";
+            case 'scatterChart':
+            case 'bubbleChart':
+              chartType = 'scatter';
               break;
-            case "pieChart":
-            case "pie3DChart":
-              chartType = "pie";
+            case 'pieChart':
+            case 'pie3DChart':
+              chartType = 'pie';
               break;
-            case "radarChart":
-              chartType = "radar";
+            case 'radarChart':
+              chartType = 'radar';
               break;
-            case "doughnutChart":
-              chartType = "ring";
+            case 'doughnutChart':
+              chartType = 'ring';
               break;
             default:
           }
 
           slide.elements.push({
-            type: "chart",
+            type: 'chart',
             id: nanoid(10),
             chartType: chartType,
             width: el.width,
@@ -1319,12 +1288,12 @@ export async function transformParsedToSlides(
             data: {
               labels,
               legends,
-              series
+              series,
             },
-            options
+            options,
           });
-        } else if (el.type === "group") {
-          let elements: BaseElement[] = el.elements.map(_el => {
+        } else if (el.type === 'group') {
+          let elements: BaseElement[] = el.elements.map((_el) => {
             let left = _el.left + originLeft;
             let top = _el.top + originTop;
 
@@ -1336,7 +1305,7 @@ export async function transformParsedToSlides(
                 originHeight,
                 _el.left,
                 _el.top,
-                el.rotate
+                el.rotate,
               );
               left = x;
               top = y;
@@ -1345,21 +1314,21 @@ export async function transformParsedToSlides(
             const element = {
               ..._el,
               left,
-              top
+              top,
             };
-            if (el.isFlipH && "isFlipH" in element) element.isFlipH = true;
-            if (el.isFlipV && "isFlipV" in element) element.isFlipV = true;
+            if (el.isFlipH && 'isFlipH' in element) element.isFlipH = true;
+            if (el.isFlipV && 'isFlipV' in element) element.isFlipV = true;
 
             return element;
           });
-          if (el.isFlipH) elements = flipGroupElements(elements, "y");
-          if (el.isFlipV) elements = flipGroupElements(elements, "x");
+          if (el.isFlipH) elements = flipGroupElements(elements, 'y');
+          if (el.isFlipV) elements = flipGroupElements(elements, 'x');
           await parseElements(elements);
-        } else if (el.type === "diagram") {
-          const elements = el.elements.map(_el => ({
+        } else if (el.type === 'diagram') {
+          const elements = el.elements.map((_el) => ({
             ..._el,
             left: _el.left + originLeft,
-            top: _el.top + originTop
+            top: _el.top + originTop,
           }));
           await parseElements(elements);
         }

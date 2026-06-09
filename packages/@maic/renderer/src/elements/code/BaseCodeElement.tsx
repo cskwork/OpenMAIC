@@ -356,9 +356,7 @@ function CodeLineRow({
           {lineNumber}
         </span>
       )}
-      <span
-        style={{ flex: 1, paddingRight: '16px', whiteSpace: 'pre', tabSize: 4 }}
-      >
+      <span style={{ flex: 1, paddingRight: '16px', whiteSpace: 'pre', tabSize: 4 }}>
         {contentNode}
       </span>
     </motion.div>

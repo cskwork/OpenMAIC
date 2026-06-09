@@ -49,20 +49,24 @@ export function createRenderContext(
   const masterPath = presentation.layoutToMaster.get(layoutPath) || '';
   const themePath = presentation.masterToTheme.get(masterPath) || '';
 
-  const layout: LayoutData = presentation.layouts.get(layoutPath) || ({
-    placeholders: [],
-    spTree: new SafeXmlNode(null),
-    rels: new Map(),
-    showMasterSp: true,
-  } as unknown as LayoutData);
+  const layout: LayoutData =
+    presentation.layouts.get(layoutPath) ||
+    ({
+      placeholders: [],
+      spTree: new SafeXmlNode(null),
+      rels: new Map(),
+      showMasterSp: true,
+    } as unknown as LayoutData);
 
-  const master: MasterData = presentation.masters.get(masterPath) || ({
-    colorMap: new Map(),
-    textStyles: {},
-    placeholders: [],
-    spTree: new SafeXmlNode(null),
-    rels: new Map(),
-  } as unknown as MasterData);
+  const master: MasterData =
+    presentation.masters.get(masterPath) ||
+    ({
+      colorMap: new Map(),
+      textStyles: {},
+      placeholders: [],
+      spTree: new SafeXmlNode(null),
+      rels: new Map(),
+    } as unknown as MasterData);
 
   const theme: ThemeData = presentation.themes.get(themePath) || {
     colorScheme: new Map(),

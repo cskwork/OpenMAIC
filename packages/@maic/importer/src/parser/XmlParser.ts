@@ -113,7 +113,7 @@ import { DOMParser } from '@xmldom/xmldom';
 export function parseXml(xmlString: string): SafeXmlNode {
   // Strip UTF-8 BOM (U+FEFF) — some PPTX files include it before the XML
   // declaration, which causes @xmldom/xmldom to throw a fatalError.
-  const cleaned = xmlString.charCodeAt(0) === 0xFEFF ? xmlString.slice(1) : xmlString;
+  const cleaned = xmlString.charCodeAt(0) === 0xfeff ? xmlString.slice(1) : xmlString;
   const parser = new DOMParser();
   const doc = parser.parseFromString(cleaned, 'application/xml');
 

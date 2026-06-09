@@ -18,55 +18,108 @@ import { isAllowedExternalUrl } from '../utils/urlSafety';
 // Wingdings / Symbol Font → Unicode Mapping
 // ---------------------------------------------------------------------------
 
-const SYMBOL_FONTS = new Set([
-  'wingdings',
-  'wingdings 2',
-  'wingdings 3',
-  'symbol',
-  'webdings',
-]);
+const SYMBOL_FONTS = new Set(['wingdings', 'wingdings 2', 'wingdings 3', 'symbol', 'webdings']);
 
 function isSymbolFont(fontName: string | undefined): boolean {
   return !!fontName && SYMBOL_FONTS.has(fontName.toLowerCase());
 }
 
 const WINGDINGS: Record<number, string> = {
-  0x66: '●', 0x67: '●', 0x6C: '●', 0x6D: '○', 0x6E: '■', 0x6F: '□',
-  0x71: '✕', 0x72: '✓', 0x73: '☐', 0x74: '⬥', 0x75: '◆', 0x76: '❖',
-  0x77: '⬜', 0x9C: '●', 0x9D: '○', 0x9E: '■', 0x9F: '□',
-  0xA1: '✡', 0xA7: '✺', 0xAB: '⇨', 0xFC: '●',
-  0xA8: '✶', 0xAA: '⇦', 0xAC: '⇧', 0xAD: '⇩',
+  0x66: '●',
+  0x67: '●',
+  0x6c: '●',
+  0x6d: '○',
+  0x6e: '■',
+  0x6f: '□',
+  0x71: '✕',
+  0x72: '✓',
+  0x73: '☐',
+  0x74: '⬥',
+  0x75: '◆',
+  0x76: '❖',
+  0x77: '⬜',
+  0x9c: '●',
+  0x9d: '○',
+  0x9e: '■',
+  0x9f: '□',
+  0xa1: '✡',
+  0xa7: '✺',
+  0xab: '⇨',
+  0xfc: '●',
+  0xa8: '✶',
+  0xaa: '⇦',
+  0xac: '⇧',
+  0xad: '⇩',
   // Arrows
-  0xE0: '→', 0xE1: '←', 0xE2: '↑', 0xE3: '↓',
-  0xE4: '↔', 0xE5: '↕', 0xE6: '⇒', 0xE7: '⇐',
-  0xE8: '⇑', 0xE9: '⇓', 0xEA: '⇔', 0xEB: '⇕',
-  0xEF: '➔',
+  0xe0: '→',
+  0xe1: '←',
+  0xe2: '↑',
+  0xe3: '↓',
+  0xe4: '↔',
+  0xe5: '↕',
+  0xe6: '⇒',
+  0xe7: '⇐',
+  0xe8: '⇑',
+  0xe9: '⇓',
+  0xea: '⇔',
+  0xeb: '⇕',
+  0xef: '➔',
   // Miscellaneous
-  0xD5: '✉', 0xD6: '☛', 0xD7: '☞', 0xD8: '✌', 0xFB: '⚫',
+  0xd5: '✉',
+  0xd6: '☛',
+  0xd7: '☞',
+  0xd8: '✌',
+  0xfb: '⚫',
 };
 
 const WINGDINGS2: Record<number, string> = {
-  0x9E: '◉', 0x9F: '⊙', 0x62: '①', 0x63: '②', 0x64: '③',
-  0x65: '④', 0x66: '⑤', 0x67: '⑥', 0x68: '⑦', 0x69: '⑧',
-  0x6A: '⑨', 0x6B: '⑩', 0x98: '⬥', 0x99: '◇', 0xA3: '✦',
-  0xF0: '●', 0xF1: '○', 0xF2: '◉', 0xF3: '◎',
+  0x9e: '◉',
+  0x9f: '⊙',
+  0x62: '①',
+  0x63: '②',
+  0x64: '③',
+  0x65: '④',
+  0x66: '⑤',
+  0x67: '⑥',
+  0x68: '⑦',
+  0x69: '⑧',
+  0x6a: '⑨',
+  0x6b: '⑩',
+  0x98: '⬥',
+  0x99: '◇',
+  0xa3: '✦',
+  0xf0: '●',
+  0xf1: '○',
+  0xf2: '◉',
+  0xf3: '◎',
 };
 
 const WINGDINGS3: Record<number, string> = {
-  0x7D: '▶', 0x7E: '◀', 0x7B: '▲', 0x7C: '▼',
-  0x75: '►', 0x76: '◄', 0x77: '▸', 0x78: '◂',
+  0x7d: '▶',
+  0x7e: '◀',
+  0x7b: '▲',
+  0x7c: '▼',
+  0x75: '►',
+  0x76: '◄',
+  0x77: '▸',
+  0x78: '◂',
 };
 
 const SYMBOL: Record<number, string> = {
-  0xB7: '•', 0xD8: '≠', 0xB3: '≥', 0xA3: '≤',
-  0xAE: '®', 0xA9: '©', 0xC6: '…',
+  0xb7: '•',
+  0xd8: '≠',
+  0xb3: '≥',
+  0xa3: '≤',
+  0xae: '®',
+  0xa9: '©',
+  0xc6: '…',
 };
 
 function symbolFontCharToUnicode(char: string, fontName: string): string {
   if (!char || char.length === 0) return char;
   const font = fontName.toLowerCase();
   let code = char.codePointAt(0) ?? 0;
-  if (code >= 0xF000 && code <= 0xF0FF) code -= 0xF000;
+  if (code >= 0xf000 && code <= 0xf0ff) code -= 0xf000;
 
   let table: Record<number, string> | undefined;
   if (font === 'wingdings') table = WINGDINGS;
@@ -906,8 +959,7 @@ export function renderTextBody(
         // 96px 默认网格，把首段错误推到 marL+96=145px。)只有「无自定义 tabLst」用 96。
         const firstStop = merged.tabStopsPx?.[0];
         const ml = effectiveMarginLeft ?? 0;
-        const tabAdvance =
-          firstStop !== undefined ? Math.max(0, firstStop - ml) : 96;
+        const tabAdvance = firstStop !== undefined ? Math.max(0, firstStop - ml) : 96;
         leadingFoldPx = leadingFoldedTabs * tabAdvance;
         leadingFoldEm = spaceCount * 0.25;
         leadingStripChars = consumed;
@@ -1009,11 +1061,7 @@ export function renderTextBody(
     // blank lines over-reserves height; on decks that stack several blank
     // paragraphs to push a bottom block down (slide 10 绿色提示条) the drift
     // accumulates and the bottom text slips below its box.
-    if (
-      paraHasVisibleRuns &&
-      !merged.lineHeightAbsolute &&
-      /^[\d.]+$/.test(effectiveLineHeight)
-    ) {
+    if (paraHasVisibleRuns && !merged.lineHeightAbsolute && /^[\d.]+$/.test(effectiveLineHeight)) {
       const lh = parseFloat(effectiveLineHeight);
       if (lh > 1) {
         const extraHalf = ((lh - 1) / 2) * effectiveFontSize;
@@ -1028,12 +1076,20 @@ export function renderTextBody(
     const applySpaceAfter = !isLastPara || spcFirstLastPara;
     if (applySpaceBefore && merged.spaceBefore !== undefined && merged.spaceBefore !== 0) {
       paraCssParts.push(`margin-top: ${merged.spaceBefore}pt`);
-    } else if (applySpaceBefore && merged.spaceBeforePct !== undefined && merged.spaceBeforePct !== 0) {
+    } else if (
+      applySpaceBefore &&
+      merged.spaceBeforePct !== undefined &&
+      merged.spaceBeforePct !== 0
+    ) {
       paraCssParts.push(`margin-top: ${merged.spaceBeforePct * effectiveFontSize}pt`);
     }
     if (applySpaceAfter && merged.spaceAfter !== undefined && merged.spaceAfter !== 0) {
       paraCssParts.push(`margin-bottom: ${merged.spaceAfter}pt`);
-    } else if (applySpaceAfter && merged.spaceAfterPct !== undefined && merged.spaceAfterPct !== 0) {
+    } else if (
+      applySpaceAfter &&
+      merged.spaceAfterPct !== undefined &&
+      merged.spaceAfterPct !== 0
+    ) {
       paraCssParts.push(`margin-bottom: ${merged.spaceAfterPct * effectiveFontSize}pt`);
     }
 
@@ -1127,8 +1183,7 @@ export function renderTextBody(
           }
         }
       }
-      const bColor =
-        bulletColor ?? options?.fontRefColor ?? options?.cellTextColor ?? '#000000';
+      const bColor = bulletColor ?? options?.fontRefColor ?? options?.cellTextColor ?? '#000000';
 
       let displayChar = bulletPrefix;
       let bFontCss = '';
@@ -1270,7 +1325,7 @@ export function renderTextBody(
         const mColor =
           mathColorNode && mathColorNode.exists()
             ? resolveColorToCss(mathColorNode, ctx)
-            : mStyle.color ?? options?.fontRefColor ?? '#000000';
+            : (mStyle.color ?? options?.fontRefColor ?? '#000000');
         const latex = ommlToLatex(run.ommlXml);
         let mathHtml = '';
         if (latex) {

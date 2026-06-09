@@ -36,10 +36,7 @@ export const PPT_ELEMENT_TYPES = [
 ] as const satisfies readonly PPTElementType[];
 
 export function isPPTElementType(value: unknown): value is PPTElementType {
-  return (
-    typeof value === 'string' &&
-    (PPT_ELEMENT_TYPES as readonly string[]).includes(value)
-  );
+  return typeof value === 'string' && (PPT_ELEMENT_TYPES as readonly string[]).includes(value);
 }
 
 export function isTextElement(el: PPTElement): el is PPTTextElement {

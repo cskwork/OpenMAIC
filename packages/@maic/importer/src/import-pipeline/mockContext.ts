@@ -1,19 +1,19 @@
-import type { ImportContext } from "./types";
-import type { ShapePoolItem } from "../openmaic/configs/shapes";
-import type { SlideTheme } from "@maic/dsl";
-import { SHAPE_LIST } from "../openmaic/configs/shapes";
+import type { ImportContext } from './types';
+import type { ShapePoolItem } from '../openmaic/configs/shapes';
+import type { SlideTheme } from '@maic/dsl';
+import { SHAPE_LIST } from '../openmaic/configs/shapes';
 
 export function createMockImportContext(overrides: Partial<ImportContext> = {}): ImportContext {
   const shapeList: ShapePoolItem[] = [];
   for (const item of SHAPE_LIST) shapeList.push(...item.children);
 
   const theme: SlideTheme = {
-    backgroundColor: "#fff",
+    backgroundColor: '#fff',
     themeColors: [],
-    fontColor: "#333",
-    fontName: "",
+    fontColor: '#333',
+    fontName: '',
     outline: {},
-    shadow: { h: 0, v: 0, blur: 0, color: "rgba(0,0,0,0)" },
+    shadow: { h: 0, v: 0, blur: 0, color: 'rgba(0,0,0,0)' },
   };
 
   return {

@@ -183,7 +183,7 @@ function getTransitionForSlide(slide: SlideData, files: PptxFiles): Slide['trans
 
 /**
  * Serialize one slide to pptxtojson Slide (fill, layoutElements, elements, note, transition).
- * 
+ *
  * Order:
  * 1. Background (slide → layout → master inheritance)
  * 2. Master non-placeholder shapes (behind everything)

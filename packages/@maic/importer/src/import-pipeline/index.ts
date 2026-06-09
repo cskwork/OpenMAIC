@@ -15,14 +15,14 @@
  * `Promise.allSettled` here so a missing inner `.catch` cannot fail the
  * whole import either.
  */
-import type { Slide } from "@maic/dsl";
-import type { Output } from "../adapter/types";
-import { parseZip } from "../parser/ZipParser";
-import { buildPresentation } from "../model/Presentation";
-import { toPptxtojsonFormat } from "../adapter/toPptxtojson";
-import type { ImportContext } from "./types";
-import { transformParsedToSlides } from "./transformParsedToSlides";
-import { createMockImportContext } from "./mockContext";
+import type { Slide } from '@maic/dsl';
+import type { Output } from '../adapter/types';
+import { parseZip } from '../parser/ZipParser';
+import { buildPresentation } from '../model/Presentation';
+import { toPptxtojsonFormat } from '../adapter/toPptxtojson';
+import type { ImportContext } from './types';
+import { transformParsedToSlides } from './transformParsedToSlides';
+import { createMockImportContext } from './mockContext';
 
 /**
  * Fallback viewport width in CSS pixels — used only when the parsed deck
@@ -33,11 +33,7 @@ import { createMockImportContext } from "./mockContext";
  */
 const FALLBACK_VIEWPORT_SIZE = 1280;
 
-export type OssUpload = (
-  blob: Blob,
-  filename: string,
-  dir?: string,
-) => Promise<string>;
+export type OssUpload = (blob: Blob, filename: string, dir?: string) => Promise<string>;
 
 export interface ImportPptxOptions {
   /**
@@ -66,9 +62,7 @@ export async function parsedToSlides(
   // (pt → px via ratio) so 16:9 widescreen decks (960pt → 1280px) don't
   // get text elements truncated to the legacy 4:3 default of 960.
   const deckViewportWidth =
-    json.size.width > 0
-      ? json.size.width * baseCtx.ratio
-      : FALLBACK_VIEWPORT_SIZE;
+    json.size.width > 0 ? json.size.width * baseCtx.ratio : FALLBACK_VIEWPORT_SIZE;
   const ctx: ImportContext = { ...baseCtx, viewportWidth: deckViewportWidth };
 
   // pptxtojson-pro's `Output` is structurally compatible with the npm
@@ -101,13 +95,11 @@ export async function importPptx(
   const buffer = await toArrayBuffer(input);
   const files = await parseZip(buffer);
   const presentation = buildPresentation(files);
-  const json = await toPptxtojsonFormat(presentation, files, "base64");
+  const json = await toPptxtojsonFormat(presentation, files, 'base64');
   return parsedToSlides(json, options);
 }
 
-function buildContextOverrides(
-  upload: OssUpload | undefined,
-): Partial<ImportContext> {
+function buildContextOverrides(upload: OssUpload | undefined): Partial<ImportContext> {
   if (!upload) return {};
   return {
     uploadBase64Image: async (base64, filename, dir) => {
@@ -118,9 +110,7 @@ function buildContextOverrides(
   };
 }
 
-async function toArrayBuffer(
-  input: File | Blob | ArrayBuffer,
-): Promise<ArrayBuffer> {
+async function toArrayBuffer(input: File | Blob | ArrayBuffer): Promise<ArrayBuffer> {
   if (input instanceof ArrayBuffer) return input;
   return input.arrayBuffer();
 }
@@ -130,7 +120,7 @@ async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
   return response.blob();
 }
 
-export type { ImportContext, TransformResult } from "./types";
-export { transformParsedToSlides } from "./transformParsedToSlides";
-export { createMockImportContext } from "./mockContext";
-export type { Output } from "../adapter/types";
+export type { ImportContext, TransformResult } from './types';
+export { transformParsedToSlides } from './transformParsedToSlides';
+export { createMockImportContext } from './mockContext';
+export type { Output } from '../adapter/types';

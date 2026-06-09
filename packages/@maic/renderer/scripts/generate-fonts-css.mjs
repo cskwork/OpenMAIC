@@ -7,12 +7,7 @@
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import {
-  FONT_CDN_BASE_URL,
-  FONT_DIR,
-  FONT_FAMILIES,
-  fontUrl,
-} from '../fonts.config.mjs';
+import { FONT_CDN_BASE_URL, FONT_DIR, FONT_FAMILIES, fontUrl } from '../fonts.config.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const outFile = path.join(here, '..', 'fonts.css');

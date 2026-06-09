@@ -22,7 +22,9 @@ declare module 'pngjs' {
 declare module 'jpegxr' {
   class JpegXR {
     constructor();
-    then<T>(resolve: (mod: { decode(data: Uint8Array | ArrayBuffer): JpegXRResult }) => T): Promise<T>;
+    then<T>(
+      resolve: (mod: { decode(data: Uint8Array | ArrayBuffer): JpegXRResult }) => T,
+    ): Promise<T>;
   }
   interface JpegXRResult {
     width: number;
@@ -34,7 +36,10 @@ declare module 'jpegxr' {
 }
 
 declare module 'canvas' {
-  export function createCanvas(width: number, height: number): {
+  export function createCanvas(
+    width: number,
+    height: number,
+  ): {
     getContext(type: '2d'): unknown;
     toBuffer(mime: string): Buffer;
     width: number;

@@ -57,7 +57,8 @@ export function BaseTextElement({ elementInfo, target }: BaseTextElementProps) {
             height: elementInfo.vertical ? '100%' : 'auto',
             textShadow: shadowStyle,
             lineHeight: elementInfo.lineHeight,
-            letterSpacing: elementInfo.wordSpace !== undefined ? `${elementInfo.wordSpace}px` : undefined,
+            letterSpacing:
+              elementInfo.wordSpace !== undefined ? `${elementInfo.wordSpace}px` : undefined,
             color: elementInfo.defaultColor,
             fontFamily: elementInfo.defaultFontName,
             writingMode: elementInfo.vertical ? 'vertical-rl' : 'horizontal-tb',

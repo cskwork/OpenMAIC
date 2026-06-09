@@ -43,7 +43,9 @@ export function HighlightOverlay({ element, options }: HighlightOverlayProps) {
           borderRadius: '4px',
           border: `${borderWidth}px solid ${color}`,
           boxShadow: `0 0 ${borderWidth * 3}px ${color}, inset 0 0 ${borderWidth * 2}px rgba(255,255,255,${opacity * 0.5})`,
-          backgroundColor: `${color}${Math.round(opacity * 255).toString(16).padStart(2, '0')}`,
+          backgroundColor: `${color}${Math.round(opacity * 255)
+            .toString(16)
+            .padStart(2, '0')}`,
         }}
       />
       {animated && (

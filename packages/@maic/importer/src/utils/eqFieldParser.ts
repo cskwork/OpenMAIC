@@ -70,15 +70,24 @@ function parseCommand(code: string, pos: number): ParseResult {
   const cmd = code.substring(cmdStart, pos);
 
   switch (cmd) {
-    case 'f': return parseFraction(code, pos);
-    case 'o': return parseOverlay(code, pos);
-    case 'b': return parseBracket(code, pos);
-    case 'a': return parseArray(code, pos);
-    case 's': return parseShift(code, pos);
-    case 'r': return parseRadical(code, pos);
-    case 'i': return parseIntegral(code, pos);
-    case 'lc': return parseLcRcModifier(code, pos, 'lc');
-    case 'rc': return parseLcRcModifier(code, pos, 'rc');
+    case 'f':
+      return parseFraction(code, pos);
+    case 'o':
+      return parseOverlay(code, pos);
+    case 'b':
+      return parseBracket(code, pos);
+    case 'a':
+      return parseArray(code, pos);
+    case 's':
+      return parseShift(code, pos);
+    case 'r':
+      return parseRadical(code, pos);
+    case 'i':
+      return parseIntegral(code, pos);
+    case 'lc':
+      return parseLcRcModifier(code, pos, 'lc');
+    case 'rc':
+      return parseLcRcModifier(code, pos, 'rc');
     default:
       return { latex: '\\' + cmd, endPos: pos };
   }
@@ -143,7 +152,10 @@ function parseBracket(code: string, pos: number): ParseResult {
   };
 }
 
-function parseBracketModifier(code: string, pos: number): { type: string; char: string; endPos: number } {
+function parseBracketModifier(
+  code: string,
+  pos: number,
+): { type: string; char: string; endPos: number } {
   if (code.substring(pos, pos + 3) === '\\lc') {
     pos += 3;
     const ch = readBracketChar(code, pos);
@@ -381,7 +393,10 @@ export function parseDocxMathContent(xmlString: string): DocxMathContent {
   }
 
   return {
-    latex: latexParts.join('').replace(/\\text\{}\s*/g, '').trim(),
+    latex: latexParts
+      .join('')
+      .replace(/\\text\{}\s*/g, '')
+      .trim(),
     plainText: textParts.join('').trim(),
   };
 }
@@ -441,7 +456,10 @@ function eqFieldToPlainText(instrText: string): string {
   try {
     return eqToPlain(code, 0).text;
   } catch {
-    return code.replace(/\\[a-zA-Z]+\d*/g, '').replace(/\s+/g, ' ').trim();
+    return code
+      .replace(/\\[a-zA-Z]+\d*/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 }
 
@@ -460,46 +478,62 @@ function eqToPlain(code: string, pos: number): { text: string; endPos: number } 
         if (args) {
           parts.push(`${plainArg(args.items[0])}/${plainArg(args.items[1])}`);
           pos = args.endPos;
-        } else { pos = p; }
+        } else {
+          pos = p;
+        }
       } else if (cmd === 'o') {
         const args = readParenArgs(code, p);
         if (args) {
           parts.push(plainArg(args.items[0]) + '→');
           pos = args.endPos;
-        } else { pos = p; }
+        } else {
+          pos = p;
+        }
       } else if (cmd === 'b') {
         while (p < code.length && code[p] === '\\') {
           const mod = code.substring(p).match(/^\\[a-zA-Z]+\\?./);
-          if (mod) p += mod[0].length; else break;
+          if (mod) p += mod[0].length;
+          else break;
         }
         const args = readParenArgs(code, p);
         if (args) {
           parts.push('(' + args.items.map(plainArg).join(', ') + ')');
           pos = args.endPos;
-        } else { pos = p; }
+        } else {
+          pos = p;
+        }
       } else if (cmd === 'a') {
         while (p < code.length && code[p] === '\\') {
           const mod = code.substring(p).match(/^\\[a-zA-Z]+\d*/);
-          if (mod) p += mod[0].length; else break;
+          if (mod) p += mod[0].length;
+          else break;
         }
         const args = readParenArgs(code, p);
         if (args) {
           parts.push(args.items.map(plainArg).join(', '));
           pos = args.endPos;
-        } else { pos = p; }
+        } else {
+          pos = p;
+        }
       } else if (cmd === 's') {
         // skip \up N or \do N
         if (code.substring(p, p + 3) === '\\up' || code.substring(p, p + 3) === '\\do') p += 3;
         while (p < code.length && /\d/.test(code[p])) p++;
         const args = readParenArgs(code, p);
-        if (args) { parts.push(plainArg(args.items[0])); pos = args.endPos; }
-        else { pos = p; }
+        if (args) {
+          parts.push(plainArg(args.items[0]));
+          pos = args.endPos;
+        } else {
+          pos = p;
+        }
       } else if (cmd === 'r') {
         const args = readParenArgs(code, p);
         if (args) {
           parts.push('√(' + args.items.map(plainArg).join(',') + ')');
           pos = args.endPos;
-        } else { pos = p; }
+        } else {
+          pos = p;
+        }
       } else {
         // Unknown command — skip
         pos = p;
@@ -516,7 +550,11 @@ function plainArg(s: string | undefined): string {
   if (!s) return '';
   const t = s.trim();
   if (t.includes('\\')) {
-    try { return eqToPlain(t, 0).text; } catch { /* fall through */ }
+    try {
+      return eqToPlain(t, 0).text;
+    } catch {
+      /* fall through */
+    }
   }
   return t;
 }

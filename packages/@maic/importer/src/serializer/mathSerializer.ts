@@ -44,20 +44,56 @@ function pxToPt(px: number): number {
 // --- Greek LaTeX command tables (used in stage 2) ---
 
 const GREEK_LOWER_LATEX: Record<number, string> = {
-  0x03B1: '\\alpha', 0x03B2: '\\beta', 0x03B3: '\\gamma', 0x03B4: '\\delta',
-  0x03B5: '\\epsilon', 0x03B6: '\\zeta', 0x03B7: '\\eta', 0x03B8: '\\theta',
-  0x03B9: '\\iota', 0x03BA: '\\kappa', 0x03BB: '\\lambda', 0x03BC: '\\mu',
-  0x03BD: '\\nu', 0x03BE: '\\xi', 0x03C0: '\\pi', 0x03C1: '\\rho',
-  0x03C2: '\\varsigma', 0x03C3: '\\sigma', 0x03C4: '\\tau', 0x03C5: '\\upsilon',
-  0x03C6: '\\varphi', 0x03C7: '\\chi', 0x03C8: '\\psi', 0x03C9: '\\omega',
+  0x03b1: '\\alpha',
+  0x03b2: '\\beta',
+  0x03b3: '\\gamma',
+  0x03b4: '\\delta',
+  0x03b5: '\\epsilon',
+  0x03b6: '\\zeta',
+  0x03b7: '\\eta',
+  0x03b8: '\\theta',
+  0x03b9: '\\iota',
+  0x03ba: '\\kappa',
+  0x03bb: '\\lambda',
+  0x03bc: '\\mu',
+  0x03bd: '\\nu',
+  0x03be: '\\xi',
+  0x03c0: '\\pi',
+  0x03c1: '\\rho',
+  0x03c2: '\\varsigma',
+  0x03c3: '\\sigma',
+  0x03c4: '\\tau',
+  0x03c5: '\\upsilon',
+  0x03c6: '\\varphi',
+  0x03c7: '\\chi',
+  0x03c8: '\\psi',
+  0x03c9: '\\omega',
 };
 const GREEK_UPPER_LATEX: Record<number, string> = {
-  0x0391: 'A', 0x0392: 'B', 0x0393: '\\Gamma', 0x0394: '\\Delta',
-  0x0395: 'E', 0x0396: 'Z', 0x0397: 'H', 0x0398: '\\Theta',
-  0x0399: 'I', 0x039A: 'K', 0x039B: '\\Lambda', 0x039C: 'M',
-  0x039D: 'N', 0x039E: '\\Xi', 0x039F: 'O', 0x03A0: '\\Pi',
-  0x03A1: 'P', 0x03A3: '\\Sigma', 0x03A4: 'T', 0x03A5: '\\Upsilon',
-  0x03A6: '\\Phi', 0x03A7: 'X', 0x03A8: '\\Psi', 0x03A9: '\\Omega',
+  0x0391: 'A',
+  0x0392: 'B',
+  0x0393: '\\Gamma',
+  0x0394: '\\Delta',
+  0x0395: 'E',
+  0x0396: 'Z',
+  0x0397: 'H',
+  0x0398: '\\Theta',
+  0x0399: 'I',
+  0x039a: 'K',
+  0x039b: '\\Lambda',
+  0x039c: 'M',
+  0x039d: 'N',
+  0x039e: '\\Xi',
+  0x039f: 'O',
+  0x03a0: '\\Pi',
+  0x03a1: 'P',
+  0x03a3: '\\Sigma',
+  0x03a4: 'T',
+  0x03a5: '\\Upsilon',
+  0x03a6: '\\Phi',
+  0x03a7: 'X',
+  0x03a8: '\\Psi',
+  0x03a9: '\\Omega',
 };
 
 // ---------------------------------------------------------------------------
@@ -69,39 +105,39 @@ const GREEK_UPPER_LATEX: Record<number, string> = {
 
 function normalizeMathCharToUnicode(cp: number): string | undefined {
   // Mathematical Bold A-Z / a-z
-  if (cp >= 0x1D400 && cp <= 0x1D419) return String.fromCharCode(cp - 0x1D400 + 0x41);
-  if (cp >= 0x1D41A && cp <= 0x1D433) return String.fromCharCode(cp - 0x1D41A + 0x61);
+  if (cp >= 0x1d400 && cp <= 0x1d419) return String.fromCharCode(cp - 0x1d400 + 0x41);
+  if (cp >= 0x1d41a && cp <= 0x1d433) return String.fromCharCode(cp - 0x1d41a + 0x61);
   // Mathematical Italic A-Z / a-z (h = U+210E is a gap)
-  if (cp >= 0x1D434 && cp <= 0x1D44D) return String.fromCharCode(cp - 0x1D434 + 0x41);
-  if (cp === 0x210E) return 'h';
-  if (cp >= 0x1D44E && cp <= 0x1D467) return String.fromCharCode(cp - 0x1D44E + 0x61);
+  if (cp >= 0x1d434 && cp <= 0x1d44d) return String.fromCharCode(cp - 0x1d434 + 0x41);
+  if (cp === 0x210e) return 'h';
+  if (cp >= 0x1d44e && cp <= 0x1d467) return String.fromCharCode(cp - 0x1d44e + 0x61);
   // Mathematical Bold Italic A-Z / a-z
-  if (cp >= 0x1D468 && cp <= 0x1D481) return String.fromCharCode(cp - 0x1D468 + 0x41);
-  if (cp >= 0x1D482 && cp <= 0x1D49B) return String.fromCharCode(cp - 0x1D482 + 0x61);
+  if (cp >= 0x1d468 && cp <= 0x1d481) return String.fromCharCode(cp - 0x1d468 + 0x41);
+  if (cp >= 0x1d482 && cp <= 0x1d49b) return String.fromCharCode(cp - 0x1d482 + 0x61);
   // Mathematical Sans-Serif / Bold Sans-Serif / Monospace (0x1D5A0–0x1D6A3)
-  if (cp >= 0x1D5A0 && cp <= 0x1D5B9) return String.fromCharCode(cp - 0x1D5A0 + 0x41);
-  if (cp >= 0x1D5BA && cp <= 0x1D5D3) return String.fromCharCode(cp - 0x1D5BA + 0x61);
-  if (cp >= 0x1D5D4 && cp <= 0x1D5ED) return String.fromCharCode(cp - 0x1D5D4 + 0x41);
-  if (cp >= 0x1D5EE && cp <= 0x1D607) return String.fromCharCode(cp - 0x1D5EE + 0x61);
-  if (cp >= 0x1D670 && cp <= 0x1D689) return String.fromCharCode(cp - 0x1D670 + 0x41);
-  if (cp >= 0x1D68A && cp <= 0x1D6A3) return String.fromCharCode(cp - 0x1D68A + 0x61);
+  if (cp >= 0x1d5a0 && cp <= 0x1d5b9) return String.fromCharCode(cp - 0x1d5a0 + 0x41);
+  if (cp >= 0x1d5ba && cp <= 0x1d5d3) return String.fromCharCode(cp - 0x1d5ba + 0x61);
+  if (cp >= 0x1d5d4 && cp <= 0x1d5ed) return String.fromCharCode(cp - 0x1d5d4 + 0x41);
+  if (cp >= 0x1d5ee && cp <= 0x1d607) return String.fromCharCode(cp - 0x1d5ee + 0x61);
+  if (cp >= 0x1d670 && cp <= 0x1d689) return String.fromCharCode(cp - 0x1d670 + 0x41);
+  if (cp >= 0x1d68a && cp <= 0x1d6a3) return String.fromCharCode(cp - 0x1d68a + 0x61);
 
   // Mathematical Bold / Italic / Bold-Italic Greek → basic Greek Unicode
   // Bold Greek Capitals (Α-Ω): U+1D6A8–U+1D6C0 → U+0391+
-  if (cp >= 0x1D6A8 && cp <= 0x1D6C0) return String.fromCodePoint(cp - 0x1D6A8 + 0x0391);
+  if (cp >= 0x1d6a8 && cp <= 0x1d6c0) return String.fromCodePoint(cp - 0x1d6a8 + 0x0391);
   // Bold Greek Small (α-ω): U+1D6C2–U+1D6DA → U+03B1+
-  if (cp >= 0x1D6C2 && cp <= 0x1D6DA) return String.fromCodePoint(cp - 0x1D6C2 + 0x03B1);
+  if (cp >= 0x1d6c2 && cp <= 0x1d6da) return String.fromCodePoint(cp - 0x1d6c2 + 0x03b1);
   // Italic Greek Capitals: U+1D6E2–U+1D6FA → U+0391+
-  if (cp >= 0x1D6E2 && cp <= 0x1D6FA) return String.fromCodePoint(cp - 0x1D6E2 + 0x0391);
+  if (cp >= 0x1d6e2 && cp <= 0x1d6fa) return String.fromCodePoint(cp - 0x1d6e2 + 0x0391);
   // Italic Greek Small: U+1D6FC–U+1D714 → U+03B1+
-  if (cp >= 0x1D6FC && cp <= 0x1D714) return String.fromCodePoint(cp - 0x1D6FC + 0x03B1);
+  if (cp >= 0x1d6fc && cp <= 0x1d714) return String.fromCodePoint(cp - 0x1d6fc + 0x03b1);
   // Bold Italic Greek Capitals: U+1D71C–U+1D734 → U+0391+
-  if (cp >= 0x1D71C && cp <= 0x1D734) return String.fromCodePoint(cp - 0x1D71C + 0x0391);
+  if (cp >= 0x1d71c && cp <= 0x1d734) return String.fromCodePoint(cp - 0x1d71c + 0x0391);
   // Bold Italic Greek Small: U+1D736–U+1D74E → U+03B1+
-  if (cp >= 0x1D736 && cp <= 0x1D74E) return String.fromCodePoint(cp - 0x1D736 + 0x03B1);
+  if (cp >= 0x1d736 && cp <= 0x1d74e) return String.fromCodePoint(cp - 0x1d736 + 0x03b1);
 
   // Mathematical Bold Digits 0-9: U+1D7CE–U+1D7D7
-  if (cp >= 0x1D7CE && cp <= 0x1D7D7) return String.fromCharCode(cp - 0x1D7CE + 0x30);
+  if (cp >= 0x1d7ce && cp <= 0x1d7d7) return String.fromCharCode(cp - 0x1d7ce + 0x30);
 
   // --- Math Greek "extra" symbols that sit right after each style's letter run ---
   // Each of the 4 styled Greek blocks (Bold/Italic/BoldItalic/SansBold) appends
@@ -109,11 +145,11 @@ function normalizeMathCharToUnicode(cp: number): string | undefined {
   // (ϵ ϑ ϰ ϕ ϱ ϖ). These are OUTSIDE the α–ω ranges above, so without this they
   // leak into the LaTeX as lone surrogates and KaTeX rejects them — breaks every
   // ∂L/∂w gradient formula (反向传播页全中招).
-  if (cp === 0x1D6C1 || cp === 0x1D6FB || cp === 0x1D735 || cp === 0x1D76F) return '\u2207'; // ∇
-  if (cp === 0x1D6DB || cp === 0x1D715 || cp === 0x1D74F || cp === 0x1D789) return '\u2202'; // ∂
+  if (cp === 0x1d6c1 || cp === 0x1d6fb || cp === 0x1d735 || cp === 0x1d76f) return '\u2207'; // ∇
+  if (cp === 0x1d6db || cp === 0x1d715 || cp === 0x1d74f || cp === 0x1d789) return '\u2202'; // ∂
   // ϵ ϑ ϰ ϕ ϱ ϖ (variant Greek) → BMP equivalents
-  const VARIANT_GREEK = [0x03F5, 0x03D1, 0x03F0, 0x03D5, 0x03F1, 0x03D6];
-  for (const start of [0x1D6DC, 0x1D716, 0x1D750, 0x1D78A]) {
+  const VARIANT_GREEK = [0x03f5, 0x03d1, 0x03f0, 0x03d5, 0x03f1, 0x03d6];
+  for (const start of [0x1d6dc, 0x1d716, 0x1d750, 0x1d78a]) {
     if (cp >= start && cp <= start + 5) return String.fromCodePoint(VARIANT_GREEK[cp - start]);
   }
 
@@ -127,10 +163,12 @@ function normalizeMathCharToUnicode(cp: number): string | undefined {
  * Only produces single Unicode characters — never multi-char LaTeX commands.
  */
 function normalizeOmmlXml(xml: string): string {
-  return Array.from(xml).map(ch => {
-    const cp = ch.codePointAt(0)!;
-    return normalizeMathCharToUnicode(cp) ?? ch;
-  }).join('');
+  return Array.from(xml)
+    .map((ch) => {
+      const cp = ch.codePointAt(0)!;
+      return normalizeMathCharToUnicode(cp) ?? ch;
+    })
+    .join('');
 }
 
 // ---------------------------------------------------------------------------
@@ -160,7 +198,10 @@ function postProcessLatex(latex: string): string {
     // Invisible operators — remove
     if (cp === 0x2061 || cp === 0x2062 || cp === 0x2063 || cp === 0x2064) continue;
     // Non-breaking space → LaTeX thin space
-    if (cp === 0x00A0) { out.push('\\,'); continue; }
+    if (cp === 0x00a0) {
+      out.push('\\,');
+      continue;
+    }
 
     // Basic Greek → LaTeX commands
     const greekLower = GREEK_LOWER_LATEX[cp];
@@ -184,26 +225,56 @@ function postProcessLatex(latex: string): string {
 
     // Mathematical variant Latin/digits that survived (shouldn't happen often)
     const mapped = normalizeMathCharToUnicode(cp);
-    if (mapped !== undefined) { out.push(mapped); continue; }
+    if (mapped !== undefined) {
+      out.push(mapped);
+      continue;
+    }
 
     // Common math Unicode → LaTeX
-    if (cp === 0x2212) { out.push('-'); continue; }       // minus sign
-    if (cp === 0x00B1) { out.push('\\pm '); continue; }   // ±
-    if (cp === 0x2213) { out.push('\\mp '); continue; }    // ∓
-    if (cp === 0x00D7) { out.push('\\times '); continue; } // ×
-    if (cp === 0x2026) { out.push('\\ldots '); continue; } // …
-    if (cp === 0x221E) { out.push('\\infty '); continue; } // ∞
-    if (cp === 0x2202) { out.push('\\partial '); continue; } // ∂
-    if (cp === 0x2207) { out.push('\\nabla '); continue; }   // ∇
+    if (cp === 0x2212) {
+      out.push('-');
+      continue;
+    } // minus sign
+    if (cp === 0x00b1) {
+      out.push('\\pm ');
+      continue;
+    } // ±
+    if (cp === 0x2213) {
+      out.push('\\mp ');
+      continue;
+    } // ∓
+    if (cp === 0x00d7) {
+      out.push('\\times ');
+      continue;
+    } // ×
+    if (cp === 0x2026) {
+      out.push('\\ldots ');
+      continue;
+    } // …
+    if (cp === 0x221e) {
+      out.push('\\infty ');
+      continue;
+    } // ∞
+    if (cp === 0x2202) {
+      out.push('\\partial ');
+      continue;
+    } // ∂
+    if (cp === 0x2207) {
+      out.push('\\nabla ');
+      continue;
+    } // ∇
 
     // Catch-all: any Mathematical Alphanumeric Symbol that slipped through
     // (script/fraktur/double-struck etc. we don't special-case) → its base
     // ASCII letter/digit, so KaTeX never receives a lone surrogate.
     const mathAlnum = normalizeMathCharToUnicode(cp);
-    if (mathAlnum !== undefined) { out.push(mathAlnum); continue; }
-    if (cp >= 0x1D400 && cp <= 0x1D7FF) {
+    if (mathAlnum !== undefined) {
+      out.push(mathAlnum);
+      continue;
+    }
+    if (cp >= 0x1d400 && cp <= 0x1d7ff) {
       // Unhandled math-alnum (e.g. script/fraktur): fold to base by block math.
-      const base = ((cp - 0x1D400) % 52);
+      const base = (cp - 0x1d400) % 52;
       out.push(String.fromCharCode(base < 26 ? 0x41 + base : 0x61 + (base - 26)));
       continue;
     }
@@ -270,9 +341,7 @@ export async function prefetchTexmath(ommlList: string[]): Promise<void> {
       }
     }
   };
-  await Promise.all(
-    Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker),
-  );
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
 }
 
 /**
@@ -324,10 +393,7 @@ async function resolveFallbackImage(
  * Resolve an embedded .docx package from the slide's rels + presentation embeddings.
  * Returns the word/document.xml content string, or null.
  */
-async function resolveOleDocxContent(
-  rId: string,
-  ctx: RenderContext,
-): Promise<string | null> {
+async function resolveOleDocxContent(rId: string, ctx: RenderContext): Promise<string | null> {
   const rel = ctx.slide.rels.get(rId);
   if (!rel) return null;
 
@@ -381,7 +447,10 @@ export async function mathToElement(
         : node.ommlXml
           ? [node.ommlXml]
           : [];
-    const lines = xmls.map(ommlToLatex).map((s) => s.trim()).filter(Boolean);
+    const lines = xmls
+      .map(ommlToLatex)
+      .map((s) => s.trim())
+      .filter(Boolean);
     if (lines.length === 1) {
       latex = lines[0];
     } else if (lines.length > 1) {
@@ -394,9 +463,7 @@ export async function mathToElement(
   // OMML→LaTeX drops drawingML run color; when the whole formula is one color
   // (e.g. 蓝色权重), resolve it here so the renderer can apply it.
   const color =
-    node.colorNode && node.colorNode.exists()
-      ? resolveColorToCss(node.colorNode, ctx)
-      : undefined;
+    node.colorNode && node.colorNode.exists() ? resolveColorToCss(node.colorNode, ctx) : undefined;
 
   return {
     type: 'math',

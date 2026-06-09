@@ -145,11 +145,7 @@ export async function slideToPng(
         fontSpecs.add(`${cs.fontStyle} ${cs.fontWeight} 16px ${cs.fontFamily}`);
       });
       await Promise.race([
-        Promise.all(
-          [...fontSpecs].map((spec) =>
-            document.fonts.load(spec).catch(() => undefined),
-          ),
-        ),
+        Promise.all([...fontSpecs].map((spec) => document.fonts.load(spec).catch(() => undefined))),
         new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
       ]);
     }
@@ -176,9 +172,7 @@ export async function slideToPng(
     // (or current decoded frame) BEFORE the snapshot so html2canvas captures
     // the same preview frame the canvas shows.
     await Promise.all(
-      Array.from(container.querySelectorAll('video')).map((video) =>
-        replaceVideoWithFrame(video),
-      ),
+      Array.from(container.querySelectorAll('video')).map((video) => replaceVideoWithFrame(video)),
     );
 
     // html2canvas-pro doesn't implement CSS `filter` functions (brightness /
@@ -189,17 +183,15 @@ export async function slideToPng(
     // pixels with a Canvas2D pass (ctx.filter, which Chrome does support)
     // BEFORE the snapshot so html2canvas captures the corrected bitmap.
     await Promise.all(
-      Array.from(container.querySelectorAll('img')).map((img) =>
-        bakeImageFilter(img),
-      ),
+      Array.from(container.querySelectorAll('img')).map((img) => bakeImageFilter(img)),
     );
 
     // html2canvas-pro also ignores CSS masks, so the soft-edge feather
     // (a:softEdge) set by BaseImageElement vanishes from the PNG. Bake the same
     // feather (two destination-in alpha gradients) into the pixels.
     await Promise.all(
-      Array.from(container.querySelectorAll<HTMLImageElement>('img[data-soft-edge]')).map(
-        (img) => bakeImageSoftEdge(img),
+      Array.from(container.querySelectorAll<HTMLImageElement>('img[data-soft-edge]')).map((img) =>
+        bakeImageSoftEdge(img),
       ),
     );
 
@@ -215,8 +207,7 @@ export async function slideToPng(
     // Target the inner SlideCanvas root so html2canvas-pro's bounding-box
     // calculation matches the slide exactly (otherwise the outer container's
     // padding/margin assumptions can leave white edges).
-    const target =
-      (container.firstElementChild as HTMLElement | null) ?? container;
+    const target = (container.firstElementChild as HTMLElement | null) ?? container;
 
     const canvas = await html2canvas(target, {
       backgroundColor,

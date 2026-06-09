@@ -122,8 +122,7 @@ export function SlideCanvas(props: SlideCanvasProps) {
           position: 'absolute',
           ...(chrome
             ? {
-                boxShadow:
-                  '0 0 0 1px rgba(0, 0, 0, 0.01), 0 0 12px 0 rgba(0, 0, 0, 0.1)',
+                boxShadow: '0 0 0 1px rgba(0, 0, 0, 0.01), 0 0 12px 0 rgba(0, 0, 0, 0.1)',
                 borderRadius: '0.5rem',
               }
             : {}),

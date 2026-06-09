@@ -77,10 +77,7 @@ export function StaticTable({ elementInfo }: StaticTableProps) {
       </colgroup>
       <tbody>
         {data.map((row, rowIdx) => (
-          <tr
-            key={rowIdx}
-            style={{ height: `${rowHeights?.[rowIdx] ?? cellMinHeight}px` }}
-          >
+          <tr key={rowIdx} style={{ height: `${rowHeights?.[rowIdx] ?? cellMinHeight}px` }}>
             {row.map((cell, colIdx) => {
               // parser side (transformParsedToSlides) 已经把 hMerge/vMerge
               // continuation 单元格剔除了，data[r] 只剩 top-left cells；浏览器
@@ -101,10 +98,7 @@ export function StaticTable({ elementInfo }: StaticTableProps) {
               const cellBorders = cell.borders;
               const borderCss: CSSProperties =
                 cellBorders &&
-                (cellBorders.top ||
-                  cellBorders.bottom ||
-                  cellBorders.left ||
-                  cellBorders.right)
+                (cellBorders.top || cellBorders.bottom || cellBorders.left || cellBorders.right)
                   ? {
                       borderTop: cellBorderCss(cellBorders.top) ?? 'none',
                       borderBottom: cellBorderCss(cellBorders.bottom) ?? 'none',

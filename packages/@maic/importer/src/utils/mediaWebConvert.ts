@@ -36,8 +36,10 @@ function arrayBufferToBase64(data: Uint8Array): string {
     binary += String.fromCharCode(data[i]);
   }
   if (typeof btoa !== 'undefined') return btoa(binary);
-  const NodeBuffer = (typeof globalThis !== 'undefined' &&
-    (globalThis as unknown as { Buffer?: { from(a: Uint8Array): { toString(e: string): string } } }).Buffer);
+  const NodeBuffer =
+    typeof globalThis !== 'undefined' &&
+    (globalThis as unknown as { Buffer?: { from(a: Uint8Array): { toString(e: string): string } } })
+      .Buffer;
   if (NodeBuffer) return NodeBuffer.from(data).toString('base64');
   return btoa(binary);
 }
@@ -49,7 +51,9 @@ function extOf(path: string): string {
 /**
  * Decode TIFF/TIF bytes to RGBA using UTIF.
  */
-function tiffToRgba(data: Uint8Array): { width: number; height: number; data: Uint8ClampedArray } | null {
+function tiffToRgba(
+  data: Uint8Array,
+): { width: number; height: number; data: Uint8ClampedArray } | null {
   try {
     const ifds = UTIF.decode(data) as UtifPage[];
     if (!ifds.length) return null;
@@ -137,7 +141,10 @@ async function emfPdfToPngDataUrl(pdfData: Uint8Array, targetWidth = 1024): Prom
  * (pdfjs-dist) require async initialization; all other formats
  * resolve immediately.
  */
-export async function encodeMediaForWebDisplay(mediaPath: string, data: Uint8Array): Promise<string> {
+export async function encodeMediaForWebDisplay(
+  mediaPath: string,
+  data: Uint8Array,
+): Promise<string> {
   const ext = extOf(mediaPath);
 
   if (ext === 'tif' || ext === 'tiff') {

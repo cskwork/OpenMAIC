@@ -235,10 +235,7 @@ function getEffectiveTableStyleTextProps(
 // Returns color string instead of mutating DOM.
 // ---------------------------------------------------------------------------
 
-function applyStyleFill(
-  tcStyle: SafeXmlNode,
-  ctx: RenderContext,
-): string | undefined {
+function applyStyleFill(tcStyle: SafeXmlNode, ctx: RenderContext): string | undefined {
   const fill = tcStyle.child('fill');
   if (!fill.exists()) return undefined;
 
@@ -265,10 +262,7 @@ function applyStyleFill(
 // Border resolution from ln / lnRef
 // ---------------------------------------------------------------------------
 
-function resolveBorderFromLn(
-  ln: SafeXmlNode,
-  ctx: RenderContext,
-): Border | undefined {
+function resolveBorderFromLn(ln: SafeXmlNode, ctx: RenderContext): Border | undefined {
   if (!ln.exists()) return undefined;
 
   const noFill = ln.child('noFill');
@@ -284,10 +278,7 @@ function resolveBorderFromLn(
   };
 }
 
-function resolveBorderFromLnRef(
-  lnRef: SafeXmlNode,
-  ctx: RenderContext,
-): Border | undefined {
+function resolveBorderFromLnRef(lnRef: SafeXmlNode, ctx: RenderContext): Border | undefined {
   if (!lnRef.exists()) return undefined;
   const idx = lnRef.numAttr('idx') ?? 0;
   if (idx === 0) return undefined;
@@ -398,10 +389,7 @@ interface CellDirectProps {
   borders: Partial<Record<BorderSide, Border | null>>;
 }
 
-function applyCellProperties(
-  tcPr: SafeXmlNode,
-  ctx: RenderContext,
-): CellDirectProps {
+function applyCellProperties(tcPr: SafeXmlNode, ctx: RenderContext): CellDirectProps {
   const result: CellDirectProps = { borders: {} };
 
   // Vertical text alignment. OOXML spec: `t` (top, default), `ctr` (middle),
@@ -451,10 +439,7 @@ function applyCellProperties(
 // Returns color string instead of mutating DOM.
 // ---------------------------------------------------------------------------
 
-function applyTableBackground(
-  tblStyle: SafeXmlNode,
-  ctx: RenderContext,
-): string | undefined {
+function applyTableBackground(tblStyle: SafeXmlNode, ctx: RenderContext): string | undefined {
   const tblBg = tblStyle.child('tblBg');
   if (!tblBg.exists()) return undefined;
 
@@ -471,10 +456,7 @@ function applyTableBackground(
 // Table-level borders — mirrors table.js getTableBorders (line 5)
 // ---------------------------------------------------------------------------
 
-function getTableBorders(
-  tblStyle: SafeXmlNode,
-  ctx: RenderContext,
-): Table['borders'] {
+function getTableBorders(tblStyle: SafeXmlNode, ctx: RenderContext): Table['borders'] {
   const borders: Table['borders'] = {};
   const tcBdr = tblStyle.child('wholeTbl').child('tcStyle').child('tcBdr');
   if (!tcBdr.exists()) return borders;
@@ -505,11 +487,7 @@ function getTableBorders(
 // Main serializer
 // ---------------------------------------------------------------------------
 
-export function tableToElement(
-  node: TableNodeData,
-  ctx: RenderContext,
-  _order: number,
-): Table {
+export function tableToElement(node: TableNodeData, ctx: RenderContext, _order: number): Table {
   const order = node.xmlOrder;
   const left = pxToPt(node.position.x);
   const top = pxToPt(node.position.y);
@@ -545,16 +523,15 @@ export function tableToElement(
       for (const section of sections) {
         const tcStyle = section.child('tcStyle');
         if (!tcStyle.exists()) continue;
-        const styleBorders = applyStyleBorders(
-          tcStyle, ctx, rowIdx, colIdx, totalRows, totalCols,
-        );
+        const styleBorders = applyStyleBorders(tcStyle, ctx, rowIdx, colIdx, totalRows, totalCols);
         for (const side of ['top', 'bottom', 'left', 'right'] as const) {
           if (styleBorders[side]) mergedBorders[side] = styleBorders[side];
         }
       }
 
       // Text props from tcTxStyle
-      const textProps = sections.length > 0 ? getEffectiveTableStyleTextProps(sections, ctx) : undefined;
+      const textProps =
+        sections.length > 0 ? getEffectiveTableStyleTextProps(sections, ctx) : undefined;
 
       // Cell padding comes from tcPr marL/marR/marT/marB. OOXML defaults are
       // 91440 EMU (L/R) and 45720 EMU (T/B), which happens to match the shape

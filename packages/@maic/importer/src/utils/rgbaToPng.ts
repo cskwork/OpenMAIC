@@ -11,7 +11,10 @@ export function rgbaToPngDataUrl(
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext('2d')!;
-  const src = rgba instanceof Uint8ClampedArray ? rgba : new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength);
+  const src =
+    rgba instanceof Uint8ClampedArray
+      ? rgba
+      : new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength);
   const copy = new Uint8ClampedArray(src.length);
   copy.set(src);
   const imageData = new ImageData(copy, width, height);

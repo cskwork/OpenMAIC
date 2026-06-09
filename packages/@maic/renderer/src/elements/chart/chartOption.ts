@@ -41,8 +41,7 @@ export const getChartOption = ({
     return null;
   }
 
-  const legend =
-    data.series.length > 1 ? { top: 'bottom' as const, textStyle } : undefined;
+  const legend = data.series.length > 1 ? { top: 'bottom' as const, textStyle } : undefined;
 
   if (type === 'bar') {
     return {

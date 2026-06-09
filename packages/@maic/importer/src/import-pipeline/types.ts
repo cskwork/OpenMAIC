@@ -1,5 +1,5 @@
-import type { Slide, SlideTheme } from "@maic/dsl";
-import type { ShapePoolItem } from "../openmaic/configs/shapes";
+import type { Slide, SlideTheme } from '@maic/dsl';
+import type { ShapePoolItem } from '../openmaic/configs/shapes';
 
 export interface ImportContext {
   ratio: number;

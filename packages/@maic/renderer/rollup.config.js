@@ -1,6 +1,6 @@
-import { nodeResolve } from '@rollup/plugin-node-resolve'
-import commonjs from '@rollup/plugin-commonjs'
-import typescript from '@rollup/plugin-typescript'
+import { nodeResolve } from '@rollup/plugin-node-resolve';
+import commonjs from '@rollup/plugin-commonjs';
+import typescript from '@rollup/plugin-typescript';
 
 const external = [
   /^@maic\/dsl($|\/)/,
@@ -16,13 +16,13 @@ const external = [
   /^clsx($|\/)/,
   /^html-to-image($|\/)/,
   /^html2canvas-pro($|\/)/,
-]
+];
 
 const onwarn = (warning) => {
-  if (warning.code === 'CIRCULAR_DEPENDENCY') return
-  if (warning.code === 'MODULE_LEVEL_DIRECTIVE') return
-  console.warn(`(!) ${warning.message}`)
-}
+  if (warning.code === 'CIRCULAR_DEPENDENCY') return;
+  if (warning.code === 'MODULE_LEVEL_DIRECTIVE') return;
+  console.warn(`(!) ${warning.message}`);
+};
 
 const plugins = [
   nodeResolve({ browser: true, preferBuiltins: false }),
@@ -33,14 +33,14 @@ const plugins = [
     declarationMap: false,
     rootDir: 'src',
   }),
-]
+];
 
 const entries = {
   index: 'src/index.ts',
   'elements/index': 'src/elements/index.ts',
   'types/index': 'src/types/index.ts',
   'snapshot/index': 'src/snapshot/index.ts',
-}
+};
 
 const buildBundle = (format) => ({
   input: entries,
@@ -55,6 +55,6 @@ const buildBundle = (format) => ({
     sourcemap: true,
   },
   plugins,
-})
+});
 
-export default [buildBundle('es'), buildBundle('cjs')]
+export default [buildBundle('es'), buildBundle('cjs')];

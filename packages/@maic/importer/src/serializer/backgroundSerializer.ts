@@ -25,7 +25,7 @@ function compositeOnWhiteToHex(r: number, g: number, b: number, a: number): stri
 
 /**
  * Resolve slide fill
- * 
+ *
  * Background priority: slide.background -> layout.background -> master.background.
  * The first found background is used.
  */
@@ -67,7 +67,11 @@ export async function resolveSlideFill(ctx: RenderContext): Promise<Fill> {
  * Render background from bgPr (background properties).
  * Contains direct fill definitions: solidFill, gradFill, blipFill, etc.
  */
-export async function renderBgPr(bgPr: SafeXmlNode, ctx: RenderContext, rels?: Map<string, RelEntry>): Promise<Fill> {
+export async function renderBgPr(
+  bgPr: SafeXmlNode,
+  ctx: RenderContext,
+  rels?: Map<string, RelEntry>,
+): Promise<Fill> {
   // solidFill
   const solidFill = bgPr.child('solidFill');
   if (solidFill.exists()) {
@@ -126,7 +130,12 @@ export async function renderBgPr(bgPr: SafeXmlNode, ctx: RenderContext, rels?: M
         const mediaPath = resolveMediaPath(rel.target);
         const data = ctx.presentation.media.get(mediaPath);
         if (data) {
-          const picBase64 = await resolveMediaToUrl(mediaPath, data, ctx.mediaMode, ctx.mediaUrlCache);
+          const picBase64 = await resolveMediaToUrl(
+            mediaPath,
+            data,
+            ctx.mediaMode,
+            ctx.mediaUrlCache,
+          );
           return {
             type: 'image',
             value: { picBase64, opacity: 1 },

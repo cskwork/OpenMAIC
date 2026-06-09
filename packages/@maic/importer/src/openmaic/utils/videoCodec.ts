@@ -19,9 +19,7 @@ export interface VideoCodecInfo {
   audioCodec?: string;
 }
 
-export async function parseVideoCodec(
-  _arrayBuffer: ArrayBuffer,
-): Promise<VideoCodecInfo | null> {
+export async function parseVideoCodec(_arrayBuffer: ArrayBuffer): Promise<VideoCodecInfo | null> {
   return null;
 }
 

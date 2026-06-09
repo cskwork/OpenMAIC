@@ -25,9 +25,21 @@ function pxToPt(px: number): number {
 }
 
 const OOXML_CHART_TYPES: string[] = [
-  'lineChart', 'line3DChart', 'barChart', 'bar3DChart', 'pieChart', 'pie3DChart',
-  'doughnutChart', 'areaChart', 'area3DChart', 'scatterChart', 'bubbleChart',
-  'radarChart', 'stockChart', 'surfaceChart', 'surface3DChart',
+  'lineChart',
+  'line3DChart',
+  'barChart',
+  'bar3DChart',
+  'pieChart',
+  'pie3DChart',
+  'doughnutChart',
+  'areaChart',
+  'area3DChart',
+  'scatterChart',
+  'bubbleChart',
+  'radarChart',
+  'stockChart',
+  'surfaceChart',
+  'surface3DChart',
 ];
 
 function mapToChartType(ooxmlName: string): ChartType {
@@ -141,7 +153,10 @@ function extractSeriesColors(
       const fill = dPt.child('spPr').child('solidFill');
       if (fill.exists()) {
         const hex = resolveColorHex(fill, ctx);
-        if (hex) { colors.push(hex); continue; }
+        if (hex) {
+          colors.push(hex);
+          continue;
+        }
       }
       colors.push(themeColors[colors.length % themeColors.length]);
     }
@@ -268,7 +283,10 @@ export function chartToElement(
       : [[], []];
     const result: ScatterChart = {
       type: 'chart',
-      left, top, width, height,
+      left,
+      top,
+      width,
+      height,
       data,
       colors,
       chartType,
@@ -277,13 +295,14 @@ export function chartToElement(
     return result;
   }
 
-  const data: ChartItem[] = chartTypeNode
-    ? extractCommonChartData(chartTypeNode)
-    : [];
+  const data: ChartItem[] = chartTypeNode ? extractCommonChartData(chartTypeNode) : [];
 
   const result: CommonChart = {
     type: 'chart',
-    left, top, width, height,
+    left,
+    top,
+    width,
+    height,
     data,
     colors,
     chartType: chartType as CommonChart['chartType'],

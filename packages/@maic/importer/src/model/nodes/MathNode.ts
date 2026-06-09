@@ -131,9 +131,7 @@ export function isMathAlternateContent(altContent: SafeXmlNode): boolean {
  * The actual docx parsing is deferred to the serializer (needs zip decompression);
  * here we just capture the rIds.
  */
-export function parseOleDocxMathNode(
-  graphicFrame: SafeXmlNode,
-): MathNodeData | undefined {
+export function parseOleDocxMathNode(graphicFrame: SafeXmlNode): MathNodeData | undefined {
   const base = parseBaseProps(graphicFrame);
 
   const graphicData = graphicFrame.child('graphic').child('graphicData');

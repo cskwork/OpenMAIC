@@ -105,7 +105,11 @@ export function getSvgPathRange(path: string | undefined | null): PathRange {
       }
       case 'A': {
         // rx ry x-axis-rotation large-arc-flag sweep-flag x y
-        readNum(); readNum(); readNum(); readNum(); readNum();
+        readNum();
+        readNum();
+        readNum();
+        readNum();
+        readNum();
         const x = readNum();
         const y = readNum();
         pushPoint(absolute ? x : cx + x, absolute ? y : cy + y);

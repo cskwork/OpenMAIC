@@ -1,7 +1,13 @@
 'use client';
 
 import { createContext, useContext, type CSSProperties, type ReactNode } from 'react';
-import type { PPTElement, PPTImageElement, PPTVideoElement, Slide, SlideBackground } from '@maic/dsl';
+import type {
+  PPTElement,
+  PPTImageElement,
+  PPTVideoElement,
+  Slide,
+  SlideBackground,
+} from '@maic/dsl';
 import type { SlideEffects } from './types/effects';
 
 export interface SlideContextValue {
