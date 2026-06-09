@@ -8,8 +8,14 @@
  */
 
 import { NextRequest } from 'next/server';
-import { generateTTS } from '@/lib/audio/tts-providers';
-import { resolveTTSApiKey, resolveTTSBaseUrl } from '@/lib/server/provider-config';
+import { generateTTS, TTSRateLimitError } from '@/lib/audio/tts-providers';
+import {
+  isServerConfiguredProvider,
+  isServerTTSProviderDisabled,
+  resolveTTSApiKey,
+  resolveTTSBaseUrl,
+  resolveTTSModel,
+} from '@/lib/server/provider-config';
 import type { TTSProviderId } from '@/lib/audio/types';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
@@ -55,12 +61,23 @@ export async function POST(req: NextRequest) {
       return apiError('INVALID_REQUEST', 400, 'browser-native-tts must be handled client-side');
     }
 
+    // Enforce server precedence: a force-disabled provider is off for everyone,
+    // regardless of any client key/selection (#665).
+    if (isServerTTSProviderDisabled(ttsProviderId)) {
+      return apiError('PROVIDER_DISABLED', 403, 'This TTS provider is disabled by the server');
+    }
+
     const voxcpmVoicePrompt =
       typeof ttsProviderOptions?.voicePrompt === 'string' ? ttsProviderOptions.voicePrompt : '';
+    const voxcpmRegisteredVoiceId =
+      typeof ttsProviderOptions?.registeredVoiceId === 'string'
+        ? ttsProviderOptions.registeredVoiceId
+        : '';
     if (
       ttsProviderId === VOXCPM_TTS_PROVIDER_ID &&
       ttsVoice === VOXCPM_AUTO_VOICE_ID &&
-      !voxcpmVoicePrompt.trim()
+      !voxcpmVoicePrompt.trim() &&
+      !voxcpmRegisteredVoiceId.trim()
     ) {
       return apiError(
         'VOXCPM_AUTO_VOICE_REQUIRES_CONTEXT',
@@ -69,7 +86,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const clientBaseUrl = ttsBaseUrl || undefined;
+    // Managed providers are admin-owned: ignore any client-sent key/baseUrl.
+    const managed = isServerConfiguredProvider('tts', ttsProviderId);
+    const clientBaseUrl = managed ? undefined : ttsBaseUrl || undefined;
     if (clientBaseUrl) {
       const ssrfError = await validateUrlForSSRF(clientBaseUrl);
       if (ssrfError) {
@@ -77,17 +96,13 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const apiKey = clientBaseUrl
-      ? ttsApiKey || ''
-      : resolveTTSApiKey(ttsProviderId, ttsApiKey || undefined);
-    const baseUrl = clientBaseUrl
-      ? clientBaseUrl
-      : resolveTTSBaseUrl(ttsProviderId, ttsBaseUrl || undefined);
+    const apiKey = resolveTTSApiKey(ttsProviderId, managed ? undefined : ttsApiKey || undefined);
+    const baseUrl = resolveTTSBaseUrl(ttsProviderId, clientBaseUrl);
 
-    // Build TTS config
+    // Build TTS config (managed providers may pin the model server-side)
     const config = {
       providerId: ttsProviderId as TTSProviderId,
-      modelId: ttsModelId,
+      modelId: resolveTTSModel(ttsProviderId, ttsModelId),
       voice: ttsVoice,
       speed: ttsSpeed ?? 1.0,
       apiKey,
@@ -96,7 +111,8 @@ export async function POST(req: NextRequest) {
     };
 
     log.info(
-      `Generating TTS: provider=${ttsProviderId}, model=${ttsModelId || 'default'}, voice=${ttsVoice}, audioId=${audioId}, textLen=${text.length}`,
+      `Generating TTS: provider=${ttsProviderId}, model=${config.modelId || 'default'}, voice=${ttsVoice}, ` +
+        `registeredVoiceId=${voxcpmRegisteredVoiceId || 'none'}, audioId=${audioId}, textLen=${text.length}`,
     );
 
     // Generate audio
@@ -111,6 +127,9 @@ export async function POST(req: NextRequest) {
       `TTS generation failed [provider=${ttsProviderId ?? 'unknown'}, voice=${ttsVoice ?? 'unknown'}, audioId=${audioId ?? 'unknown'}]:`,
       error,
     );
+    if (error instanceof TTSRateLimitError) {
+      return apiError('RATE_LIMITED', 429, error.message);
+    }
     return apiError(
       'GENERATION_FAILED',
       500,

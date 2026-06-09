@@ -128,6 +128,17 @@ export class TTSRateLimitError extends Error {
 }
 
 /**
+ * Map an upstream HTTP 429 to a typed {@link TTSRateLimitError} so the API route
+ * can surface it as 429 instead of a generic 500. Call right after an
+ * `!response.ok` check, before building the provider-specific error message.
+ */
+export function throwIfTtsRateLimited(provider: string, status: number): void {
+  if (status === 429) {
+    throw new TTSRateLimitError(provider, `${provider} TTS rate limit exceeded (HTTP 429)`);
+  }
+}
+
+/**
  * Generate speech using specified TTS provider
  */
 export async function generateTTS(
@@ -205,6 +216,7 @@ async function generateOpenAITTS(
   });
 
   if (!response.ok) {
+    throwIfTtsRateLimited('OpenAI', response.status);
     const error = await response.json().catch(() => ({ error: response.statusText }));
     throw new Error(`OpenAI TTS API error: ${error.error?.message || response.statusText}`);
   }
@@ -248,6 +260,7 @@ async function generateLemonadeTTS(
   });
 
   if (!response.ok) {
+    throwIfTtsRateLimited('Lemonade', response.status);
     throw new Error(`Lemonade TTS API error: ${await readTTSApiError(response)}`);
   }
 
@@ -284,7 +297,9 @@ async function generateVoxCPMTTS(
     (config.voice && config.voice !== 'default' && config.voice !== VOXCPM_AUTO_VOICE_ID
       ? config.voice
       : undefined);
-  if (config.voice === VOXCPM_AUTO_VOICE_ID && !voicePrompt) {
+  // A registered voice carries timbre by id, so no voice prompt is required.
+  const registeredVoiceId = options.registeredVoiceId?.trim() || undefined;
+  if (config.voice === VOXCPM_AUTO_VOICE_ID && !voicePrompt && !registeredVoiceId) {
     throw new Error('VoxCPM Auto Voice requires agent context');
   }
   const cfgValue = options.cfgValue ?? 2.0;
@@ -295,6 +310,8 @@ async function generateVoxCPMTTS(
 
   const request = {
     targetText: usePromptContinuation ? text : buildVoxCPMTargetText(text, voicePrompt),
+    rawText: text,
+    registeredVoiceId,
     voicePrompt,
     promptText: options.promptText,
     cfgValue,
@@ -314,6 +331,7 @@ async function generateVoxCPMTTS(
         : await postVoxCPMVLLMOmni(baseUrl, request, config);
 
   if (!response.ok) {
+    throwIfTtsRateLimited('VoxCPM', response.status);
     throw new Error(`VoxCPM TTS API error: ${await readTTSApiError(response)}`);
   }
 
@@ -374,6 +392,8 @@ async function postVoxCPMVLLMOmni(
   baseUrl: string,
   params: {
     targetText: string;
+    rawText?: string;
+    registeredVoiceId?: string;
     promptText?: string;
     referenceAudioBase64?: string;
     referenceAudioMimeType?: string;
@@ -384,13 +404,17 @@ async function postVoxCPMVLLMOmni(
   const payload: Record<string, unknown> = {
     model: getVLLMOmniModelId(config),
     input: params.targetText,
-    // VoxCPM2's vLLM-Omni adapter currently ignores named voices; prompts/ref_audio carry voice identity.
     voice: 'default',
     response_format: 'wav',
     stream: false,
   };
 
-  if (params.referenceAudioBase64) {
+  if (params.registeredVoiceId) {
+    // A registered voice carries timbre by id (pre-encoded latents): reference it
+    // directly and send the raw text — no inline voice-design prompt or ref_audio.
+    payload.voice = params.registeredVoiceId;
+    payload.input = params.rawText ?? params.targetText;
+  } else if (params.referenceAudioBase64) {
     const referenceAudio = getVoxCPMDataAudioUrl(
       params.referenceAudioBase64,
       params.referenceAudioMimeType,
@@ -559,6 +583,7 @@ async function generateAzureTTS(
   });
 
   if (!response.ok) {
+    throwIfTtsRateLimited('Azure', response.status);
     throw new Error(`Azure TTS API error: ${response.statusText}`);
   }
 
@@ -592,6 +617,7 @@ async function generateGLMTTS(config: TTSModelConfig, text: string): Promise<TTS
   });
 
   if (!response.ok) {
+    throwIfTtsRateLimited('GLM', response.status);
     const errorText = await response.text().catch(() => response.statusText);
     let errorMessage = `GLM TTS API error: ${errorText}`;
     try {
@@ -642,6 +668,7 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
   });
 
   if (!response.ok) {
+    throwIfTtsRateLimited('Qwen', response.status);
     const errorText = await response.text().catch(() => response.statusText);
     throw new Error(`Qwen TTS API error: ${errorText}`);
   }
@@ -708,6 +735,7 @@ async function generateMiniMaxTTS(
   });
 
   if (!response.ok) {
+    throwIfTtsRateLimited('MiniMax', response.status);
     const errorText = await response.text().catch(() => response.statusText);
     throw new Error(`MiniMax TTS API error: ${errorText}`);
   }
@@ -773,6 +801,7 @@ async function generateElevenLabsTTS(
   );
 
   if (!response.ok) {
+    throwIfTtsRateLimited('ElevenLabs', response.status);
     const errorText = await response.text().catch(() => response.statusText);
     throw new Error(`ElevenLabs TTS API error: ${errorText || response.statusText}`);
   }
@@ -853,6 +882,7 @@ async function generateDoubaoTTS(
   });
 
   if (!response.ok) {
+    throwIfTtsRateLimited('Doubao', response.status);
     const errorText = await response.text().catch(() => response.statusText);
     throw new Error(`Doubao TTS API error (${response.status}): ${errorText}`);
   }
