@@ -232,9 +232,13 @@ function extractTexts(raw: string): string[] {
   const state = createParserState();
   const streamed = parseStructuredChunk(raw, state);
   if (streamed.textChunks.length > 0) return streamed.textChunks;
-  // No structured text parsed (e.g. the model emitted plain prose, or never
-  // closed the array). Recover it the same way the app's stream finalizer does.
-  return finalizeParser(state).textChunks;
+  // Recover only when the model emitted plain prose (never opened a JSON array) —
+  // finalizeParser then surfaces that prose as text. If an array WAS started but
+  // yielded no text (e.g. actions-only), the correct result is "no text"; we must
+  // not fall through to finalizeParser's raw-buffer fallback, which would surface
+  // action JSON as fake speech.
+  if (!state.jsonStarted) return finalizeParser(state).textChunks;
+  return [];
 }
 
 // ==================== Sampling ====================
