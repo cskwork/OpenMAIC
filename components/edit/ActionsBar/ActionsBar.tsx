@@ -25,8 +25,31 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import { useStageStore } from '@/lib/store/stage';
-import { useCanvasStore } from '@/lib/store/canvas';
 import type { Action } from '@/lib/types/action';
+
+/**
+ * Transiently highlight the bound element on the edit canvas. Edit-mode elements
+ * render as `#editable-element-<id>`; we paint a brand-colored ring directly
+ * (with `!important` so React's inline position styles don't clobber it) and
+ * clear it on leave. Self-contained — no dependency on the playback overlays.
+ */
+function highlightElement(elementId: string | undefined, on: boolean) {
+  if (!elementId) return;
+  const el = document.getElementById(`editable-element-${elementId}`);
+  if (!el) return;
+  if (on) {
+    el.style.setProperty('outline', '2px solid var(--primary, #722ed1)', 'important');
+    el.style.setProperty('outline-offset', '2px', 'important');
+    el.style.setProperty('box-shadow', '0 0 0 6px rgba(114,46,209,0.16)', 'important');
+    el.style.setProperty('border-radius', '3px', 'important');
+    el.style.setProperty('transition', 'box-shadow 120ms ease, outline-color 120ms ease', 'important');
+  } else {
+    el.style.removeProperty('outline');
+    el.style.removeProperty('outline-offset');
+    el.style.removeProperty('box-shadow');
+    el.style.removeProperty('transition');
+  }
+}
 
 const EMPTY: Action[] = [];
 
@@ -71,19 +94,11 @@ function CueBadge({ action }: { action: Action }) {
   const Icon = m.icon;
   const elementId = (action as { elementId?: string }).elementId;
 
-  const enter = () => {
-    if (elementId) useCanvasStore.getState().setSpotlight(elementId);
-  };
-  const leave = () => {
-    // clear (empty id makes SpotlightOverlay drop the rect)
-    useCanvasStore.getState().setSpotlight('');
-  };
-
   return (
     <span
       className="group/badge relative mx-0.5 inline-flex translate-y-px cursor-default select-none items-center"
-      onMouseEnter={enter}
-      onMouseLeave={leave}
+      onMouseEnter={() => highlightElement(elementId, true)}
+      onMouseLeave={() => highlightElement(elementId, false)}
     >
       <span
         className={cn(
