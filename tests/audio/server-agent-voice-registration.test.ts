@@ -118,6 +118,19 @@ describe('registerAgentVoicesOnServer', () => {
     expect(adapter.registerVoice).toHaveBeenCalledTimes(1);
   });
 
+  it('degrades every agent sharing a failed ensure call to the inline prompt', async () => {
+    adapter.registerVoice.mockRejectedValue(new Error('backend down'));
+    const result = await registerAgentVoicesOnServer([
+      { id: 'gen-1', voiceDesign: design, refText },
+      { id: 'gen-2', voiceDesign: design, refText },
+    ]);
+    expect(adapter.registerVoice).toHaveBeenCalledTimes(1); // still one shared attempt
+    expect(result.get('gen-1')?.voiceId).toBeUndefined();
+    expect(result.get('gen-2')?.voiceId).toBeUndefined();
+    expect(result.get('gen-1')?.voicePrompt).toContain('中年男教师');
+    expect(result.get('gen-2')?.voicePrompt).toContain('中年男教师');
+  });
+
   it('derives a bootstrap language code from the course language directive', async () => {
     await registerAgentVoicesOnServer(
       [{ id: 'gen-1', voiceDesign: design }], // no refText → bootstrap falls back to the sample sentence

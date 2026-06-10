@@ -232,6 +232,13 @@ function asNonEmptyString(value: unknown): string | undefined {
 }
 
 /**
+ * The LLM returned parseable JSON whose structure violates the roster rules
+ * (vs a SyntaxError for unparseable output — V8's JSON.parse messages also
+ * start with "Expected", so callers must discriminate by type, not message).
+ */
+export class AgentProfilesValidationError extends Error {}
+
+/**
  * Parse + validate a generate-mode LLM response.
  * Throws on structural problems (callers map to API errors / fallbacks).
  */
@@ -241,11 +248,13 @@ export function parseGenerateAgentProfilesResponse(raw: string): GeneratedAgentP
   };
 
   if (!parsed.agents || !Array.isArray(parsed.agents) || parsed.agents.length < 2) {
-    throw new Error(`Expected at least 2 agents, got ${parsed.agents?.length ?? 0}`);
+    throw new AgentProfilesValidationError(
+      `Expected at least 2 agents, got ${parsed.agents?.length ?? 0}`,
+    );
   }
   const teacherCount = parsed.agents.filter((a) => a.role === 'teacher').length;
   if (teacherCount !== 1) {
-    throw new Error(`Expected exactly 1 teacher, got ${teacherCount}`);
+    throw new AgentProfilesValidationError(`Expected exactly 1 teacher, got ${teacherCount}`);
   }
 
   return parsed.agents.map((agent) => {

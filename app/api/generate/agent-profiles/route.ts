@@ -19,6 +19,7 @@ import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { resolveModelFromRequest } from '@/lib/server/resolve-model';
 import { AGENT_COLOR_PALETTE } from '@/lib/constants/agent-defaults';
 import {
+  AgentProfilesValidationError,
   buildAdaptAgentProfilesPrompt,
   buildGenerateAgentProfilesPrompt,
   parseAdaptAgentProfilesResponse,
@@ -157,10 +158,9 @@ export async function POST(req: NextRequest) {
     try {
       generated = parseGenerateAgentProfilesResponse(rawResult);
     } catch (parseError) {
-      const message = parseError instanceof Error ? parseError.message : String(parseError);
-      if (message.startsWith('Expected')) {
-        log.error(message);
-        return apiError('GENERATION_FAILED', 500, `${message} (from LLM)`);
+      if (parseError instanceof AgentProfilesValidationError) {
+        log.error(parseError.message);
+        return apiError('GENERATION_FAILED', 500, `${parseError.message} (from LLM)`);
       }
       log.error('Failed to parse LLM response as JSON:', rawResult.substring(0, 500));
       return apiError('PARSE_FAILED', 500, 'Failed to parse agent profiles from LLM response');

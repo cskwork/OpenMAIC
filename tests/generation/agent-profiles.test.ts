@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  AgentProfilesValidationError,
   buildAdaptAgentProfilesPrompt,
   buildGenerateAgentProfilesPrompt,
   parseAdaptAgentProfilesResponse,
@@ -96,12 +97,23 @@ describe('parseGenerateAgentProfilesResponse', () => {
   it('throws when there are fewer than 2 agents or not exactly 1 teacher', () => {
     expect(() =>
       parseGenerateAgentProfilesResponse(JSON.stringify({ agents: [validAgents[0]] })),
-    ).toThrow(/at least 2/);
+    ).toThrow(AgentProfilesValidationError);
     expect(() =>
       parseGenerateAgentProfilesResponse(
         JSON.stringify({ agents: [validAgents[1], validAgents[1]] }),
       ),
     ).toThrow(/exactly 1 teacher/);
+  });
+  it('distinguishes structural violations from unparseable JSON by error type', () => {
+    // V8's own SyntaxError messages also start with "Expected" — the route must
+    // not classify those as LLM roster violations.
+    try {
+      parseGenerateAgentProfilesResponse('{,');
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(SyntaxError);
+      expect(error).not.toBeInstanceOf(AgentProfilesValidationError);
+    }
   });
 });
 
