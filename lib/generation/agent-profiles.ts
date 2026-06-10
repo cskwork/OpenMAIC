@@ -15,11 +15,7 @@
  * (see lib/audio/voice-registration.ts).
  */
 
-import {
-  normalizeRefText,
-  normalizeVoiceDesign,
-  type VoiceDesign,
-} from '@/lib/audio/voice-design';
+import { normalizeRefText, normalizeVoiceDesign, type VoiceDesign } from '@/lib/audio/voice-design';
 
 export interface GeneratedAgentProfile {
   name: string;

@@ -774,16 +774,73 @@ function GenerationPreviewContent() {
           const a = registry.getAgent(id);
           return a && !a.isGenerated;
         });
-        agents = presetAgentIds
-          .map((id) => registry.getAgent(id))
-          .filter(Boolean)
-          .map((a) => ({
+        const presetAgents = presetAgentIds.map((id) => registry.getAgent(id)).filter(Boolean);
+
+        // Adapt pass: fit the preset profiles to this course (localized name,
+        // course-flavored persona, voiceDesign + refText). The adapted agents
+        // are per-course copies saved like generated agents; the preset
+        // registry entries and the user's selection stay untouched. Any
+        // failure falls back to the presets as-is.
+        let adapted = false;
+        if (presetAgents.length > 0) {
+          try {
+            const adaptResp = await fetch('/api/generate/agent-profiles', {
+              method: 'POST',
+              headers: getApiHeaders(),
+              body: JSON.stringify(
+                withThinkingConfig({
+                  stageInfo: { name: stage.name, description: stage.description },
+                  sceneOutlines: outlines.map((o) => ({
+                    title: o.title,
+                    description: o.description,
+                  })),
+                  languageDirective,
+                  seedAgents: presetAgents.map((a) => ({
+                    id: a!.id,
+                    name: a!.name,
+                    role: a!.role,
+                    persona: a!.persona,
+                    avatar: a!.avatar,
+                    color: a!.color,
+                    priority: a!.priority,
+                    ...(a!.voiceConfig ? { voiceConfig: a!.voiceConfig } : {}),
+                    ...(a!.voiceDesign ? { voiceDesign: a!.voiceDesign } : {}),
+                    ...(a!.refText ? { refText: a!.refText } : {}),
+                  })),
+                }),
+              ),
+              signal,
+            });
+            if (!adaptResp.ok) throw new Error('Agent adaptation failed');
+            const adaptData = await adaptResp.json();
+            if (!adaptData.success) throw new Error(adaptData.error || 'Agent adaptation failed');
+
+            const { saveGeneratedAgents } = await import('@/lib/orchestration/registry/store');
+            const savedIds = await saveGeneratedAgents(stage.id, adaptData.agents);
+            stage.agentIds = savedIds;
+            agents = savedIds
+              .map((id) => useAgentRegistry.getState().getAgent(id))
+              .filter(Boolean)
+              .map((a) => ({
+                id: a!.id,
+                name: a!.name,
+                role: a!.role,
+                persona: a!.persona,
+              }));
+            adapted = true;
+          } catch (err: unknown) {
+            log.warn('[Generation] Preset agent adaptation failed, using presets as-is:', err);
+          }
+        }
+        if (!adapted) {
+          agents = presetAgents.map((a) => ({
             id: a!.id,
             name: a!.name,
             role: a!.role,
             persona: a!.persona,
           }));
-        stage.agentIds = presetAgentIds;
+          stage.agentIds = presetAgentIds;
+        }
       }
 
       // Move to scene generation step

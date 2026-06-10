@@ -13,7 +13,14 @@ import {
 } from '@/lib/generation/scene-generator';
 import type { AICallFn } from '@/lib/generation/pipeline-types';
 import type { AgentInfo } from '@/lib/generation/pipeline-types';
-import { getDefaultAgents } from '@/lib/orchestration/registry/store';
+import {
+  buildAdaptAgentProfilesPrompt,
+  buildGenerateAgentProfilesPrompt,
+  parseAdaptAgentProfilesResponse,
+  parseGenerateAgentProfilesResponse,
+} from '@/lib/generation/agent-profiles';
+import { getDefaultAgents, getDefaultAgentSeeds } from '@/lib/orchestration/registry/store';
+import { registerAgentVoicesOnServer } from '@/lib/server/agent-voice-registration';
 import { createLogger } from '@/lib/logger';
 import { isProviderKeyRequired } from '@/lib/ai/providers';
 import { resolveClassroomWebSearchConfig } from '@/lib/server/web-search-config';
@@ -102,63 +109,65 @@ function createInMemoryStore(stage: Stage): StageStore {
   };
 }
 
-function stripCodeFences(text: string): string {
-  let cleaned = text.trim();
-  if (cleaned.startsWith('```')) {
-    cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
-  }
-  return cleaned.trim();
-}
+type GeneratedAgentConfig = NonNullable<Stage['generatedAgentConfigs']>[number];
 
-async function generateAgentProfiles(
+/** generate mode: LLM invents a fresh roster (voiceDesign + refText required). */
+async function generateAgentConfigs(
   requirement: string,
   languageDirective: string,
   aiCall: AICallFn,
-): Promise<AgentInfo[]> {
-  const systemPrompt =
-    'You are an expert instructional designer. Generate agent profiles for a multi-agent classroom simulation. Return ONLY valid JSON, no markdown or explanation.';
-
-  const userPrompt = `Generate agent profiles for a course with this requirement:
-${requirement}
-
-Requirements:
-- Decide the appropriate number of agents based on the course content (typically 3-5)
-- Exactly 1 agent must have role "teacher", the rest can be "assistant" or "student"
-- Each agent needs: name, role, persona (2-3 sentences describing personality and teaching/learning style)
-- Language directive for this course: ${languageDirective}
-  Agent names and personas must follow this language directive.
-
-Return a JSON object with this exact structure:
-{
-  "agents": [
-    {
-      "name": "string",
-      "role": "teacher" | "assistant" | "student",
-      "persona": "string (2-3 sentences)"
-    }
-  ]
-}`;
-
+): Promise<GeneratedAgentConfig[]> {
+  const { systemPrompt, userPrompt } = buildGenerateAgentProfilesPrompt({
+    courseName: requirement,
+    languageDirective,
+  });
   const response = await aiCall(systemPrompt, userPrompt);
-  const rawText = stripCodeFences(response);
-  const parsed = JSON.parse(rawText) as {
-    agents: Array<{ name: string; role: string; persona: string }>;
-  };
-
-  if (!parsed.agents || !Array.isArray(parsed.agents) || parsed.agents.length < 2) {
-    throw new Error(`Expected at least 2 agents, got ${parsed.agents?.length ?? 0}`);
-  }
-
-  const teacherCount = parsed.agents.filter((a) => a.role === 'teacher').length;
-  if (teacherCount !== 1) {
-    throw new Error(`Expected exactly 1 teacher, got ${teacherCount}`);
-  }
-
-  return parsed.agents.map((a, i) => ({
+  return parseGenerateAgentProfilesResponse(response).map((a, i) => ({
     id: `gen-server-${i}`,
     name: a.name,
     role: a.role,
     persona: a.persona,
+    avatar: AGENT_DEFAULT_AVATARS[i % AGENT_DEFAULT_AVATARS.length],
+    color: AGENT_COLOR_PALETTE[i % AGENT_COLOR_PALETTE.length],
+    priority: a.priority ?? (a.role === 'teacher' ? 10 : a.role === 'assistant' ? 7 : 5),
+    ...(a.voiceDesign ? { voiceDesign: a.voiceDesign } : {}),
+    ...(a.refText ? { refText: a.refText } : {}),
+  }));
+}
+
+/**
+ * default mode: the preset agents are the seeds; the LLM lightly fits them to
+ * the course (localized name, course-flavored persona, voiceDesign + refText)
+ * while identity fields stay locked to the seed. Per-course copies get fresh
+ * ids so they never collide with the preset registry entries on the client.
+ */
+async function adaptDefaultAgentConfigs(
+  requirement: string,
+  languageDirective: string,
+  sceneOutlines: Array<{ title: string; description?: string }>,
+  aiCall: AICallFn,
+): Promise<GeneratedAgentConfig[]> {
+  const seeds = getDefaultAgentSeeds();
+  const { systemPrompt, userPrompt } = buildAdaptAgentProfilesPrompt({
+    seedAgents: seeds,
+    course: { courseName: requirement, sceneOutlines, languageDirective },
+  });
+  const response = await aiCall(systemPrompt, userPrompt);
+  const adapted = parseAdaptAgentProfilesResponse(response, seeds);
+  log.info(
+    `Adapted ${adapted.filter((a) => a.adapted).length}/${seeds.length} preset agents to the course`,
+  );
+  return adapted.map((a) => ({
+    id: `gen-${nanoid(8)}`,
+    name: a.name,
+    role: a.role,
+    persona: a.persona,
+    avatar: a.avatar,
+    color: a.color,
+    priority: a.priority,
+    ...(a.voiceConfig ? { voiceConfig: a.voiceConfig } : {}),
+    ...(a.voiceDesign ? { voiceDesign: a.voiceDesign } : {}),
+    ...(a.refText ? { refText: a.refText } : {}),
   }));
 }
 
@@ -309,21 +318,40 @@ export async function generateClassroom(
     totalScenes: outlines.length,
   });
 
-  // Resolve agents based on agentMode — now AFTER outlines so we can use languageDirective
-  let agents: AgentInfo[];
+  // Resolve agents based on agentMode — now AFTER outlines so we can use languageDirective.
+  // Both modes run an LLM profile pass (generate: fresh roster; default: presets
+  // adapted to the course); on failure each falls back to the presets as-is.
   const agentMode = input.agentMode || 'default';
+  let generatedAgentConfigs: GeneratedAgentConfig[] | undefined;
   if (agentMode === 'generate') {
     log.info('Generating custom agent profiles via LLM...');
     try {
-      agents = await generateAgentProfiles(requirement, languageDirective, aiCall);
-      log.info(`Generated ${agents.length} agent profiles`);
+      generatedAgentConfigs = await generateAgentConfigs(requirement, languageDirective, aiCall);
+      log.info(`Generated ${generatedAgentConfigs.length} agent profiles`);
     } catch (e) {
       log.warn('Agent profile generation failed, falling back to defaults:', e);
-      agents = getDefaultAgents();
     }
   } else {
-    agents = getDefaultAgents();
+    log.info('Adapting preset agent profiles to the course via LLM...');
+    try {
+      generatedAgentConfigs = await adaptDefaultAgentConfigs(
+        requirement,
+        languageDirective,
+        outlines.map((o) => ({ title: o.title, description: o.description })),
+        aiCall,
+      );
+    } catch (e) {
+      log.warn('Preset agent adaptation failed, using presets as-is:', e);
+    }
   }
+  const agents: AgentInfo[] = generatedAgentConfigs
+    ? generatedAgentConfigs.map((a) => ({
+        id: a.id,
+        name: a.name,
+        role: a.role,
+        persona: a.persona,
+      }))
+    : getDefaultAgents();
 
   const stageId = nanoid(10);
   const stage: Stage = {
@@ -335,24 +363,10 @@ export async function generateClassroom(
     style: 'interactive',
     createdAt: Date.now(),
     updatedAt: Date.now(),
-    // For LLM-generated agents, embed full configs so the client can
-    // hydrate the agent registry without prior IndexedDB data.
-    // For default agents, just record IDs — the client already has them.
-    ...(agentMode === 'generate'
-      ? {
-          generatedAgentConfigs: agents.map((a, i) => ({
-            id: a.id,
-            name: a.name,
-            role: a.role,
-            persona: a.persona || '',
-            avatar: AGENT_DEFAULT_AVATARS[i % AGENT_DEFAULT_AVATARS.length],
-            color: AGENT_COLOR_PALETTE[i % AGENT_COLOR_PALETTE.length],
-            priority: a.role === 'teacher' ? 10 : a.role === 'assistant' ? 7 : 5,
-          })),
-        }
-      : {
-          agentIds: agents.map((a) => a.id),
-        }),
+    // When an LLM profile pass succeeded (either mode), embed full configs so
+    // the client can hydrate the agent registry without prior IndexedDB data.
+    // Otherwise just record preset IDs — the client already has them.
+    ...(generatedAgentConfigs ? { generatedAgentConfigs } : { agentIds: agents.map((a) => a.id) }),
   };
 
   const store = createInMemoryStore(stage);
@@ -445,7 +459,23 @@ export async function generateClassroom(
     });
 
     try {
-      await generateTTSForClassroom(scenes, stageId, options.baseUrl);
+      // Register auto voices first (register-once): every profiled agent gets a
+      // stable reference-by-id voice, and the narrator's id drives batch TTS.
+      let voxcpmAuto: { registeredVoiceId?: string; voicePrompt?: string } | undefined;
+      if (generatedAgentConfigs?.length) {
+        const voices = await registerAgentVoicesOnServer(generatedAgentConfigs, languageDirective);
+        const narrator =
+          generatedAgentConfigs.find((a) => a.role === 'teacher' && a.voiceDesign) ??
+          generatedAgentConfigs.find((a) => a.role === 'teacher');
+        const narratorVoice = narrator ? voices.get(narrator.id) : undefined;
+        if (narratorVoice) {
+          voxcpmAuto = {
+            registeredVoiceId: narratorVoice.voiceId,
+            voicePrompt: narratorVoice.voicePrompt,
+          };
+        }
+      }
+      await generateTTSForClassroom(scenes, stageId, options.baseUrl, { voxcpmAuto });
       log.info('TTS generation complete');
     } catch (err) {
       log.warn('TTS generation phase failed, continuing:', err);

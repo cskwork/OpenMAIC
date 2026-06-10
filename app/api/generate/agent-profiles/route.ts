@@ -1,8 +1,14 @@
 /**
  * Agent Profiles Generation API
  *
- * Generates agent profiles (teacher, assistant, student) for a course stage
- * based on stage info and scene outlines.
+ * Two modes over one response shape (`{ agents }`):
+ * - generate (default): invent agent profiles (teacher, assistant, student)
+ *   for a course stage based on stage info and scene outlines.
+ * - adapt (`seedAgents` provided): lightly fit the given preset agents to the
+ *   course — localized name, course-flavored persona, voiceDesign + refText —
+ *   while identity fields (role/avatar/color/priority/voiceConfig) stay locked
+ *   to the seed. Adapted copies get fresh `gen-` ids so they never collide
+ *   with the preset registry entries.
  */
 
 import { NextRequest } from 'next/server';
@@ -12,7 +18,13 @@ import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { resolveModelFromRequest } from '@/lib/server/resolve-model';
 import { AGENT_COLOR_PALETTE } from '@/lib/constants/agent-defaults';
-import { normalizeVoiceDesign } from '@/lib/audio/voice-design';
+import {
+  buildAdaptAgentProfilesPrompt,
+  buildGenerateAgentProfilesPrompt,
+  parseAdaptAgentProfilesResponse,
+  parseGenerateAgentProfilesResponse,
+  type SeedAgentProfile,
+} from '@/lib/generation/agent-profiles';
 
 const log = createLogger('Agent Profiles API');
 
@@ -22,7 +34,7 @@ interface RequestBody {
   stageInfo: { name: string; description?: string };
   sceneOutlines?: { title: string; description?: string }[];
   languageDirective: string;
-  availableAvatars: string[];
+  availableAvatars?: string[];
   avatarDescriptions?: Array<{ path: string; desc: string }>;
   availableVoices?: Array<{
     providerId: string;
@@ -30,15 +42,19 @@ interface RequestBody {
     voiceName: string;
     voiceLanguage?: string;
   }>;
+  /** Present → adapt mode: fit these preset agents to the course. */
+  seedAgents?: SeedAgentProfile[];
 }
 
-function stripCodeFences(text: string): string {
-  let cleaned = text.trim();
-  // Remove markdown code fences (```json ... ``` or ``` ... ```)
-  if (cleaned.startsWith('```')) {
-    cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
-  }
-  return cleaned.trim();
+function isUsableSeed(seed: unknown): seed is SeedAgentProfile {
+  if (!seed || typeof seed !== 'object') return false;
+  const record = seed as Record<string, unknown>;
+  return (
+    typeof record.id === 'string' &&
+    typeof record.name === 'string' &&
+    typeof record.role === 'string' &&
+    typeof record.persona === 'string'
+  );
 }
 
 export async function POST(req: NextRequest) {
@@ -55,6 +71,8 @@ export async function POST(req: NextRequest) {
       availableVoices,
     } = body;
     stageName = stageInfo?.name;
+    const seedAgents = Array.isArray(body.seedAgents) ? body.seedAgents.filter(isUsableSeed) : [];
+    const adaptMode = seedAgents.length > 0;
 
     // ── Validate required fields ──
     if (!stageInfo?.name) {
@@ -63,7 +81,7 @@ export async function POST(req: NextRequest) {
     if (!languageDirective) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'languageDirective is required');
     }
-    if (!availableAvatars || availableAvatars.length === 0) {
+    if (!adaptMode && (!availableAvatars || availableAvatars.length === 0)) {
       return apiError(
         'MISSING_REQUIRED_FIELD',
         400,
@@ -79,78 +97,25 @@ export async function POST(req: NextRequest) {
     } = await resolveModelFromRequest(req, body);
     modelString = _modelString;
 
-    // ── Build prompt ──
-    const sceneSummary = sceneOutlines?.length
-      ? sceneOutlines
-          .map((s, i) => `${i + 1}. ${s.title}${s.description ? ` — ${s.description}` : ''}`)
-          .join('\n')
-      : null;
+    const course = {
+      courseName: stageInfo.name,
+      courseDescription: stageInfo.description,
+      sceneOutlines,
+      languageDirective,
+    };
+    const { systemPrompt, userPrompt } = adaptMode
+      ? buildAdaptAgentProfilesPrompt({ seedAgents, course })
+      : buildGenerateAgentProfilesPrompt({
+          ...course,
+          availableAvatars,
+          avatarDescriptions,
+          colorPalette: [...AGENT_COLOR_PALETTE],
+          availableVoices,
+        });
 
-    const systemPrompt = `You are an expert instructional designer. Generate agent profiles for a multi-agent classroom simulation. Decide the appropriate number of agents (typically 3-5) based on the course content and complexity. Return ONLY valid JSON, no markdown or explanation.`;
-
-    // Build voice list for prompt (if available)
-    const voiceListStr =
-      availableVoices && availableVoices.length > 0
-        ? JSON.stringify(
-            availableVoices.map((v) => ({
-              id: `${v.providerId}::${v.voiceId}`,
-              name: v.voiceName,
-              language: v.voiceLanguage || 'unknown',
-            })),
-          )
-        : '';
-
-    const voicePrompt = voiceListStr
-      ? `- Each agent should be assigned a voice that matches their persona from this list: ${voiceListStr}
-  - Prefer a voice whose language matches the course language directive
-  - Pick a voice that suits the agent's personality and role (e.g. authoritative voice for teacher, lively voice for energetic student)
-  - Try to use different voices for each agent`
-      : '';
-
-    const voiceJsonField = voiceListStr
-      ? ',\n      "voice": "string (voice id from available list, e.g. \'qwen-tts::Cherry\')"'
-      : '';
-
-    const userPrompt = `Generate agent profiles for the following course:
-
-Course name: ${stageInfo.name}
-${stageInfo.description ? `Course description: ${stageInfo.description}` : ''}
-${sceneSummary ? `\nScene outlines:\n${sceneSummary}\n` : ''}
-Requirements:
-- Decide the appropriate number of agents based on the course content (typically 3-5)
-- Exactly 1 agent must have role "teacher", the rest can be "assistant" or "student"
-- Priority values: teacher=10 (highest), assistant=7, student=4-6
-- Each agent needs: name, role, persona (2-3 sentences describing personality and teaching/learning style)
-- Language directive for this course: ${languageDirective}
-  Agent names and personas must follow this language directive.
-- Each agent must be assigned one avatar from this list: ${JSON.stringify(avatarDescriptions && avatarDescriptions.length > 0 ? avatarDescriptions.map((a) => ({ path: a.path, description: a.desc })) : availableAvatars)}
-  - Pick an avatar that visually matches the agent's personality and role
-  - Try to use different avatars for each agent
-  - Use the "path" value as the avatar field in the output
-- Each agent must be assigned one color from this list: ${JSON.stringify(AGENT_COLOR_PALETTE)}
-  - Each agent must have a different color
-- Each agent needs a "voiceDesign" object describing their VOCAL identity (not personality), written following the language directive and consistent with the persona, as three short comma-free phrases:
-  - "identity": gender + age + role (e.g. "middle-aged male teacher")
-  - "texture": pitch + vocal quality (e.g. "warm low-pitched slightly husky")
-  - "delivery": emotion + pace (e.g. "calm measured encouraging")
-${voicePrompt}
-
-Return a JSON object with this exact structure:
-{
-  "agents": [
-    {
-      "name": "string",
-      "role": "teacher" | "assistant" | "student",
-      "persona": "string (2-3 sentences)",
-      "voiceDesign": { "identity": "string", "texture": "string", "delivery": "string" },
-      "avatar": "string (from available list)",
-      "color": "string (hex color from palette)",
-      "priority": number (10 for teacher, 7 for assistant, 4-6 for student)${voiceJsonField}
-    }
-  ]
-}`;
-
-    log.info(`Generating agent profiles for "${stageInfo.name}" [model=${modelString}]`);
+    log.info(
+      `${adaptMode ? `Adapting ${seedAgents.length} preset` : 'Generating'} agent profiles for "${stageInfo.name}" [model=${modelString}]`,
+    );
 
     const rawResult = (
       await callLLM(
@@ -165,50 +130,39 @@ Return a JSON object with this exact structure:
       )
     ).text;
 
-    // ── Parse LLM response ──
-    const rawText = stripCodeFences(rawResult);
-    let parsed: {
-      agents: Array<{
-        name: string;
-        role: string;
-        persona: string;
-        avatar: string;
-        color: string;
-        priority: number;
-        voice?: string;
-        voiceDesign?: unknown;
-      }>;
-    };
+    if (adaptMode) {
+      let adapted: ReturnType<typeof parseAdaptAgentProfilesResponse>;
+      try {
+        adapted = parseAdaptAgentProfilesResponse(rawResult, seedAgents);
+      } catch {
+        log.error('Failed to parse LLM response as JSON:', rawResult.substring(0, 500));
+        return apiError('PARSE_FAILED', 500, 'Failed to parse agent profiles from LLM response');
+      }
+      const agents = adapted.map(({ adapted: _adapted, ...agent }) => ({
+        ...agent,
+        id: `gen-${nanoid(8)}`,
+      }));
+      log.info(
+        `Adapted ${adapted.filter((a) => a.adapted).length}/${seedAgents.length} preset agents for "${stageInfo.name}"`,
+      );
+      return apiSuccess({ agents });
+    }
 
+    let generated: ReturnType<typeof parseGenerateAgentProfilesResponse>;
     try {
-      parsed = JSON.parse(rawText);
-    } catch {
-      log.error('Failed to parse LLM response as JSON:', rawText.substring(0, 500));
+      generated = parseGenerateAgentProfilesResponse(rawResult);
+    } catch (parseError) {
+      const message = parseError instanceof Error ? parseError.message : String(parseError);
+      if (message.startsWith('Expected')) {
+        log.error(message);
+        return apiError('GENERATION_FAILED', 500, `${message} (from LLM)`);
+      }
+      log.error('Failed to parse LLM response as JSON:', rawResult.substring(0, 500));
       return apiError('PARSE_FAILED', 500, 'Failed to parse agent profiles from LLM response');
     }
 
-    // ── Validate parsed structure ──
-    if (!parsed.agents || !Array.isArray(parsed.agents) || parsed.agents.length < 2) {
-      log.error(`Expected at least 2 agents, got ${parsed.agents?.length ?? 0}`);
-      return apiError(
-        'GENERATION_FAILED',
-        500,
-        `Expected at least 2 agents but LLM returned ${parsed.agents?.length ?? 0}`,
-      );
-    }
-
-    const teacherCount = parsed.agents.filter((a) => a.role === 'teacher').length;
-    if (teacherCount !== 1) {
-      log.error(`Expected exactly 1 teacher, got ${teacherCount}`);
-      return apiError(
-        'GENERATION_FAILED',
-        500,
-        `Expected exactly 1 teacher but LLM returned ${teacherCount}`,
-      );
-    }
-
     // ── Build output with IDs ──
-    const agents = parsed.agents.map((agent, index) => {
+    const agents = generated.map((agent, index) => {
       // Parse voice "providerId::voiceId" format
       let voiceConfig: { providerId: string; voiceId: string } | undefined;
       if (agent.voice && agent.voice.includes('::')) {
@@ -218,19 +172,18 @@ Return a JSON object with this exact structure:
         }
       }
 
-      const voiceDesign = normalizeVoiceDesign(agent.voiceDesign);
-
       return {
         id: `gen-${nanoid(8)}`,
         name: agent.name,
         role: agent.role,
         persona: agent.persona,
-        avatar: agent.avatar || availableAvatars[index % availableAvatars.length],
+        avatar: agent.avatar || availableAvatars![index % availableAvatars!.length],
         color: agent.color || AGENT_COLOR_PALETTE[index % AGENT_COLOR_PALETTE.length],
         priority:
           agent.priority ?? (agent.role === 'teacher' ? 10 : agent.role === 'assistant' ? 7 : 5),
         ...(voiceConfig ? { voiceConfig } : {}),
-        ...(voiceDesign ? { voiceDesign } : {}),
+        ...(agent.voiceDesign ? { voiceDesign: agent.voiceDesign } : {}),
+        ...(agent.refText ? { refText: agent.refText } : {}),
       };
     });
 

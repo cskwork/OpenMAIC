@@ -217,6 +217,15 @@ export async function generateTTSForClassroom(
   scenes: Scene[],
   classroomId: string,
   baseUrl: string,
+  opts: {
+    /**
+     * Narrator auto-voice resolved at generation time (speech actions carry no
+     * agent, so narration is all spoken by the narrator): a registered voice id
+     * for reference-by-id timbre stability, and/or the inline voice-design
+     * prompt as fallback. Absent → legacy behavior (skip VoxCPM Auto Voice).
+     */
+    voxcpmAuto?: { registeredVoiceId?: string; voicePrompt?: string };
+  } = {},
 ): Promise<void> {
   const audioDir = path.join(CLASSROOMS_DIR, classroomId, 'audio');
   await ensureDir(audioDir);
@@ -241,9 +250,23 @@ export async function generateTTSForClassroom(
   const ttsBaseUrl = resolveTTSBaseUrl(providerId) || ttsProvider?.defaultBaseUrl;
   const voice = DEFAULT_TTS_VOICES[providerId as keyof typeof DEFAULT_TTS_VOICES] || 'default';
   const format = ttsProvider?.supportedFormats?.[0] || 'mp3';
+  let providerOptions: Record<string, unknown> | undefined;
   if (providerId === VOXCPM_TTS_PROVIDER_ID && voice === VOXCPM_AUTO_VOICE_ID) {
-    log.warn('VoxCPM Auto Voice requires agent context; skipping server-side TTS generation');
-    return;
+    const { registeredVoiceId, voicePrompt } = opts.voxcpmAuto || {};
+    if (!registeredVoiceId && !voicePrompt) {
+      log.warn('VoxCPM Auto Voice requires agent context; skipping server-side TTS generation');
+      return;
+    }
+    providerOptions = {
+      voiceMode: 'auto',
+      ...(voicePrompt ? { voicePrompt } : {}),
+      ...(registeredVoiceId ? { registeredVoiceId } : {}),
+    };
+    log.info(
+      `VoxCPM Auto Voice for narration: ${
+        registeredVoiceId ? `registered voice ${registeredVoiceId}` : 'inline voice prompt'
+      }`,
+    );
   }
 
   for (const scene of scenes) {
@@ -271,6 +294,7 @@ export async function generateTTSForClassroom(
             baseUrl: ttsBaseUrl,
             voice,
             speed: speechAction.speed,
+            ...(providerOptions ? { providerOptions } : {}),
           },
           speechAction.text,
         );
