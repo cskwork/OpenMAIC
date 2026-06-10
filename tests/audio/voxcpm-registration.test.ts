@@ -3,6 +3,7 @@ import {
   voxCPMVoiceExists,
   registerVoxCPMVoice,
   bootstrapVoxCPMReferenceClip,
+  voxcpmVoiceRegistrationAdapter,
 } from '@/lib/audio/voxcpm-registration';
 
 const cfg = { baseUrl: 'https://voxcpm.test/v1', apiKey: 'k', model: 'voxcpm2' };
@@ -113,5 +114,17 @@ describe('bootstrapVoxCPMReferenceClip', () => {
       String((f.mock.calls[1] as unknown as [string, RequestInit])[1].body),
     );
     expect(second.input).toContain('你好，欢迎来到今天的课程');
+  });
+});
+
+describe('canonicalModelId', () => {
+  it('maps empty/undefined/display-name to the single vLLM model id', () => {
+    const canon = voxcpmVoiceRegistrationAdapter.canonicalModelId!;
+    expect(canon(undefined)).toBe('voxcpm2');
+    expect(canon('')).toBe('voxcpm2');
+    expect(canon('VoxCPM2')).toBe('voxcpm2');
+    expect(canon('voxcpm2')).toBe('voxcpm2');
+    // a genuinely different model id passes through (different timbre namespace)
+    expect(canon('my-finetuned-model')).toBe('my-finetuned-model');
   });
 });

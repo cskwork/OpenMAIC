@@ -38,6 +38,13 @@ export interface VoiceRegistrationAdapter {
     cfg: VoiceRegistrationConfig,
     params: { design: VoiceDesign; language?: string; refText?: string },
   ): Promise<{ referenceAudioBase64: string; mimeType: string }>;
+  /**
+   * Canonicalize a model id for deterministic-voice-id purposes, so every
+   * pipeline (server pre-registration, client lazy ensure) hashes the same
+   * value for what is effectively the same model (e.g. VoxCPM treats '',
+   * undefined and the display name as its single vLLM model id).
+   */
+  canonicalModelId?(model?: string): string | undefined;
 }
 
 /** providerId → adapter. The only seam to touch when adding a provider. */
@@ -57,4 +64,67 @@ export function supportsVoiceRegistration(
   options?: Record<string, unknown>,
 ): boolean {
   return getVoiceRegistrationAdapter(providerId)?.supportsRegistration(options) ?? false;
+}
+
+/**
+ * The model id to hash into a deterministic voice id for `providerId`.
+ * Dispatches to the adapter's canonicalization so the server (config-resolved
+ * model) and the client (settings model) agree on the same id.
+ */
+export function canonicalVoiceModelId(providerId: string, model?: string): string | undefined {
+  const adapter = getVoiceRegistrationAdapter(providerId);
+  return adapter?.canonicalModelId ? adapter.canonicalModelId(model) : model;
+}
+
+/**
+ * Core ensure-registered flow shared by the registration API route and the
+ * generation-time server pass:
+ *  - voice already on the backend → no-op;
+ *  - a cached clip is supplied → (re)register it (register-on-invalid,
+ *    preserving the original timbre);
+ *  - else bootstrap the design once, register, and return the clip so the
+ *    caller can cache it.
+ * Throws on backend failure; callers decide how to degrade.
+ */
+export async function ensureBackendVoiceRegistered(
+  adapter: VoiceRegistrationAdapter,
+  cfg: VoiceRegistrationConfig,
+  params: {
+    voiceId: string;
+    design?: VoiceDesign;
+    language?: string;
+    refText?: string;
+    cachedClip?: { referenceAudioBase64: string; mimeType?: string };
+  },
+): Promise<{
+  voiceId: string;
+  registeredClip?: { referenceAudioBase64: string; mimeType: string };
+}> {
+  if (await adapter.voiceExists(cfg, params.voiceId)) {
+    return { voiceId: params.voiceId };
+  }
+
+  if (params.cachedClip) {
+    await adapter.registerVoice(cfg, {
+      voiceId: params.voiceId,
+      referenceAudioBase64: params.cachedClip.referenceAudioBase64,
+      mimeType: params.cachedClip.mimeType,
+    });
+    return { voiceId: params.voiceId };
+  }
+
+  if (!params.design) {
+    throw new Error('voice design is required to bootstrap an unregistered voice');
+  }
+  const clip = await adapter.bootstrapReferenceClip(cfg, {
+    design: params.design,
+    language: params.language,
+    refText: params.refText,
+  });
+  await adapter.registerVoice(cfg, {
+    voiceId: params.voiceId,
+    referenceAudioBase64: clip.referenceAudioBase64,
+    mimeType: clip.mimeType,
+  });
+  return { voiceId: params.voiceId, registeredClip: clip };
 }

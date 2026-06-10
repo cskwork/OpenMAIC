@@ -102,4 +102,21 @@ describe('ensureRegisteredVoice memoization', () => {
     );
     expect(ids[0]).not.toBe(ids[1]);
   });
+
+  it('normalizes refText and the model id before hashing, converging with the server pass', async () => {
+    const f = okFetch();
+    const voiceDesign = { identity: 'normalize teacher', texture: 'warm', delivery: 'calm' };
+    const req = { ttsBaseUrl: 'https://g.test/v1' };
+    const refText = '大家好，我是这门课的老师，欢迎来到课堂，我们马上开始。';
+
+    // Raw whitespace + an unset model must memo-hit the normalized + canonical
+    // ('voxcpm2') registration instead of registering a second voice.
+    await ensureRegisteredVoice('voxcpm-tts', { voiceDesign, refText }, { ...req });
+    await ensureRegisteredVoice(
+      'voxcpm-tts',
+      { voiceDesign, refText: `  ${refText}\n ` },
+      { ...req, ttsModelId: 'voxcpm2' },
+    );
+    expect(f).toHaveBeenCalledTimes(1);
+  });
 });

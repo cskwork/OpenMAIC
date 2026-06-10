@@ -111,14 +111,14 @@ describe('getDeterministicVoiceId', () => {
 
 describe('normalizeRefText', () => {
   it('trims, collapses whitespace, and strips parentheses/control chars', () => {
-    expect(normalizeRefText('  大家好，（笑）欢迎来到\n今天的  课程。 ')).toBe(
-      '大家好， 笑 欢迎来到 今天的 课程。',
-    );
+    expect(
+      normalizeRefText('  大家好，（笑）欢迎来到\n今天的  线性代数课程，我们马上开始。 '),
+    ).toBe('大家好， 笑 欢迎来到 今天的 线性代数课程，我们马上开始。');
   });
-  it('rejects non-strings and scripts too short for a stable clip', () => {
+  it('rejects non-strings and scripts too short to be a meaningful seed', () => {
     expect(normalizeRefText(undefined)).toBeUndefined();
     expect(normalizeRefText(42)).toBeUndefined();
-    expect(normalizeRefText('你好。')).toBeUndefined();
+    expect(normalizeRefText('你好，欢迎来上课。')).toBeUndefined();
   });
   it('caps overly long scripts', () => {
     const long = 'a'.repeat(500);

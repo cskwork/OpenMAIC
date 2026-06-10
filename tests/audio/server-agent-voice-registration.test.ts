@@ -18,10 +18,14 @@ const adapter = vi.hoisted(() => ({
     mimeType: 'audio/wav',
   })),
 }));
-vi.mock('@/lib/audio/voice-registration', () => ({
-  getVoiceRegistrationAdapter: (providerId: string) =>
-    providerId === 'voxcpm-tts' ? adapter : undefined,
-}));
+vi.mock('@/lib/audio/voice-registration', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/audio/voice-registration')>();
+  return {
+    ...actual,
+    getVoiceRegistrationAdapter: (providerId: string) =>
+      providerId === 'voxcpm-tts' ? adapter : undefined,
+  };
+});
 
 import { registerAgentVoicesOnServer } from '@/lib/server/agent-voice-registration';
 

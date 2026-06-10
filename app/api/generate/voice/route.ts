@@ -27,6 +27,7 @@ import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
 import { normalizeRefText, normalizeVoiceDesign } from '@/lib/audio/voice-design';
 import {
+  ensureBackendVoiceRegistered,
   getVoiceRegistrationAdapter,
   type VoiceRegistrationConfig,
 } from '@/lib/audio/voice-registration';
@@ -105,42 +106,28 @@ export async function POST(req: NextRequest) {
       model: resolveTTSModel(providerId, body.ttsModelId),
     };
 
-    // Already registered → no-op (also avoids a redundant re-register when the
-    // client offered a cached clip but the voice is still live on the backend).
-    if (await adapter.voiceExists(cfg, voiceId)) {
-      return apiSuccess({ voiceId, registered: true });
-    }
-
-    // Not present, but the client has the cached reference clip → re-register it
-    // (register-on-invalid; preserves the original timbre instead of re-synthesizing).
-    if (body.referenceAudioBase64) {
-      await adapter.registerVoice(cfg, {
-        voiceId,
-        referenceAudioBase64: body.referenceAudioBase64,
-        mimeType: body.mimeType,
-      });
-      return apiSuccess({ voiceId, registered: true });
-    }
-
-    // First use → bootstrap-synthesize the descriptor, register, return the clip.
-    const clip = await adapter.bootstrapReferenceClip(cfg, {
-      design: design!,
+    // Shared ensure flow: no-op when live, re-register the cached clip
+    // (register-on-invalid), else bootstrap once and return the new clip.
+    const { registeredClip } = await ensureBackendVoiceRegistered(adapter, cfg, {
+      voiceId,
+      design,
       language: body.language,
       refText: normalizeRefText(body.refText),
-    });
-    await adapter.registerVoice(cfg, {
-      voiceId,
-      referenceAudioBase64: clip.referenceAudioBase64,
-      mimeType: clip.mimeType,
+      cachedClip: body.referenceAudioBase64
+        ? { referenceAudioBase64: body.referenceAudioBase64, mimeType: body.mimeType }
+        : undefined,
     });
 
-    log.info(`Registered auto voice ${voiceId} for provider ${providerId}`);
-    return apiSuccess({
-      voiceId,
-      registered: true,
-      referenceAudioBase64: clip.referenceAudioBase64,
-      mimeType: clip.mimeType,
-    });
+    if (registeredClip) {
+      log.info(`Registered auto voice ${voiceId} for provider ${providerId}`);
+      return apiSuccess({
+        voiceId,
+        registered: true,
+        referenceAudioBase64: registeredClip.referenceAudioBase64,
+        mimeType: registeredClip.mimeType,
+      });
+    }
+    return apiSuccess({ voiceId, registered: true });
   } catch (error) {
     log.error(
       `Voice registration failed [provider=${providerId ?? 'unknown'}, voiceId=${voiceId ?? 'unknown'}]:`,

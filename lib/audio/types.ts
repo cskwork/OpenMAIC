@@ -130,6 +130,17 @@ export interface TTSProviderConfig {
 }
 
 /**
+ * Per-agent TTS voice selection as serialized across boundaries (stage JSON,
+ * IndexedDB records, generation payloads). `providerId` stays a plain string
+ * here; the agent registry narrows it to `TTSProviderId` when hydrating.
+ */
+export interface AgentVoiceConfigRef {
+  providerId: string;
+  modelId?: string;
+  voiceId: string;
+}
+
+/**
  * TTS Model Configuration for API calls
  */
 export interface TTSModelConfig {

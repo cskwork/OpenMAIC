@@ -16,6 +16,7 @@
  */
 
 import { normalizeRefText, normalizeVoiceDesign, type VoiceDesign } from '@/lib/audio/voice-design';
+import type { AgentVoiceConfigRef } from '@/lib/audio/types';
 
 export interface GeneratedAgentProfile {
   name: string;
@@ -39,7 +40,7 @@ export interface SeedAgentProfile {
   avatar: string;
   color: string;
   priority: number;
-  voiceConfig?: { providerId: string; modelId?: string; voiceId: string };
+  voiceConfig?: AgentVoiceConfigRef;
   voiceDesign?: VoiceDesign;
   refText?: string;
 }

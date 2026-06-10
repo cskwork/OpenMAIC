@@ -473,6 +473,12 @@ export async function generateClassroom(
             registeredVoiceId: narratorVoice.voiceId,
             voicePrompt: narratorVoice.voicePrompt,
           };
+        } else if (narrator && voices.size > 0) {
+          // Don't silently fall back to the legacy skip when other agents
+          // resolved fine — this means the narrator itself has no voiceDesign.
+          log.warn(
+            `Narrator agent ${narrator.id} has no resolved auto voice; batch TTS will skip VoxCPM Auto Voice`,
+          );
         }
       }
       await generateTTSForClassroom(scenes, stageId, options.baseUrl, { voxcpmAuto });

@@ -7,8 +7,9 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { AgentConfig } from './types';
 import { getActionsForRole } from './types';
-import type { TTSProviderId } from '@/lib/audio/types';
+import type { AgentVoiceConfigRef, TTSProviderId } from '@/lib/audio/types';
 import type { VoiceDesign } from '@/lib/audio/voice-design';
+import type { SeedAgentProfile } from '@/lib/generation/agent-profiles';
 import { USER_AVATAR } from '@/lib/types/roundtable';
 import type { Participant, ParticipantRole } from '@/lib/types/roundtable';
 import { useUserProfileStore } from '@/lib/store/user-profile';
@@ -208,18 +209,7 @@ export function getDefaultAgents(): AgentInfo[] {
  * Return the built-in default agents as full adapt-pass seeds (identity fields
  * included, so adapted per-course copies keep the preset avatar/color/priority).
  */
-export function getDefaultAgentSeeds(): Array<{
-  id: string;
-  name: string;
-  role: string;
-  persona: string;
-  avatar: string;
-  color: string;
-  priority: number;
-  voiceConfig?: { providerId: string; modelId?: string; voiceId: string };
-  voiceDesign?: VoiceDesign;
-  refText?: string;
-}> {
+export function getDefaultAgentSeeds(): SeedAgentProfile[] {
   return Object.values(DEFAULT_AGENTS).map((a) => ({
     id: a.id,
     name: a.name,
@@ -422,7 +412,7 @@ export async function saveGeneratedAgents(
     avatar: string;
     color: string;
     priority: number;
-    voiceConfig?: { providerId: string; voiceId: string };
+    voiceConfig?: AgentVoiceConfigRef;
     voiceDesign?: VoiceDesign;
     refText?: string;
   }>,
@@ -442,7 +432,8 @@ export async function saveGeneratedAgents(
   const records = agents.map((a) => ({ ...a, stageId, createdAt: Date.now() }));
   await db.generatedAgents.bulkPut(records);
 
-  // Add to registry
+  // Add to registry (spread voiceConfig through so modelId survives, matching
+  // the loadGeneratedAgentsForStage hydration path)
   for (const record of records) {
     const { voiceConfig, ...rest } = record;
     registry.addAgent({
@@ -456,8 +447,8 @@ export async function saveGeneratedAgents(
       ...(voiceConfig
         ? {
             voiceConfig: {
+              ...voiceConfig,
               providerId: voiceConfig.providerId as TTSProviderId,
-              voiceId: voiceConfig.voiceId,
             },
           }
         : {}),

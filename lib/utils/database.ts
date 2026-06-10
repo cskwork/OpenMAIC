@@ -10,6 +10,7 @@ import type {
 } from '@/lib/types/chat';
 import type { SceneOutline } from '@/lib/types/generation';
 import type { VoiceDesign } from '@/lib/audio/voice-design';
+import type { AgentVoiceConfigRef } from '@/lib/audio/types';
 import type { UIMessage } from 'ai';
 import { createLogger } from '@/lib/logger';
 
@@ -168,7 +169,7 @@ export interface GeneratedAgentRecord {
   avatar: string;
   color: string;
   priority: number;
-  voiceConfig?: { providerId: string; modelId?: string; voiceId: string }; // Per-agent TTS voice selection
+  voiceConfig?: AgentVoiceConfigRef; // Per-agent TTS voice selection
   voiceDesign?: VoiceDesign; // 3-layer vocal descriptor for auto voice
   refText?: string; // Seed script spoken when bootstrapping the auto voice (its exact transcript)
   createdAt: number;

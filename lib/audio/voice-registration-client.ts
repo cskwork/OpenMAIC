@@ -11,7 +11,12 @@
  */
 
 import { db } from '@/lib/utils/database';
-import { getDeterministicVoiceId, type VoiceDesign } from '@/lib/audio/voice-design';
+import {
+  getDeterministicVoiceId,
+  normalizeRefText,
+  type VoiceDesign,
+} from '@/lib/audio/voice-design';
+import { canonicalVoiceModelId } from '@/lib/audio/voice-registration';
 
 export interface VoiceRegistrationRequestConfig {
   ttsApiKey?: string;
@@ -74,10 +79,13 @@ export async function ensureRegisteredVoice(
 ): Promise<string | undefined> {
   if (!params.voiceDesign) return undefined;
 
+  // Same normalization + model canonicalization as the server-side
+  // generation-time pass, so both pipelines derive the SAME deterministic id.
+  const refText = normalizeRefText(params.refText);
   const voiceId = await getDeterministicVoiceId(params.voiceDesign, {
     providerId,
-    model: request.ttsModelId,
-    refText: params.refText,
+    model: canonicalVoiceModelId(providerId, request.ttsModelId),
+    refText,
   });
   const memoKey = memoKeyFor(voiceId, request);
   if (registeredThisSession.has(memoKey)) return voiceId;
@@ -86,9 +94,13 @@ export async function ensureRegisteredVoice(
   const existing = inFlight.get(memoKey);
   if (existing) return existing;
 
-  const promise = registerOnce(providerId, voiceId, memoKey, params, request).finally(() =>
-    inFlight.delete(memoKey),
-  );
+  const promise = registerOnce(
+    providerId,
+    voiceId,
+    memoKey,
+    { ...params, refText },
+    request,
+  ).finally(() => inFlight.delete(memoKey));
   inFlight.set(memoKey, promise);
   return promise;
 }

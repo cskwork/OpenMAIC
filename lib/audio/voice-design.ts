@@ -40,15 +40,17 @@ export function buildVoiceDesignPrompt(design: VoiceDesign): string {
     .join(', ');
 }
 
-const REF_TEXT_MIN_CHARS = 10;
+const REF_TEXT_MIN_CHARS = 20;
 const REF_TEXT_MAX_CHARS = 300;
 
 /**
  * Coerce an arbitrary (LLM-produced) value into a usable refText — the seed
  * script an auto voice speaks when bootstrapping its reference clip, persisted
  * on the agent profile as the clip's exact transcript. Strips parentheses
- * (they delimit the VoxCPM `(prompt)text` syntax) and control chars; rejects
- * scripts too short to make a stable reference clip (official guidance: >=5s).
+ * (they delimit the VoxCPM `(prompt)text` syntax) and control chars, and
+ * rejects scripts too short to be a meaningful seed (the ~5-10s spoken-length
+ * target itself is enforced by the profile-generation prompts, not here —
+ * a character count can't measure duration across languages).
  */
 export function normalizeRefText(raw: unknown): string | undefined {
   if (typeof raw !== 'string') return undefined;

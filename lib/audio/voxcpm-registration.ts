@@ -9,6 +9,7 @@
 
 import { buildVoiceDesignPrompt, type VoiceDesign } from '@/lib/audio/voice-design';
 import {
+  VOXCPM_MODEL_ID,
   VOXCPM_VLLM_MODEL_ID,
   normalizeVoxCPMBackend,
   voxCPMBackendSupportsVoiceRegistration,
@@ -133,4 +134,12 @@ export const voxcpmVoiceRegistrationAdapter: VoiceRegistrationAdapter = {
   voiceExists: voxCPMVoiceExists,
   registerVoice: registerVoxCPMVoice,
   bootstrapReferenceClip: bootstrapVoxCPMReferenceClip,
+  // VoxCPM has a single vLLM model id; '', undefined and the display name all
+  // mean the same model, so they must hash to the same deterministic voice id
+  // regardless of which pipeline (server config vs client settings) computed it.
+  canonicalModelId(model) {
+    const trimmed = model?.trim();
+    if (!trimmed || trimmed === VOXCPM_MODEL_ID) return VOXCPM_VLLM_MODEL_ID;
+    return trimmed;
+  },
 };

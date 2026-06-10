@@ -26,6 +26,8 @@ import {
   type VoiceDesign,
 } from '@/lib/audio/voice-design';
 import {
+  canonicalVoiceModelId,
+  ensureBackendVoiceRegistered,
   getVoiceRegistrationAdapter,
   type VoiceRegistrationConfig,
 } from '@/lib/audio/voice-registration';
@@ -82,32 +84,41 @@ export async function registerAgentVoicesOnServer(
     apiKey: resolveTTSApiKey(providerId) || undefined,
     model,
   };
+  // Canonicalized so the client's lazy ensure (settings-supplied model) derives
+  // the SAME deterministic id and finds the voice already registered.
+  const idModel = canonicalVoiceModelId(providerId, model);
 
-  for (const agent of candidates) {
-    const design = agent.voiceDesign!;
-    const voicePrompt = buildVoiceDesignPrompt(design);
-    const refText = normalizeRefText(agent.refText);
-    try {
-      const voiceId = await getDeterministicVoiceId(design, { providerId, model, refText });
-      if (await adapter.voiceExists(cfg, voiceId)) {
-        log.info(`Auto voice ${voiceId} already registered (agent ${agent.id})`);
-      } else {
-        const clip = await adapter.bootstrapReferenceClip(cfg, { design, language, refText });
-        await adapter.registerVoice(cfg, {
-          voiceId,
-          referenceAudioBase64: clip.referenceAudioBase64,
-          mimeType: clip.mimeType,
+  // Bootstrap + register concurrently (one synthesis + one upload per agent on
+  // the generation critical path); each agent degrades independently.
+  await Promise.all(
+    candidates.map(async (agent) => {
+      const design = agent.voiceDesign!;
+      const voicePrompt = buildVoiceDesignPrompt(design);
+      const refText = normalizeRefText(agent.refText);
+      try {
+        const voiceId = await getDeterministicVoiceId(design, {
+          providerId,
+          model: idModel,
+          refText,
         });
-        log.info(`Registered auto voice ${voiceId} for agent ${agent.id} [provider=${providerId}]`);
+        const { registeredClip } = await ensureBackendVoiceRegistered(adapter, cfg, {
+          voiceId,
+          design,
+          language,
+          refText,
+        });
+        log.info(
+          `${registeredClip ? 'Registered' : 'Reusing already-registered'} auto voice ${voiceId} for agent ${agent.id} [provider=${providerId}]`,
+        );
+        resolved.set(agent.id, { voiceId, voicePrompt });
+      } catch (error) {
+        log.warn(
+          `Auto-voice registration failed for agent ${agent.id}, falling back to inline prompt:`,
+          error,
+        );
+        resolved.set(agent.id, { voicePrompt });
       }
-      resolved.set(agent.id, { voiceId, voicePrompt });
-    } catch (error) {
-      log.warn(
-        `Auto-voice registration failed for agent ${agent.id}, falling back to inline prompt:`,
-        error,
-      );
-      resolved.set(agent.id, { voicePrompt });
-    }
-  }
+    }),
+  );
   return resolved;
 }
