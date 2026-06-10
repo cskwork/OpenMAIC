@@ -54,6 +54,13 @@ function pruneThinkingConfigs(
 export const PLAYBACK_SPEEDS = [1, 1.25, 1.5, 2] as const;
 export type PlaybackSpeed = (typeof PLAYBACK_SPEEDS)[number];
 
+/** A user-picked voice for one agent (same shape as AgentConfig.voiceConfig). */
+export interface AgentVoiceOverride {
+  providerId: TTSProviderId;
+  modelId?: string;
+  voiceId: string;
+}
+
 export interface SettingsState {
   // Model selection
   providerId: ProviderId;
@@ -194,6 +201,13 @@ export interface SettingsState {
   selectedAgentIds: string[];
   agentMode: 'preset' | 'auto';
   autoAgentCount: number;
+  /**
+   * Per-agent voice picks made in the AgentBar, keyed by agent id. Lives here
+   * (persisted) rather than on registry AgentConfig records because default
+   * agents are reset from code and generated agents are rebuilt from IndexedDB
+   * on every load. Highest-priority input to resolveAgentVoice.
+   */
+  agentVoiceOverrides: Record<string, AgentVoiceOverride>;
 
   // Layout preferences (persisted via localStorage)
   sidebarCollapsed: boolean;
@@ -220,6 +234,7 @@ export interface SettingsState {
   setSelectedAgentIds: (ids: string[]) => void;
   setAgentMode: (mode: 'preset' | 'auto') => void;
   setAutoAgentCount: (count: number) => void;
+  setAgentVoiceOverride: (agentId: string, voice: AgentVoiceOverride) => void;
 
   // Layout actions
   setSidebarCollapsed: (collapsed: boolean) => void;
@@ -814,6 +829,7 @@ export const useSettingsStore = create<SettingsState>()(
         selectedAgentIds: migratedData?.selectedAgentIds || ['default-1', 'default-2', 'default-3'],
         agentMode: 'auto' as const,
         autoAgentCount: 3,
+        agentVoiceOverrides: {},
 
         // Playback controls
         ttsMuted: false,
@@ -935,6 +951,10 @@ export const useSettingsStore = create<SettingsState>()(
 
         setAgentMode: (mode) => set({ agentMode: mode }),
         setAutoAgentCount: (count) => set({ autoAgentCount: count }),
+        setAgentVoiceOverride: (agentId, voice) =>
+          set((state) => ({
+            agentVoiceOverrides: { ...state.agentVoiceOverrides, [agentId]: voice },
+          })),
 
         // Layout actions
         setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
