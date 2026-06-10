@@ -51,6 +51,9 @@ export interface Stage {
     avatar: string;
     color: string;
     priority: number;
+    voiceConfig?: { providerId: string; modelId?: string; voiceId: string };
+    voiceDesign?: { identity: string; texture: string; delivery: string };
+    refText?: string;
   }>;
   /**
    * True when this classroom was generated with Interactive Mode enabled

@@ -204,6 +204,36 @@ export function getDefaultAgents(): AgentInfo[] {
   }));
 }
 
+/**
+ * Return the built-in default agents as full adapt-pass seeds (identity fields
+ * included, so adapted per-course copies keep the preset avatar/color/priority).
+ */
+export function getDefaultAgentSeeds(): Array<{
+  id: string;
+  name: string;
+  role: string;
+  persona: string;
+  avatar: string;
+  color: string;
+  priority: number;
+  voiceConfig?: { providerId: string; modelId?: string; voiceId: string };
+  voiceDesign?: VoiceDesign;
+  refText?: string;
+}> {
+  return Object.values(DEFAULT_AGENTS).map((a) => ({
+    id: a.id,
+    name: a.name,
+    role: a.role,
+    persona: a.persona,
+    avatar: a.avatar,
+    color: a.color,
+    priority: a.priority,
+    ...(a.voiceConfig ? { voiceConfig: a.voiceConfig } : {}),
+    ...(a.voiceDesign ? { voiceDesign: a.voiceDesign } : {}),
+    ...(a.refText ? { refText: a.refText } : {}),
+  }));
+}
+
 export const useAgentRegistry = create<AgentRegistryState>()(
   persist(
     (set, get) => ({
@@ -385,6 +415,7 @@ export async function saveGeneratedAgents(
     priority: number;
     voiceConfig?: { providerId: string; voiceId: string };
     voiceDesign?: VoiceDesign;
+    refText?: string;
   }>,
 ): Promise<string[]> {
   const { db } = await import('@/lib/utils/database');

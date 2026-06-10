@@ -17,6 +17,7 @@ export interface AgentConfig {
   priority: number; // Priority for director selection (1-10)
   voiceConfig?: { providerId: TTSProviderId; modelId?: string; voiceId: string }; // Per-agent TTS voice selection
   voiceDesign?: VoiceDesign; // 3-layer vocal descriptor for auto voice (provider-neutral)
+  refText?: string; // Seed script spoken when bootstrapping the auto voice (its exact transcript)
 
   // Metadata
   createdAt: Date;
@@ -39,6 +40,7 @@ export interface AgentTemplate {
   priority: number;
   voiceConfig?: { providerId: TTSProviderId; modelId?: string; voiceId: string }; // Per-agent TTS voice selection
   voiceDesign?: VoiceDesign; // 3-layer vocal descriptor for auto voice (provider-neutral)
+  refText?: string; // Seed script spoken when bootstrapping the auto voice (its exact transcript)
 
   // LLM-generated agent fields
   isGenerated?: boolean; // true for LLM-generated agents
