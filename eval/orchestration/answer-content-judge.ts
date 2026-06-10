@@ -17,6 +17,19 @@
 
 import { generateText, type LanguageModel } from 'ai';
 
+/** Accept only a real boolean or the exact strings "true"/"false" (case-insensitive).
+ * Anything else (e.g. a stray string, number, undefined) returns null so the caller
+ * flags the sample as malformed instead of silently coercing it to a pass/fail. */
+function asStrictBool(v: unknown): boolean | null {
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase();
+    if (s === 'true') return true;
+    if (s === 'false') return false;
+  }
+  return null;
+}
+
 export interface AnswerVerdict {
   /** First sentence(s) already address the literal question/request. */
   leads_with_answer: boolean;
@@ -39,7 +52,7 @@ A reply "addresses" the message when it does what the answer key asks: gives the
 
 Fairness for specific request types:
 - LANGUAGE / FORMAT requests are satisfied when the reply is PRIMARILY in the requested language/format. Keeping individual technical terms, proper nouns, or formulas in their standard (often English) form is normal and still counts as honoring the request — do not penalize that code-switching.
-- NAVIGATION / PACING requests ("skip to the next page", "move on") are satisfied when the reply acknowledges the request AND transitions to the next slide's content/topic. A verbal transition counts; an explicit page-turn action is NOT required. Only continuing to narrate the SAME current slide, or ignoring the request, counts as not addressing it.
+- SLIDE-NAVIGATION requests ("skip to the next page", "go back a slide"): the agent has NO action to change the slide, so a correct reply ACKNOWLEDGES the request and is HONEST that it cannot directly change the slide — offering to continue with the next point verbally, or telling the user how to navigate (e.g. the slide controls). Pretending it flipped the slide, or silently narrating the current slide as if nothing was asked, does NOT count. (Pure pacing like "slow down" / "go deeper" — which the agent CAN do by adjusting its narration — is satisfied by doing so.)
 
 A reply does NOT address it when it instead: greets ("Welcome!"), launches an opening lecture ("Today we examine…"), pivots to an adjacent (non-requested) topic, reacts to peers, asks a rhetorical lead-in unrelated to the request, or answers a different question than the one asked.
 
@@ -74,10 +87,20 @@ AI's FULL reply: "${fullReply || '(no text — only actions / empty)'}"`,
 
   try {
     const text = result.text.replace(/```json\s*|\s*```/g, '').trim();
-    const parsed = JSON.parse(text) as Partial<AnswerVerdict>;
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    const leads = asStrictBool(parsed.leads_with_answer);
+    const answered = asStrictBool(parsed.answered_anywhere);
+    if (leads === null || answered === null) {
+      return {
+        leads_with_answer: false,
+        answered_anywhere: false,
+        reason: `Malformed judge booleans: ${result.text.slice(0, 200)}`,
+        error: true,
+      };
+    }
     return {
-      leads_with_answer: Boolean(parsed.leads_with_answer),
-      answered_anywhere: Boolean(parsed.answered_anywhere),
+      leads_with_answer: leads,
+      answered_anywhere: answered,
       reason: typeof parsed.reason === 'string' ? parsed.reason : '',
     };
   } catch {

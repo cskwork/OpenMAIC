@@ -295,10 +295,13 @@ async function sampleVariant(
 }
 
 function aggregate(samples: SampleResult[]): VariantAgg {
-  const usable = samples.filter((s) => !s.error && !s.verdict.error);
-  const n = usable.length || 1;
-  const leadsRate = usable.filter((s) => s.verdict.leads_with_answer).length / n;
-  const answeredRate = usable.filter((s) => s.verdict.answered_anywhere).length / n;
+  // Errors count as failures for an eval gate: the denominator is ALL requested
+  // samples, so a scenario cannot "pass" on one good sample while the rest error
+  // out. An errored sample (generation or judge failure) contributes 0.
+  const n = samples.length || 1;
+  const ok = (s: SampleResult) => !s.error && !s.verdict.error;
+  const leadsRate = samples.filter((s) => ok(s) && s.verdict.leads_with_answer).length / n;
+  const answeredRate = samples.filter((s) => ok(s) && s.verdict.answered_anywhere).length / n;
   return { samples, leadsRate, answeredRate };
 }
 
