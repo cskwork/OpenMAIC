@@ -2,14 +2,15 @@
 
 /**
  * ActionsBar — Pro-mode "narration script" of the active scene's playback
- * `actions`. Speech renders as soft bubbles; non-speech cues (spotlight / laser
- * / board) render as type-coded badges, interleaved in order. Hovering a cue:
- *  - shows a properties tooltip (portaled, so the script container can't clip it),
- *  - "plays" a spotlight on the bound canvas element — a portaled overlay that
- *    dims the screen and rings the element (works in edit mode, where the
- *    playback SpotlightOverlay isn't mounted).
- * The bar is collapsible and its height is drag-resizable from the top edge.
- * Reads reactively from the stage store so regenerating actions updates it live.
+ * `actions`, rendered as one continuous inline flow: speech as softly tinted
+ * runs of text, non-speech cues (spotlight / laser / board) as small inline
+ * pills at their exact position in the sequence. Hovering a cue pill:
+ *  - shows a properties tooltip (portaled — the container can't clip it),
+ *  - plays the REAL playback spotlight effect on the bound canvas element
+ *    (drives useCanvasStore.setSpotlight → the same SpotlightOverlay the
+ *    player uses, mounted in the edit canvas with the editor id prefix).
+ * Collapsible; height drag-resizable from the top edge. Reads reactively from
+ * the stage store, so regenerating actions updates it live.
  */
 import { useCallback, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -28,34 +29,33 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import { useStageStore } from '@/lib/store/stage';
+import { useCanvasStore } from '@/lib/store/canvas';
 import type { Action } from '@/lib/types/action';
 
 const EMPTY: Action[] = [];
 const MIN_H = 96;
 const MAX_H = 560;
-const DEFAULT_H = 196;
+const DEFAULT_H = 188;
 
 interface TypeMeta {
   icon: LucideIcon;
   label: string;
-  /** chip surface */
-  chip: string;
-  /** spotlight ring color */
-  ring: string;
+  /** dot color */
+  dot: string;
 }
 
 const META: Record<string, TypeMeta> = {
-  spotlight: { icon: Focus, label: '聚光', chip: 'bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:ring-amber-900', ring: '#d97706' },
-  laser: { icon: Crosshair, label: '激光', chip: 'bg-rose-50 text-rose-700 ring-rose-200 dark:bg-rose-950/40 dark:text-rose-400 dark:ring-rose-900', ring: '#e11d48' },
-  wb_open: { icon: Presentation, label: '画板', chip: 'bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-950/40 dark:text-sky-400 dark:ring-sky-900', ring: '#0284c7' },
-  wb_draw_text: { icon: PenLine, label: '板书', chip: 'bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-950/40 dark:text-sky-400 dark:ring-sky-900', ring: '#0284c7' },
-  wb_draw_shape: { icon: Shapes, label: '图形', chip: 'bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-950/40 dark:text-sky-400 dark:ring-sky-900', ring: '#0284c7' },
-  wb_draw_latex: { icon: Sigma, label: '公式', chip: 'bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-950/40 dark:text-sky-400 dark:ring-sky-900', ring: '#0284c7' },
-  wb_draw_table: { icon: Table2, label: '表格', chip: 'bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-950/40 dark:text-sky-400 dark:ring-sky-900', ring: '#0284c7' },
+  spotlight: { icon: Focus, label: '聚光', dot: 'bg-amber-500' },
+  laser: { icon: Crosshair, label: '激光', dot: 'bg-rose-500' },
+  wb_open: { icon: Presentation, label: '画板', dot: 'bg-sky-500' },
+  wb_draw_text: { icon: PenLine, label: '板书', dot: 'bg-sky-500' },
+  wb_draw_shape: { icon: Shapes, label: '图形', dot: 'bg-sky-500' },
+  wb_draw_latex: { icon: Sigma, label: '公式', dot: 'bg-sky-500' },
+  wb_draw_table: { icon: Table2, label: '表格', dot: 'bg-sky-500' },
 };
 
 function metaFor(type: string): TypeMeta {
-  return META[type] ?? { icon: Circle, label: type, chip: 'bg-muted text-muted-foreground ring-border', ring: '#6b7280' };
+  return META[type] ?? { icon: Circle, label: type, dot: 'bg-muted-foreground' };
 }
 
 function propsOf(a: Action): Array<[string, string]> {
@@ -71,80 +71,59 @@ function propsOf(a: Action): Array<[string, string]> {
   return rows;
 }
 
-interface HoverState {
+interface TooltipState {
   action: Action;
   badge: DOMRect;
-  target: DOMRect | null;
 }
 
-/** Portaled spotlight (dim + ring around the element) + properties tooltip. */
-function HoverOverlay({ hover }: { hover: HoverState }) {
+/** Portaled properties tooltip (above the pill; never clipped by the bar). */
+function CueTooltip({ tip }: { tip: TooltipState }) {
   if (typeof document === 'undefined') return null;
-  const m = metaFor(hover.action.type);
-  const t = hover.target;
-  const pad = 6;
-
   return createPortal(
-    <div className="pointer-events-none fixed inset-0 z-[60]">
-      {t && (
-        <div
-          style={{
-            position: 'fixed',
-            left: t.left - pad,
-            top: t.top - pad,
-            width: t.width + pad * 2,
-            height: t.height + pad * 2,
-            borderRadius: 6,
-            border: `2px solid ${m.ring}`,
-            boxShadow: '0 0 0 9999px rgba(15,23,42,0.45)',
-            transition: 'opacity 120ms ease',
-          }}
-        />
-      )}
-      {/* properties tooltip, above the badge */}
-      <div
-        style={{
-          position: 'fixed',
-          left: Math.max(8, hover.badge.left + hover.badge.width / 2),
-          top: hover.badge.top - 8,
-          transform: 'translate(-50%, -100%)',
-          maxWidth: 280,
-        }}
-        className="rounded-lg border border-border bg-popover px-2.5 py-1.5 text-popover-foreground shadow-md"
-      >
-        {propsOf(hover.action).map(([k, v]) => (
-          <div key={k} className="flex gap-2 text-[11px] leading-relaxed">
-            <span className="shrink-0 text-muted-foreground">{k}</span>
-            <span className="font-mono [overflow-wrap:anywhere]">{v}</span>
-          </div>
-        ))}
-        {t && <div className="mt-0.5 text-[10px] text-muted-foreground">高亮画布元素</div>}
-      </div>
+    <div
+      style={{
+        position: 'fixed',
+        left: Math.max(8, tip.badge.left + tip.badge.width / 2),
+        top: tip.badge.top - 8,
+        transform: 'translate(-50%, -100%)',
+        maxWidth: 280,
+        zIndex: 60,
+      }}
+      className="pointer-events-none rounded-lg border border-border bg-popover px-2.5 py-1.5 text-popover-foreground shadow-md"
+    >
+      {propsOf(tip.action).map(([k, v]) => (
+        <div key={k} className="flex gap-2 text-[11px] leading-relaxed">
+          <span className="shrink-0 text-muted-foreground">{k}</span>
+          <span className="font-mono [overflow-wrap:anywhere]">{v}</span>
+        </div>
+      ))}
     </div>,
     document.body,
   );
 }
 
-function CueBadge({ action, onHover }: { action: Action; onHover: (h: HoverState | null) => void }) {
+function CuePill({ action, onTip }: { action: Action; onTip: (t: TooltipState | null) => void }) {
   const m = metaFor(action.type);
   const Icon = m.icon;
   const elementId = (action as { elementId?: string }).elementId;
 
   const enter = (e: React.MouseEvent<HTMLSpanElement>) => {
-    const badge = e.currentTarget.getBoundingClientRect();
-    const el = elementId ? document.getElementById(`editable-element-${elementId}`) : null;
-    onHover({ action, badge, target: el ? el.getBoundingClientRect() : null });
+    onTip({ action, badge: e.currentTarget.getBoundingClientRect() });
+    // Play the real playback spotlight on the canvas element.
+    if (elementId) useCanvasStore.getState().setSpotlight(elementId);
+  };
+  const leave = () => {
+    onTip(null);
+    useCanvasStore.getState().setSpotlight('');
   };
 
   return (
     <span
       onMouseEnter={enter}
-      onMouseLeave={() => onHover(null)}
-      className={cn(
-        'inline-flex cursor-default select-none items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium ring-1 transition-shadow hover:shadow-sm',
-        m.chip,
-      )}
+      onMouseLeave={leave}
+      className="mx-1 inline-flex -translate-y-px cursor-default select-none items-center gap-1.5 rounded-full border border-border bg-background px-2 py-[2px] align-middle text-[11px] font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
     >
+      <span className={cn('size-1.5 rounded-full', m.dot)} />
       <Icon className="size-3" />
       {m.label}
     </span>
@@ -154,9 +133,9 @@ function CueBadge({ action, onHover }: { action: Action; onHover: (h: HoverState
 export function ActionsBar({ sceneId }: { sceneId: string }) {
   const actions = useStageStore((s) => s.scenes.find((x) => x.id === sceneId)?.actions ?? EMPTY);
   const [open, setOpen] = useState(true);
-  const [hover, setHover] = useState<HoverState | null>(null);
+  const [tip, setTip] = useState<TooltipState | null>(null);
 
-  // height drag-resize (top edge)
+  // height drag-resize (top edge), same pointer-capture pattern as the rails
   const sectionRef = useRef<HTMLElement>(null);
   const [height, setHeight] = useState(DEFAULT_H);
   const dragRef = useRef<{ startY: number; startH: number; lastH: number; pointerId: number } | null>(null);
@@ -177,7 +156,7 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
   const onResizeMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const d = dragRef.current;
     if (!d || e.pointerId !== d.pointerId) return;
-    const next = Math.min(MAX_H, Math.max(MIN_H, d.startH + (d.startY - e.clientY))); // drag up → taller
+    const next = Math.min(MAX_H, Math.max(MIN_H, d.startH + (d.startY - e.clientY)));
     d.lastH = next;
     if (sectionRef.current) sectionRef.current.style.height = `${next}px`;
   }, []);
@@ -194,9 +173,7 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
     document.body.style.cursor = '';
   }, []);
 
-  const counts = new Map<string, number>();
-  for (const a of actions) counts.set(a.type, (counts.get(a.type) ?? 0) + 1);
-  const speechCount = counts.get('speech') ?? 0;
+  const speechCount = actions.filter((a) => a.type === 'speech').length;
   const cueCount = actions.length - speechCount;
 
   return (
@@ -220,40 +197,40 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex h-9 shrink-0 items-center gap-2 px-4 text-left transition-colors hover:bg-accent/50"
+        className="flex h-9 shrink-0 items-center gap-2.5 px-5 text-left transition-colors hover:bg-accent/40"
       >
-        <ScrollText className="size-4 text-primary" />
-        <span className="text-[13px] font-medium text-foreground">讲解脚本</span>
-        <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-          {speechCount} 段讲解 · {cueCount} 个提示
+        <ScrollText className="size-3.5 text-primary" />
+        <span className="text-[12px] font-semibold tracking-wide text-foreground">讲解脚本</span>
+        <span className="font-mono text-[11px] tabular-nums text-muted-foreground/80">
+          {speechCount} 讲解 · {cueCount} 动作
         </span>
         <ChevronDown className={cn('ml-auto size-4 text-muted-foreground transition-transform', open && 'rotate-180')} />
       </button>
 
       {open && (
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-3">
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4">
           {actions.length === 0 ? (
             <p className="text-[12px] text-muted-foreground">暂无动作 — 让 MAIC Agent 为这一页生成讲解动作。</p>
           ) : (
-            <div className="flex flex-wrap items-center gap-x-1.5 gap-y-2">
+            <p className="max-w-[88ch] text-[13px] leading-[2.1] text-foreground/90">
               {actions.map((a, i) =>
                 a.type === 'speech' ? (
                   <span
                     key={a.id ?? i}
-                    className="rounded-lg bg-muted/60 px-2.5 py-1.5 text-sm leading-relaxed text-foreground"
+                    className="rounded-[4px] bg-secondary/60 px-1 py-[2px] [box-decoration-break:clone] dark:bg-secondary/30"
                   >
                     {(a as { text?: string }).text ?? ''}
                   </span>
                 ) : (
-                  <CueBadge key={a.id ?? i} action={a} onHover={setHover} />
+                  <CuePill key={a.id ?? i} action={a} onTip={setTip} />
                 ),
               )}
-            </div>
+            </p>
           )}
         </div>
       )}
 
-      {hover && <HoverOverlay hover={hover} />}
+      {tip && <CueTooltip tip={tip} />}
     </section>
   );
 }

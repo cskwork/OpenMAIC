@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import Canvas from '@/components/slide-renderer/Editor/Canvas';
+import { SpotlightOverlay } from '@/components/slide-renderer/Editor/SpotlightOverlay';
 import { SceneProvider } from '@/lib/contexts/scene-context';
 import { useCanvasStore } from '@/lib/store/canvas';
 import {
@@ -57,6 +58,10 @@ export function SlideCanvas() {
     <div className="relative h-full w-full" {...gestureProps}>
       <SceneProvider controller={controller}>
         <Canvas />
+        {/* Same spotlight effect as playback, retargeted to the editor's
+            element ids — driven by useCanvasStore.setSpotlight (e.g. from the
+            ActionsBar cue-badge hover). */}
+        <SpotlightOverlay domIdPrefix="editable-element-" />
       </SceneProvider>
       <AnchoredTextBar editingElementId={editingElementId} />
       <AnchoredElementBar element={nonTextElement} />
