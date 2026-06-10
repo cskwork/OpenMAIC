@@ -87,17 +87,19 @@ export default function ClassroomDetailPage() {
       const { useSettingsStore } = await import('@/lib/store/settings');
       const { restoreAgentSelection } =
         await import('@/lib/orchestration/registry/agent-selection');
-      // Keep the user's persisted mode/selection when still valid for this
-      // stage instead of unconditionally forcing auto mode (which clobbered
-      // AgentBar choices on every classroom visit); fall back to the
-      // stage-derived defaults when the persisted choice is stale. Stale
-      // generated IDs (from another stage / pre-bleed-fix) never validate, so
-      // they don't resolve against a leftover registry entry.
+      // Keep the user's explicit AgentBar mode/selection when still valid for
+      // this stage instead of unconditionally forcing auto mode (which
+      // clobbered it on every classroom visit); fall back to the stage-derived
+      // defaults otherwise, marking them as NOT user-set so the next classroom
+      // never mistakes them for a choice. Stale generated IDs (from another
+      // stage / pre-bleed-fix) never validate, so they don't resolve against a
+      // leftover registry entry.
       const settings = useSettingsStore.getState();
       const registry = useAgentRegistry.getState();
       const stage = useStageStore.getState().stage;
-      const next = restoreAgentSelection({
+      const { selection: next, isUserSet } = restoreAgentSelection({
         persisted: { mode: settings.agentMode, selectedAgentIds: settings.selectedAgentIds },
+        persistedIsUserSet: settings.agentSelectionIsUserSet,
         generatedAgentIds,
         stageAgentIds: stage?.agentIds,
         isPresetAgent: (id) => {
@@ -110,6 +112,9 @@ export default function ClassroomDetailPage() {
       if (next.mode !== settings.agentMode) settings.setAgentMode(next.mode);
       if (next.selectedAgentIds !== settings.selectedAgentIds) {
         settings.setSelectedAgentIds(next.selectedAgentIds);
+      }
+      if (isUserSet !== settings.agentSelectionIsUserSet) {
+        settings.setAgentSelectionIsUserSet(isUserSet);
       }
     } catch (error) {
       log.error('Failed to load classroom:', error);

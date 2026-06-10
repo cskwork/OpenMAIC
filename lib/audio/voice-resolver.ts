@@ -20,11 +20,15 @@ export interface ResolvedVoice {
   voiceId: string;
 }
 
+/** A user-picked voice for one agent (same shape as AgentConfig.voiceConfig). */
+export interface AgentVoiceOverride {
+  providerId: TTSProviderId;
+  modelId?: string;
+  voiceId: string;
+}
+
 /** Persisted per-agent voice picks, keyed by agent id (settings store). */
-export type AgentVoiceOverrides = Record<
-  string,
-  { providerId: TTSProviderId; modelId?: string; voiceId: string }
->;
+export type AgentVoiceOverrides = Record<string, AgentVoiceOverride>;
 
 /**
  * Resolve the TTS provider + voice for an agent, choosing only among ENABLED

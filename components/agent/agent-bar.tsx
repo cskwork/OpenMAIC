@@ -292,8 +292,8 @@ function AgentVoicePill({
                         type="button"
                         onClick={() => {
                           // Persisted in settings, not on the registry record:
-                          // default/generated agent records are rebuilt from
-                          // code/IndexedDB on every load and would drop the pick.
+                          // default agent records are reset from code on every
+                          // load and would drop the pick.
                           setAgentVoiceOverride(agent.id, {
                             providerId: provider.providerId,
                             modelId: group.modelId || undefined,
@@ -618,6 +618,7 @@ export function AgentBar() {
   const setSelectedAgentIds = useSettingsStore((s) => s.setSelectedAgentIds);
   const agentMode = useSettingsStore((s) => s.agentMode);
   const setAgentMode = useSettingsStore((s) => s.setAgentMode);
+  const setAgentSelectionIsUserSet = useSettingsStore((s) => s.setAgentSelectionIsUserSet);
   const ttsProvidersConfig = useSettingsStore((s) => s.ttsProvidersConfig);
   const ttsEnabled = useSettingsStore((s) => s.ttsEnabled);
 
@@ -663,6 +664,8 @@ export function AgentBar() {
   }, [open]);
 
   const handleModeChange = (mode: 'preset' | 'auto') => {
+    // An explicit choice — restoreAgentSelection keeps it across classrooms.
+    setAgentSelectionIsUserSet(true);
     setAgentMode(mode);
     if (mode === 'preset') {
       // Remove stale auto-generated agent IDs that may linger from a previous auto classroom
@@ -683,6 +686,7 @@ export function AgentBar() {
   const toggleAgent = (agentId: string) => {
     const agent = agents.find((a) => a.id === agentId);
     if (agent?.role === 'teacher') return;
+    setAgentSelectionIsUserSet(true);
     if (selectedAgentIds.includes(agentId)) {
       setSelectedAgentIds(selectedAgentIds.filter((id) => id !== agentId));
     } else {
