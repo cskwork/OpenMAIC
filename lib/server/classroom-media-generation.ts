@@ -284,7 +284,13 @@ export async function generateTTSForClassroom(
         const result = await generateTTS(
           {
             providerId,
-            modelId: DEFAULT_TTS_MODELS[providerId as keyof typeof DEFAULT_TTS_MODELS] || '',
+            // The operator-pinned model (server config) is authoritative, like
+            // the key/baseUrl — a vLLM backend only accepts its served model
+            // name. Fall back to the provider default when nothing is pinned.
+            modelId:
+              provider.model ||
+              DEFAULT_TTS_MODELS[providerId as keyof typeof DEFAULT_TTS_MODELS] ||
+              '',
             apiKey,
             baseUrl: ttsBaseUrl,
             voice,
