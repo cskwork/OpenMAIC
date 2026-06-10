@@ -11,6 +11,7 @@ vi.mock('@/lib/utils/database', () => ({
 }));
 
 import { ensureRegisteredVoice } from '@/lib/audio/voice-registration-client';
+import { getDeterministicVoiceId } from '@/lib/audio/voice-design';
 
 function okFetch() {
   const f = vi.fn(
@@ -118,5 +119,16 @@ describe('ensureRegisteredVoice memoization', () => {
       { ...req, ttsModelId: 'voxcpm2' },
     );
     expect(f).toHaveBeenCalledTimes(1);
+
+    // Cross-pipeline assertion: the id sent by the client equals the id the
+    // generation-time server pass computes (canonical model + same refText).
+    const body = JSON.parse(String((f.mock.calls[0] as unknown as [string, RequestInit])[1].body));
+    expect(body.voiceId).toBe(
+      await getDeterministicVoiceId(voiceDesign, {
+        providerId: 'voxcpm-tts',
+        model: 'voxcpm2',
+        refText,
+      }),
+    );
   });
 });

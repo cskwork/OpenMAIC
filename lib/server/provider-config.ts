@@ -457,6 +457,32 @@ export function resolveTTSModel(providerId: string, clientModel?: string): strin
   return clientModel;
 }
 
+export interface FirstServerTTSProvider {
+  providerId: string;
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+}
+
+/**
+ * First enabled server TTS provider with its resolved credentials — the single
+ * precedence rule shared by server batch TTS and generation-time auto-voice
+ * registration. `requiresApiKey` gating stays with the callers (it lives in
+ * the provider catalog, which this config module doesn't depend on).
+ */
+export function resolveFirstServerTTSProvider(): FirstServerTTSProvider | undefined {
+  const providerId = Object.entries(getServerTTSProviders())
+    .filter(([id, info]) => id !== 'browser-native-tts' && !info.disabled)
+    .map(([id]) => id)[0];
+  if (!providerId) return undefined;
+  return {
+    providerId,
+    apiKey: resolveTTSApiKey(providerId) || undefined,
+    baseUrl: resolveTTSBaseUrl(providerId),
+    model: resolveTTSModel(providerId),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Public API — ASR
 // ---------------------------------------------------------------------------

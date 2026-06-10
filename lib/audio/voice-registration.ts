@@ -70,6 +70,11 @@ export function supportsVoiceRegistration(
  * The model id to hash into a deterministic voice id for `providerId`.
  * Dispatches to the adapter's canonicalization so the server (config-resolved
  * model) and the client (settings model) agree on the same id.
+ *
+ * Migration note: clients whose settings carried no model id used to hash ''
+ * and now hash the canonical model, so those auto voices get a new id and
+ * re-register once on next use (one-time re-bootstrap; the old backend voice
+ * and cached clip are simply orphaned).
  */
 export function canonicalVoiceModelId(providerId: string, model?: string): string | undefined {
   const adapter = getVoiceRegistrationAdapter(providerId);

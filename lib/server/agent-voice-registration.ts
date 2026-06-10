@@ -13,12 +13,8 @@
  */
 
 import { createLogger } from '@/lib/logger';
-import {
-  getServerTTSProviders,
-  resolveTTSApiKey,
-  resolveTTSBaseUrl,
-  resolveTTSModel,
-} from '@/lib/server/provider-config';
+import { resolveFirstServerTTSProvider } from '@/lib/server/provider-config';
+import { TTS_PROVIDERS } from '@/lib/audio/constants';
 import {
   buildVoiceDesignPrompt,
   getDeterministicVoiceId,
@@ -47,11 +43,19 @@ export interface ResolvedAgentVoice {
   voicePrompt: string;
 }
 
-/** First enabled server TTS provider — same precedence as server batch TTS. */
-function resolveServerTTSProviderId(): string | undefined {
-  return Object.entries(getServerTTSProviders())
-    .filter(([id, info]) => id !== 'browser-native-tts' && !info.disabled)
-    .map(([id]) => id)[0];
+/**
+ * Map the course `languageDirective` (a full instruction sentence on the server
+ * pipeline; the client passes a locale instead) onto something the bootstrap
+ * fallback-sentence table can key on. Without this, a Chinese directive would
+ * never match and a refText-less agent would bootstrap with the English sample.
+ */
+export function toBootstrapLanguage(language?: string): string | undefined {
+  const value = language?.trim();
+  if (!value) return undefined;
+  if (/\p{Script=Han}/u.test(value)) return 'zh';
+  // already a language/locale code → pass through
+  if (/^[a-zA-Z]{2,3}([-_][a-zA-Z0-9]+)*$/.test(value)) return value;
+  return undefined;
 }
 
 /**
@@ -68,28 +72,33 @@ export async function registerAgentVoicesOnServer(
   const candidates = agents.filter((agent) => agent.voiceDesign);
   if (candidates.length === 0) return resolved;
 
-  const providerId = resolveServerTTSProviderId();
-  if (!providerId) return resolved;
+  const provider = resolveFirstServerTTSProvider();
+  if (!provider) return resolved;
+  const { providerId, apiKey, baseUrl, model } = provider;
+  if (TTS_PROVIDERS[providerId as keyof typeof TTS_PROVIDERS]?.requiresApiKey && !apiKey) {
+    return resolved; // batch TTS will skip for the same reason; don't spam warns
+  }
 
   // Server-managed providers carry no client provider-options; the adapter
   // decides support from its defaults (VoxCPM: default backend is vLLM-Omni).
   const adapter = getVoiceRegistrationAdapter(providerId);
   if (!adapter?.supportsRegistration(undefined)) return resolved;
-
-  const baseUrl = resolveTTSBaseUrl(providerId);
   if (!baseUrl) return resolved;
-  const model = resolveTTSModel(providerId);
-  const cfg: VoiceRegistrationConfig = {
-    baseUrl,
-    apiKey: resolveTTSApiKey(providerId) || undefined,
-    model,
-  };
+
+  const cfg: VoiceRegistrationConfig = { baseUrl, apiKey, model };
   // Canonicalized so the client's lazy ensure (settings-supplied model) derives
-  // the SAME deterministic id and finds the voice already registered.
+  // the SAME deterministic id and finds the voice already registered. This
+  // holds as long as the server-resolved model canonicalizes to the same value
+  // as the client's; an operator-pinned custom model id namespaces separately
+  // (clients unaware of the pin will register their own voice).
   const idModel = canonicalVoiceModelId(providerId, model);
+  const bootstrapLanguage = toBootstrapLanguage(language);
 
   // Bootstrap + register concurrently (one synthesis + one upload per agent on
-  // the generation critical path); each agent degrades independently.
+  // the generation critical path); each agent degrades independently. Agents
+  // that resolve to the SAME deterministic id (same design + refText) share
+  // one ensure call instead of racing duplicate bootstrap/register requests.
+  const ensures = new Map<string, Promise<{ registeredClip?: unknown }>>();
   await Promise.all(
     candidates.map(async (agent) => {
       const design = agent.voiceDesign!;
@@ -101,12 +110,17 @@ export async function registerAgentVoicesOnServer(
           model: idModel,
           refText,
         });
-        const { registeredClip } = await ensureBackendVoiceRegistered(adapter, cfg, {
-          voiceId,
-          design,
-          language,
-          refText,
-        });
+        let ensure = ensures.get(voiceId);
+        if (!ensure) {
+          ensure = ensureBackendVoiceRegistered(adapter, cfg, {
+            voiceId,
+            design,
+            language: bootstrapLanguage,
+            refText,
+          });
+          ensures.set(voiceId, ensure);
+        }
+        const { registeredClip } = await ensure;
         log.info(
           `${registeredClip ? 'Registered' : 'Reusing already-registered'} auto voice ${voiceId} for agent ${agent.id} [provider=${providerId}]`,
         );

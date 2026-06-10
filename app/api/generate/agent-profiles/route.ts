@@ -49,11 +49,16 @@ interface RequestBody {
 function isUsableSeed(seed: unknown): seed is SeedAgentProfile {
   if (!seed || typeof seed !== 'object') return false;
   const record = seed as Record<string, unknown>;
+  // Identity fields are copied verbatim into the adapted output, so a seed
+  // missing any of them would produce a malformed agent record.
   return (
     typeof record.id === 'string' &&
     typeof record.name === 'string' &&
     typeof record.role === 'string' &&
-    typeof record.persona === 'string'
+    typeof record.persona === 'string' &&
+    typeof record.avatar === 'string' &&
+    typeof record.color === 'string' &&
+    typeof record.priority === 'number'
   );
 }
 

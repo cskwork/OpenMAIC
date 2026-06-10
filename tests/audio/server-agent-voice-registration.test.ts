@@ -2,10 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { getDeterministicVoiceId } from '@/lib/audio/voice-design';
 
 const providerConfig = vi.hoisted(() => ({
-  getServerTTSProviders: vi.fn(),
-  resolveTTSApiKey: vi.fn(() => 'test-key'),
-  resolveTTSBaseUrl: vi.fn(() => 'http://voxcpm.test'),
-  resolveTTSModel: vi.fn(() => 'voxcpm2'),
+  resolveFirstServerTTSProvider: vi.fn(),
 }));
 vi.mock('@/lib/server/provider-config', () => providerConfig);
 
@@ -27,14 +24,22 @@ vi.mock('@/lib/audio/voice-registration', async (importOriginal) => {
   };
 });
 
-import { registerAgentVoicesOnServer } from '@/lib/server/agent-voice-registration';
+import {
+  registerAgentVoicesOnServer,
+  toBootstrapLanguage,
+} from '@/lib/server/agent-voice-registration';
 
 const design = { identity: '中年男教师', texture: '低沉温暖', delivery: '从容鼓励' };
 const refText = '大家好，我是这门课的老师，欢迎来到课堂，我们马上开始今天的学习。';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  providerConfig.getServerTTSProviders.mockReturnValue({ 'voxcpm-tts': {} });
+  providerConfig.resolveFirstServerTTSProvider.mockReturnValue({
+    providerId: 'voxcpm-tts',
+    apiKey: 'test-key',
+    baseUrl: 'http://voxcpm.test',
+    model: 'voxcpm2',
+  });
   adapter.supportsRegistration.mockReturnValue(true);
   adapter.voiceExists.mockResolvedValue(false);
 });
@@ -86,7 +91,11 @@ describe('registerAgentVoicesOnServer', () => {
   });
 
   it('returns an empty map when the provider does not support registration', async () => {
-    providerConfig.getServerTTSProviders.mockReturnValue({ 'qwen-tts': {} });
+    providerConfig.resolveFirstServerTTSProvider.mockReturnValue({
+      providerId: 'qwen-tts',
+      apiKey: 'k',
+      baseUrl: 'http://qwen.test',
+    });
     const result = await registerAgentVoicesOnServer([
       { id: 'gen-1', voiceDesign: design, refText },
     ]);
@@ -96,6 +105,41 @@ describe('registerAgentVoicesOnServer', () => {
   it('ignores agents without a voiceDesign', async () => {
     const result = await registerAgentVoicesOnServer([{ id: 'gen-1', refText }]);
     expect(result.size).toBe(0);
-    expect(providerConfig.getServerTTSProviders).not.toHaveBeenCalled();
+    expect(providerConfig.resolveFirstServerTTSProvider).not.toHaveBeenCalled();
+  });
+
+  it('shares one ensure call between agents resolving to the same voice id', async () => {
+    const result = await registerAgentVoicesOnServer([
+      { id: 'gen-1', voiceDesign: design, refText },
+      { id: 'gen-2', voiceDesign: design, refText },
+    ]);
+    expect(result.get('gen-1')?.voiceId).toBe(result.get('gen-2')?.voiceId);
+    expect(adapter.bootstrapReferenceClip).toHaveBeenCalledTimes(1);
+    expect(adapter.registerVoice).toHaveBeenCalledTimes(1);
+  });
+
+  it('derives a bootstrap language code from the course language directive', async () => {
+    await registerAgentVoicesOnServer(
+      [{ id: 'gen-1', voiceDesign: design }], // no refText → bootstrap falls back to the sample sentence
+      '本课程将使用中文（简体）进行教学。',
+    );
+    expect(adapter.bootstrapReferenceClip).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ language: 'zh' }),
+    );
+  });
+});
+
+describe('toBootstrapLanguage', () => {
+  it('maps a CJK directive sentence to zh and passes locale codes through', () => {
+    expect(toBootstrapLanguage('本课程将使用中文进行教学。')).toBe('zh');
+    expect(toBootstrapLanguage('zh-CN')).toBe('zh-CN');
+    expect(toBootstrapLanguage('en')).toBe('en');
+  });
+  it('returns undefined for non-CJK directive sentences (default sample)', () => {
+    expect(
+      toBootstrapLanguage('The course should be delivered entirely in English.'),
+    ).toBeUndefined();
+    expect(toBootstrapLanguage(undefined)).toBeUndefined();
   });
 });
