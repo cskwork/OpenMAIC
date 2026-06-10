@@ -59,6 +59,13 @@ describe('agentVoiceOverrides', () => {
     expect(store.getState().agentVoiceOverrides).toEqual({
       'default-3': { providerId: 'qwen-tts', modelId: 'qwen3-tts-flash', voiceId: 'Cherry' },
     });
+
+    // The write must actually reach storage (would break if a future
+    // partialize omits the field) — sync storage writes synchronously.
+    const blob = JSON.parse(storage.get('settings-storage')!);
+    expect(blob.state.agentVoiceOverrides).toEqual({
+      'default-3': { providerId: 'qwen-tts', modelId: 'qwen3-tts-flash', voiceId: 'Cherry' },
+    });
   });
 
   it('survives persist rehydration of an existing blob', async () => {
@@ -86,6 +93,7 @@ describe('agentSelectionIsUserSet', () => {
     expect(store.getState().agentSelectionIsUserSet).toBe(false);
     store.getState().setAgentSelectionIsUserSet(true);
     expect(store.getState().agentSelectionIsUserSet).toBe(true);
+    expect(JSON.parse(storage.get('settings-storage')!).state.agentSelectionIsUserSet).toBe(true);
     store.getState().setAgentSelectionIsUserSet(false);
     expect(store.getState().agentSelectionIsUserSet).toBe(false);
   });

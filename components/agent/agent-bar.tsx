@@ -664,6 +664,9 @@ export function AgentBar() {
   }, [open]);
 
   const handleModeChange = (mode: 'preset' | 'auto') => {
+    // Clicking the already-active tab is a visual no-op; it must not convert
+    // stage-derived defaults into a "user choice".
+    if (mode === agentMode) return;
     // An explicit choice — restoreAgentSelection keeps it across classrooms.
     setAgentSelectionIsUserSet(true);
     setAgentMode(mode);
