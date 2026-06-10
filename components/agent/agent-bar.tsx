@@ -77,9 +77,10 @@ function AgentVoicePill({
   disabled?: boolean;
 }) {
   const { t, locale } = useI18n();
-  const updateAgent = useAgentRegistry((s) => s.updateAgent);
   const ttsProvidersConfig = useSettingsStore((s) => s.ttsProvidersConfig);
-  const resolved = resolveAgentVoice(agent, agentIndex, availableProviders);
+  const agentVoiceOverrides = useSettingsStore((s) => s.agentVoiceOverrides);
+  const setAgentVoiceOverride = useSettingsStore((s) => s.setAgentVoiceOverride);
+  const resolved = resolveAgentVoice(agent, agentIndex, availableProviders, agentVoiceOverrides);
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [voiceQuery, setVoiceQuery] = useState('');
   const [previewingId, setPreviewingId] = useState<string | null>(null);
@@ -290,12 +291,13 @@ function AgentVoicePill({
                       <button
                         type="button"
                         onClick={() => {
-                          updateAgent(agent.id, {
-                            voiceConfig: {
-                              providerId: provider.providerId,
-                              modelId: group.modelId || undefined,
-                              voiceId: voice.id,
-                            },
+                          // Persisted in settings, not on the registry record:
+                          // default/generated agent records are rebuilt from
+                          // code/IndexedDB on every load and would drop the pick.
+                          setAgentVoiceOverride(agent.id, {
+                            providerId: provider.providerId,
+                            modelId: group.modelId || undefined,
+                            voiceId: voice.id,
                           });
                           setPopoverOpen(false);
                         }}
