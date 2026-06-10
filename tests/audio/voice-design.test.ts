@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildVoiceDesignPrompt,
   normalizeVoiceDesign,
+  normalizeRefText,
   getDeterministicVoiceId,
   type VoiceDesign,
 } from '@/lib/audio/voice-design';
@@ -85,5 +86,42 @@ describe('getDeterministicVoiceId', () => {
     const a = await getDeterministicVoiceId(design, { providerId: 'voxcpm-tts', model: 'm' });
     const b = await getDeterministicVoiceId(design, { providerId: 'voxcpm-tts', model: 'm' });
     expect(a).toBe(b);
+  });
+  it('changes when refText changes (different seed script = different clip)', async () => {
+    const opts = { providerId: 'voxcpm-tts', model: 'm' };
+    const base = await getDeterministicVoiceId(design, opts);
+    const withRef = await getDeterministicVoiceId(design, {
+      ...opts,
+      refText: '大家好，欢迎来到今天的课程。',
+    });
+    const withOtherRef = await getDeterministicVoiceId(design, {
+      ...opts,
+      refText: '同学们好，我们开始上课吧。',
+    });
+    expect(withRef).not.toBe(base);
+    expect(withOtherRef).not.toBe(withRef);
+  });
+  it('keeps the historical id when refText is absent (backwards compatible)', async () => {
+    const opts = { providerId: 'voxcpm-tts', model: 'm' };
+    const legacy = await getDeterministicVoiceId(design, opts);
+    const explicitEmpty = await getDeterministicVoiceId(design, { ...opts, refText: undefined });
+    expect(explicitEmpty).toBe(legacy);
+  });
+});
+
+describe('normalizeRefText', () => {
+  it('trims, collapses whitespace, and strips parentheses/control chars', () => {
+    expect(normalizeRefText('  大家好，（笑）欢迎来到\n今天的  课程。 ')).toBe(
+      '大家好， 笑 欢迎来到 今天的 课程。',
+    );
+  });
+  it('rejects non-strings and scripts too short for a stable clip', () => {
+    expect(normalizeRefText(undefined)).toBeUndefined();
+    expect(normalizeRefText(42)).toBeUndefined();
+    expect(normalizeRefText('你好。')).toBeUndefined();
+  });
+  it('caps overly long scripts', () => {
+    const long = 'a'.repeat(500);
+    expect(normalizeRefText(long)?.length).toBe(300);
   });
 });

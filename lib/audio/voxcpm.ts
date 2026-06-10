@@ -40,6 +40,8 @@ export interface VoxCPMVoicePromptContext {
   language?: string;
   locale?: string;
   voiceDesign?: VoiceDesign;
+  /** Seed script for the registered-voice bootstrap clip (its exact transcript). */
+  refText?: string;
   backend?: VoxCPMBackendType;
 }
 

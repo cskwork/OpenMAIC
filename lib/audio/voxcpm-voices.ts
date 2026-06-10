@@ -293,7 +293,11 @@ export async function getVoxCPMProviderOptions(
     const registeredVoiceId = canRegister
       ? await ensureRegisteredVoice(
           VOXCPM_TTS_PROVIDER_ID,
-          { voiceDesign: context!.voiceDesign, language: context!.language || context!.locale },
+          {
+            voiceDesign: context!.voiceDesign,
+            language: context!.language || context!.locale,
+            refText: context!.refText,
+          },
           request!,
         ).catch(() => undefined)
       : undefined;

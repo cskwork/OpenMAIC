@@ -86,6 +86,7 @@ export async function resolveAgentVoiceOptions(
         role: agent?.role ?? 'teacher',
         persona: agent?.persona,
         voiceDesign: effectiveVoiceDesign(agent),
+        refText: agent?.refText,
         language: opts.language,
         backend: normalizeVoxCPMBackend(opts.providerConfig?.providerOptions?.backend),
       },

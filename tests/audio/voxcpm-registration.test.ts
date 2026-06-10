@@ -94,4 +94,24 @@ describe('bootstrapVoxCPMReferenceClip', () => {
     const payload = JSON.parse(String(init.body));
     expect(payload.input).toContain('(male teacher, warm, calm)');
   });
+
+  it('speaks the agent refText when provided, falling back to the sample sentence', async () => {
+    const wav = new Uint8Array([82, 73, 70, 70]);
+    const f = vi.fn(
+      async () => new Response(wav, { status: 200, headers: { 'content-type': 'audio/wav' } }),
+    );
+    vi.stubGlobal('fetch', f);
+
+    const design = { identity: 'male teacher', texture: 'warm', delivery: 'calm' };
+    const refText = 'Hello everyone, I am your teacher for this course. Let us begin our journey.';
+    await bootstrapVoxCPMReferenceClip(cfg, { design, language: 'en', refText });
+    await bootstrapVoxCPMReferenceClip(cfg, { design, language: 'zh' });
+
+    const first = JSON.parse(String((f.mock.calls[0] as unknown as [string, RequestInit])[1].body));
+    expect(first.input).toBe(`(male teacher, warm, calm)${refText}`);
+    const second = JSON.parse(
+      String((f.mock.calls[1] as unknown as [string, RequestInit])[1].body),
+    );
+    expect(second.input).toContain('你好，欢迎来到今天的课程');
+  });
 });

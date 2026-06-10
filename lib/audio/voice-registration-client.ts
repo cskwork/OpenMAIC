@@ -69,7 +69,7 @@ async function getCachedClip(
  */
 export async function ensureRegisteredVoice(
   providerId: string,
-  params: { voiceDesign?: VoiceDesign; language?: string },
+  params: { voiceDesign?: VoiceDesign; language?: string; refText?: string },
   request: VoiceRegistrationRequestConfig,
 ): Promise<string | undefined> {
   if (!params.voiceDesign) return undefined;
@@ -77,6 +77,7 @@ export async function ensureRegisteredVoice(
   const voiceId = await getDeterministicVoiceId(params.voiceDesign, {
     providerId,
     model: request.ttsModelId,
+    refText: params.refText,
   });
   const memoKey = memoKeyFor(voiceId, request);
   if (registeredThisSession.has(memoKey)) return voiceId;
@@ -96,7 +97,7 @@ async function registerOnce(
   providerId: string,
   voiceId: string,
   memoKey: string,
-  params: { voiceDesign?: VoiceDesign; language?: string },
+  params: { voiceDesign?: VoiceDesign; language?: string; refText?: string },
   request: VoiceRegistrationRequestConfig,
 ): Promise<string | undefined> {
   const cached = await getCachedClip(voiceId);
@@ -108,6 +109,7 @@ async function registerOnce(
       voiceId,
       descriptor: params.voiceDesign,
       language: params.language,
+      refText: params.refText,
       referenceAudioBase64: cached?.base64,
       mimeType: cached?.mimeType,
       ...request,

@@ -40,6 +40,28 @@ export function buildVoiceDesignPrompt(design: VoiceDesign): string {
     .join(', ');
 }
 
+const REF_TEXT_MIN_CHARS = 10;
+const REF_TEXT_MAX_CHARS = 300;
+
+/**
+ * Coerce an arbitrary (LLM-produced) value into a usable refText — the seed
+ * script an auto voice speaks when bootstrapping its reference clip, persisted
+ * on the agent profile as the clip's exact transcript. Strips parentheses
+ * (they delimit the VoxCPM `(prompt)text` syntax) and control chars; rejects
+ * scripts too short to make a stable reference clip (official guidance: >=5s).
+ */
+export function normalizeRefText(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const cleaned = raw
+    .replace(/[\p{C}]+/gu, ' ')
+    .replace(/[()（）]/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .slice(0, REF_TEXT_MAX_CHARS)
+    .trim();
+  return cleaned.length >= REF_TEXT_MIN_CHARS ? cleaned : undefined;
+}
+
 /** Coerce an arbitrary (LLM-produced) value into a VoiceDesign, or undefined. */
 export function normalizeVoiceDesign(raw: unknown): VoiceDesign | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
@@ -64,10 +86,15 @@ export function normalizeVoiceDesign(raw: unknown): VoiceDesign | undefined {
  * bootstrap sample sentence (which affects neither output language nor timbre).
  * Keeping it out means every TTS path (narration passes a directive, discussion
  * passes a locale) resolves to the SAME id for the same agent.
+ *
+ * refText IS part of the id: the registered clip is synthesized from it, so the
+ * same design with a different seed script is a different reference recording.
+ * Sharing one id across refTexts would silently reuse whichever clip registered
+ * first and break the "refText is the exact transcript" contract.
  */
 export async function getDeterministicVoiceId(
   design: VoiceDesign,
-  opts: { providerId?: string; model?: string } = {},
+  opts: { providerId?: string; model?: string; refText?: string } = {},
 ): Promise<string> {
   const seed = [
     opts.providerId || '',
@@ -75,6 +102,9 @@ export async function getDeterministicVoiceId(
     design.texture,
     design.delivery,
     opts.model || '',
+    // Appended conditionally so pre-refText voices keep their historical ids
+    // (and their cached/registered clips) instead of re-registering en masse.
+    ...(opts.refText ? [opts.refText] : []),
   ].join('|');
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(seed));
   const hex = Array.from(new Uint8Array(digest))

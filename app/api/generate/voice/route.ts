@@ -25,7 +25,7 @@ import {
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
-import { normalizeVoiceDesign } from '@/lib/audio/voice-design';
+import { normalizeRefText, normalizeVoiceDesign } from '@/lib/audio/voice-design';
 import {
   getVoiceRegistrationAdapter,
   type VoiceRegistrationConfig,
@@ -44,6 +44,7 @@ export async function POST(req: NextRequest) {
       voiceId?: string;
       descriptor?: unknown;
       language?: string;
+      refText?: string;
       referenceAudioBase64?: string;
       mimeType?: string;
       ttsApiKey?: string;
@@ -125,6 +126,7 @@ export async function POST(req: NextRequest) {
     const clip = await adapter.bootstrapReferenceClip(cfg, {
       design: design!,
       language: body.language,
+      refText: normalizeRefText(body.refText),
     });
     await adapter.registerVoice(cfg, {
       voiceId,

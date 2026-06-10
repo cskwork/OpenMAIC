@@ -29,10 +29,14 @@ export interface VoiceRegistrationAdapter {
     cfg: VoiceRegistrationConfig,
     params: { voiceId: string; referenceAudioBase64: string; mimeType?: string },
   ): Promise<string>;
-  /** Synthesize the voice design once into a reference clip. */
+  /**
+   * Synthesize the voice design once into a reference clip. `refText` is the
+   * agent's seed script (becomes the clip's exact transcript); `language` only
+   * selects the fallback sample sentence when no refText is available.
+   */
   bootstrapReferenceClip(
     cfg: VoiceRegistrationConfig,
-    params: { design: VoiceDesign; language?: string },
+    params: { design: VoiceDesign; language?: string; refText?: string },
   ): Promise<{ referenceAudioBase64: string; mimeType: string }>;
 }
 

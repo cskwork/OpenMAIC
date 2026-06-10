@@ -79,4 +79,27 @@ describe('ensureRegisteredVoice memoization', () => {
     );
     expect(f).toHaveBeenCalledTimes(2); // different creds → re-validate
   });
+
+  it('sends the refText to the registration endpoint and scopes the voice id by it', async () => {
+    const f = okFetch();
+    const voiceDesign = { identity: 'refText teacher', texture: 'warm', delivery: 'calm' };
+    const req = { ttsBaseUrl: 'https://e.test/v1' };
+    const refText = '大家好，我是这门课的老师，欢迎来到课堂，我们马上开始今天的学习。';
+
+    await ensureRegisteredVoice('voxcpm-tts', { voiceDesign, refText }, req);
+    const body = JSON.parse(String((f.mock.calls[0] as unknown as [string, RequestInit])[1].body));
+    expect(body.refText).toBe(refText);
+
+    // A different seed script is a different reference clip → separate registration.
+    await ensureRegisteredVoice(
+      'voxcpm-tts',
+      { voiceDesign, refText: refText + '今天我们学新内容。' },
+      req,
+    );
+    expect(f).toHaveBeenCalledTimes(2);
+    const ids = f.mock.calls.map(
+      (call) => JSON.parse(String((call as unknown as [string, RequestInit])[1].body)).voiceId,
+    );
+    expect(ids[0]).not.toBe(ids[1]);
+  });
 });

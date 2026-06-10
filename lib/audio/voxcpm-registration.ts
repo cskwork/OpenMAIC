@@ -98,10 +98,12 @@ export async function registerVoxCPMVoice(
 /** Synthesize the voice-design prompt once into a reference clip. */
 export async function bootstrapVoxCPMReferenceClip(
   cfg: VoiceRegistrationConfig,
-  params: { design: VoiceDesign; language?: string },
+  params: { design: VoiceDesign; language?: string; refText?: string },
 ): Promise<{ referenceAudioBase64: string; mimeType: string }> {
   const prompt = buildVoiceDesignPrompt(params.design);
-  const sample = bootstrapSentence(params.language);
+  // Prefer the agent's seed script (longer, course-language, persisted as the
+  // clip's transcript); the per-language sample sentence is only a fallback.
+  const sample = params.refText?.trim() || bootstrapSentence(params.language);
   const res = await fetch(`${v1(cfg.baseUrl)}/audio/speech`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json; charset=utf-8', ...authHeaders(cfg.apiKey) },
