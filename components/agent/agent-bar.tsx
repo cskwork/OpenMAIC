@@ -683,6 +683,14 @@ export function AgentBar() {
       setSelectedAgentIds(
         presetIds.length > 0 ? presetIds : ['default-1', 'default-2', 'default-3'],
       );
+    } else {
+      // Auto mode plays the current classroom's generated agents — leaving the
+      // preset ids selected would desync playback from the toggle (UI says
+      // Auto, discussion still uses preset agents) and persist an auto
+      // selection that can never validate on restore. When no classroom's
+      // agents are loaded (fresh home), an empty selection falls back to the
+      // stage-derived defaults on the next classroom load.
+      setSelectedAgentIds(allAgents.filter((a) => a.isGenerated).map((a) => a.id));
     }
   };
 
