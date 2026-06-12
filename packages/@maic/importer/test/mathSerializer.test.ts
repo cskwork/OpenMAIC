@@ -14,7 +14,11 @@ const omath = (inner: string) => `<m:oMath ${M}>${inner}</m:oMath>`;
  */
 describe('mathSerializer · ommlToLatex', () => {
   it('分数 m:f → \\frac{a}{b}', () => {
-    const latex = ommlToLatex(omath('<m:f><m:num><m:r><m:t>a</m:t></m:r></m:num><m:den><m:r><m:t>b</m:t></m:r></m:den></m:f>'));
+    const latex = ommlToLatex(
+      omath(
+        '<m:f><m:num><m:r><m:t>a</m:t></m:r></m:num><m:den><m:r><m:t>b</m:t></m:r></m:den></m:f>',
+      ),
+    );
     expect(latex).toBe('\\frac{a}{b}');
   });
 

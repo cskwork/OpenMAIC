@@ -81,8 +81,8 @@ describe('textSerializer · 负 indent + Wingdings bullet 槽位', () => {
         </a:pPr>
         <a:r><a:rPr sz="2000"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:rPr><a:t>正文</a:t></a:r>
       </a:p>`);
-    expect(html).toMatch(/■<\/span>/);          // bullet 槽位存在
-    expect(html).toContain('color: #FFC000;');  // bullet 用 buClr 金色
-    expect(html).toContain('color: #000000');   // 正文用 run 的黑色
+    expect(html).toMatch(/■<\/span>/); // bullet 槽位存在
+    expect(html).toContain('color: #FFC000;'); // bullet 用 buClr 金色
+    expect(html).toContain('color: #000000'); // 正文用 run 的黑色
   });
 });

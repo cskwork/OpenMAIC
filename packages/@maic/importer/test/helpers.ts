@@ -9,10 +9,7 @@
 
 import { parseXml, SafeXmlNode } from '../src/parser/XmlParser';
 import { parseTextBody, type TextBody } from '../src/model/nodes/ShapeNode';
-import {
-  renderTextBody,
-  type RenderTextBodyOptions,
-} from '../src/serializer/textSerializer';
+import { renderTextBody, type RenderTextBodyOptions } from '../src/serializer/textSerializer';
 import type { RenderContext } from '../src/serializer/RenderContext';
 import type { PlaceholderInfo } from '../src/model/nodes/BaseNode';
 
