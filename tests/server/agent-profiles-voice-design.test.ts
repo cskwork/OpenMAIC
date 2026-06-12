@@ -72,7 +72,7 @@ describe('agent-profiles route — voiceDesign', () => {
     );
   });
 
-  it('flattens a legacy 3-layer voiceDesign object from older clients', async () => {
+  it('omits voiceDesign when the LLM emits a non-string value', async () => {
     callLLM.mockResolvedValue({
       text: llmAgents({
         voiceDesign: { identity: 'older male teacher', texture: 'warm low', delivery: 'calm' },
@@ -83,7 +83,7 @@ describe('agent-profiles route — voiceDesign', () => {
     const body = await res.json();
 
     expect(body.success).toBe(true);
-    expect(body.agents[0].voiceDesign).toBe('older male teacher, warm low, calm');
+    expect(body.agents[0]).not.toHaveProperty('voiceDesign');
   });
 
   it('omits voiceDesign when the LLM does not emit one', async () => {

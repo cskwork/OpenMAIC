@@ -56,25 +56,11 @@ export function normalizeRefText(raw: unknown): string | undefined {
   return cleaned.length >= REF_TEXT_MIN_CHARS ? cleaned : undefined;
 }
 
-/**
- * Coerce an arbitrary value into a VoiceDesign, or undefined.
- * Accepts free text (LLM output, current schema) and the legacy 3-layer
- * `{ identity, texture, delivery }` object (pre-free-text persisted records
- * and older clients), which is flattened into one comma-joined description.
- */
+/** Coerce an arbitrary (LLM-produced) value into a VoiceDesign, or undefined. */
 export function normalizeVoiceDesign(raw: unknown): VoiceDesign | undefined {
-  if (typeof raw === 'string') {
-    const text = raw.trim();
-    return text || undefined;
-  }
-  if (raw && typeof raw === 'object') {
-    const record = raw as Record<string, unknown>;
-    const parts = [record.identity, record.texture, record.delivery]
-      .map((value) => (typeof value === 'string' ? value.trim() : ''))
-      .filter(Boolean);
-    if (parts.length > 0) return parts.join(', ');
-  }
-  return undefined;
+  if (typeof raw !== 'string') return undefined;
+  const text = raw.trim();
+  return text || undefined;
 }
 
 /**

@@ -8,7 +8,7 @@ import { persist } from 'zustand/middleware';
 import type { AgentConfig } from './types';
 import { getActionsForRole } from './types';
 import type { AgentVoiceConfigRef, TTSProviderId } from '@/lib/audio/types';
-import { normalizeVoiceDesign } from '@/lib/audio/voice-design';
+import type { VoiceDesign } from '@/lib/audio/voice-design';
 import type { SeedAgentProfile } from '@/lib/generation/agent-profiles';
 import { USER_AVATAR } from '@/lib/types/roundtable';
 import type { Participant, ParticipantRole } from '@/lib/types/roundtable';
@@ -375,11 +375,8 @@ export async function loadGeneratedAgentsForStage(stageId: string): Promise<stri
   const ids: string[] = [];
   for (const record of records) {
     const { voiceConfig, ...rest } = record;
-    // Pre-free-text records may carry the legacy 3-layer voiceDesign object.
-    const voiceDesign = normalizeVoiceDesign(record.voiceDesign);
     registry.addAgent({
       ...rest,
-      voiceDesign,
       allowedActions: getActionsForRole(record.role),
       isDefault: false,
       isGenerated: true,
@@ -416,8 +413,7 @@ export async function saveGeneratedAgents(
     color: string;
     priority: number;
     voiceConfig?: AgentVoiceConfigRef;
-    /** Free text, or the legacy 3-layer object from older persisted classrooms. */
-    voiceDesign?: unknown;
+    voiceDesign?: VoiceDesign;
     refText?: string;
   }>,
 ): Promise<string[]> {
@@ -432,14 +428,8 @@ export async function saveGeneratedAgents(
     if (agent.isGenerated) registry.deleteAgent(agent.id);
   }
 
-  // Write to IndexedDB (normalizing legacy 3-layer voiceDesign objects from
-  // older persisted server classrooms into the free-text form)
-  const records = agents.map((a) => ({
-    ...a,
-    voiceDesign: normalizeVoiceDesign(a.voiceDesign),
-    stageId,
-    createdAt: Date.now(),
-  }));
+  // Write to IndexedDB
+  const records = agents.map((a) => ({ ...a, stageId, createdAt: Date.now() }));
   await db.generatedAgents.bulkPut(records);
 
   // Add to registry (spread voiceConfig through so modelId survives, matching

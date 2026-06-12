@@ -30,21 +30,10 @@ describe('normalizeVoiceDesign', () => {
   it('returns trimmed free text', () => {
     expect(normalizeVoiceDesign(`  ${design} `)).toBe(design);
   });
-  it('flattens the legacy 3-layer object into one description', () => {
-    expect(
-      normalizeVoiceDesign({
-        identity: 'older male teacher',
-        texture: 'warm low',
-        delivery: 'calm',
-      }),
-    ).toBe('older male teacher, warm low, calm');
-    expect(normalizeVoiceDesign({ identity: 'a', texture: '', delivery: '' })).toBe('a');
-  });
-  it('returns undefined for empty/invalid values', () => {
+  it('returns undefined for empty/non-string values', () => {
     expect(normalizeVoiceDesign('')).toBeUndefined();
     expect(normalizeVoiceDesign('   ')).toBeUndefined();
     expect(normalizeVoiceDesign({})).toBeUndefined();
-    expect(normalizeVoiceDesign({ identity: '', texture: '', delivery: '' })).toBeUndefined();
     expect(normalizeVoiceDesign(null)).toBeUndefined();
     expect(normalizeVoiceDesign(42)).toBeUndefined();
   });
