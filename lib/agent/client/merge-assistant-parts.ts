@@ -1,14 +1,18 @@
 /**
- * Pure, side-effect-free helper that assembles the assistant message content
- * parts from accumulated per-run state. Extracted so it can be unit-tested
- * without React or a browser environment.
+ * Chronological assembly of the assistant message from pi agent turns.
  *
- * Behaviour (mirrors the PoC buildAssistant closure):
- *  - Text part first: `text` if non-empty, else `error` if non-empty.
- *  - One `tool-call` part per id in `toolOrder` (upserted name/args, with
- *    `result`/`isError` if a result exists).
- *  - If no parts at all, a single empty text part.
+ * A run produces multiple assistant turns (the tool-call turn, then a wrap-up
+ * turn). Each turn's content array is already ordered (text / toolCall parts
+ * interleaved as generated), and the runtime replaces a turn's array wholesale
+ * on every stream update. Flattening the turns in arrival order makes the
+ * rendered sequence match what actually happened: turn-1 text → tool call →
+ * wrap-up text BELOW the tool card (never above it). Tool results attach by
+ * toolCallId. Pure and side-effect-free so it can be unit-tested without React.
  */
+
+export type PiPart =
+  | { type: 'text'; text: string }
+  | { type: 'toolCall'; id: string; name: string; arguments: Record<string, unknown> };
 
 export type AssistantPart =
   | { type: 'text'; text: string }
@@ -22,33 +26,35 @@ export type AssistantPart =
     };
 
 export interface MergeInput {
-  text: string;
-  error: string;
-  toolOrder: string[];
-  toolCalls: Map<string, { name: string; args: Record<string, unknown> }>;
+  /** Chronological assistant turns; each is that turn's ordered content. */
+  turns: PiPart[][];
+  /** Executed tool results keyed by toolCallId. */
   toolResults: Map<string, { result: unknown; isError: boolean }>;
+  /** Run-level error (stream failure / turn errorMessage); appended as text. */
+  error: string;
 }
 
-export function mergeAssistantParts(input: MergeInput): AssistantPart[] {
-  const { text, error, toolOrder, toolCalls, toolResults } = input;
+export function mergeAssistantParts({ turns, toolResults, error }: MergeInput): AssistantPart[] {
   const parts: AssistantPart[] = [];
 
-  const displayText = text || error;
-  if (displayText) parts.push({ type: 'text', text: displayText });
-
-  for (const tcId of toolOrder) {
-    const tc = toolCalls.get(tcId);
-    if (!tc) continue;
-    const tr = toolResults.get(tcId);
-    parts.push({
-      type: 'tool-call',
-      toolCallId: tcId,
-      toolName: tc.name,
-      args: tc.args,
-      ...(tr ? { result: tr.result, isError: tr.isError } : {}),
-    });
+  for (const turn of turns) {
+    for (const p of turn) {
+      if (p.type === 'text') {
+        if (p.text) parts.push({ type: 'text', text: p.text });
+      } else {
+        const r = toolResults.get(p.id);
+        parts.push({
+          type: 'tool-call',
+          toolCallId: p.id,
+          toolName: p.name,
+          args: p.arguments,
+          ...(r ? { result: r.result, isError: r.isError } : {}),
+        });
+      }
+    }
   }
 
+  if (error) parts.push({ type: 'text', text: error });
   if (parts.length === 0) parts.push({ type: 'text', text: '' });
   return parts;
 }

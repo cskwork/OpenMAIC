@@ -1,22 +1,23 @@
 'use client';
 
 /**
- * MAIC Agent — editor AI sidebar (right rail).
- *
- * Composes assistant-ui primitives into the chat: markdown-rendered assistant
- * replies (with a streaming lifecycle via message `status`), brand-accent user
- * bubbles, and a receipt-style tool-call card (see regenerate-tool-ui). Themed
- * on the project's shadcn tokens so it fits the editor chrome (light/dark).
- *
- * The rail is drag-resizable from its left edge, mirroring SlideNavRail: the
- * width is written directly to the DOM during the gesture (cursor-locked) and
- * committed to React state on pointer-up.
+ * MAIC Agent — editor AI sidebar (right rail), mainstream agent-GUI layout:
+ * assistant output is full-width text (markdown) with slim inline tool rows in
+ * chronological order; user messages are compact neutral bubbles; a typing
+ * indicator shows while the run streams. Brand color is reserved for accents
+ * (send button, focus ring, status). Drag-resizable from the left edge.
+ * Wiring (ExternalStore over the pi AgentEvent SSE stream) lives in
+ * use-agent-runtime.
  */
 import { useCallback, useRef, useState } from 'react';
-import { AssistantRuntimeProvider, ComposerPrimitive, MessagePrimitive, ThreadPrimitive } from '@assistant-ui/react';
-import { ArrowUp, ChevronDown, Sparkles } from 'lucide-react';
-import { motion, useReducedMotion } from 'motion/react';
-import { cn } from '@/lib/utils/cn';
+import {
+  AssistantRuntimeProvider,
+  ComposerPrimitive,
+  MessagePrimitive,
+  ThreadPrimitive,
+  useMessage,
+} from '@assistant-ui/react';
+import { ArrowUp, ChevronDown } from 'lucide-react';
 import { useAgentRuntime } from '@/lib/agent/client/use-agent-runtime';
 import { MarkdownText } from './markdown-text';
 import { RegenerateSceneActionsUI } from './regenerate-tool-ui';
@@ -28,25 +29,45 @@ const DEFAULT_WIDTH = 384;
 function UserMessage() {
   return (
     <MessagePrimitive.Root className="flex justify-end">
-      <div className="min-w-0 max-w-[85%] rounded-2xl rounded-br-sm bg-primary px-3.5 py-2 text-sm text-primary-foreground [overflow-wrap:anywhere]">
+      <div className="min-w-0 max-w-[85%] rounded-2xl rounded-br-md bg-muted px-3.5 py-2 text-[13px] leading-relaxed text-foreground [overflow-wrap:anywhere]">
         <MessagePrimitive.Parts />
       </div>
     </MessagePrimitive.Root>
   );
 }
 
-function AssistantMessage() {
-  const reduce = useReducedMotion();
+function TypingDots() {
   return (
-    <MessagePrimitive.Root className="flex">
-      <motion.div
-        initial={reduce ? false : { opacity: 0, y: 3 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.16, ease: 'easeOut' }}
-        className="min-w-0 flex-1 space-y-1.5"
-      >
-        <MessagePrimitive.Parts components={{ Text: MarkdownText }} />
-      </motion.div>
+    <span className="inline-flex items-center gap-1 py-1">
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          className="size-1.5 animate-bounce rounded-full bg-muted-foreground/40"
+          style={{ animationDelay: `${i * 140}ms` }}
+        />
+      ))}
+    </span>
+  );
+}
+
+function AssistantMessage() {
+  // Show typing dots while the run streams and nothing has arrived yet.
+  const showDots = useMessage((m) => {
+    const hasContent = m.content.some(
+      (p) => (p.type === 'text' && p.text.length > 0) || p.type === 'tool-call',
+    );
+    return !hasContent && m.status?.type === 'running';
+  });
+
+  return (
+    <MessagePrimitive.Root className="min-w-0">
+      {showDots ? (
+        <TypingDots />
+      ) : (
+        <div className="min-w-0 text-[13.5px] leading-relaxed text-foreground">
+          <MessagePrimitive.Parts components={{ Text: MarkdownText }} />
+        </div>
+      )}
     </MessagePrimitive.Root>
   );
 }
@@ -54,10 +75,9 @@ function AssistantMessage() {
 export function AgentPanel({ scene }: { scene?: { id: string; title: string } }) {
   const runtime = useAgentRuntime({ scene });
 
-  // ── Drag-to-resize (left edge of the right rail) ──────────────────────────
+  // Drag-to-resize from the left edge (pointer capture, direct DOM write).
   const railRef = useRef<HTMLElement>(null);
   const [width, setWidth] = useState(DEFAULT_WIDTH);
-  const [dragging, setDragging] = useState(false);
   const dragRef = useRef<{ startX: number; startW: number; lastW: number; pointerId: number } | null>(null);
 
   const onResizeStart = useCallback(
@@ -67,35 +87,30 @@ export function AgentPanel({ scene }: { scene?: { id: string; title: string } })
       try {
         e.currentTarget.setPointerCapture(e.pointerId);
       } catch {
-        /* capture best-effort */
+        /* best effort */
       }
       document.body.style.cursor = 'col-resize';
-      setDragging(true);
     },
     [width],
   );
-
   const onResizeMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    if (!drag || e.pointerId !== drag.pointerId) return;
-    const delta = drag.startX - e.clientX; // drag the handle left → wider rail
-    const next = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, drag.startW + delta));
-    drag.lastW = next;
+    const d = dragRef.current;
+    if (!d || e.pointerId !== d.pointerId) return;
+    const next = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, d.startW + (d.startX - e.clientX)));
+    d.lastW = next;
     if (railRef.current) railRef.current.style.width = `${next}px`;
   }, []);
-
   const onResizeEnd = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    if (!drag || e.pointerId !== drag.pointerId) return;
+    const d = dragRef.current;
+    if (!d || e.pointerId !== d.pointerId) return;
     try {
       e.currentTarget.releasePointerCapture(e.pointerId);
     } catch {
       /* may already be released */
     }
-    setWidth(drag.lastW);
+    setWidth(d.lastW);
     dragRef.current = null;
     document.body.style.cursor = '';
-    setDragging(false);
   }, []);
 
   return (
@@ -104,45 +119,38 @@ export function AgentPanel({ scene }: { scene?: { id: string; title: string } })
       style={{ width }}
       className="relative flex h-full shrink-0 flex-col border-l border-border bg-background"
     >
-      {/* resize handle — left edge, mirrors SlideNavRail */}
       <div
         onPointerDown={onResizeStart}
         onPointerMove={onResizeMove}
         onPointerUp={onResizeEnd}
         onPointerCancel={onResizeEnd}
-        className={cn(
-          'group absolute left-0 top-0 bottom-0 z-10 w-1.5 cursor-col-resize touch-none',
-          'transition-colors hover:bg-primary/20',
-          dragging && 'bg-primary/30',
-        )}
+        className="group absolute left-0 top-0 bottom-0 z-10 w-1.5 cursor-col-resize touch-none"
       >
-        <div className="absolute left-0 top-1/2 h-8 w-0.5 -translate-y-1/2 rounded-full bg-border transition-colors group-hover:bg-primary/60" />
+        <div className="absolute left-0.5 top-1/2 h-8 w-[3px] -translate-y-1/2 rounded-full bg-transparent transition-colors group-hover:bg-border" />
       </div>
 
-      <header className="flex items-center gap-2 border-b border-border px-4 py-3 pl-5">
-        <Sparkles className="size-4 text-primary" />
-        <span className="text-sm font-semibold text-foreground">MAIC Agent</span>
-        <span className="ml-auto font-mono text-[10px] uppercase tracking-wide text-muted-foreground">beta</span>
+      <header className="flex h-10 shrink-0 items-center gap-2.5 border-b border-border px-4 pl-5">
+        <span className="size-1.5 rounded-full bg-primary" />
+        <span className="text-[12px] font-medium tracking-[0.14em] text-foreground/80">MAIC Agent</span>
+        <span className="ml-auto font-mono text-[10px] uppercase tracking-wide text-muted-foreground/60">beta</span>
       </header>
 
       <AssistantRuntimeProvider runtime={runtime}>
-        {/* registers the regenerate_scene_actions tool card with the runtime */}
         <RegenerateSceneActionsUI />
 
         <ThreadPrimitive.Root className="relative flex min-h-0 flex-1 flex-col">
-          <ThreadPrimitive.Viewport className="flex-1 space-y-4 overflow-y-auto px-4 py-4 scroll-smooth">
+          <ThreadPrimitive.Viewport className="flex-1 space-y-6 overflow-y-auto px-4 py-5 scroll-smooth">
             <ThreadPrimitive.Empty>
-              <div className="mx-auto mt-12 flex max-w-[280px] flex-col items-center text-center">
-                <Sparkles className="size-6 text-primary/70" />
-                <p className="mt-3 text-sm font-medium text-foreground">编辑当前场景</p>
-                <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
-                  让 Agent 把这一页的讲解旁白重新生成，与页面内容保持一致。
+              <div className="mx-auto mt-14 flex max-w-[260px] flex-col items-center text-center">
+                <p className="text-sm font-medium text-foreground">有什么想改的？</p>
+                <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">
+                  让 Agent 编辑当前页面，或重新生成讲解旁白。
                 </p>
                 <ThreadPrimitive.Suggestion
                   prompt="重新生成这一页的讲解旁白，让它和页面内容保持一致"
                   autoSend
                   method="replace"
-                  className="mt-4 w-full rounded-lg border border-border bg-card px-3 py-2 text-left text-[12px] leading-snug text-muted-foreground transition-colors hover:border-primary/40 hover:bg-accent hover:text-foreground"
+                  className="mt-5 w-full rounded-xl border border-border bg-card px-3.5 py-2.5 text-left text-[12px] leading-snug text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground"
                 >
                   重新生成这一页的讲解旁白
                 </ThreadPrimitive.Suggestion>
@@ -156,16 +164,16 @@ export function AgentPanel({ scene }: { scene?: { id: string; title: string } })
             <ChevronDown className="size-4" />
           </ThreadPrimitive.ScrollToBottom>
 
-          <div className="border-t border-border p-3">
-            <ComposerPrimitive.Root className="flex items-center gap-2 rounded-2xl border border-border bg-card pl-3.5 pr-1.5 transition-colors focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/15">
+          <div className="px-3 pb-3 pt-1">
+            <ComposerPrimitive.Root className="relative rounded-2xl border border-border bg-card shadow-sm transition-shadow focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/10">
               <ComposerPrimitive.Input
                 rows={1}
                 autoFocus
-                placeholder="让 Agent 编辑这一页…"
-                className="max-h-32 min-h-[40px] min-w-0 flex-1 resize-none self-center bg-transparent py-2.5 text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground/70"
+                placeholder="描述对这一页的修改…"
+                className="max-h-36 w-full resize-none bg-transparent py-3 pl-3.5 pr-11 text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground/60"
               />
-              <ComposerPrimitive.Send className="grid size-8 shrink-0 place-items-center self-center rounded-xl bg-primary text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30">
-                <ArrowUp className="size-4" />
+              <ComposerPrimitive.Send className="absolute bottom-2 right-2 grid size-7 place-items-center rounded-full bg-primary text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30">
+                <ArrowUp className="size-3.5" />
               </ComposerPrimitive.Send>
             </ComposerPrimitive.Root>
           </div>

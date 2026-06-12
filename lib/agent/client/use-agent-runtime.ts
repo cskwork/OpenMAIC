@@ -4,28 +4,24 @@
  * MAIC Agent v0 — client runtime.
  *
  * Drives an assistant-ui ExternalStore from the server's pi `AgentEvent` SSE
- * stream. This is the second integration seam of option B: assistant-ui's
- * ExternalStoreRuntime fed by pi events (it matches tool results to tool calls
- * by toolCallId; we render them as `tool-call` content parts).
+ * stream. A run produces multiple assistant turns (tool-call turn, wrap-up
+ * turn); we keep each turn's ordered content as it streams (`turnsRef`) and
+ * flatten chronologically via `mergeAssistantParts`, so tool cards and text
+ * render in the order they actually happened. The assistant message carries a
+ * streaming `status` (running → complete/error) for proper streaming UI.
  *
- * A single agent run can produce MULTIPLE assistant turns (the tool-call turn,
- * then a wrap-up turn). We ACCUMULATE across turns into one assistant message:
- * tool calls are upserted by id (so the tool card from the first turn survives
- * the wrap-up turn), the latest non-empty assistant text wins, and a turn error
- * surfaces as text. When a `regenerate_scene_actions` tool result arrives, its
- * `details` payload is applied to the editor's Dexie-backed stage store.
- *
- * Scene/stage context (outline, allOutlines, content, stageId) is read from
- * `useStageStore` at send-time and included in the POST body so the
- * `regenerate_scene_actions` tool never needs to rely on model-fabricated data.
+ * When a `regenerate_scene_actions` tool result arrives, its `details` payload
+ * is applied to the editor's Dexie-backed stage store (guarded against empty
+ * actions). Scene/stage context is read from `useStageStore` at send-time and
+ * POSTed so the tool never relies on model-fabricated data.
  */
 import { useCallback, useRef, useState } from 'react';
 import { useExternalStoreRuntime, type AppendMessage, type ThreadMessageLike } from '@assistant-ui/react';
 import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import { useStageStore } from '@/lib/store/stage';
 import type { SceneContextMap } from '@/app/api/agent/edit/route';
-import { mergeAssistantParts } from './merge-assistant-parts';
-export type { AssistantPart } from './merge-assistant-parts';
+import { mergeAssistantParts, type PiPart } from './merge-assistant-parts';
+export type { AssistantPart, PiPart } from './merge-assistant-parts';
 
 interface PiAssistantContent {
   type: string;
@@ -47,27 +43,33 @@ function extractText(message: AppendMessage): string {
     .join('\n');
 }
 
+function toPiParts(content: PiAssistantContent[]): PiPart[] {
+  const parts: PiPart[] = [];
+  for (const c of content) {
+    if (c.type === 'text') {
+      parts.push({ type: 'text', text: c.text ?? '' });
+    } else if (c.type === 'toolCall' && c.id) {
+      parts.push({ type: 'toolCall', id: c.id, name: c.name ?? 'tool', arguments: c.arguments ?? {} });
+    }
+  }
+  return parts;
+}
+
 export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
   const [messages, setMessages] = useState<ThreadMessageLike[]>([]);
   const [isRunning, setIsRunning] = useState(false);
 
-  // Per-run accumulated state (merged across assistant turns).
-  const toolCallsRef = useRef<Map<string, { name: string; args: Record<string, unknown> }>>(new Map());
-  const toolOrderRef = useRef<string[]>([]);
+  // Per-run accumulated state: chronological turns + tool results.
+  const turnsRef = useRef<PiPart[][]>([]);
   const toolResultsRef = useRef<Map<string, { result: unknown; isError: boolean }>>(new Map());
-  const textRef = useRef<string>('');
   const errorRef = useRef<string>('');
-  // Drives the assistant message's `status` so assistant-ui renders a proper
-  // streaming lifecycle (running → complete/error) rather than a static blob.
   const phaseRef = useRef<'running' | 'complete' | 'error'>('complete');
 
   const buildAssistant = useCallback((id: string): ThreadMessageLike => {
     const parts = mergeAssistantParts({
-      text: textRef.current,
-      error: errorRef.current,
-      toolOrder: toolOrderRef.current,
-      toolCalls: toolCallsRef.current,
+      turns: turnsRef.current,
       toolResults: toolResultsRef.current,
+      error: errorRef.current,
     });
     const status: ThreadMessageLike['status'] =
       phaseRef.current === 'running'
@@ -78,57 +80,47 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
     return { role: 'assistant', id, content: parts as ThreadMessageLike['content'], status };
   }, []);
 
-  const handleEvent = useCallback(
-    (event: AgentEvent, assistantId: string, refresh: () => void) => {
-      switch (event.type) {
-        case 'message_start':
-        case 'message_update':
-        case 'message_end': {
-          const msg = (event as { message?: { role?: string; content?: PiAssistantContent[]; errorMessage?: string } })
-            .message;
-          if (msg?.role !== 'assistant') break;
-          if (msg.errorMessage) errorRef.current = msg.errorMessage;
-          if (Array.isArray(msg.content)) {
-            // latest non-empty assistant text for this turn wins
-            const turnText = msg.content
-              .filter((c) => c.type === 'text' && c.text)
-              .map((c) => c.text as string)
-              .join('');
-            if (turnText) textRef.current = turnText;
-            // upsert tool calls by id (survives across turns)
-            for (const c of msg.content) {
-              if (c.type === 'toolCall' && c.id) {
-                if (!toolCallsRef.current.has(c.id)) toolOrderRef.current.push(c.id);
-                toolCallsRef.current.set(c.id, { name: c.name ?? 'tool', args: c.arguments ?? {} });
-              }
-            }
-          }
+  const handleEvent = useCallback((event: AgentEvent, refresh: () => void) => {
+    switch (event.type) {
+      case 'message_start': {
+        const msg = (event as { message?: { role?: string } }).message;
+        if (msg?.role === 'assistant') {
+          turnsRef.current.push([]); // a new assistant turn begins
           refresh();
-          break;
         }
-        case 'tool_execution_end': {
-          const e = event as { toolCallId: string; result?: { details?: unknown }; isError?: boolean };
-          toolResultsRef.current.set(e.toolCallId, { result: e.result, isError: !!e.isError });
-          const details = (e.result?.details ?? {}) as { sceneId?: string; actions?: unknown };
-          // Only apply actions when the array is non-empty.  Applying an empty
-          // array would destructively wipe the scene's existing narration — we
-          // guard here so a failed generation never silently clears actions.
-          if (
-            details.sceneId &&
-            Array.isArray(details.actions) &&
-            details.actions.length > 0
-          ) {
-            useStageStore.getState().updateScene(details.sceneId, { actions: details.actions });
-          }
-          refresh();
-          break;
-        }
-        default:
-          break;
+        break;
       }
-    },
-    [],
-  );
+      case 'message_update':
+      case 'message_end': {
+        const msg = (event as { message?: { role?: string; content?: PiAssistantContent[]; errorMessage?: string } })
+          .message;
+        if (msg?.role !== 'assistant') break;
+        if (msg.errorMessage) errorRef.current = msg.errorMessage;
+        if (Array.isArray(msg.content)) {
+          if (turnsRef.current.length === 0) turnsRef.current.push([]);
+          // Replace the CURRENT turn's content wholesale (pi re-emits the full
+          // accumulated turn on each update) — order within the turn is kept.
+          turnsRef.current[turnsRef.current.length - 1] = toPiParts(msg.content);
+        }
+        refresh();
+        break;
+      }
+      case 'tool_execution_end': {
+        const e = event as { toolCallId: string; result?: { details?: unknown }; isError?: boolean };
+        toolResultsRef.current.set(e.toolCallId, { result: e.result, isError: !!e.isError });
+        const details = (e.result?.details ?? {}) as { sceneId?: string; actions?: unknown };
+        // Apply only non-empty actions — an empty array would destructively
+        // wipe the scene's existing narration on a failed generation.
+        if (details.sceneId && Array.isArray(details.actions) && details.actions.length > 0) {
+          useStageStore.getState().updateScene(details.sceneId, { actions: details.actions });
+        }
+        refresh();
+        break;
+      }
+      default:
+        break;
+    }
+  }, []);
 
   const onNew = useCallback(
     async (message: AppendMessage) => {
@@ -137,10 +129,8 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
 
       const turnId = `t-${Date.now()}`;
       const assistantId = `a-${turnId}`;
-      toolCallsRef.current = new Map();
-      toolOrderRef.current = [];
+      turnsRef.current = [];
       toolResultsRef.current = new Map();
-      textRef.current = '';
       errorRef.current = '';
       phaseRef.current = 'running';
 
@@ -156,14 +146,12 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
         });
 
       try {
-        // Build trusted scene context map from the client store.
-        // This lets the route inject outline/content into the tool without the
-        // model having to fabricate those large structures.
+        // Trusted scene context from the client store — the route injects it
+        // into the tool deps so the model never fabricates outline/content.
         const storeState = useStageStore.getState();
         const { scenes, outlines, stage } = storeState;
         const sceneContextMap: SceneContextMap = {};
         for (const scene of scenes) {
-          // Match outline by order (outlines are ordered 1-based, scene.order is the same)
           const outline = outlines.find((o) => o.order === scene.order) ?? {
             id: scene.id,
             type: scene.type,
@@ -174,16 +162,17 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
           };
           sceneContextMap[scene.id] = {
             outline,
-            allOutlines: outlines.length > 0
-              ? outlines
-              : scenes.map((s) => ({
-                  id: s.id,
-                  type: s.type,
-                  title: s.title,
-                  description: '',
-                  keyPoints: [],
-                  order: s.order,
-                })),
+            allOutlines:
+              outlines.length > 0
+                ? outlines
+                : scenes.map((s) => ({
+                    id: s.id,
+                    type: s.type,
+                    title: s.title,
+                    description: '',
+                    keyPoints: [],
+                    order: s.order,
+                  })),
             content: scene.content,
             stageId: scene.stageId,
             languageDirective: stage?.languageDirective,
@@ -217,7 +206,7 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
             } catch {
               continue;
             }
-            handleEvent(event, assistantId, refresh);
+            handleEvent(event, refresh);
           }
         }
       } catch (err) {
@@ -226,7 +215,6 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
       } finally {
         if (phaseRef.current === 'running') phaseRef.current = 'complete';
         setIsRunning(false);
-        // Final rebuild so the closing status (complete/error) is rendered.
         setMessages((prev) => {
           const next = prev.slice();
           next[next.length - 1] = buildAssistant(assistantId);
@@ -241,8 +229,6 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
     messages,
     isRunning,
     onNew,
-    // We store ThreadMessageLike directly; identity converter satisfies the
-    // adapter's requirement when the store type isn't the internal ThreadMessage.
     convertMessage: (m) => m,
   });
 }
