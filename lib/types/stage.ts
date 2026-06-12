@@ -53,7 +53,7 @@ export interface Stage {
     color: string;
     priority: number;
     voiceConfig?: AgentVoiceConfigRef;
-    voiceDesign?: { identity: string; texture: string; delivery: string };
+    voiceDesign?: string;
     refText?: string;
   }>;
   /**

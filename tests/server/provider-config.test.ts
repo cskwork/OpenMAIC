@@ -28,9 +28,12 @@ const ENV_PREFIXES_TO_CLEAR = [
   'TTS_AZURE',
   'TTS_GLM',
   'TTS_QWEN',
+  'TTS_VOXCPM',
   'TTS_DOUBAO',
   'TTS_ELEVENLABS',
   'TTS_MINIMAX',
+  'TTS_LEMONADE',
+  'TTS_BROWSER_NATIVE',
   'ASR_OPENAI',
   'ASR_QWEN',
   'PDF_UNPDF',
@@ -57,6 +60,9 @@ function clearProviderEnv() {
     delete process.env[`${prefix}_API_KEY`];
     delete process.env[`${prefix}_BASE_URL`];
     delete process.env[`${prefix}_MODELS`];
+    // Force-disable switch (#665) — a developer's .env.local TTS_<P>_ENABLED
+    // would otherwise leak into the "nothing configured" assertions.
+    delete process.env[`${prefix}_ENABLED`];
   }
   delete process.env.TAVILY_API_KEY;
   delete process.env.BOCHA_API_KEY;

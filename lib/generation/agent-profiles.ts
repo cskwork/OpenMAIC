@@ -9,7 +9,7 @@
  *   (localized name, course-flavored persona) while locking identity fields
  *   (id/role/avatar/color/priority/voiceConfig) to the seed.
  *
- * Both modes require per-agent `voiceDesign` (3-layer vocal descriptor) and
+ * Both modes require per-agent `voiceDesign` (free-text vocal description) and
  * `refText` (a course-language seed script, ~5-10s spoken) so auto voices can
  * be bootstrapped into a stable registered reference clip
  * (see lib/audio/voice-registration.ts).
@@ -83,10 +83,7 @@ export function stripCodeFences(text: string): string {
 }
 
 /** Requirement block shared by both modes: vocal descriptor + bootstrap script. */
-const VOICE_FIELDS_REQUIREMENT = `- Each agent needs a "voiceDesign" object describing their VOCAL identity (not personality), written following the language directive and consistent with the persona, as three short comma-free phrases:
-  - "identity": gender + age + role (e.g. "middle-aged male teacher")
-  - "texture": pitch + vocal quality (e.g. "warm low-pitched slightly husky")
-  - "delivery": emotion + pace (e.g. "calm measured encouraging")
+const VOICE_FIELDS_REQUIREMENT = `- Each agent needs a "voiceDesign" string: a natural-language description (1-2 fluent sentences) of their VOCAL identity (not personality), written following the language directive and consistent with the persona. Cover gender, age, role, pitch, vocal texture, speaking pace and emotional tone; mention an accent only when it matters (e.g. "a middle-aged male teacher with a warm low-pitched slightly husky voice, speaking in a calm measured encouraging way"). No parentheses.
 - Each agent needs a "refText" string: a natural spoken course-opening line in the course language, consistent with the persona (e.g. a short self-introduction plus a welcoming sentence about the course topic). Around 30-60 Chinese characters or 20-40 English words (about 5-10 seconds when spoken aloud). Plain prose only: no parentheses, no stage directions, no emoji.`;
 
 function courseContextBlock(ctx: CourseContext): string {
@@ -173,7 +170,7 @@ Return a JSON object with this exact structure:
       "name": "string",
       "role": "teacher" | "assistant" | "student",
       "persona": "string (2-3 sentences)",
-      "voiceDesign": { "identity": "string", "texture": "string", "delivery": "string" },
+      "voiceDesign": "string (natural-language vocal description)",
       "refText": "string"${avatarJsonField}${colorJsonField},
       "priority": number (10 for teacher, 7 for assistant, 4-6 for student)${voiceJsonField}
     }
@@ -218,7 +215,7 @@ Return a JSON object with this exact structure:
       "seedId": "string (copied from seed)",
       "name": "string",
       "persona": "string",
-      "voiceDesign": { "identity": "string", "texture": "string", "delivery": "string" },
+      "voiceDesign": "string (natural-language vocal description)",
       "refText": "string"
     }
   ]

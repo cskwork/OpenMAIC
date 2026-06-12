@@ -28,7 +28,7 @@ function agent(partial: Partial<AgentConfig>): AgentConfig {
   };
 }
 
-const DESIGN = { identity: 'middle-aged female teacher', texture: 'warm', delivery: 'calm' };
+const DESIGN = 'a middle-aged female teacher with a warm voice, speaking calmly';
 
 describe('pickNarratorAgent', () => {
   it('prefers the teacher WITH a voiceDesign over a default teacher (the registry-seeding bug)', () => {
@@ -69,16 +69,12 @@ describe('resolveAgentVoiceOptions — voice-design source', () => {
 
   it('uses the real voiceDesign when the agent has one (generated agents)', async () => {
     await resolveAgentVoiceOptions(agent({ role: 'teacher', voiceDesign: DESIGN }), opts);
-    expect(mockGetOptions.mock.calls[0][1].voiceDesign).toEqual(DESIGN);
+    expect(mockGetOptions.mock.calls[0][1].voiceDesign).toBe(DESIGN);
   });
 
   it('falls back to the persona as the descriptor when there is no voiceDesign (preset agents)', async () => {
     await resolveAgentVoiceOptions(agent({ role: 'teacher', persona: 'patient mentor' }), opts);
-    expect(mockGetOptions.mock.calls[0][1].voiceDesign).toEqual({
-      identity: 'patient mentor',
-      texture: '',
-      delivery: '',
-    });
+    expect(mockGetOptions.mock.calls[0][1].voiceDesign).toBe('patient mentor');
   });
 
   it('has no descriptor when the agent has neither voiceDesign nor persona', async () => {

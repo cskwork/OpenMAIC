@@ -1,43 +1,35 @@
 /**
  * Provider-neutral per-agent voice design.
  *
- * A `VoiceDesign` describes an agent's vocal identity (not personality) as a
- * 3-layer recipe. It is consumed by any TTS provider: as an inline voice
- * prompt where supported, or as the seed for a registered/cloned voice
- * (see `voice-registration.ts`). Nothing here is VoxCPM-specific.
+ * A `VoiceDesign` is a free-text natural-language description of an agent's
+ * vocal identity (not personality) — e.g. "a middle-aged male teacher with a
+ * warm low-pitched voice, speaking in a calm, encouraging way". It is consumed
+ * by any TTS provider: as an inline voice prompt where supported, or as the
+ * seed for a registered/cloned voice (see `voice-registration.ts`). It is
+ * deliberately NOT structured: what makes a good voice description differs per
+ * provider, so providers shape their own prompts from the text.
  */
 
-export interface VoiceDesign {
-  identity: string; // gender / age / role
-  texture: string; // pitch / vocal quality
-  delivery: string; // emotion / pace
-}
+export type VoiceDesign = string;
 
 const VOICE_DESIGN_PROMPT_MAX_CHARS = 200;
 
 /** Prefix for deterministic auto-voice ids (provider-neutral, backend-name-safe). */
 export const AUTO_VOICE_ID_PREFIX = 'auto-' as const;
 
-function sanitizeVoiceDesignPart(value?: string): string {
-  return (
-    (value || '')
-      .replace(/[\p{C}]+/gu, ' ')
-      // Strip parentheses: VoxCPM uses `(prompt)text` delimiters, so a paren in the
-      // descriptor/persona would corrupt the bootstrap synthesis prompt.
-      .replace(/[()（）]/gu, ' ')
-      .replace(/\s+/gu, ' ')
-      .trim()
-      .slice(0, VOICE_DESIGN_PROMPT_MAX_CHARS)
-      .trim()
-  );
-}
-
-/** Compose the 3 layers into one comma-joined prompt, dropping blank layers. */
+/**
+ * Compose the description into a synthesis-safe prompt: strips parentheses
+ * (VoxCPM uses `(prompt)text` delimiters, so a paren in the descriptor/persona
+ * would corrupt the bootstrap synthesis prompt) and control chars, capped.
+ */
 export function buildVoiceDesignPrompt(design: VoiceDesign): string {
-  return [design.identity, design.texture, design.delivery]
-    .map((part) => sanitizeVoiceDesignPart(part))
-    .filter(Boolean)
-    .join(', ');
+  return (design || '')
+    .replace(/[\p{C}]+/gu, ' ')
+    .replace(/[()（）]/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .slice(0, VOICE_DESIGN_PROMPT_MAX_CHARS)
+    .trim();
 }
 
 const REF_TEXT_MIN_CHARS = 20;
@@ -64,18 +56,25 @@ export function normalizeRefText(raw: unknown): string | undefined {
   return cleaned.length >= REF_TEXT_MIN_CHARS ? cleaned : undefined;
 }
 
-/** Coerce an arbitrary (LLM-produced) value into a VoiceDesign, or undefined. */
+/**
+ * Coerce an arbitrary value into a VoiceDesign, or undefined.
+ * Accepts free text (LLM output, current schema) and the legacy 3-layer
+ * `{ identity, texture, delivery }` object (pre-free-text persisted records
+ * and older clients), which is flattened into one comma-joined description.
+ */
 export function normalizeVoiceDesign(raw: unknown): VoiceDesign | undefined {
-  if (!raw || typeof raw !== 'object') return undefined;
-  const record = raw as Record<string, unknown>;
-  const pick = (value: unknown) => (typeof value === 'string' ? value.trim() : '');
-  const design = {
-    identity: pick(record.identity),
-    texture: pick(record.texture),
-    delivery: pick(record.delivery),
-  };
-  if (!design.identity && !design.texture && !design.delivery) return undefined;
-  return design;
+  if (typeof raw === 'string') {
+    const text = raw.trim();
+    return text || undefined;
+  }
+  if (raw && typeof raw === 'object') {
+    const record = raw as Record<string, unknown>;
+    const parts = [record.identity, record.texture, record.delivery]
+      .map((value) => (typeof value === 'string' ? value.trim() : ''))
+      .filter(Boolean);
+    if (parts.length > 0) return parts.join(', ');
+  }
+  return undefined;
 }
 
 /**
@@ -100,9 +99,7 @@ export async function getDeterministicVoiceId(
 ): Promise<string> {
   const seed = [
     opts.providerId || '',
-    design.identity,
-    design.texture,
-    design.delivery,
+    design,
     opts.model || '',
     // Appended conditionally so pre-refText voices keep their historical ids
     // (and their cached/registered clips) instead of re-registering en masse.

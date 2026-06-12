@@ -62,8 +62,7 @@ export function pickNarratorAgent(agents: AgentConfig[]): AgentConfig | undefine
  */
 function effectiveVoiceDesign(agent: AgentConfig | undefined): VoiceDesign | undefined {
   if (agent?.voiceDesign) return agent.voiceDesign;
-  const persona = agent?.persona?.trim();
-  return persona ? { identity: persona, texture: '', delivery: '' } : undefined;
+  return agent?.persona?.trim() || undefined;
 }
 
 /**

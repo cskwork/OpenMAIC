@@ -4,56 +4,49 @@ import {
   normalizeVoiceDesign,
   normalizeRefText,
   getDeterministicVoiceId,
-  type VoiceDesign,
 } from '@/lib/audio/voice-design';
 
-const design: VoiceDesign = {
-  identity: 'middle-aged male teacher',
-  texture: 'warm low-pitched resonant',
-  delivery: 'calm measured encouraging',
-};
+const design =
+  'a middle-aged male teacher with a warm low-pitched resonant voice, speaking in a calm measured encouraging way';
 
 describe('buildVoiceDesignPrompt', () => {
-  it('composes the three layers into one comma-joined prompt', () => {
-    expect(buildVoiceDesignPrompt(design)).toBe(
-      'middle-aged male teacher, warm low-pitched resonant, calm measured encouraging',
-    );
+  it('passes a clean description through', () => {
+    expect(buildVoiceDesignPrompt(design)).toBe(design);
   });
-  it('drops blank layers and collapses whitespace', () => {
-    expect(
-      buildVoiceDesignPrompt({ identity: '  male  teacher ', texture: '', delivery: 'slow' }),
-    ).toBe('male teacher, slow');
+  it('collapses whitespace and control chars', () => {
+    expect(buildVoiceDesignPrompt('  male  teacher \n slow ')).toBe('male teacher slow');
   });
   it('strips parentheses so they cannot break the (prompt)text delimiter', () => {
-    expect(
-      buildVoiceDesignPrompt({
-        identity: 'male teacher (deep)',
-        texture: '英文（带口音）',
-        delivery: 'calm',
-      }),
-    ).toBe('male teacher deep, 英文 带口音, calm');
+    expect(buildVoiceDesignPrompt('male teacher (deep), 英文（带口音）, calm')).toBe(
+      'male teacher deep , 英文 带口音 , calm',
+    );
+  });
+  it('caps overly long descriptions', () => {
+    expect(buildVoiceDesignPrompt('a'.repeat(500)).length).toBe(200);
   });
 });
 
 describe('normalizeVoiceDesign', () => {
-  it('returns a clean design from a well-formed object', () => {
-    expect(normalizeVoiceDesign({ identity: 'a', texture: 'b', delivery: 'c' })).toEqual({
-      identity: 'a',
-      texture: 'b',
-      delivery: 'c',
-    });
+  it('returns trimmed free text', () => {
+    expect(normalizeVoiceDesign(`  ${design} `)).toBe(design);
   });
-  it('returns undefined when all layers are empty/missing', () => {
+  it('flattens the legacy 3-layer object into one description', () => {
+    expect(
+      normalizeVoiceDesign({
+        identity: 'older male teacher',
+        texture: 'warm low',
+        delivery: 'calm',
+      }),
+    ).toBe('older male teacher, warm low, calm');
+    expect(normalizeVoiceDesign({ identity: 'a', texture: '', delivery: '' })).toBe('a');
+  });
+  it('returns undefined for empty/invalid values', () => {
+    expect(normalizeVoiceDesign('')).toBeUndefined();
+    expect(normalizeVoiceDesign('   ')).toBeUndefined();
     expect(normalizeVoiceDesign({})).toBeUndefined();
+    expect(normalizeVoiceDesign({ identity: '', texture: '', delivery: '' })).toBeUndefined();
     expect(normalizeVoiceDesign(null)).toBeUndefined();
-    expect(normalizeVoiceDesign('nope')).toBeUndefined();
-  });
-  it('keeps a partial design (some layers present)', () => {
-    expect(normalizeVoiceDesign({ identity: 'a' })).toEqual({
-      identity: 'a',
-      texture: '',
-      delivery: '',
-    });
+    expect(normalizeVoiceDesign(42)).toBeUndefined();
   });
 });
 
@@ -67,16 +60,16 @@ describe('getDeterministicVoiceId', () => {
   });
   it('changes when descriptor, model, or provider changes', async () => {
     const base = await getDeterministicVoiceId(design, { providerId: 'voxcpm-tts', model: 'm' });
-    const tex = await getDeterministicVoiceId(
-      { ...design, texture: 'bright' },
-      { providerId: 'voxcpm-tts', model: 'm' },
-    );
+    const desc = await getDeterministicVoiceId(`${design}, slightly husky`, {
+      providerId: 'voxcpm-tts',
+      model: 'm',
+    });
     const model = await getDeterministicVoiceId(design, { providerId: 'voxcpm-tts', model: 'm2' });
     const prov = await getDeterministicVoiceId(design, {
       providerId: 'elevenlabs-tts',
       model: 'm',
     });
-    expect(tex).not.toBe(base);
+    expect(desc).not.toBe(base);
     expect(model).not.toBe(base);
     expect(prov).not.toBe(base);
   });
@@ -101,11 +94,11 @@ describe('getDeterministicVoiceId', () => {
     expect(withRef).not.toBe(base);
     expect(withOtherRef).not.toBe(withRef);
   });
-  it('keeps the historical id when refText is absent (backwards compatible)', async () => {
+  it('keeps the id stable when refText is absent', async () => {
     const opts = { providerId: 'voxcpm-tts', model: 'm' };
-    const legacy = await getDeterministicVoiceId(design, opts);
+    const noRef = await getDeterministicVoiceId(design, opts);
     const explicitEmpty = await getDeterministicVoiceId(design, { ...opts, refText: undefined });
-    expect(explicitEmpty).toBe(legacy);
+    expect(explicitEmpty).toBe(noRef);
   });
 });
 

@@ -29,7 +29,7 @@ import {
   toBootstrapLanguage,
 } from '@/lib/server/agent-voice-registration';
 
-const design = { identity: '中年男教师', texture: '低沉温暖', delivery: '从容鼓励' };
+const design = '中年男教师，低沉温暖的嗓音，从容而鼓励的语气';
 const refText = '大家好，我是这门课的老师，欢迎来到课堂，我们马上开始今天的学习。';
 
 beforeEach(() => {

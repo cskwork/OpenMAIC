@@ -35,7 +35,7 @@ describe('voice-registration provider dispatch', () => {
 
 describe('ensureBackendVoiceRegistered', () => {
   const cfg = { baseUrl: 'https://b.test/v1' };
-  const design = { identity: 'teacher', texture: 'warm', delivery: 'calm' };
+  const design = 'a teacher with a warm voice, speaking calmly';
 
   function makeAdapter(exists: boolean): VoiceRegistrationAdapter {
     return {

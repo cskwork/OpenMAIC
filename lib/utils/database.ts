@@ -170,7 +170,7 @@ export interface GeneratedAgentRecord {
   color: string;
   priority: number;
   voiceConfig?: AgentVoiceConfigRef; // Per-agent TTS voice selection
-  voiceDesign?: VoiceDesign; // 3-layer vocal descriptor for auto voice
+  voiceDesign?: VoiceDesign; // Free-text vocal description for auto voice
   refText?: string; // Seed script spoken when bootstrapping the auto voice (its exact transcript)
   createdAt: number;
 }

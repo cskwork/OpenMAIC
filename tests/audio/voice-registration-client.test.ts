@@ -27,7 +27,7 @@ describe('ensureRegisteredVoice memoization', () => {
   it('re-registers when the backend base URL changes (memo keyed by backend, not voiceId alone)', async () => {
     const f = okFetch();
     // Distinct descriptor per test so the module-level memo from other tests can't collide.
-    const voiceDesign = { identity: 'backend-switch teacher', texture: 'warm', delivery: 'calm' };
+    const voiceDesign = 'backend-switch teacher with a warm calm voice';
 
     await ensureRegisteredVoice('voxcpm-tts', { voiceDesign }, { ttsBaseUrl: 'https://a.test/v1' });
     // Same backend again → memoized, no second round-trip.
@@ -41,7 +41,7 @@ describe('ensureRegisteredVoice memoization', () => {
 
   it('coalesces concurrent calls for the same (voiceId, backend) into one request', async () => {
     const f = okFetch();
-    const voiceDesign = { identity: 'concurrent teacher', texture: 'warm', delivery: 'calm' };
+    const voiceDesign = 'concurrent teacher with a warm calm voice';
     const req = { ttsBaseUrl: 'https://c.test/v1' };
 
     await Promise.all([
@@ -54,11 +54,7 @@ describe('ensureRegisteredVoice memoization', () => {
 
   it('re-registers when the API key changes on the same base URL (auth-scoped)', async () => {
     const f = okFetch();
-    const voiceDesign = {
-      identity: 'credential-switch teacher',
-      texture: 'warm',
-      delivery: 'calm',
-    };
+    const voiceDesign = 'credential-switch teacher with a warm calm voice';
     const base = 'https://d.test/v1';
 
     await ensureRegisteredVoice(
@@ -83,7 +79,7 @@ describe('ensureRegisteredVoice memoization', () => {
 
   it('sends the refText to the registration endpoint and scopes the voice id by it', async () => {
     const f = okFetch();
-    const voiceDesign = { identity: 'refText teacher', texture: 'warm', delivery: 'calm' };
+    const voiceDesign = 'refText teacher with a warm calm voice';
     const req = { ttsBaseUrl: 'https://e.test/v1' };
     const refText = '大家好，我是这门课的老师，欢迎来到课堂，我们马上开始今天的学习。';
 
@@ -106,7 +102,7 @@ describe('ensureRegisteredVoice memoization', () => {
 
   it('normalizes refText and the model id before hashing, converging with the server pass', async () => {
     const f = okFetch();
-    const voiceDesign = { identity: 'normalize teacher', texture: 'warm', delivery: 'calm' };
+    const voiceDesign = 'normalize teacher with a warm calm voice';
     const req = { ttsBaseUrl: 'https://g.test/v1' };
     const refText = '大家好，我是这门课的老师，欢迎来到课堂，我们马上开始。';
 

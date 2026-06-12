@@ -301,10 +301,13 @@ export async function getVoxCPMProviderOptions(
           request!,
         ).catch(() => undefined)
       : undefined;
+    // Mutually exclusive: a registered voice carries timbre by id, so the
+    // inline prompt is only sent when registration is unavailable/failed.
     return {
       voiceMode: 'auto',
-      voicePrompt: buildAutoVoxCPMVoicePrompt(context), // inline fallback always set
-      ...(registeredVoiceId ? { registeredVoiceId } : {}),
+      ...(registeredVoiceId
+        ? { registeredVoiceId }
+        : { voicePrompt: buildAutoVoxCPMVoicePrompt(context) }),
     };
   }
 

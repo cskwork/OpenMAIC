@@ -469,10 +469,11 @@ export async function generateClassroom(
           generatedAgentConfigs.find((a) => a.role === 'teacher');
         const narratorVoice = narrator ? voices.get(narrator.id) : undefined;
         if (narratorVoice) {
-          voxcpmAuto = {
-            registeredVoiceId: narratorVoice.voiceId,
-            voicePrompt: narratorVoice.voicePrompt,
-          };
+          // Mutually exclusive: reference the registered voice by id; the
+          // inline prompt is only the fallback when registration failed.
+          voxcpmAuto = narratorVoice.voiceId
+            ? { registeredVoiceId: narratorVoice.voiceId }
+            : { voicePrompt: narratorVoice.voicePrompt };
         } else if (narrator && voices.size > 0) {
           // Don't silently fall back to the legacy skip when other agents
           // resolved fine — this means the narrator itself has no voiceDesign.

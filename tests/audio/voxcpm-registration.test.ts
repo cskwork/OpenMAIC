@@ -82,7 +82,7 @@ describe('bootstrapVoxCPMReferenceClip', () => {
     vi.stubGlobal('fetch', f);
 
     const out = await bootstrapVoxCPMReferenceClip(cfg, {
-      design: { identity: 'male teacher', texture: 'warm', delivery: 'calm' },
+      design: 'male teacher, warm, calm',
       language: 'en',
     });
 
@@ -103,7 +103,7 @@ describe('bootstrapVoxCPMReferenceClip', () => {
     );
     vi.stubGlobal('fetch', f);
 
-    const design = { identity: 'male teacher', texture: 'warm', delivery: 'calm' };
+    const design = 'male teacher, warm, calm';
     const refText = 'Hello everyone, I am your teacher for this course. Let us begin our journey.';
     await bootstrapVoxCPMReferenceClip(cfg, { design, language: 'en', refText });
     await bootstrapVoxCPMReferenceClip(cfg, { design, language: 'zh' });

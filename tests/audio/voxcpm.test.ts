@@ -5,11 +5,8 @@ import {
 } from '@/lib/audio/voxcpm';
 import { buildVoiceDesignPrompt, type VoiceDesign } from '@/lib/audio/voice-design';
 
-const design: VoiceDesign = {
-  identity: 'middle-aged male teacher',
-  texture: 'warm low-pitched resonant',
-  delivery: 'calm measured encouraging',
-};
+const design: VoiceDesign =
+  'a middle-aged male teacher with a warm low-pitched resonant voice, speaking in a calm measured encouraging way';
 
 describe('buildAutoVoxCPMVoicePrompt fallback chain', () => {
   it('prefers voiceDesign over persona', () => {

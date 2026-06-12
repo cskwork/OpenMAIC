@@ -59,6 +59,22 @@ describe('agent-profiles route — voiceDesign', () => {
   it('attaches a normalized voiceDesign when the LLM emits one', async () => {
     callLLM.mockResolvedValue({
       text: llmAgents({
+        voiceDesign: 'an older male teacher with a warm low voice, speaking calmly',
+      }),
+    });
+
+    const res = await POST(makeRequest());
+    const body = await res.json();
+
+    expect(body.success).toBe(true);
+    expect(body.agents[0].voiceDesign).toBe(
+      'an older male teacher with a warm low voice, speaking calmly',
+    );
+  });
+
+  it('flattens a legacy 3-layer voiceDesign object from older clients', async () => {
+    callLLM.mockResolvedValue({
+      text: llmAgents({
         voiceDesign: { identity: 'older male teacher', texture: 'warm low', delivery: 'calm' },
       }),
     });
@@ -67,11 +83,7 @@ describe('agent-profiles route — voiceDesign', () => {
     const body = await res.json();
 
     expect(body.success).toBe(true);
-    expect(body.agents[0].voiceDesign).toEqual({
-      identity: 'older male teacher',
-      texture: 'warm low',
-      delivery: 'calm',
-    });
+    expect(body.agents[0].voiceDesign).toBe('older male teacher, warm low, calm');
   });
 
   it('omits voiceDesign when the LLM does not emit one', async () => {
