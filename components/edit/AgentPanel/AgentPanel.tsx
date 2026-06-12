@@ -117,19 +117,21 @@ export function AgentPanel({ scene }: { scene?: { id: string; title: string } })
     <aside
       ref={railRef}
       style={{ width }}
-      className="relative flex h-full shrink-0 flex-col border-l border-border bg-background"
+      // Mirrors SlideNavRail's surface (white/translucent glass, soft hairline,
+      // faint side shadow) so the two rails read as one chrome family.
+      className="relative flex h-full shrink-0 flex-col border-l border-gray-100 bg-white/80 backdrop-blur-xl dark:border-gray-800 dark:bg-slate-900/80 shadow-[-2px_0_24px_rgba(0,0,0,0.02)]"
     >
       <div
         onPointerDown={onResizeStart}
         onPointerMove={onResizeMove}
         onPointerUp={onResizeEnd}
         onPointerCancel={onResizeEnd}
-        className="group absolute left-0 top-0 bottom-0 z-10 w-1.5 cursor-col-resize touch-none"
+        className="group absolute left-0 top-0 bottom-0 z-10 w-1.5 cursor-col-resize touch-none transition-colors hover:bg-violet-400/30 active:bg-violet-500/50 dark:hover:bg-violet-500/30"
       >
-        <div className="absolute left-0.5 top-1/2 h-8 w-[3px] -translate-y-1/2 rounded-full bg-transparent transition-colors group-hover:bg-border" />
+        <div className="absolute left-0.5 top-1/2 h-8 w-0.5 -translate-y-1/2 rounded-full bg-gray-300 transition-colors group-hover:bg-violet-400 dark:bg-gray-600 dark:group-hover:bg-violet-500" />
       </div>
 
-      <header className="flex h-10 shrink-0 items-center gap-2.5 border-b border-border px-4 pl-5">
+      <header className="flex h-10 shrink-0 items-center gap-2.5 border-b border-gray-100 px-4 pl-5 dark:border-gray-800">
         <span className="size-1.5 rounded-full bg-primary" />
         <span className="text-[12px] font-medium tracking-[0.14em] text-foreground/80">MAIC Agent</span>
         <span className="ml-auto font-mono text-[10px] uppercase tracking-wide text-muted-foreground/60">beta</span>
@@ -165,14 +167,18 @@ export function AgentPanel({ scene }: { scene?: { id: string; title: string } })
           </ThreadPrimitive.ScrollToBottom>
 
           <div className="px-3 pb-3 pt-1">
-            <ComposerPrimitive.Root className="relative rounded-2xl border border-border bg-card shadow-sm transition-shadow focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/10">
+            {/* flex items-end keeps the send button glued to the last text line;
+                minRows/maxRows are react-textarea-autosize's real knobs (its
+                height measurement breaks when fighting `rows`/max-h classes). */}
+            <ComposerPrimitive.Root className="flex items-end gap-1.5 rounded-2xl border border-border bg-card py-2 pl-3.5 pr-2 shadow-sm transition-shadow focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/10">
               <ComposerPrimitive.Input
-                rows={1}
+                minRows={1}
+                maxRows={6}
                 autoFocus
                 placeholder="描述对这一页的修改…"
-                className="max-h-36 w-full resize-none bg-transparent py-3 pl-3.5 pr-11 text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground/60"
+                className="min-w-0 flex-1 resize-none self-center bg-transparent py-1 text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground/60"
               />
-              <ComposerPrimitive.Send className="absolute bottom-2 right-2 grid size-7 place-items-center rounded-full bg-primary text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30">
+              <ComposerPrimitive.Send className="grid size-7 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground/50">
                 <ArrowUp className="size-3.5" />
               </ComposerPrimitive.Send>
             </ComposerPrimitive.Root>

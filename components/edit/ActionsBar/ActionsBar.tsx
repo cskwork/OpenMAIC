@@ -200,7 +200,9 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
     <section
       ref={sectionRef}
       style={open ? { height } : undefined}
-      className="relative flex flex-col border-t border-border bg-background"
+      // Same chrome family as SlideNavRail / AgentPanel: white glass surface,
+      // gray-100 hairline, violet hover on the resize handle.
+      className="relative flex flex-col border-t border-gray-100 bg-white/80 backdrop-blur-xl dark:border-gray-800 dark:bg-slate-900/80"
     >
       {open && (
         <div
@@ -208,9 +210,9 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
           onPointerMove={onResizeMove}
           onPointerUp={onResizeEnd}
           onPointerCancel={onResizeEnd}
-          className="group absolute inset-x-0 top-0 z-10 h-1.5 cursor-row-resize touch-none"
+          className="group absolute inset-x-0 top-0 z-10 h-1.5 cursor-row-resize touch-none transition-colors hover:bg-violet-400/30 active:bg-violet-500/50 dark:hover:bg-violet-500/30"
         >
-          <div className="absolute left-1/2 top-[3px] h-[3px] w-9 -translate-x-1/2 rounded-full bg-transparent transition-colors group-hover:bg-border" />
+          <div className="absolute left-1/2 top-[3px] h-0.5 w-9 -translate-x-1/2 rounded-full bg-gray-300 transition-colors group-hover:bg-violet-400 dark:bg-gray-600 dark:group-hover:bg-violet-500" />
         </div>
       )}
 

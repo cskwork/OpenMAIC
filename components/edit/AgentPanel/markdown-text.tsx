@@ -3,12 +3,12 @@
 /**
  * Assistant text renderer — Streamdown via the official assistant-ui bridge.
  *
- * StreamdownTextPrimitive reads the message part's text/status from assistant-ui
- * context (works with our ExternalStoreRuntime unchanged) and renders with
- * streaming-first behavior: incomplete-markdown repair (no mid-stream flicker
- * on unclosed bold/links), a streaming caret while running, word fade-in at
- * token cadence, and memoized block rendering. `smooth` adds useSmooth char
- * interpolation so bursty SSE deltas read as a steady reveal.
+ * Used for its streaming-first RENDERING only: incomplete-markdown repair (no
+ * mid-stream flicker on unclosed bold/links), memoized block rendering, and
+ * Shiki code blocks. Deliberately NO library entrance animation and NO caret —
+ * the tasteful mainstream streaming feel (Claude-style) is a steady, even
+ * character reveal, which `smooth` (useSmooth interpolation over bursty SSE
+ * deltas) provides on its own.
  */
 import 'streamdown/styles.css';
 import { StreamdownTextPrimitive } from '@assistant-ui/react-streamdown';
@@ -18,9 +18,7 @@ export function MarkdownText() {
   return (
     <StreamdownTextPrimitive
       className="text-[13.5px] leading-relaxed text-foreground [overflow-wrap:anywhere]"
-      caret="block"
-      animated={{ animation: 'fadeIn', sep: 'word' }}
-      smooth
+      smooth={{ maxCharIntervalMs: 18, drainMs: 320 }}
       plugins={{ code }}
     />
   );
