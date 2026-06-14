@@ -66,6 +66,9 @@ interface CanvasState {
   laserElementId: string; // Element focused by laser pointer
   laserOptions: LaserOptions | null; // Laser pointer configuration
   zoomTarget: { elementId: string; scale: number } | null; // Zoom target
+  // Timeline "pick element on canvas" mode: when set, the editor canvas lets the
+  // user click an element to bind it to the given scene action (ActionsBar cue).
+  pickTarget: { sceneId: string; actionIndex: number; cueType: string } | null;
 
   // ===== Canvas viewport state =====
   canvasScale: number; // Canvas actual zoom scale
@@ -174,6 +177,7 @@ interface CanvasState {
   clearHighlight: () => void;
   setLaser: (elementId: string, options?: LaserOptions) => void;
   clearLaser: () => void;
+  setPickTarget: (target: { sceneId: string; actionIndex: number; cueType: string } | null) => void;
   setZoom: (elementId: string, scale: number) => void;
   clearZoom: () => void;
   clearAllEffects: () => void;
@@ -244,6 +248,7 @@ const initialState = {
   laserElementId: '',
   laserOptions: null,
   zoomTarget: null,
+  pickTarget: null,
 };
 
 // ==================== Store Implementation ====================
@@ -426,6 +431,8 @@ const useCanvasStoreBase = create<CanvasState>((set, get) => ({
       laserOptions: null,
     });
   },
+
+  setPickTarget: (target) => set({ pickTarget: target }),
 
   setZoom: (elementId, scale) => {
     set({

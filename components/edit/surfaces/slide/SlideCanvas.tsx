@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import Canvas from '@/components/slide-renderer/Editor/Canvas';
 import { SpotlightOverlay } from '@/components/slide-renderer/Editor/SpotlightOverlay';
+import { LaserPointerOverlay } from '@/components/slide-renderer/Editor/LaserPointerOverlay';
 import { SceneProvider } from '@/lib/contexts/scene-context';
 import { useCanvasStore } from '@/lib/store/canvas';
 import {
@@ -13,6 +14,7 @@ import {
 } from './use-slide-surface';
 import { AnchoredTextBar } from './AnchoredTextBar';
 import { AnchoredElementBar } from './AnchoredElementBar';
+import { ElementPickLayer } from './ElementPickLayer';
 
 /**
  * The slide surface's canvas. Reuses the unmodified slide renderer
@@ -58,13 +60,17 @@ export function SlideCanvas() {
     <div className="relative h-full w-full" {...gestureProps}>
       <SceneProvider controller={controller}>
         <Canvas />
-        {/* Same spotlight effect as playback, retargeted to the editor's
-            element ids — driven by useCanvasStore.setSpotlight (e.g. from the
-            ActionsBar cue-badge hover). */}
+        {/* Same spotlight + laser effects as playback, retargeted to the
+            editor's element ids — driven by useCanvasStore.setSpotlight /
+            setLaser (e.g. from the ActionsBar cue-badge hover). The laser cue
+            replays as a laser pointer, the spotlight cue as a spotlight. */}
         <SpotlightOverlay domIdPrefix="editable-element-" />
+        <LaserPointerOverlay domIdPrefix="editable-element-" />
       </SceneProvider>
       <AnchoredTextBar editingElementId={editingElementId} />
       <AnchoredElementBar element={nonTextElement} />
+      {/* Canvas-side element picker for the timeline's element-bound cues. */}
+      <ElementPickLayer />
     </div>
   );
 }

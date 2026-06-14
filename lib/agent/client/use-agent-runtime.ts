@@ -64,6 +64,9 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
   const toolResultsRef = useRef<Map<string, { result: unknown; isError: boolean }>>(new Map());
   const errorRef = useRef<string>('');
   const phaseRef = useRef<'running' | 'complete' | 'error'>('complete');
+  // Aborts the in-flight run; closing the fetch body cancels the server stream
+  // (the route's ReadableStream.cancel() calls agent.abort()).
+  const abortRef = useRef<AbortController | null>(null);
 
   const buildAssistant = useCallback((id: string): ThreadMessageLike => {
     const parts = mergeAssistantParts({
@@ -133,6 +136,8 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
       toolResultsRef.current = new Map();
       errorRef.current = '';
       phaseRef.current = 'running';
+      const abort = new AbortController();
+      abortRef.current = abort;
 
       const userMsg: ThreadMessageLike = { role: 'user', id: `u-${turnId}`, content: [{ type: 'text', text: userText }] };
       setMessages((prev) => [...prev, userMsg, buildAssistant(assistantId)]);
@@ -183,6 +188,7 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message: userText, scene: opts.scene, sceneContextMap }),
+          signal: abort.signal,
         });
         if (!res.ok || !res.body) throw new Error(`agent request failed: ${res.status}`);
 
@@ -210,10 +216,16 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
           }
         }
       } catch (err) {
-        errorRef.current = `⚠️ ${err instanceof Error ? err.message : String(err)}`;
-        phaseRef.current = 'error';
+        // User-initiated stop — keep whatever streamed, don't surface an error.
+        if (abort.signal.aborted) {
+          phaseRef.current = 'complete';
+        } else {
+          errorRef.current = `⚠️ ${err instanceof Error ? err.message : String(err)}`;
+          phaseRef.current = 'error';
+        }
       } finally {
         if (phaseRef.current === 'running') phaseRef.current = 'complete';
+        if (abortRef.current === abort) abortRef.current = null;
         setIsRunning(false);
         setMessages((prev) => {
           const next = prev.slice();
@@ -225,10 +237,19 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
     [buildAssistant, handleEvent, opts.scene],
   );
 
+  // Stop the current response: abort the fetch (cancels the server stream) and
+  // drop the running flag immediately for a snappy UI; onNew's finally then
+  // finalizes the assistant message with whatever had already streamed.
+  const onCancel = useCallback(async () => {
+    abortRef.current?.abort();
+    setIsRunning(false);
+  }, []);
+
   return useExternalStoreRuntime({
     messages,
     isRunning,
     onNew,
+    onCancel,
     convertMessage: (m) => m,
   });
 }

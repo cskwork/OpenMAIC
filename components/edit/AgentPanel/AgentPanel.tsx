@@ -1,11 +1,17 @@
 'use client';
 
 /**
- * MAIC Agent — editor AI sidebar (right rail), mainstream agent-GUI layout:
- * assistant output is full-width text (markdown) with slim inline tool rows in
- * chronological order; user messages are compact neutral bubbles; a typing
- * indicator shows while the run streams. Brand color is reserved for accents
- * (send button, focus ring, status). Drag-resizable from the left edge.
+ * MAIC Agent — editor AI sidebar (right rail), "Edit with AI" Cursor-style
+ * surface per the OpenMAIC AgentSidebar design board:
+ * - user messages are right-aligned solid-violet bubbles (radius 14/14/4/14);
+ * - assistant output is full-width markdown with design-language tool cards in
+ *   chronological order;
+ * - the composer is a bordered shell with a violet focus glow, an @-context
+ *   chip for the active scene, horizontally-scrolling quick-prompt chips, and a
+ *   square violet send button.
+ * Only design aspects with real V0 backing are implemented — the model picker,
+ * Agent/Ask mode, checkpoints/Restore, reasoning blocks and per-element @-chips
+ * from the board are intentionally omitted (no runtime support yet).
  * Wiring (ExternalStore over the pi AgentEvent SSE stream) lives in
  * use-agent-runtime.
  */
@@ -17,7 +23,7 @@ import {
   ThreadPrimitive,
   useMessage,
 } from '@assistant-ui/react';
-import { ArrowUp, ChevronDown } from 'lucide-react';
+import { ArrowUp, AtSign, ChevronDown, Sparkles, Square } from 'lucide-react';
 import { useAgentRuntime } from '@/lib/agent/client/use-agent-runtime';
 import { MarkdownText } from './markdown-text';
 import { RegenerateSceneActionsUI } from './regenerate-tool-ui';
@@ -26,33 +32,30 @@ const MIN_WIDTH = 320;
 const MAX_WIDTH = 640;
 const DEFAULT_WIDTH = 384;
 
+/** Quick-prompt chips — one tap prefills the composer (user reviews, then sends). */
+const QUICK_PROMPTS = ['重新生成讲解旁白', '让讲解更口语一些', '加一个生活化类比'];
+
 function UserMessage() {
   return (
     <MessagePrimitive.Root className="flex justify-end">
-      <div className="min-w-0 max-w-[85%] rounded-2xl rounded-br-md bg-muted px-3.5 py-2 text-[13px] leading-relaxed text-foreground [overflow-wrap:anywhere]">
+      {/* Solid brand-violet bubble, right-aligned, with a tail toward the user
+          (radius 14/14/4/14) — per the design board's .ae-user. */}
+      <div className="min-w-0 max-w-[88%] rounded-[14px] rounded-br-[4px] bg-primary px-3.5 py-2 text-[13px] leading-relaxed text-white [overflow-wrap:anywhere]">
         <MessagePrimitive.Parts />
       </div>
     </MessagePrimitive.Root>
   );
 }
 
-function TypingDots() {
-  return (
-    <span className="inline-flex items-center gap-1 py-1">
-      {[0, 1, 2].map((i) => (
-        <span
-          key={i}
-          className="size-1.5 animate-bounce rounded-full bg-muted-foreground/40"
-          style={{ animationDelay: `${i * 140}ms` }}
-        />
-      ))}
-    </span>
-  );
+function ThinkingIndicator() {
+  // Cursor-style shimmer label instead of bouncing dots — the bright band
+  // sweeps across "Thinking…" while we wait for the first streamed token.
+  return <span className="ai-thinking-shimmer text-[13px] font-medium">Thinking…</span>;
 }
 
 function AssistantMessage() {
-  // Show typing dots while the run streams and nothing has arrived yet.
-  const showDots = useMessage((m) => {
+  // Show the thinking indicator while the run streams and nothing has arrived yet.
+  const showThinking = useMessage((m) => {
     const hasContent = m.content.some(
       (p) => (p.type === 'text' && p.text.length > 0) || p.type === 'tool-call',
     );
@@ -61,10 +64,10 @@ function AssistantMessage() {
 
   return (
     <MessagePrimitive.Root className="min-w-0">
-      {showDots ? (
-        <TypingDots />
+      {showThinking ? (
+        <ThinkingIndicator />
       ) : (
-        <div className="min-w-0 text-[13.5px] leading-relaxed text-foreground">
+        <div className="min-w-0 space-y-2 text-[13px] leading-[1.6] text-foreground/90">
           <MessagePrimitive.Parts components={{ Text: MarkdownText }} />
         </div>
       )}
@@ -131,10 +134,10 @@ export function AgentPanel({ scene }: { scene?: { id: string; title: string } })
         <div className="absolute left-0.5 top-1/2 h-8 w-0.5 -translate-y-1/2 rounded-full bg-gray-300 transition-colors group-hover:bg-violet-400 dark:bg-gray-600 dark:group-hover:bg-violet-500" />
       </div>
 
-      <header className="flex h-10 shrink-0 items-center gap-2.5 border-b border-gray-100 px-4 pl-5 dark:border-gray-800">
-        <span className="size-1.5 rounded-full bg-primary" />
-        <span className="text-[12px] font-medium tracking-[0.14em] text-foreground/80">MAIC Agent</span>
-        <span className="ml-auto font-mono text-[10px] uppercase tracking-wide text-muted-foreground/60">beta</span>
+      {/* Header — "Edit with AI" with a violet sparkles mark (design .ae-head). */}
+      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-gray-100 px-4 pl-5 dark:border-gray-800">
+        <Sparkles className="size-3.5 text-[#5b1fa8] dark:text-violet-300" />
+        <span className="text-[13px] font-semibold text-[#5b1fa8] dark:text-violet-300">Edit with AI</span>
       </header>
 
       <AssistantRuntimeProvider runtime={runtime}>
@@ -146,16 +149,8 @@ export function AgentPanel({ scene }: { scene?: { id: string; title: string } })
               <div className="mx-auto mt-14 flex max-w-[260px] flex-col items-center text-center">
                 <p className="text-sm font-medium text-foreground">有什么想改的？</p>
                 <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">
-                  让 Agent 编辑当前页面，或重新生成讲解旁白。
+                  在画布上编辑好这一页后，让 AI 重新生成与内容匹配的讲解旁白。
                 </p>
-                <ThreadPrimitive.Suggestion
-                  prompt="重新生成这一页的讲解旁白，让它和页面内容保持一致"
-                  autoSend
-                  method="replace"
-                  className="mt-5 w-full rounded-xl border border-border bg-card px-3.5 py-2.5 text-left text-[12px] leading-snug text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground"
-                >
-                  重新生成这一页的讲解旁白
-                </ThreadPrimitive.Suggestion>
               </div>
             </ThreadPrimitive.Empty>
 
@@ -166,21 +161,67 @@ export function AgentPanel({ scene }: { scene?: { id: string; title: string } })
             <ChevronDown className="size-4" />
           </ThreadPrimitive.ScrollToBottom>
 
+          {/* Composer (design .ae-composer): quick chips → bordered input shell
+              with an @-scene context chip and a square violet send. */}
           <div className="px-3 pb-3 pt-1">
-            {/* flex items-end keeps the send button glued to the last text line;
-                minRows/maxRows are react-textarea-autosize's real knobs (its
-                height measurement breaks when fighting `rows`/max-h classes). */}
-            <ComposerPrimitive.Root className="flex items-end gap-1.5 rounded-2xl border border-border bg-card py-2 pl-3.5 pr-2 shadow-sm transition-shadow focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/10">
+            <div className="scrollbar-hide mb-2 flex gap-1.5 overflow-x-auto pb-0.5">
+              {QUICK_PROMPTS.map((p) => (
+                <ThreadPrimitive.Suggestion
+                  key={p}
+                  prompt={p}
+                  method="replace"
+                  className="shrink-0 whitespace-nowrap rounded-full border border-border bg-muted/50 px-2.5 py-1 text-[11.5px] text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground"
+                >
+                  {p}
+                </ThreadPrimitive.Suggestion>
+              ))}
+            </div>
+
+            <ComposerPrimitive.Root className="rounded-[10px] border border-border bg-card shadow-sm transition-[border-color,box-shadow] focus-within:border-violet-400 focus-within:ring-[3px] focus-within:ring-violet-500/10 dark:focus-within:ring-violet-500/20">
+              {scene?.title ? (
+                <div className="px-2 pt-2">
+                  <span className="inline-flex max-w-full items-center gap-1 rounded-md border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-[#5b1fa8] dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300">
+                    <AtSign className="size-3 shrink-0 text-violet-500" />
+                    <span className="truncate">{scene.title}</span>
+                  </span>
+                </div>
+              ) : null}
+
+              {/* minRows/maxRows are react-textarea-autosize's real knobs (its
+                  height measurement breaks when fighting `rows`/max-h classes). */}
               <ComposerPrimitive.Input
                 minRows={1}
                 maxRows={6}
                 autoFocus
                 placeholder="描述对这一页的修改…"
-                className="min-w-0 flex-1 resize-none self-center bg-transparent py-1 text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground/60"
+                className="block w-full resize-none bg-transparent px-3 pb-1 pt-2 text-[13px] leading-5 text-foreground outline-none placeholder:text-muted-foreground/50"
               />
-              <ComposerPrimitive.Send className="grid size-7 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground/50">
-                <ArrowUp className="size-3.5" />
-              </ComposerPrimitive.Send>
+
+              <div className="flex items-center px-2 pb-2 pt-0.5">
+                {/* Send while idle; Stop while a response streams. Stop calls the
+                    thread runtime's cancelRun → our onCancel aborts the fetch. */}
+                <ThreadPrimitive.If running={false}>
+                  <ComposerPrimitive.Send className="ml-auto grid size-[30px] shrink-0 place-items-center rounded-lg bg-primary text-white transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground/50">
+                    <ArrowUp className="size-4" />
+                  </ComposerPrimitive.Send>
+                </ThreadPrimitive.If>
+                <ThreadPrimitive.If running>
+                  <button
+                    type="button"
+                    aria-label="停止生成"
+                    onClick={() => {
+                      try {
+                        runtime.thread.cancelRun();
+                      } catch {
+                        /* no run to cancel */
+                      }
+                    }}
+                    className="ml-auto grid size-[30px] shrink-0 place-items-center rounded-lg bg-primary text-white transition-colors hover:opacity-90"
+                  >
+                    <Square className="size-3 fill-current" />
+                  </button>
+                </ThreadPrimitive.If>
+              </div>
             </ComposerPrimitive.Root>
           </div>
         </ThreadPrimitive.Root>

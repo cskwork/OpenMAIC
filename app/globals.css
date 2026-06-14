@@ -295,3 +295,38 @@ body[data-maic-editor='true'] .editable-element-text li,
     transform: scale(1.08);
   }
 }
+
+/* Cursor-style "Thinking…" indicator: a bright band sweeps left→right across
+   muted text (gradient clipped to glyphs). Used by the AI sidebar while the
+   agent run streams and nothing has arrived yet. */
+@keyframes ai-thinking-shimmer {
+  0% {
+    background-position: 150% 0;
+  }
+  100% {
+    background-position: -50% 0;
+  }
+}
+.ai-thinking-shimmer {
+  background: linear-gradient(
+    100deg,
+    var(--muted-foreground) 0%,
+    var(--muted-foreground) 40%,
+    var(--foreground) 50%,
+    var(--muted-foreground) 60%,
+    var(--muted-foreground) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: ai-thinking-shimmer 1.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ai-thinking-shimmer {
+    animation: none;
+    color: var(--muted-foreground);
+    -webkit-text-fill-color: var(--muted-foreground);
+  }
+}
