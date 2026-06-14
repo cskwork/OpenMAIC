@@ -86,7 +86,10 @@ export function duplicateSlideScene(source: Scene, copySuffix: string, order: nu
   // cues onto the cloned element ids, and drop the stale audioId so the copy
   // re-derives / regenerates its own narration audio.
   const clonedActions = source.actions?.map((action) => {
-    const next: Record<string, unknown> = { ...action, id: nanoid() };
+    // Deep-clone so nested cue data (chart/table/line data, points, themeColors)
+    // isn't shared by reference with the source — same reason the canvas
+    // elements are deep-cloned above.
+    const next: Record<string, unknown> = { ...structuredClone(action), id: nanoid() };
     const elId = next.elementId;
     if (typeof elId === 'string' && elIdMap[elId]) next.elementId = elIdMap[elId];
     delete next.audioId;
