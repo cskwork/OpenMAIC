@@ -224,14 +224,21 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
           phaseRef.current = 'error';
         }
       } finally {
-        if (phaseRef.current === 'running') phaseRef.current = 'complete';
-        if (abortRef.current === abort) abortRef.current = null;
-        setIsRunning(false);
-        setMessages((prev) => {
-          const next = prev.slice();
-          next[next.length - 1] = buildAssistant(assistantId);
-          return next;
-        });
+        // If the user stopped this run and immediately started a new one, a
+        // newer onNew has already taken over abortRef and the message list.
+        // This (superseded) run must NOT reset isRunning or rewrite the last
+        // message, or it would clobber the new run.
+        const superseded = abortRef.current !== abort;
+        if (!superseded) {
+          abortRef.current = null;
+          if (phaseRef.current === 'running') phaseRef.current = 'complete';
+          setIsRunning(false);
+          setMessages((prev) => {
+            const next = prev.slice();
+            next[next.length - 1] = buildAssistant(assistantId);
+            return next;
+          });
+        }
       }
     },
     [buildAssistant, handleEvent, opts.scene],
