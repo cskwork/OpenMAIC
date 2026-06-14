@@ -4,7 +4,10 @@ vi.mock('@/lib/generation/generation-pipeline', () => ({
   generateSceneActions: vi.fn(async () => [{ type: 'speech', id: 'a1', title: 'hi', text: 'hi' }]),
 }));
 
-import { makeRegenerateSceneActionsTool, type SceneContext } from '@/lib/agent/tools/regenerate-scene-actions';
+import {
+  makeRegenerateSceneActionsTool,
+  type SceneContext,
+} from '@/lib/agent/tools/regenerate-scene-actions';
 import { generateSceneActions } from '@/lib/generation/generation-pipeline';
 import type { SlideContent } from '@/lib/types/stage';
 import type { PPTElement, Slide } from '@/lib/types/slides';
@@ -27,7 +30,15 @@ const stubSlideContent: SlideContent = {
     viewportSize: 1000,
     viewportRatio: 0.5625,
     elements: [
-      { id: 'el1', type: 'text', content: 'Hello', left: 0, top: 0, width: 100, height: 50 } as unknown as PPTElement,
+      {
+        id: 'el1',
+        type: 'text',
+        content: 'Hello',
+        left: 0,
+        top: 0,
+        width: 100,
+        height: 50,
+      } as unknown as PPTElement,
     ],
     background: { type: 'solid', color: '#ffffff' },
   } as unknown as Slide,

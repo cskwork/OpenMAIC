@@ -12,7 +12,9 @@ interface ToolCallPartLike {
 }
 
 /** Ingest: capture providerMetadata from an AI SDK fullStream tool-call part. */
-export function captureToolCallMetadata(part: ToolCallPartLike): ToolCallProviderMetadata | undefined {
+export function captureToolCallMetadata(
+  part: ToolCallPartLike,
+): ToolCallProviderMetadata | undefined {
   const meta = part.providerMetadata ?? part.providerOptions;
   if (!meta || Object.keys(meta).length === 0) return undefined;
   return meta;

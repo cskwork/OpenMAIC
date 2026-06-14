@@ -3,12 +3,16 @@ import {
   insertAt,
   makeAction,
   move,
+  moveById,
+  moveByIdDir,
   removeAt,
+  removeById,
   setAudioId,
   setAudioIdById,
   setElementId,
   setElementIdById,
   setSpeechText,
+  setSpeechTextById,
 } from '@/components/edit/ActionsBar/actions-edit';
 import type { Action } from '@/lib/types/action';
 
@@ -52,6 +56,27 @@ describe('move', () => {
   test('no-op when dropping into its own slot', () => {
     expect(ids(move(base, 1, 1))).toEqual(['a', 'b', 'c', 'd']);
     expect(ids(move(base, 1, 2))).toEqual(['a', 'b', 'c', 'd']);
+  });
+});
+
+describe('by-id ops (index-stale-safe)', () => {
+  const base = [A('a'), A('b'), A('c'), A('d')];
+  test('moveById targets the slot; missing id is a no-op', () => {
+    expect(ids(moveById(base, 'a', 2))).toEqual(['b', 'a', 'c', 'd']);
+    expect(moveById(base, 'zzz', 2)).toBe(base);
+  });
+  test('moveByIdDir nudges left/right by one and clamps at the ends', () => {
+    expect(ids(moveByIdDir(base, 'c', -1))).toEqual(['a', 'c', 'b', 'd']);
+    expect(ids(moveByIdDir(base, 'b', 1))).toEqual(['a', 'c', 'b', 'd']);
+    expect(ids(moveByIdDir(base, 'a', -1))).toEqual(['a', 'b', 'c', 'd']); // already first
+    expect(ids(moveByIdDir(base, 'd', 1))).toEqual(['a', 'b', 'c', 'd']); // already last
+  });
+  test('removeById / setSpeechTextById resolve by id', () => {
+    expect(ids(removeById(base, 'c'))).toEqual(['a', 'b', 'd']);
+    expect(removeById(base, 'zzz')).toBe(base);
+    const xs = [A('s', 'speech')];
+    expect((setSpeechTextById(xs, 's', 'hi')[0] as { text?: string }).text).toBe('hi');
+    expect(setSpeechTextById(xs, 'zzz', 'no')).toBe(xs);
   });
 });
 

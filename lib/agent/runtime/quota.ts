@@ -1,7 +1,9 @@
 import type { AfterToolCallContext, AfterToolCallResult } from '@earendil-works/pi-agent-core';
 
 /** Budget source — v0 stub; wire to the -live credit system (#410) later. */
-export interface QuotaSource { remaining(): number; }
+export interface QuotaSource {
+  remaining(): number;
+}
 
 export function makeQuotaHook(source: QuotaSource) {
   return async (_ctx: AfterToolCallContext): Promise<AfterToolCallResult | undefined> => {

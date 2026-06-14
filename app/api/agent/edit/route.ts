@@ -50,7 +50,10 @@ export async function POST(req: NextRequest) {
     return new Response('message is required', { status: 400 });
   }
 
-  const { model, modelInfo, thinkingConfig, modelString } = await resolveModelFromRequest(req, body);
+  const { model, modelInfo, thinkingConfig, modelString } = await resolveModelFromRequest(
+    req,
+    body,
+  );
 
   const aiCall = async (system: string, prompt: string): Promise<string> => {
     const r = await callLLM(

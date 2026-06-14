@@ -22,10 +22,21 @@ import type {
   ToolCall,
 } from '@earendil-works/pi-ai';
 import type { StreamFn } from '@earendil-works/pi-agent-core';
-import { jsonSchema, stepCountIs, tool as aiTool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import {
+  jsonSchema,
+  stepCountIs,
+  tool as aiTool,
+  type LanguageModel,
+  type ModelMessage,
+  type ToolSet,
+} from 'ai';
 import { streamLLM } from '@/lib/ai/llm';
 import type { ThinkingConfig } from '@/lib/types/provider';
-import { captureToolCallMetadata, emitToolCallProviderOptions, type ToolCallProviderMetadata } from './provider-metadata';
+import {
+  captureToolCallMetadata,
+  emitToolCallProviderOptions,
+  type ToolCallProviderMetadata,
+} from './provider-metadata';
 
 /**
  * Local re-implementation of pi-ai's `AssistantMessageEventStream` queue. pi
@@ -67,7 +78,9 @@ class LocalAssistantEventStream {
       } else if (this.done) {
         return;
       } else {
-        const r = await new Promise<IteratorResult<AssistantMessageEvent>>((resolve) => this.waiting.push(resolve));
+        const r = await new Promise<IteratorResult<AssistantMessageEvent>>((resolve) =>
+          this.waiting.push(resolve),
+        );
         if (r.done) return;
         yield r.value;
       }
@@ -169,7 +182,8 @@ async function pump(
         // Capture provider-specific metadata (e.g. Gemini thought_signature) via
         // the typed seam so it can be re-emitted on the next turn.
         const meta = captureToolCallMetadata(part as never);
-        if (meta) (toolCall as { providerMetadata?: ToolCallProviderMetadata }).providerMetadata = meta;
+        if (meta)
+          (toolCall as { providerMetadata?: ToolCallProviderMetadata }).providerMetadata = meta;
         partial.content.push(toolCall);
         stream.push({ type: 'toolcall_start', contentIndex: idx, partial });
         stream.push({ type: 'toolcall_end', contentIndex: idx, toolCall, partial });
@@ -217,7 +231,9 @@ export function toModelMessages(messages: PiMessage[]): ModelMessage[] {
             toolName: c.name,
             input: c.arguments,
           };
-          const meta = emitToolCallProviderOptions((c as { providerMetadata?: ToolCallProviderMetadata }).providerMetadata);
+          const meta = emitToolCallProviderOptions(
+            (c as { providerMetadata?: ToolCallProviderMetadata }).providerMetadata,
+          );
           if (meta) part.providerOptions = meta;
           parts.push(part);
         }
@@ -228,7 +244,12 @@ export function toModelMessages(messages: PiMessage[]): ModelMessage[] {
       out.push({
         role: 'tool',
         content: [
-          { type: 'tool-result', toolCallId: m.toolCallId, toolName: m.toolName, output: { type: 'text', value: text } },
+          {
+            type: 'tool-result',
+            toolCallId: m.toolCallId,
+            toolName: m.toolName,
+            output: { type: 'text', value: text },
+          },
         ],
       } as unknown as ModelMessage);
     }

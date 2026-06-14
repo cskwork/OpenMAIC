@@ -61,6 +61,31 @@ export function setSpeechText(actions: Action[], index: number, text: string): A
   return next;
 }
 
+/** Like {@link setSpeechText} but targets an action by id (index-stale-safe). */
+export function setSpeechTextById(actions: Action[], id: string, text: string): Action[] {
+  const index = actions.findIndex((a) => a.id === id);
+  return index < 0 ? actions : setSpeechText(actions, index, text);
+}
+
+/** Remove an action by id (index-stale-safe). */
+export function removeById(actions: Action[], id: string): Action[] {
+  const index = actions.findIndex((a) => a.id === id);
+  return index < 0 ? actions : removeAt(actions, index);
+}
+
+/** Move an action (by id) to insertion slot `to` (index-stale-safe). */
+export function moveById(actions: Action[], id: string, to: number): Action[] {
+  const index = actions.findIndex((a) => a.id === id);
+  return index < 0 ? actions : move(actions, index, to);
+}
+
+/** Nudge an action one slot left (`dir < 0`) or right (`dir > 0`), by id. */
+export function moveByIdDir(actions: Action[], id: string, dir: number): Action[] {
+  const index = actions.findIndex((a) => a.id === id);
+  if (index < 0) return actions;
+  return dir < 0 ? move(actions, index, index - 1) : move(actions, index, index + 2);
+}
+
 /** Element-bound cue types whose `elementId` may be set. */
 const ELEMENT_BOUND_TYPES = new Set(['spotlight', 'laser', 'play_video']);
 

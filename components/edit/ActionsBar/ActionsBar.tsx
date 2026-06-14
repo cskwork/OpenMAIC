@@ -45,10 +45,11 @@ import { applyCuePreview, clearCuePreview, cuePreviewFor } from './cue-preview';
 import {
   insertAt,
   makeAction,
-  move,
-  removeAt,
+  moveById,
+  moveByIdDir,
+  removeById,
   setAudioIdById,
-  setSpeechText,
+  setSpeechTextById,
   type AddableType,
 } from './actions-edit';
 import {
@@ -73,7 +74,7 @@ const AXIS_FROM_TOP = 20; // px from track top to the axis center (nodes hang be
  */
 const PALETTE: AddableType[] = ['speech', 'spotlight', 'laser'];
 
-type DragPayload = { kind: 'new'; type: AddableType } | { kind: 'move'; from: number };
+type DragPayload = { kind: 'new'; type: AddableType } | { kind: 'move'; id: string };
 
 interface TooltipState {
   action: Action;
@@ -769,7 +770,7 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
         commit((cur) => insertAt(cur, slot, action));
         if (p.type === 'speech') setFocusId(id);
       } else {
-        commit((cur) => move(cur, p.from, slot));
+        commit((cur) => moveById(cur, p.id, slot));
       }
     },
     [actions, commit],
@@ -916,7 +917,7 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
             />
             {items.map(({ action, index, key, speechIndex: si }) => {
               const onDragStart = (e: React.DragEvent) => {
-                dragRef.current = { kind: 'move', from: index };
+                dragRef.current = { kind: 'move', id: key };
                 setBlankDragImage(e);
               };
               const onDragEnd = () => {
@@ -969,15 +970,17 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
                               ttsRefresh={ttsRefresh}
                               autoFocus={key === focusId}
                               onFocused={() => setFocusId(null)}
-                              onCommit={(text) => commit((cur) => setSpeechText(cur, index, text))}
+                              onCommit={(text) =>
+                                commit((cur) => setSpeechTextById(cur, key, text))
+                              }
                               onGenerated={() =>
                                 commit((cur) =>
                                   setAudioIdById(cur, key, speechAudioId(sceneOrder, key)),
                                 )
                               }
-                              onDelete={() => commit((cur) => removeAt(cur, index))}
-                              onMoveLeft={() => commit((cur) => move(cur, index, index - 1))}
-                              onMoveRight={() => commit((cur) => move(cur, index, index + 2))}
+                              onDelete={() => commit((cur) => removeById(cur, key))}
+                              onMoveLeft={() => commit((cur) => moveByIdDir(cur, key, -1))}
+                              onMoveRight={() => commit((cur) => moveByIdDir(cur, key, 1))}
                               canMoveLeft={index > 0}
                               canMoveRight={index < actions.length - 1}
                               onDragStart={onDragStart}
@@ -987,10 +990,10 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
                             <CueMarker
                               action={action}
                               onTip={setTip}
-                              onDelete={() => commit((cur) => removeAt(cur, index))}
+                              onDelete={() => commit((cur) => removeById(cur, key))}
                               onPick={onPick}
-                              onMoveLeft={() => commit((cur) => move(cur, index, index - 1))}
-                              onMoveRight={() => commit((cur) => move(cur, index, index + 2))}
+                              onMoveLeft={() => commit((cur) => moveByIdDir(cur, key, -1))}
+                              onMoveRight={() => commit((cur) => moveByIdDir(cur, key, 1))}
                               canMoveLeft={index > 0}
                               canMoveRight={index < actions.length - 1}
                               onDragStart={onDragStart}

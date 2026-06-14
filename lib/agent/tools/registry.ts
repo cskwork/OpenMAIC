@@ -1,5 +1,8 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core';
-import { makeRegenerateSceneActionsTool, type RegenerateActionsDeps } from './regenerate-scene-actions';
+import {
+  makeRegenerateSceneActionsTool,
+  type RegenerateActionsDeps,
+} from './regenerate-scene-actions';
 
 /**
  * Deps needed to build the v0 toolset.

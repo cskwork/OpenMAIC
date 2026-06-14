@@ -71,7 +71,13 @@ const LEFT_RAIL_DELAY = CHROME_STAGGER * 2;
  * never remount during scene navigation, removing the chrome flicker that
  * the previous two-branch design caused (PR3a rearch).
  */
-export function EditShell({ scene, leftRail, commandTrailing, rightRail, bottomRail }: EditShellProps) {
+export function EditShell({
+  scene,
+  leftRail,
+  commandTrailing,
+  rightRail,
+  bottomRail,
+}: EditShellProps) {
   const surface = sceneEditorRegistry.resolve(scene.type) ?? NOOP_SURFACE;
   // Surface state is published from a child runner (keyed by sceneType so it
   // remounts when the surface identity changes — that's the boundary at which
@@ -225,7 +231,16 @@ interface FrameProps {
   readonly children: ReactNode;
 }
 
-function Frame({ title, leftRail, history, commands, trailing, rightRail, bottomRail, children }: FrameProps) {
+function Frame({
+  title,
+  leftRail,
+  history,
+  commands,
+  trailing,
+  rightRail,
+  bottomRail,
+  children,
+}: FrameProps) {
   const prefersReducedMotion = useReducedMotion();
 
   // Chrome layers fade in (opacity only) — deliberately NO transform (x/y)
