@@ -27,17 +27,62 @@ export interface CueMeta {
 }
 
 const META: Record<string, CueMeta> = {
-  speech: { icon: Quote, label: '讲解', glyph: 'text-primary bg-primary/10 dark:text-primary', accent: 'bg-primary/40' },
-  spotlight: { icon: Focus, label: '聚光', glyph: 'text-amber-600 bg-amber-500/10 dark:text-amber-400', accent: 'bg-amber-400/70' },
-  laser: { icon: Crosshair, label: '激光', glyph: 'text-rose-600 bg-rose-500/10 dark:text-rose-400', accent: 'bg-rose-400/70' },
-  wb_open: { icon: Presentation, label: '画板', glyph: 'text-sky-600 bg-sky-500/10 dark:text-sky-400', accent: 'bg-sky-400/70' },
-  wb_draw_text: { icon: PenLine, label: '板书', glyph: 'text-sky-600 bg-sky-500/10 dark:text-sky-400', accent: 'bg-sky-400/70' },
-  wb_draw_shape: { icon: Shapes, label: '图形', glyph: 'text-sky-600 bg-sky-500/10 dark:text-sky-400', accent: 'bg-sky-400/70' },
-  wb_draw_latex: { icon: Sigma, label: '公式', glyph: 'text-sky-600 bg-sky-500/10 dark:text-sky-400', accent: 'bg-sky-400/70' },
-  wb_draw_table: { icon: Table2, label: '表格', glyph: 'text-sky-600 bg-sky-500/10 dark:text-sky-400', accent: 'bg-sky-400/70' },
+  speech: {
+    icon: Quote,
+    label: '讲解',
+    glyph: 'text-primary bg-primary/10 dark:text-primary',
+    accent: 'bg-primary/40',
+  },
+  spotlight: {
+    icon: Focus,
+    label: '聚光',
+    glyph: 'text-amber-600 bg-amber-500/10 dark:text-amber-400',
+    accent: 'bg-amber-400/70',
+  },
+  laser: {
+    icon: Crosshair,
+    label: '激光',
+    glyph: 'text-rose-600 bg-rose-500/10 dark:text-rose-400',
+    accent: 'bg-rose-400/70',
+  },
+  wb_open: {
+    icon: Presentation,
+    label: '画板',
+    glyph: 'text-sky-600 bg-sky-500/10 dark:text-sky-400',
+    accent: 'bg-sky-400/70',
+  },
+  wb_draw_text: {
+    icon: PenLine,
+    label: '板书',
+    glyph: 'text-sky-600 bg-sky-500/10 dark:text-sky-400',
+    accent: 'bg-sky-400/70',
+  },
+  wb_draw_shape: {
+    icon: Shapes,
+    label: '图形',
+    glyph: 'text-sky-600 bg-sky-500/10 dark:text-sky-400',
+    accent: 'bg-sky-400/70',
+  },
+  wb_draw_latex: {
+    icon: Sigma,
+    label: '公式',
+    glyph: 'text-sky-600 bg-sky-500/10 dark:text-sky-400',
+    accent: 'bg-sky-400/70',
+  },
+  wb_draw_table: {
+    icon: Table2,
+    label: '表格',
+    glyph: 'text-sky-600 bg-sky-500/10 dark:text-sky-400',
+    accent: 'bg-sky-400/70',
+  },
 };
 
-const FALLBACK: CueMeta = { icon: Circle, label: '动作', glyph: 'text-muted-foreground bg-muted', accent: 'bg-muted-foreground/30' };
+const FALLBACK: CueMeta = {
+  icon: Circle,
+  label: '动作',
+  glyph: 'text-muted-foreground bg-muted',
+  accent: 'bg-muted-foreground/30',
+};
 
 export function cueMeta(type: string): CueMeta {
   return META[type] ?? { ...FALLBACK, label: type };

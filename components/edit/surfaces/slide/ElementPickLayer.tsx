@@ -10,7 +10,7 @@
  * selectable element is outlined; the hovered one gets a solid ring + live
  * spotlight/laser preview. Click empty canvas or press Esc to cancel.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, GripHorizontal, MousePointerClick } from 'lucide-react';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useStageStore } from '@/lib/store/stage';
@@ -44,7 +44,9 @@ function elementHostAt(x: number, y: number): HTMLElement | null {
 export function ElementPickLayer() {
   const pickTarget = useCanvasStore.use.pickTarget();
   // Reactive scene lookup so the panel/binding state tracks store updates.
-  const scene = useStageStore((s) => (pickTarget ? (s.scenes.find((x) => x.id === pickTarget.sceneId) ?? null) : null));
+  const scene = useStageStore((s) =>
+    pickTarget ? (s.scenes.find((x) => x.id === pickTarget.sceneId) ?? null) : null,
+  );
 
   const rootRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<{ id: string; box: Box } | null>(null);
@@ -55,10 +57,18 @@ export function ElementPickLayer() {
   const moveRafRef = useRef<number | null>(null);
 
   const cueType = pickTarget?.cueType;
-  const elements: ElementLite[] =
-    ((scene?.content as { canvas?: { elements?: ElementLite[] } } | undefined)?.canvas?.elements) ?? [];
+  const elements = useMemo<ElementLite[]>(
+    () =>
+      (scene?.content as { canvas?: { elements?: ElementLite[] } } | undefined)?.canvas?.elements ??
+      [],
+    [scene],
+  );
   const currentBound =
-    (scene?.actions?.find((a) => a.id === pickTarget?.actionId) as { elementId?: string } | undefined)?.elementId ?? '';
+    (
+      scene?.actions?.find((a) => a.id === pickTarget?.actionId) as
+        | { elementId?: string }
+        | undefined
+    )?.elementId ?? '';
 
   const preview = useCallback(
     (elementId: string) => {
@@ -105,7 +115,6 @@ export function ElementPickLayer() {
       if (b) boxes.push({ id: el.id, box: b });
     }
     setOutlines(boxes);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [elements, toLocal]);
 
   // On entering pick mode: outline every selectable element, dock panel top-right.
@@ -206,7 +215,11 @@ export function ElementPickLayer() {
   return (
     <div ref={rootRef} className="absolute inset-0 z-[120]">
       {/* click-catcher (sibling of the panel, so panel clicks never reach it) */}
-      <div className="absolute inset-0 cursor-crosshair" onMouseMove={onCanvasMove} onClick={onCanvasClick} />
+      <div
+        className="absolute inset-0 cursor-crosshair"
+        onMouseMove={onCanvasMove}
+        onClick={onCanvasClick}
+      />
 
       {/* every selectable element gets a faint outline → "this is clickable" */}
       {outlines.map((o) => (
@@ -221,13 +234,19 @@ export function ElementPickLayer() {
       {hover && hover.box.width > 0 && (
         <div
           className="pointer-events-none absolute rounded-md ring-2 ring-violet-500 bg-violet-500/[0.06]"
-          style={{ left: hover.box.left - 2, top: hover.box.top - 2, width: hover.box.width + 4, height: hover.box.height + 4 }}
+          style={{
+            left: hover.box.left - 2,
+            top: hover.box.top - 2,
+            width: hover.box.width + 4,
+            height: hover.box.height + 4,
+          }}
         />
       )}
 
       {/* instruction banner */}
       <div className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2 rounded-full border border-violet-300/60 bg-popover/95 px-3.5 py-1.5 text-[12px] font-medium text-foreground shadow-lg shadow-black/10 backdrop-blur">
-        <span className="text-violet-600 dark:text-violet-400">为「{typeLabel}」选择元素</span> · 点高亮元素或下方列表 · Esc 取消
+        <span className="text-violet-600 dark:text-violet-400">为「{typeLabel}」选择元素</span> ·
+        点高亮元素或下方列表 · Esc 取消
       </div>
 
       {/* draggable + collapsible element panel, inside the canvas */}
@@ -253,14 +272,18 @@ export function ElementPickLayer() {
             className="ml-auto grid size-5 place-items-center rounded text-muted-foreground/60 hover:bg-muted hover:text-foreground"
             aria-label={collapsed ? '展开' : '折叠'}
           >
-            <ChevronDown className={`size-3.5 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
+            <ChevronDown
+              className={`size-3.5 transition-transform ${collapsed ? '-rotate-90' : ''}`}
+            />
           </button>
         </div>
 
         {!collapsed && (
           <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
             {elements.length === 0 ? (
-              <p className="px-2 py-3 text-[11px] text-muted-foreground/70">这一页没有可定位的元素。</p>
+              <p className="px-2 py-3 text-[11px] text-muted-foreground/70">
+                这一页没有可定位的元素。
+              </p>
             ) : (
               elements.map((el) => (
                 <button
@@ -273,11 +296,17 @@ export function ElementPickLayer() {
                   }}
                   onClick={() => bind(el.id)}
                   className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] transition-colors hover:bg-muted ${
-                    el.id === currentBound ? 'bg-violet-50 ring-1 ring-violet-200 dark:bg-violet-500/10 dark:ring-violet-500/30' : ''
+                    el.id === currentBound
+                      ? 'bg-violet-50 ring-1 ring-violet-200 dark:bg-violet-500/10 dark:ring-violet-500/30'
+                      : ''
                   }`}
                 >
-                  <span className="min-w-0 flex-1 truncate text-foreground/90">{elementLabel(el)}</span>
-                  <span className="shrink-0 font-mono text-[9px] text-muted-foreground/45">{el.id.slice(0, 6)}</span>
+                  <span className="min-w-0 flex-1 truncate text-foreground/90">
+                    {elementLabel(el)}
+                  </span>
+                  <span className="shrink-0 font-mono text-[9px] text-muted-foreground/45">
+                    {el.id.slice(0, 6)}
+                  </span>
                 </button>
               ))
             )}

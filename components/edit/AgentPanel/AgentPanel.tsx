@@ -23,7 +23,15 @@ import {
   ThreadPrimitive,
   useMessage,
 } from '@assistant-ui/react';
-import { ArrowUp, AtSign, ChevronDown, PanelRightClose, PanelRightOpen, Sparkles, Square } from 'lucide-react';
+import {
+  ArrowUp,
+  AtSign,
+  ChevronDown,
+  PanelRightClose,
+  PanelRightOpen,
+  Sparkles,
+  Square,
+} from 'lucide-react';
 import { useAgentRuntime } from '@/lib/agent/client/use-agent-runtime';
 import { MarkdownText } from './markdown-text';
 import { RegenerateSceneActionsUI } from './regenerate-tool-ui';
@@ -85,7 +93,12 @@ export function AgentPanel({ scene }: { scene?: { id: string; title: string } })
   // Drag-to-resize from the left edge (pointer capture, direct DOM write).
   const railRef = useRef<HTMLElement>(null);
   const [width, setWidth] = useState(DEFAULT_WIDTH);
-  const dragRef = useRef<{ startX: number; startW: number; lastW: number; pointerId: number } | null>(null);
+  const dragRef = useRef<{
+    startX: number;
+    startW: number;
+    lastW: number;
+    pointerId: number;
+  } | null>(null);
 
   const onResizeStart = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
@@ -163,7 +176,9 @@ export function AgentPanel({ scene }: { scene?: { id: string; title: string } })
       {/* Header — "Edit with AI" with a violet sparkles mark (design .ae-head). */}
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-gray-100 px-4 pl-5 dark:border-gray-800">
         <Sparkles className="size-3.5 text-[#5b1fa8] dark:text-violet-300" />
-        <span className="text-[13px] font-semibold text-[#5b1fa8] dark:text-violet-300">Edit with AI</span>
+        <span className="text-[13px] font-semibold text-[#5b1fa8] dark:text-violet-300">
+          Edit with AI
+        </span>
         <button
           type="button"
           onClick={() => setCollapsed(true)}

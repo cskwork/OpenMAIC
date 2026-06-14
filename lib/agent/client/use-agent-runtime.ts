@@ -16,7 +16,11 @@
  * POSTed so the tool never relies on model-fabricated data.
  */
 import { useCallback, useRef, useState } from 'react';
-import { useExternalStoreRuntime, type AppendMessage, type ThreadMessageLike } from '@assistant-ui/react';
+import {
+  useExternalStoreRuntime,
+  type AppendMessage,
+  type ThreadMessageLike,
+} from '@assistant-ui/react';
 import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import { useStageStore } from '@/lib/store/stage';
 import type { SceneContextMap } from '@/app/api/agent/edit/route';
@@ -49,7 +53,12 @@ function toPiParts(content: PiAssistantContent[]): PiPart[] {
     if (c.type === 'text') {
       parts.push({ type: 'text', text: c.text ?? '' });
     } else if (c.type === 'toolCall' && c.id) {
-      parts.push({ type: 'toolCall', id: c.id, name: c.name ?? 'tool', arguments: c.arguments ?? {} });
+      parts.push({
+        type: 'toolCall',
+        id: c.id,
+        name: c.name ?? 'tool',
+        arguments: c.arguments ?? {},
+      });
     }
   }
   return parts;
@@ -95,8 +104,11 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
       }
       case 'message_update':
       case 'message_end': {
-        const msg = (event as { message?: { role?: string; content?: PiAssistantContent[]; errorMessage?: string } })
-          .message;
+        const msg = (
+          event as {
+            message?: { role?: string; content?: PiAssistantContent[]; errorMessage?: string };
+          }
+        ).message;
         if (msg?.role !== 'assistant') break;
         if (msg.errorMessage) errorRef.current = msg.errorMessage;
         if (Array.isArray(msg.content)) {
@@ -109,7 +121,11 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
         break;
       }
       case 'tool_execution_end': {
-        const e = event as { toolCallId: string; result?: { details?: unknown }; isError?: boolean };
+        const e = event as {
+          toolCallId: string;
+          result?: { details?: unknown };
+          isError?: boolean;
+        };
         toolResultsRef.current.set(e.toolCallId, { result: e.result, isError: !!e.isError });
         const details = (e.result?.details ?? {}) as { sceneId?: string; actions?: unknown };
         // Apply only non-empty actions — an empty array would destructively
@@ -139,16 +155,27 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
       const abort = new AbortController();
       abortRef.current = abort;
 
-      const userMsg: ThreadMessageLike = { role: 'user', id: `u-${turnId}`, content: [{ type: 'text', text: userText }] };
+      const userMsg: ThreadMessageLike = {
+        role: 'user',
+        id: `u-${turnId}`,
+        content: [{ type: 'text', text: userText }],
+      };
       setMessages((prev) => [...prev, userMsg, buildAssistant(assistantId)]);
       setIsRunning(true);
 
-      const refresh = () =>
+      // This run is "current" only while it still owns abortRef. Once the user
+      // stops and starts another run, a newer onNew takes abortRef — late SSE
+      // events from this (superseded) run must not rewrite the new message.
+      const isCurrent = () => abortRef.current === abort;
+
+      const refresh = () => {
+        if (!isCurrent()) return;
         setMessages((prev) => {
           const next = prev.slice();
           next[next.length - 1] = buildAssistant(assistantId);
           return next;
         });
+      };
 
       try {
         // Trusted scene context from the client store — the route injects it
@@ -212,7 +239,9 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
             } catch {
               continue;
             }
-            handleEvent(event, refresh);
+            // Skip late events from a superseded run (don't apply stale tool
+            // results to the stage or rewrite the new run's message).
+            if (isCurrent()) handleEvent(event, refresh);
           }
         }
       } catch (err) {

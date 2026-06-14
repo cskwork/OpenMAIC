@@ -42,7 +42,15 @@ import { useSettingsStore } from '@/lib/store/settings';
 import type { Action } from '@/lib/types/action';
 import { ELEMENT_BOUND, cueLabel, cueMeta } from './cue-meta';
 import { applyCuePreview, clearCuePreview, cuePreviewFor } from './cue-preview';
-import { insertAt, makeAction, move, removeAt, setAudioIdById, setSpeechText, type AddableType } from './actions-edit';
+import {
+  insertAt,
+  makeAction,
+  move,
+  removeAt,
+  setAudioIdById,
+  setSpeechText,
+  type AddableType,
+} from './actions-edit';
 import {
   audioExists,
   audioObjectUrl,
@@ -362,6 +370,7 @@ function SpeechClip({
 
   useEffect(() => {
     if (document.activeElement !== ref.current || !dirtyRef.current) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- sync external text in only when not mid-edit
       setVal(text);
       dirtyRef.current = false;
     }
@@ -398,8 +407,15 @@ function SpeechClip({
           {String(index).padStart(2, '0')}
         </span>
         <SpeechIcon className="size-3 text-primary/45" />
-        <span className="ml-auto mr-0.5 text-[8.5px] font-medium uppercase tracking-[0.12em] text-muted-foreground/40">讲解</span>
-        <MoveButtons onLeft={onMoveLeft} onRight={onMoveRight} canLeft={canMoveLeft} canRight={canMoveRight} />
+        <span className="ml-auto mr-0.5 text-[8.5px] font-medium uppercase tracking-[0.12em] text-muted-foreground/40">
+          讲解
+        </span>
+        <MoveButtons
+          onLeft={onMoveLeft}
+          onRight={onMoveRight}
+          canLeft={canMoveLeft}
+          canRight={canMoveRight}
+        />
         <DeleteButton onDelete={onDelete} />
       </div>
       <textarea
@@ -481,8 +497,12 @@ function CueMarker({
       }}
       className={cn(
         'group/cue relative flex h-full w-[108px] shrink-0 flex-col overflow-hidden rounded-xl border bg-white/65 shadow-sm transition-colors dark:bg-slate-800/40',
-        bound ? 'cursor-pointer hover:border-violet-300/70 dark:hover:border-violet-500/40' : 'cursor-grab active:cursor-grabbing',
-        needsTarget ? 'border-dashed border-amber-400/70' : 'border-gray-200/80 dark:border-gray-700/60',
+        bound
+          ? 'cursor-pointer hover:border-violet-300/70 dark:hover:border-violet-500/40'
+          : 'cursor-grab active:cursor-grabbing',
+        needsTarget
+          ? 'border-dashed border-amber-400/70'
+          : 'border-gray-200/80 dark:border-gray-700/60',
       )}
       aria-label={m.label}
     >
@@ -499,7 +519,12 @@ function CueMarker({
           <GripVertical className="size-3.5" />
         </span>
         <span className="ml-auto flex items-center">
-          <MoveButtons onLeft={onMoveLeft} onRight={onMoveRight} canLeft={canMoveLeft} canRight={canMoveRight} />
+          <MoveButtons
+            onLeft={onMoveLeft}
+            onRight={onMoveRight}
+            canLeft={canMoveLeft}
+            canRight={canMoveRight}
+          />
           <DeleteButton onDelete={onDelete} />
         </span>
       </div>
@@ -509,7 +534,14 @@ function CueMarker({
         </span>
         <span className="text-[10px] font-medium text-foreground/70">{m.label}</span>
         {bound && (
-          <span className={cn('text-[9px]', needsTarget ? 'font-medium text-amber-600 dark:text-amber-400' : 'text-muted-foreground/45')}>
+          <span
+            className={cn(
+              'text-[9px]',
+              needsTarget
+                ? 'font-medium text-amber-600 dark:text-amber-400'
+                : 'text-muted-foreground/45',
+            )}
+          >
             {needsTarget ? '选元素' : '已绑定'}
           </span>
         )}
@@ -559,7 +591,9 @@ function NodeDot({
       }}
       className={cn(
         'grid size-6 place-items-center rounded-full ring-2 ring-white transition-transform hover:scale-110 dark:ring-slate-900',
-        needsTarget ? 'text-amber-600 bg-amber-100 ring-amber-200 animate-pulse dark:bg-amber-500/20 dark:text-amber-400' : m.glyph,
+        needsTarget
+          ? 'text-amber-600 bg-amber-100 ring-amber-200 animate-pulse dark:bg-amber-500/20 dark:text-amber-400'
+          : m.glyph,
         bound ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing',
       )}
       aria-label={m.label}
@@ -591,7 +625,10 @@ function DropZone({
         e.preventDefault();
         onDrop();
       }}
-      className={cn('relative h-full shrink-0 transition-all', flex ? 'flex-1' : active ? 'w-10' : 'w-2.5')}
+      className={cn(
+        'relative h-full shrink-0 transition-all',
+        flex ? 'flex-1' : active ? 'w-10' : 'w-2.5',
+      )}
     >
       <span
         className={cn(
@@ -609,7 +646,9 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
   const sceneOrder = scene?.order ?? 0;
   const language = useStageStore((s) => s.stage?.languageDirective);
   // Managed TTS on → speech clips show audio status + 试听 / 重新生成.
-  const ttsActive = useSettingsStore((s) => s.ttsEnabled && s.ttsProviderId !== 'browser-native-tts');
+  const ttsActive = useSettingsStore(
+    (s) => s.ttsEnabled && s.ttsProviderId !== 'browser-native-tts',
+  );
 
   const [lineMode, setLineMode] = useState(false); // collapse to just the axis line of node icons
   const [tip, setTip] = useState<TooltipState | null>(null);
@@ -620,8 +659,14 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
   const reduce = useReducedMotion();
   const dragRef = useRef<DragPayload | null>(null);
 
+  // Apply an edit to the LATEST actions from the store (not the render-time
+  // snapshot), so a concurrent agent/TTS update isn't reverted by a later UI
+  // commit (drag / reorder / blur / delete).
   const commit = useCallback(
-    (next: Action[]) => useStageStore.getState().updateScene(sceneId, { actions: next }),
+    (updater: (cur: Action[]) => Action[]) => {
+      const cur = useStageStore.getState().scenes.find((s) => s.id === sceneId)?.actions ?? [];
+      useStageStore.getState().updateScene(sceneId, { actions: updater(cur) });
+    },
     [sceneId],
   );
 
@@ -641,16 +686,23 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
       for (const a of speeches) {
         if (!a.id) continue;
         try {
-          await regenerateSpeechAudio(order, { id: a.id, text: (a as { text?: string }).text ?? '' }, language);
+          await regenerateSpeechAudio(
+            order,
+            { id: a.id, text: (a as { text?: string }).text ?? '' },
+            language,
+          );
         } catch {
           /* skip a failed line, keep going */
         }
       }
-      let next = latest()?.actions ?? [];
-      for (const a of next) {
-        if (a.type === 'speech' && a.id) next = setAudioIdById(next, a.id, speechAudioId(order, a.id));
-      }
-      commit(next);
+      commit((cur) => {
+        let next = cur;
+        for (const a of cur) {
+          if (a.type === 'speech' && a.id)
+            next = setAudioIdById(next, a.id, speechAudioId(order, a.id));
+        }
+        return next;
+      });
       setTtsRefresh((n) => n + 1);
     } finally {
       setRegenAll(false);
@@ -660,9 +712,15 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
   // Height drag-resize (top edge).
   const sectionRef = useRef<HTMLElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const panViewport = (dir: -1 | 1) => scrollRef.current?.scrollBy({ left: dir * 280, behavior: 'smooth' });
+  const panViewport = (dir: -1 | 1) =>
+    scrollRef.current?.scrollBy({ left: dir * 280, behavior: 'smooth' });
   const [height, setHeight] = useState(DEFAULT_H);
-  const resizeRef = useRef<{ startY: number; startH: number; lastH: number; pointerId: number } | null>(null);
+  const resizeRef = useRef<{
+    startY: number;
+    startH: number;
+    lastH: number;
+    pointerId: number;
+  } | null>(null);
   const onResizeStart = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
       const startH = sectionRef.current?.getBoundingClientRect().height ?? height;
@@ -703,12 +761,15 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
       setDragOver(null);
       if (!p) return;
       if (p.kind === 'new') {
-        const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `a-${Date.now()}`;
+        const id =
+          typeof crypto !== 'undefined' && crypto.randomUUID
+            ? crypto.randomUUID()
+            : `a-${Date.now()}`;
         const action = makeAction(p.type, id);
-        commit(insertAt(actions, slot, action));
+        commit((cur) => insertAt(cur, slot, action));
         if (p.type === 'speech') setFocusId(id);
       } else {
-        commit(move(actions, p.from, slot));
+        commit((cur) => move(cur, p.from, slot));
       }
     },
     [actions, commit],
@@ -742,9 +803,15 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
       )}
 
       <div className="flex h-10 shrink-0 items-center gap-2.5 px-6">
-        <button type="button" onClick={() => setLineMode((v) => !v)} className="flex items-center gap-2.5">
+        <button
+          type="button"
+          onClick={() => setLineMode((v) => !v)}
+          className="flex items-center gap-2.5"
+        >
           <span className="size-1.5 rounded-full bg-primary" />
-          <span className="text-[12px] font-medium tracking-[0.18em] text-foreground/80">讲解脚本</span>
+          <span className="text-[12px] font-medium tracking-[0.18em] text-foreground/80">
+            讲解脚本
+          </span>
         </button>
 
         {!lineMode && (
@@ -827,116 +894,124 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
         <div className="relative h-full min-w-max">
-            {/* the timeline axis (top) — nodes hang below it; hidden when empty
+          {/* the timeline axis (top) — nodes hang below it; hidden when empty
                 so the placeholder hint doesn't collide with the line */}
-            {actions.length > 0 && (
-              <div
-                className="pointer-events-none absolute inset-x-3 bg-gradient-to-r from-border/30 via-border to-border/30"
-                style={{ top: AXIS_FROM_TOP - 1, height: 2 }}
-              />
+          {actions.length > 0 && (
+            <div
+              className="pointer-events-none absolute inset-x-3 bg-gradient-to-r from-border/30 via-border to-border/30"
+              style={{ top: AXIS_FROM_TOP - 1, height: 2 }}
+            />
+          )}
+          <div className="relative flex h-full items-stretch px-3.5">
+            {actions.length === 0 && (
+              <span className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[12px] text-muted-foreground/60">
+                把上方的动作拖到轴上开始编排，或让 MAIC Agent 生成讲解。
+              </span>
             )}
-            <div className="relative flex h-full items-stretch px-3.5">
-              {actions.length === 0 && (
-                <span className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[12px] text-muted-foreground/60">
-                  把上方的动作拖到轴上开始编排，或让 MAIC Agent 生成讲解。
-                </span>
-              )}
-              <DropZone
-                active={dragOver === 0}
-                flex={actions.length === 0}
-                onEnter={() => setDragOver(0)}
-                onDrop={() => handleDrop(0)}
-              />
-              {items.map(({ action, index, key, speechIndex: si }) => {
-                const onDragStart = (e: React.DragEvent) => {
-                  dragRef.current = { kind: 'move', from: index };
-                  setBlankDragImage(e);
-                };
-                const onDragEnd = () => {
-                  dragRef.current = null;
-                  setDragOver(null);
-                };
-                const onPick = () =>
-                  useCanvasStore.getState().setPickTarget({ sceneId, actionId: key, cueType: action.type });
-                const dot = (
-                  <NodeDot action={action} onTip={setTip} onPick={onPick} onDragStart={onDragStart} onDragEnd={onDragEnd} />
-                );
-                return (
-                  <div key={key} className="relative flex h-full items-stretch">
-                    <motion.div
-                      initial={reduce ? false : { opacity: 0, y: -6 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.22, delay: reduce ? 0 : Math.min(index * 0.02, 0.24), ease: 'easeOut' }}
-                      className="flex h-full flex-col items-center"
-                      style={{ paddingTop: AXIS_FROM_TOP - 12 }}
-                    >
-                      {lineMode ? (
-                        <div className="w-9">{dot}</div>
-                      ) : (
-                        <>
-                          {dot}
-                          <div className="my-1 h-2.5 w-px bg-border" />
-                          <div className="min-h-0 w-full flex-1">
-                            {action.type === 'speech' ? (
-                              <SpeechClip
-                                text={(action as { text?: string }).text ?? ''}
-                                index={si}
-                                actionId={key}
-                                audioId={(action as { audioId?: string }).audioId}
-                                sceneOrder={sceneOrder}
-                                language={language}
-                                ttsActive={ttsActive}
-                                audioUrl={(action as { audioUrl?: string }).audioUrl}
-                                ttsRefresh={ttsRefresh}
-                                autoFocus={key === focusId}
-                                onFocused={() => setFocusId(null)}
-                                onCommit={(text) => commit(setSpeechText(actions, index, text))}
-                                onGenerated={() =>
-                                  commit(
-                                    setAudioIdById(
-                                      useStageStore.getState().scenes.find((s) => s.id === sceneId)?.actions ?? actions,
-                                      key,
-                                      speechAudioId(sceneOrder, key),
-                                    ),
-                                  )
-                                }
-                                onDelete={() => commit(removeAt(actions, index))}
-                                onMoveLeft={() => commit(move(actions, index, index - 1))}
-                                onMoveRight={() => commit(move(actions, index, index + 2))}
-                                canMoveLeft={index > 0}
-                                canMoveRight={index < actions.length - 1}
-                                onDragStart={onDragStart}
-                                onDragEnd={onDragEnd}
-                              />
-                            ) : (
-                              <CueMarker
-                                action={action}
-                                onTip={setTip}
-                                onDelete={() => commit(removeAt(actions, index))}
-                                onPick={onPick}
-                                onMoveLeft={() => commit(move(actions, index, index - 1))}
-                                onMoveRight={() => commit(move(actions, index, index + 2))}
-                                canMoveLeft={index > 0}
-                                canMoveRight={index < actions.length - 1}
-                                onDragStart={onDragStart}
-                                onDragEnd={onDragEnd}
-                              />
-                            )}
-                          </div>
-                        </>
-                      )}
-                    </motion.div>
-                    <DropZone
-                      active={dragOver === index + 1}
-                      onEnter={() => setDragOver(index + 1)}
-                      onDrop={() => handleDrop(index + 1)}
-                    />
-                  </div>
-                );
-              })}
-            </div>
+            <DropZone
+              active={dragOver === 0}
+              flex={actions.length === 0}
+              onEnter={() => setDragOver(0)}
+              onDrop={() => handleDrop(0)}
+            />
+            {items.map(({ action, index, key, speechIndex: si }) => {
+              const onDragStart = (e: React.DragEvent) => {
+                dragRef.current = { kind: 'move', from: index };
+                setBlankDragImage(e);
+              };
+              const onDragEnd = () => {
+                dragRef.current = null;
+                setDragOver(null);
+              };
+              const onPick = () =>
+                useCanvasStore
+                  .getState()
+                  .setPickTarget({ sceneId, actionId: key, cueType: action.type });
+              const dot = (
+                <NodeDot
+                  action={action}
+                  onTip={setTip}
+                  onPick={onPick}
+                  onDragStart={onDragStart}
+                  onDragEnd={onDragEnd}
+                />
+              );
+              return (
+                <div key={key} className="relative flex h-full items-stretch">
+                  <motion.div
+                    initial={reduce ? false : { opacity: 0, y: -6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{
+                      duration: 0.22,
+                      delay: reduce ? 0 : Math.min(index * 0.02, 0.24),
+                      ease: 'easeOut',
+                    }}
+                    className="flex h-full flex-col items-center"
+                    style={{ paddingTop: AXIS_FROM_TOP - 12 }}
+                  >
+                    {lineMode ? (
+                      <div className="w-9">{dot}</div>
+                    ) : (
+                      <>
+                        {dot}
+                        <div className="my-1 h-2.5 w-px bg-border" />
+                        <div className="min-h-0 w-full flex-1">
+                          {action.type === 'speech' ? (
+                            <SpeechClip
+                              text={(action as { text?: string }).text ?? ''}
+                              index={si}
+                              actionId={key}
+                              audioId={(action as { audioId?: string }).audioId}
+                              sceneOrder={sceneOrder}
+                              language={language}
+                              ttsActive={ttsActive}
+                              audioUrl={(action as { audioUrl?: string }).audioUrl}
+                              ttsRefresh={ttsRefresh}
+                              autoFocus={key === focusId}
+                              onFocused={() => setFocusId(null)}
+                              onCommit={(text) => commit((cur) => setSpeechText(cur, index, text))}
+                              onGenerated={() =>
+                                commit((cur) =>
+                                  setAudioIdById(cur, key, speechAudioId(sceneOrder, key)),
+                                )
+                              }
+                              onDelete={() => commit((cur) => removeAt(cur, index))}
+                              onMoveLeft={() => commit((cur) => move(cur, index, index - 1))}
+                              onMoveRight={() => commit((cur) => move(cur, index, index + 2))}
+                              canMoveLeft={index > 0}
+                              canMoveRight={index < actions.length - 1}
+                              onDragStart={onDragStart}
+                              onDragEnd={onDragEnd}
+                            />
+                          ) : (
+                            <CueMarker
+                              action={action}
+                              onTip={setTip}
+                              onDelete={() => commit((cur) => removeAt(cur, index))}
+                              onPick={onPick}
+                              onMoveLeft={() => commit((cur) => move(cur, index, index - 1))}
+                              onMoveRight={() => commit((cur) => move(cur, index, index + 2))}
+                              canMoveLeft={index > 0}
+                              canMoveRight={index < actions.length - 1}
+                              onDragStart={onDragStart}
+                              onDragEnd={onDragEnd}
+                            />
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </motion.div>
+                  <DropZone
+                    active={dragOver === index + 1}
+                    onEnter={() => setDragOver(index + 1)}
+                    onDrop={() => handleDrop(index + 1)}
+                  />
+                </div>
+              );
+            })}
           </div>
         </div>
+      </div>
 
       {tip && <CueTooltip tip={tip} />}
     </section>

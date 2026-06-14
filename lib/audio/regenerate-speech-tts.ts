@@ -20,7 +20,10 @@ export function speechAudioId(sceneOrder: number, actionId: string): string {
  * or a prior regen) if present, else the canonical derived key. Single source
  * of truth for "what blob belongs to this speech line".
  */
-export function resolveSpeechAudioId(sceneOrder: number, action: { id?: string; audioId?: string }): string {
+export function resolveSpeechAudioId(
+  sceneOrder: number,
+  action: { id?: string; audioId?: string },
+): string {
   return action.audioId || speechAudioId(sceneOrder, action.id ?? '');
 }
 

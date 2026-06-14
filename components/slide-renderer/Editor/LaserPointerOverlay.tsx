@@ -27,7 +27,9 @@ interface LaserPointerOverlayProps {
  * the edit canvas had no laser surface, so laser cues had nowhere to render and
  * were collapsed into a spotlight instead.
  */
-export function LaserPointerOverlay({ domIdPrefix = 'screen-element-' }: LaserPointerOverlayProps = {}) {
+export function LaserPointerOverlay({
+  domIdPrefix = 'screen-element-',
+}: LaserPointerOverlayProps = {}) {
   const laserElementId = useCanvasStore.use.laserElementId();
   const laserOptions = useCanvasStore.use.laserOptions();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -63,8 +65,10 @@ export function LaserPointerOverlay({ domIdPrefix = 'screen-element-' }: LaserPo
     }
 
     setCenter({
-      x: ((targetRect.left + targetRect.width / 2 - containerRect.left) / containerRect.width) * 100,
-      y: ((targetRect.top + targetRect.height / 2 - containerRect.top) / containerRect.height) * 100,
+      x:
+        ((targetRect.left + targetRect.width / 2 - containerRect.left) / containerRect.width) * 100,
+      y:
+        ((targetRect.top + targetRect.height / 2 - containerRect.top) / containerRect.height) * 100,
     });
   }, [laserElementId, domIdPrefix]);
 

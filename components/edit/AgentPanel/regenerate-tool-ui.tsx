@@ -62,8 +62,12 @@ function ToolRow({
         )}
       >
         <Wrench className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="shrink-0 whitespace-nowrap text-[12.5px] font-semibold text-foreground">重新生成讲解</span>
-        <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-muted-foreground">{target}</span>
+        <span className="shrink-0 whitespace-nowrap text-[12.5px] font-semibold text-foreground">
+          重新生成讲解
+        </span>
+        <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-muted-foreground">
+          {target}
+        </span>
 
         {running ? (
           <span className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[10.5px] font-semibold text-[#5b1fa8] dark:bg-violet-500/10 dark:text-violet-300">
@@ -84,14 +88,19 @@ function ToolRow({
 
         {expandable && (
           <ChevronDown
-            className={cn('size-3.5 shrink-0 text-neutral-400 transition-transform', open && 'rotate-180')}
+            className={cn(
+              'size-3.5 shrink-0 text-neutral-400 transition-transform',
+              open && 'rotate-180',
+            )}
           />
         )}
       </button>
 
       {open && expandable && (
         <div className="space-y-1 border-t border-border px-2.5 py-2 text-[11px] text-muted-foreground">
-          {failed && failText ? <p className="text-amber-600 dark:text-amber-500">{failText}</p> : null}
+          {failed && failText ? (
+            <p className="text-amber-600 dark:text-amber-500">{failText}</p>
+          ) : null}
           {actions.length > 0 && <p className="font-mono">{summarize(actions)}</p>}
           {result?.details?.sceneId && (
             <p className="font-mono text-muted-foreground/70">scene {result.details.sceneId}</p>
@@ -102,11 +111,13 @@ function ToolRow({
   );
 }
 
-export const RegenerateSceneActionsUI = makeAssistantToolUI<{ sceneId?: string }, RegenerateResult>({
-  toolName: 'regenerate_scene_actions',
-  render: ({ status, result, isError }) => {
-    const running = status.type === 'running' || status.type === 'requires-action';
-    const failed = !running && (isError || status.type === 'incomplete');
-    return <ToolRow running={running} failed={failed} result={result} />;
+export const RegenerateSceneActionsUI = makeAssistantToolUI<{ sceneId?: string }, RegenerateResult>(
+  {
+    toolName: 'regenerate_scene_actions',
+    render: ({ status, result, isError }) => {
+      const running = status.type === 'running' || status.type === 'requires-action';
+      const failed = !running && (isError || status.type === 'incomplete');
+      return <ToolRow running={running} failed={failed} result={result} />;
+    },
   },
-});
+);

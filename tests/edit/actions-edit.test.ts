@@ -12,7 +12,7 @@ import {
 } from '@/components/edit/ActionsBar/actions-edit';
 import type { Action } from '@/lib/types/action';
 
-const A = (id: string, type = 'speech'): Action => ({ id, type } as unknown as Action);
+const A = (id: string, type = 'speech'): Action => ({ id, type }) as unknown as Action;
 const ids = (xs: Action[]) => xs.map((a) => a.id);
 
 describe('makeAction', () => {
