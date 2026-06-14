@@ -23,7 +23,7 @@ import {
   ThreadPrimitive,
   useMessage,
 } from '@assistant-ui/react';
-import { ArrowUp, AtSign, ChevronDown, Sparkles, Square } from 'lucide-react';
+import { ArrowUp, AtSign, ChevronDown, PanelRightClose, PanelRightOpen, Sparkles, Square } from 'lucide-react';
 import { useAgentRuntime } from '@/lib/agent/client/use-agent-runtime';
 import { MarkdownText } from './markdown-text';
 import { RegenerateSceneActionsUI } from './regenerate-tool-ui';
@@ -54,18 +54,22 @@ function ThinkingIndicator() {
 }
 
 function AssistantMessage() {
-  // Show the thinking indicator while the run streams and nothing has arrived yet.
-  const showThinking = useMessage((m) => {
+  const state = useMessage((m) => {
     const hasContent = m.content.some(
       (p) => (p.type === 'text' && p.text.length > 0) || p.type === 'tool-call',
     );
-    return !hasContent && m.status?.type === 'running';
+    const running = m.status?.type === 'running';
+    // Running with nothing yet → "Thinking…"; finished with nothing (e.g. the
+    // user hit Stop before any token) → a quiet "已停止" instead of a blank bubble.
+    return { showThinking: !hasContent && running, stoppedEmpty: !hasContent && !running };
   });
 
   return (
     <MessagePrimitive.Root className="min-w-0">
-      {showThinking ? (
+      {state.showThinking ? (
         <ThinkingIndicator />
+      ) : state.stoppedEmpty ? (
+        <span className="text-[12px] text-muted-foreground/60">已停止</span>
       ) : (
         <div className="min-w-0 space-y-2 text-[13px] leading-[1.6] text-foreground/90">
           <MessagePrimitive.Parts components={{ Text: MarkdownText }} />
@@ -116,6 +120,28 @@ export function AgentPanel({ scene }: { scene?: { id: string; title: string } })
     document.body.style.cursor = '';
   }, []);
 
+  const [collapsed, setCollapsed] = useState(false);
+
+  // Collapsed: a slim rail with the brand mark — click anywhere to reopen. The
+  // runtime stays alive in useAgentRuntime, so the conversation is preserved.
+  if (collapsed) {
+    return (
+      <aside
+        onClick={() => setCollapsed(false)}
+        title="展开 AI 助手"
+        className="group/rail relative flex h-full w-11 shrink-0 cursor-pointer flex-col items-center gap-3 border-l border-gray-100 bg-white/80 pt-3 backdrop-blur-xl transition-colors hover:bg-violet-50/40 dark:border-gray-800 dark:bg-slate-900/80 dark:hover:bg-violet-500/5 shadow-[-2px_0_24px_rgba(0,0,0,0.02)]"
+      >
+        <span className="grid size-8 place-items-center rounded-lg text-[#5b1fa8] transition-colors group-hover/rail:bg-violet-100/70 dark:text-violet-300 dark:group-hover/rail:bg-violet-500/15">
+          <PanelRightOpen className="size-4" />
+        </span>
+        <Sparkles className="size-4 text-[#5b1fa8]/80 dark:text-violet-300/80" />
+        <span className="mt-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#5b1fa8]/70 [writing-mode:vertical-rl] dark:text-violet-300/70">
+          Edit with AI
+        </span>
+      </aside>
+    );
+  }
+
   return (
     <aside
       ref={railRef}
@@ -138,6 +164,15 @@ export function AgentPanel({ scene }: { scene?: { id: string; title: string } })
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-gray-100 px-4 pl-5 dark:border-gray-800">
         <Sparkles className="size-3.5 text-[#5b1fa8] dark:text-violet-300" />
         <span className="text-[13px] font-semibold text-[#5b1fa8] dark:text-violet-300">Edit with AI</span>
+        <button
+          type="button"
+          onClick={() => setCollapsed(true)}
+          title="收起"
+          aria-label="收起"
+          className="ml-auto grid size-7 place-items-center rounded-md text-muted-foreground/55 transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <PanelRightClose className="size-4" />
+        </button>
       </header>
 
       <AssistantRuntimeProvider runtime={runtime}>

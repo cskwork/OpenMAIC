@@ -68,7 +68,9 @@ interface CanvasState {
   zoomTarget: { elementId: string; scale: number } | null; // Zoom target
   // Timeline "pick element on canvas" mode: when set, the editor canvas lets the
   // user click an element to bind it to the given scene action (ActionsBar cue).
-  pickTarget: { sceneId: string; actionIndex: number; cueType: string } | null;
+  // Keyed by actionId (not a positional index) so reorder/delete while armed
+  // can't rebind the wrong action.
+  pickTarget: { sceneId: string; actionId: string; cueType: string } | null;
 
   // ===== Canvas viewport state =====
   canvasScale: number; // Canvas actual zoom scale
@@ -177,7 +179,7 @@ interface CanvasState {
   clearHighlight: () => void;
   setLaser: (elementId: string, options?: LaserOptions) => void;
   clearLaser: () => void;
-  setPickTarget: (target: { sceneId: string; actionIndex: number; cueType: string } | null) => void;
+  setPickTarget: (target: { sceneId: string; actionId: string; cueType: string } | null) => void;
   setZoom: (elementId: string, scale: number) => void;
   clearZoom: () => void;
   clearAllEffects: () => void;
@@ -457,6 +459,7 @@ const useCanvasStoreBase = create<CanvasState>((set, get) => ({
       laserElementId: '',
       laserOptions: null,
       zoomTarget: null,
+      pickTarget: null,
       // Note: playingVideoElementId intentionally NOT cleared here.
       // Video playback has its own lifecycle (playVideo/pauseVideo/onEnded)
       // and must not be interrupted by visual effect auto-clear timers.

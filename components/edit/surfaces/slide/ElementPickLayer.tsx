@@ -3,20 +3,20 @@
 /**
  * ElementPickLayer — canvas-side target picker for the timeline.
  *
- * When the ActionsBar arms "pick" mode (useCanvasStore.pickTarget), this layer
- * covers the slide canvas (it's mounted inside SlideCanvas, not portaled, so it
- * lives in the canvas region) and lets the user bind a cue's target either way:
- * - every selectable element gets a faint outline so it reads as clickable; the
- *   one under the cursor gets a solid violet ring and a live spotlight/laser
- *   preview; click it to bind, or
- * - click a row in the floating element panel (draggable + collapsible).
- * Click empty canvas or press Esc to cancel.
+ * When the ActionsBar arms "pick" mode (useCanvasStore.pickTarget, keyed by
+ * actionId), this layer covers the slide canvas and lets the user bind a cue's
+ * target either by clicking the element on the slide (hit-tested live) or by
+ * clicking a row in the floating element panel (draggable + collapsible). Every
+ * selectable element is outlined; the hovered one gets a solid ring + live
+ * spotlight/laser preview. Click empty canvas or press Esc to cancel.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDown, GripHorizontal, MousePointerClick } from 'lucide-react';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useStageStore } from '@/lib/store/stage';
-import { setElementId } from '@/components/edit/ActionsBar/actions-edit';
+import { setElementIdById } from '@/components/edit/ActionsBar/actions-edit';
+import { cueLabel, elementLabel } from '@/components/edit/ActionsBar/cue-meta';
+import { clearCuePreview, previewCueEffect } from '@/components/edit/ActionsBar/cue-preview';
 
 const PREFIX = 'editable-element-';
 const PANEL_W = 232;
@@ -33,26 +33,6 @@ interface ElementLite {
   content?: string;
 }
 
-const EL_TYPE_ZH: Record<string, string> = {
-  text: '文本',
-  image: '图片',
-  shape: '形状',
-  line: '线条',
-  chart: '图表',
-  table: '表格',
-  latex: '公式',
-  video: '视频',
-  audio: '音频',
-  code: '代码',
-};
-
-function elementLabel(el: ElementLite): string {
-  const zh = EL_TYPE_ZH[el.type] ?? el.type;
-  const raw = (el.content ?? '').replace(/<[^>]+>/g, '').trim();
-  const snip = raw ? ` · ${raw.slice(0, 14)}${raw.length > 14 ? '…' : ''}` : '';
-  return `${zh}${snip}`;
-}
-
 function elementHostAt(x: number, y: number): HTMLElement | null {
   for (const node of document.elementsFromPoint(x, y)) {
     const host = (node as HTMLElement).closest?.(`[id^="${PREFIX}"]`) as HTMLElement | null;
@@ -63,45 +43,50 @@ function elementHostAt(x: number, y: number): HTMLElement | null {
 
 export function ElementPickLayer() {
   const pickTarget = useCanvasStore.use.pickTarget();
+  // Reactive scene lookup so the panel/binding state tracks store updates.
+  const scene = useStageStore((s) => (pickTarget ? (s.scenes.find((x) => x.id === pickTarget.sceneId) ?? null) : null));
+
   const rootRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<{ id: string; box: Box } | null>(null);
   const [outlines, setOutlines] = useState<Array<{ id: string; box: Box }>>([]);
   const [panel, setPanel] = useState<{ x: number; y: number }>({ x: 0, y: 16 });
   const [collapsed, setCollapsed] = useState(false);
   const dragRef = useRef<{ px: number; py: number; ox: number; oy: number } | null>(null);
+  const moveRafRef = useRef<number | null>(null);
 
   const cueType = pickTarget?.cueType;
+  const elements: ElementLite[] =
+    ((scene?.content as { canvas?: { elements?: ElementLite[] } } | undefined)?.canvas?.elements) ?? [];
+  const currentBound =
+    (scene?.actions?.find((a) => a.id === pickTarget?.actionId) as { elementId?: string } | undefined)?.elementId ?? '';
 
   const preview = useCallback(
     (elementId: string) => {
-      const cs = useCanvasStore.getState();
-      cs.setSpotlight('');
-      cs.clearLaser();
-      if (!elementId) return;
-      if (cueType === 'laser') cs.setLaser(elementId);
-      else cs.setSpotlight(elementId);
+      if (cueType) previewCueEffect(cueType, elementId);
     },
     [cueType],
   );
 
   const finish = useCallback(() => {
-    const cs = useCanvasStore.getState();
-    cs.setSpotlight('');
-    cs.clearLaser();
-    cs.setPickTarget(null);
+    clearCuePreview();
+    useCanvasStore.getState().setPickTarget(null);
     setHover(null);
   }, []);
 
   const bind = useCallback(
     (elementId: string) => {
-      if (!pickTarget) return;
-      const { sceneId, actionIndex } = pickTarget;
-      const scene = useStageStore.getState().scenes.find((s) => s.id === sceneId);
-      const actions = scene?.actions ?? [];
-      useStageStore.getState().updateScene(sceneId, { actions: setElementId(actions, actionIndex, elementId) });
+      const pt = useCanvasStore.getState().pickTarget;
+      if (!pt) return;
+      const sc = useStageStore.getState().scenes.find((s) => s.id === pt.sceneId);
+      if (sc) {
+        // Bind by actionId — index-stale-safe against concurrent reorder/delete.
+        useStageStore.getState().updateScene(pt.sceneId, {
+          actions: setElementIdById(sc.actions ?? [], pt.actionId, elementId),
+        });
+      }
       finish();
     },
-    [pickTarget, finish],
+    [finish],
   );
 
   // Local (canvas-relative) box for a viewport rect.
@@ -111,16 +96,7 @@ export function ElementPickLayer() {
     return { left: r.left - cr.left, top: r.top - cr.top, width: r.width, height: r.height };
   }, []);
 
-  const elements: ElementLite[] = pickTarget
-    ? ((useStageStore.getState().scenes.find((s) => s.id === pickTarget.sceneId)?.content as
-        | { canvas?: { elements?: ElementLite[] } }
-        | undefined)?.canvas?.elements ?? [])
-    : [];
-
-  // On entering pick mode: outline every selectable element, dock panel top-right.
-  useEffect(() => {
-    if (!pickTarget) return;
-    const cr = rootRef.current?.getBoundingClientRect();
+  const measureOutlines = useCallback(() => {
     const boxes: Array<{ id: string; box: Box }> = [];
     for (const el of elements) {
       const host = document.getElementById(`${PREFIX}${el.id}`);
@@ -129,10 +105,25 @@ export function ElementPickLayer() {
       if (b) boxes.push({ id: el.id, box: b });
     }
     setOutlines(boxes);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [elements, toLocal]);
+
+  // On entering pick mode: outline every selectable element, dock panel top-right.
+  useEffect(() => {
+    if (!pickTarget) return;
+    measureOutlines();
+    const cr = rootRef.current?.getBoundingClientRect();
     if (cr) setPanel({ x: Math.max(8, cr.width - PANEL_W - 16), y: 16 });
     setCollapsed(false);
+    const onResize = () => measureOutlines();
+    window.addEventListener('resize', onResize);
+    window.addEventListener('scroll', onResize, true);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('scroll', onResize, true);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pickTarget?.sceneId, pickTarget?.actionIndex]);
+  }, [pickTarget?.sceneId, pickTarget?.actionId, elements.length]);
 
   useEffect(() => {
     if (!pickTarget) return;
@@ -143,28 +134,38 @@ export function ElementPickLayer() {
     return () => window.removeEventListener('keydown', onKey);
   }, [pickTarget, finish]);
 
+  useEffect(
+    () => () => {
+      if (moveRafRef.current != null) cancelAnimationFrame(moveRafRef.current);
+    },
+    [],
+  );
+
   if (!pickTarget) return null;
 
-  const current = (useStageStore.getState().scenes.find((s) => s.id === pickTarget.sceneId)?.actions?.[
-    pickTarget.actionIndex
-  ] as { elementId?: string } | undefined)?.elementId ?? '';
-  const typeLabel = cueType === 'laser' ? '激光' : '聚光';
+  const typeLabel = cueLabel(pickTarget.cueType);
 
+  // Hit-test on mousemove, coalesced to one rAF per frame.
   const onCanvasMove = (e: React.MouseEvent) => {
-    const host = elementHostAt(e.clientX, e.clientY);
-    if (!host) {
-      if (hover) {
-        setHover(null);
-        preview('');
+    const { clientX, clientY } = e;
+    if (moveRafRef.current != null) return;
+    moveRafRef.current = requestAnimationFrame(() => {
+      moveRafRef.current = null;
+      const host = elementHostAt(clientX, clientY);
+      if (!host) {
+        if (hover) {
+          setHover(null);
+          preview('');
+        }
+        return;
       }
-      return;
-    }
-    const id = host.id.slice(PREFIX.length);
-    if (id !== hover?.id) {
-      const box = toLocal(host.getBoundingClientRect());
-      setHover(box ? { id, box } : null);
-      preview(id);
-    }
+      const id = host.id.slice(PREFIX.length);
+      if (id !== hover?.id) {
+        const box = toLocal(host.getBoundingClientRect());
+        setHover(box ? { id, box } : null);
+        preview(id);
+      }
+    });
   };
 
   const onCanvasClick = () => {
@@ -179,7 +180,6 @@ export function ElementPickLayer() {
     preview(id);
   };
 
-  // Panel drag (header).
   const onPanelDown = (e: React.PointerEvent) => {
     dragRef.current = { px: e.clientX, py: e.clientY, ox: panel.x, oy: panel.y };
     try {
@@ -273,7 +273,7 @@ export function ElementPickLayer() {
                   }}
                   onClick={() => bind(el.id)}
                   className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] transition-colors hover:bg-muted ${
-                    el.id === current ? 'bg-violet-50 ring-1 ring-violet-200 dark:bg-violet-500/10 dark:ring-violet-500/30' : ''
+                    el.id === currentBound ? 'bg-violet-50 ring-1 ring-violet-200 dark:bg-violet-500/10 dark:ring-violet-500/30' : ''
                   }`}
                 >
                   <span className="min-w-0 flex-1 truncate text-foreground/90">{elementLabel(el)}</span>

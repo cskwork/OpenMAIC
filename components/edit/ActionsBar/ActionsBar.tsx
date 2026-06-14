@@ -22,22 +22,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  ChevronDown,
-  Circle,
-  Crosshair,
-  Focus,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  FoldVertical,
   GripVertical,
-  PenLine,
   Play,
-  Presentation,
-  Quote,
   RefreshCw,
-  Shapes,
-  Sigma,
-  Table2,
   Trash2,
+  UnfoldVertical,
   Volume2,
-  type LucideIcon,
 } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { cn } from '@/lib/utils/cn';
@@ -45,54 +40,30 @@ import { useStageStore } from '@/lib/store/stage';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useSettingsStore } from '@/lib/store/settings';
 import type { Action } from '@/lib/types/action';
-import { cuePreviewFor } from './cue-preview';
-import { insertAt, makeAction, move, removeAt, setAudioId, setSpeechText, type AddableType } from './actions-edit';
-import { audioExists, audioObjectUrl, generateSpeechAudio, speechAudioId } from '@/lib/audio/regenerate-speech-tts';
+import { ELEMENT_BOUND, cueLabel, cueMeta } from './cue-meta';
+import { applyCuePreview, clearCuePreview, cuePreviewFor } from './cue-preview';
+import { insertAt, makeAction, move, removeAt, setAudioIdById, setSpeechText, type AddableType } from './actions-edit';
+import {
+  audioExists,
+  audioObjectUrl,
+  regenerateSpeechAudio,
+  resolveSpeechAudioId,
+  speechAudioId,
+} from '@/lib/audio/regenerate-speech-tts';
 
 const EMPTY: Action[] = [];
-const MIN_H = 152;
+const MIN_H = 168;
 const MAX_H = 520;
-const DEFAULT_H = 216;
-
-interface TypeMeta {
-  icon: LucideIcon;
-  label: string;
-  /** glyph tint: icon color + soft disc */
-  glyph: string;
-  /** top accent bar tint for the cue card */
-  accent: string;
-}
-
-const META: Record<string, TypeMeta> = {
-  spotlight: { icon: Focus, label: '聚光', glyph: 'text-amber-600 bg-amber-500/10 dark:text-amber-400', accent: 'bg-amber-400/70' },
-  laser: { icon: Crosshair, label: '激光', glyph: 'text-rose-600 bg-rose-500/10 dark:text-rose-400', accent: 'bg-rose-400/70' },
-  wb_open: { icon: Presentation, label: '画板', glyph: 'text-sky-600 bg-sky-500/10 dark:text-sky-400', accent: 'bg-sky-400/70' },
-  wb_draw_text: { icon: PenLine, label: '板书', glyph: 'text-sky-600 bg-sky-500/10 dark:text-sky-400', accent: 'bg-sky-400/70' },
-  wb_draw_shape: { icon: Shapes, label: '图形', glyph: 'text-sky-600 bg-sky-500/10 dark:text-sky-400', accent: 'bg-sky-400/70' },
-  wb_draw_latex: { icon: Sigma, label: '公式', glyph: 'text-sky-600 bg-sky-500/10 dark:text-sky-400', accent: 'bg-sky-400/70' },
-  wb_draw_table: { icon: Table2, label: '表格', glyph: 'text-sky-600 bg-sky-500/10 dark:text-sky-400', accent: 'bg-sky-400/70' },
-};
-
-function metaFor(type: string): TypeMeta {
-  return META[type] ?? { icon: Circle, label: type, glyph: 'text-muted-foreground bg-muted', accent: 'bg-muted-foreground/30' };
-}
+const DEFAULT_H = 224;
+const LINE_H = 86; // height when collapsed to just the axis line of node icons (fits the chips)
+const AXIS_FROM_TOP = 20; // px from track top to the axis center (nodes hang below it)
 
 /**
- * Action types offered in the add palette — only the ones that stand alone.
- * Whiteboard cues (板书 etc.) are part of a larger open→draw→close workflow with
- * content/positioning, so they aren't added as bare items here (they still
- * render in the timeline when the agent generates them).
+ * Add-palette types — only the ones that stand alone. Whiteboard cues need an
+ * open→draw→close workflow, so they aren't bare-addable (the agent still emits
+ * them and they render in the timeline). Cue icon/label/tint live in cue-meta.
  */
 const PALETTE: AddableType[] = ['speech', 'spotlight', 'laser'];
-const PALETTE_LABEL: Record<AddableType, string> = {
-  speech: '讲解',
-  spotlight: '聚光',
-  laser: '激光',
-  wb_draw_text: '板书',
-};
-
-/** Cues that target a canvas element (so canvas pick mode applies). */
-const ELEMENT_BOUND = new Set(['spotlight', 'laser', 'play_video']);
 
 type DragPayload = { kind: 'new'; type: AddableType } | { kind: 'move'; from: number };
 
@@ -102,8 +73,7 @@ interface TooltipState {
 }
 
 function propsOf(a: Action): Array<[string, string]> {
-  const m = metaFor(a.type);
-  const rows: Array<[string, string]> = [['动作', m.label]];
+  const rows: Array<[string, string]> = [['动作', cueMeta(a.type).label]];
   const el = (a as { elementId?: string }).elementId;
   if (el) rows.push(['元素', el]);
   const content = (a as { content?: string }).content;
@@ -136,18 +106,22 @@ function CueTooltip({ tip }: { tip: TooltipState }) {
   );
 }
 
-function previewCue(type: string, elementId: string) {
-  const cs = useCanvasStore.getState();
-  cs.setSpotlight('');
-  cs.clearLaser();
-  if (!elementId) return;
-  if (type === 'laser') cs.setLaser(elementId);
-  else cs.setSpotlight(elementId);
-}
-function clearPreview() {
-  const cs = useCanvasStore.getState();
-  cs.setSpotlight('');
-  cs.clearLaser();
+// Native HTML5 drag snapshots the element's square bounding box, so a round
+// icon chip drags with white corners ("白边"). Suppress the ghost with a 1×1
+// transparent image — the violet drop indicator carries the feedback instead.
+let blankDragImg: HTMLImageElement | null = null;
+function setBlankDragImage(e: React.DragEvent) {
+  if (typeof document === 'undefined') return;
+  if (!blankDragImg) {
+    blankDragImg = new Image();
+    blankDragImg.src =
+      'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+  }
+  try {
+    e.dataTransfer.setDragImage(blankDragImg, 0, 0);
+  } catch {
+    /* not supported — fall back to the default ghost */
+  }
 }
 
 /** Shared delete button — prominent, top-right of a card. */
@@ -167,29 +141,81 @@ function DeleteButton({ onDelete }: { onDelete: () => void }) {
   );
 }
 
+/** ‹ › buttons to nudge a node left/right along the timeline. */
+function MoveButtons({
+  onLeft,
+  onRight,
+  canLeft,
+  canRight,
+}: {
+  onLeft: () => void;
+  onRight: () => void;
+  canLeft: boolean;
+  canRight: boolean;
+}) {
+  const cls =
+    'grid size-5 place-items-center rounded text-muted-foreground/55 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-25 disabled:hover:bg-transparent';
+  return (
+    <>
+      <button
+        type="button"
+        disabled={!canLeft}
+        onClick={(e) => {
+          e.stopPropagation();
+          onLeft();
+        }}
+        className={cls}
+        aria-label="左移"
+        title="左移"
+      >
+        <ChevronLeft className="size-3.5" />
+      </button>
+      <button
+        type="button"
+        disabled={!canRight}
+        onClick={(e) => {
+          e.stopPropagation();
+          onRight();
+        }}
+        className={cls}
+        aria-label="右移"
+        title="右移"
+      >
+        <ChevronRight className="size-3.5" />
+      </button>
+    </>
+  );
+}
+
 type TtsStatus = 'none' | 'ready' | 'generating' | 'error';
 
 /** Audio status + 试听 / 重新生成 row, shown when managed TTS is on. */
 function SpeechTtsBar({
   actionId,
   audioId,
+  sceneOrder,
+  language,
   text,
   audioUrl,
+  refreshKey,
   onGenerated,
 }: {
   actionId: string;
   audioId?: string;
+  sceneOrder: number;
+  language?: string;
   text: string;
   audioUrl?: string;
+  refreshKey?: number;
   onGenerated: () => void;
 }) {
   const [status, setStatus] = useState<TtsStatus>('none');
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objUrlRef = useRef<string | null>(null);
 
-  // The cached audio's real key is the action's own audioId (set at
-  // generation); fall back to the derived id only when it's absent.
-  const lookupId = audioId || speechAudioId(actionId);
+  // The audio's real key: the action's stamped audioId, else the canonical
+  // derived key (resolveSpeechAudioId is the single source of truth).
+  const lookupId = resolveSpeechAudioId(sceneOrder, { id: actionId, audioId });
 
   const stopPreview = useCallback(() => {
     audioRef.current?.pause();
@@ -213,7 +239,7 @@ function SpeechTtsBar({
     return () => {
       alive = false;
     };
-  }, [lookupId, audioUrl]);
+  }, [lookupId, audioUrl, refreshKey]);
 
   useEffect(() => () => stopPreview(), [stopPreview]);
 
@@ -234,7 +260,7 @@ function SpeechTtsBar({
   const regenerate = async () => {
     setStatus('generating');
     try {
-      const id = await generateSpeechAudio({ id: actionId, text });
+      const id = await regenerateSpeechAudio(sceneOrder, { id: actionId, text }, language);
       if (id) {
         onGenerated();
         setStatus('ready');
@@ -289,12 +315,19 @@ function SpeechClip({
   index,
   actionId,
   audioId,
+  sceneOrder,
+  language,
   autoFocus,
   ttsActive,
   audioUrl,
+  ttsRefresh,
   onCommit,
   onGenerated,
   onDelete,
+  onMoveLeft,
+  onMoveRight,
+  canMoveLeft,
+  canMoveRight,
   onDragStart,
   onDragEnd,
   onFocused,
@@ -303,21 +336,35 @@ function SpeechClip({
   index: number;
   actionId: string;
   audioId?: string;
+  sceneOrder: number;
+  language?: string;
   autoFocus: boolean;
   ttsActive: boolean;
   audioUrl?: string;
+  ttsRefresh?: number;
   onCommit: (text: string) => void;
   onGenerated: () => void;
   onDelete: () => void;
+  onMoveLeft: () => void;
+  onMoveRight: () => void;
+  canMoveLeft: boolean;
+  canMoveRight: boolean;
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
   onFocused: () => void;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const [val, setVal] = useState(text);
+  // Has the user typed since the last external sync? If not, external text
+  // changes (e.g. an agent regeneration mid-edit) are adopted even while
+  // focused — so a stale draft can't clobber regenerated narration on blur.
+  const dirtyRef = useRef(false);
 
   useEffect(() => {
-    if (document.activeElement !== ref.current) setVal(text);
+    if (document.activeElement !== ref.current || !dirtyRef.current) {
+      setVal(text);
+      dirtyRef.current = false;
+    }
   }, [text]);
 
   useEffect(() => {
@@ -328,8 +375,11 @@ function SpeechClip({
   }, [autoFocus, onFocused]);
 
   const commit = () => {
-    if (val !== text) onCommit(val);
+    if (dirtyRef.current && val !== text) onCommit(val);
+    dirtyRef.current = false;
   };
+
+  const SpeechIcon = cueMeta('speech').icon;
 
   return (
     <div className="group/clip relative flex h-full w-[228px] shrink-0 flex-col overflow-hidden rounded-xl border border-gray-200/80 bg-white/70 shadow-sm transition-colors focus-within:border-violet-400 hover:border-violet-300/70 dark:border-gray-700/60 dark:bg-slate-800/50 dark:hover:border-violet-500/40">
@@ -347,20 +397,33 @@ function SpeechClip({
         <span className="font-mono text-[10px] font-semibold tabular-nums text-muted-foreground/55">
           {String(index).padStart(2, '0')}
         </span>
-        <Quote className="size-3 text-primary/45" />
+        <SpeechIcon className="size-3 text-primary/45" />
         <span className="ml-auto mr-0.5 text-[8.5px] font-medium uppercase tracking-[0.12em] text-muted-foreground/40">讲解</span>
+        <MoveButtons onLeft={onMoveLeft} onRight={onMoveRight} canLeft={canMoveLeft} canRight={canMoveRight} />
         <DeleteButton onDelete={onDelete} />
       </div>
       <textarea
         ref={ref}
         value={val}
-        onChange={(e) => setVal(e.target.value)}
+        onChange={(e) => {
+          dirtyRef.current = true;
+          setVal(e.target.value);
+        }}
         onBlur={commit}
         placeholder="输入这一句讲解…"
         className="flex-1 resize-none bg-transparent px-3 py-2 text-[12.5px] leading-[1.7] text-foreground/85 outline-none placeholder:text-muted-foreground/40 [scrollbar-width:thin]"
       />
       {ttsActive && (
-        <SpeechTtsBar actionId={actionId} audioId={audioId} text={val} audioUrl={audioUrl} onGenerated={onGenerated} />
+        <SpeechTtsBar
+          actionId={actionId}
+          audioId={audioId}
+          sceneOrder={sceneOrder}
+          language={language}
+          text={val}
+          audioUrl={audioUrl}
+          refreshKey={ttsRefresh}
+          onGenerated={onGenerated}
+        />
       )}
     </div>
   );
@@ -376,6 +439,10 @@ function CueMarker({
   onTip,
   onDelete,
   onPick,
+  onMoveLeft,
+  onMoveRight,
+  canMoveLeft,
+  canMoveRight,
   onDragStart,
   onDragEnd,
 }: {
@@ -383,12 +450,15 @@ function CueMarker({
   onTip: (t: TooltipState | null) => void;
   onDelete: () => void;
   onPick: () => void;
+  onMoveLeft: () => void;
+  onMoveRight: () => void;
+  canMoveLeft: boolean;
+  canMoveRight: boolean;
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
 }) {
-  const m = metaFor(action.type);
+  const m = cueMeta(action.type);
   const Icon = m.icon;
-  const preview = cuePreviewFor(action);
   const bound = ELEMENT_BOUND.has(action.type);
   const elementId = (action as { elementId?: string }).elementId ?? '';
   const needsTarget = bound && !elementId;
@@ -400,25 +470,24 @@ function CueMarker({
       onDragEnd={onDragEnd}
       onMouseEnter={(e) => {
         onTip({ action, anchor: e.currentTarget.getBoundingClientRect() });
-        if (preview.kind === 'laser') previewCue('laser', preview.elementId);
-        else if (preview.kind === 'spotlight') previewCue('spotlight', preview.elementId);
+        applyCuePreview(cuePreviewFor(action));
       }}
       onMouseLeave={() => {
         onTip(null);
-        clearPreview();
+        clearCuePreview();
       }}
       onClick={() => {
         if (bound) onPick();
       }}
       className={cn(
-        'group/cue relative flex h-full w-[84px] shrink-0 flex-col overflow-hidden rounded-xl border bg-white/65 shadow-sm transition-colors dark:bg-slate-800/40',
+        'group/cue relative flex h-full w-[108px] shrink-0 flex-col overflow-hidden rounded-xl border bg-white/65 shadow-sm transition-colors dark:bg-slate-800/40',
         bound ? 'cursor-pointer hover:border-violet-300/70 dark:hover:border-violet-500/40' : 'cursor-grab active:cursor-grabbing',
         needsTarget ? 'border-dashed border-amber-400/70' : 'border-gray-200/80 dark:border-gray-700/60',
       )}
       aria-label={m.label}
     >
       <span className={cn('absolute inset-x-0 top-0 h-[3px]', m.accent)} />
-      <div className="flex items-center gap-1 px-1.5 pt-1">
+      <div className="flex items-center gap-0.5 px-1 pt-1">
         <span
           draggable
           onDragStart={onDragStart}
@@ -429,7 +498,8 @@ function CueMarker({
         >
           <GripVertical className="size-3.5" />
         </span>
-        <span className="ml-auto">
+        <span className="ml-auto flex items-center">
+          <MoveButtons onLeft={onMoveLeft} onRight={onMoveRight} canLeft={canMoveLeft} canRight={canMoveRight} />
           <DeleteButton onDelete={onDelete} />
         </span>
       </div>
@@ -445,6 +515,57 @@ function CueMarker({
         )}
       </div>
     </div>
+  );
+}
+
+/** A node anchored on the axis — drag handle; for cues, hover preview + click-to-pick. */
+function NodeDot({
+  action,
+  onTip,
+  onPick,
+  onDragStart,
+  onDragEnd,
+}: {
+  action: Action;
+  onTip: (t: TooltipState | null) => void;
+  onPick: () => void;
+  onDragStart: (e: React.DragEvent) => void;
+  onDragEnd: () => void;
+}) {
+  const isSpeech = action.type === 'speech';
+  const bound = ELEMENT_BOUND.has(action.type);
+  const elementId = (action as { elementId?: string }).elementId ?? '';
+  const needsTarget = bound && !elementId;
+  const m = cueMeta(action.type);
+  const Icon = m.icon;
+  return (
+    <span
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      title={isSpeech ? (action as { text?: string }).text?.slice(0, 60) : m.label}
+      onMouseEnter={(e) => {
+        if (isSpeech) return;
+        onTip({ action, anchor: e.currentTarget.getBoundingClientRect() });
+        applyCuePreview(cuePreviewFor(action));
+      }}
+      onMouseLeave={() => {
+        if (isSpeech) return;
+        onTip(null);
+        clearCuePreview();
+      }}
+      onClick={() => {
+        if (bound) onPick();
+      }}
+      className={cn(
+        'grid size-6 place-items-center rounded-full ring-2 ring-white transition-transform hover:scale-110 dark:ring-slate-900',
+        needsTarget ? 'text-amber-600 bg-amber-100 ring-amber-200 animate-pulse dark:bg-amber-500/20 dark:text-amber-400' : m.glyph,
+        bound ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing',
+      )}
+      aria-label={m.label}
+    >
+      <Icon className="size-3.5" />
+    </span>
   );
 }
 
@@ -485,13 +606,17 @@ function DropZone({
 export function ActionsBar({ sceneId }: { sceneId: string }) {
   const scene = useStageStore((s) => s.scenes.find((x) => x.id === sceneId));
   const actions = scene?.actions ?? EMPTY;
+  const sceneOrder = scene?.order ?? 0;
+  const language = useStageStore((s) => s.stage?.languageDirective);
   // Managed TTS on → speech clips show audio status + 试听 / 重新生成.
   const ttsActive = useSettingsStore((s) => s.ttsEnabled && s.ttsProviderId !== 'browser-native-tts');
 
-  const [open, setOpen] = useState(true);
+  const [lineMode, setLineMode] = useState(false); // collapse to just the axis line of node icons
   const [tip, setTip] = useState<TooltipState | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
   const [focusId, setFocusId] = useState<string | null>(null);
+  const [regenAll, setRegenAll] = useState(false);
+  const [ttsRefresh, setTtsRefresh] = useState(0); // bump → speech clips re-check audio status
   const reduce = useReducedMotion();
   const dragRef = useRef<DragPayload | null>(null);
 
@@ -500,8 +625,42 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
     [sceneId],
   );
 
+  // Regenerate TTS for every speech line in the scene, then stamp audioIds.
+  // Reads the latest actions from the store at each step so a concurrent edit
+  // isn't clobbered, and stamps by id (index-stale-safe).
+  const regenerateAllAudio = useCallback(async () => {
+    if (regenAll) return;
+    const latest = () => useStageStore.getState().scenes.find((s) => s.id === sceneId);
+    const speeches = (latest()?.actions ?? []).filter(
+      (a) => a.type === 'speech' && ((a as { text?: string }).text ?? '').trim(),
+    );
+    if (!speeches.length) return;
+    const order = latest()?.order ?? 0;
+    setRegenAll(true);
+    try {
+      for (const a of speeches) {
+        if (!a.id) continue;
+        try {
+          await regenerateSpeechAudio(order, { id: a.id, text: (a as { text?: string }).text ?? '' }, language);
+        } catch {
+          /* skip a failed line, keep going */
+        }
+      }
+      let next = latest()?.actions ?? [];
+      for (const a of next) {
+        if (a.type === 'speech' && a.id) next = setAudioIdById(next, a.id, speechAudioId(order, a.id));
+      }
+      commit(next);
+      setTtsRefresh((n) => n + 1);
+    } finally {
+      setRegenAll(false);
+    }
+  }, [regenAll, sceneId, language, commit]);
+
   // Height drag-resize (top edge).
   const sectionRef = useRef<HTMLElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const panViewport = (dir: -1 | 1) => scrollRef.current?.scrollBy({ left: dir * 280, behavior: 'smooth' });
   const [height, setHeight] = useState(DEFAULT_H);
   const resizeRef = useRef<{ startY: number; startH: number; lastH: number; pointerId: number } | null>(null);
   const onResizeStart = useCallback(
@@ -567,10 +726,10 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
   return (
     <section
       ref={sectionRef}
-      style={open ? { height } : undefined}
+      style={{ height: lineMode ? LINE_H : height }}
       className="relative flex flex-col border-t border-gray-100 bg-white/80 backdrop-blur-xl dark:border-gray-800 dark:bg-slate-900/80"
     >
-      {open && (
+      {!lineMode && (
         <div
           onPointerDown={onResizeStart}
           onPointerMove={onResizeMove}
@@ -583,22 +742,23 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
       )}
 
       <div className="flex h-10 shrink-0 items-center gap-2.5 px-6">
-        <button type="button" onClick={() => setOpen((v) => !v)} className="flex items-center gap-2.5">
+        <button type="button" onClick={() => setLineMode((v) => !v)} className="flex items-center gap-2.5">
           <span className="size-1.5 rounded-full bg-primary" />
           <span className="text-[12px] font-medium tracking-[0.18em] text-foreground/80">讲解脚本</span>
         </button>
 
-        {open && (
+        {!lineMode && (
           <div className="ml-3 flex items-center gap-1.5 border-l border-gray-200/70 pl-3 dark:border-gray-700/60">
             <span className="text-[10px] text-muted-foreground/45">拖入添加</span>
             {PALETTE.map((t) => {
-              const Icon = t === 'speech' ? Quote : metaFor(t).icon;
+              const Icon = cueMeta(t).icon;
               return (
                 <span
                   key={t}
                   draggable
-                  onDragStart={() => {
+                  onDragStart={(e) => {
                     dragRef.current = { kind: 'new', type: t };
+                    setBlankDragImage(e);
                   }}
                   onDragEnd={() => {
                     dragRef.current = null;
@@ -607,94 +767,176 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
                   className="inline-flex cursor-grab items-center gap-1 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground active:cursor-grabbing"
                 >
                   <Icon className="size-3" />
-                  {PALETTE_LABEL[t]}
+                  {cueLabel(t)}
                 </span>
               );
             })}
           </div>
         )}
 
+        {!lineMode && ttsActive && (
+          <button
+            type="button"
+            onClick={regenerateAllAudio}
+            disabled={regenAll}
+            title="重新生成全部配音"
+            aria-label="重新生成全部配音"
+            className="ml-1.5 inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground disabled:opacity-50"
+          >
+            <RefreshCw className={cn('size-3', regenAll && 'animate-spin')} />
+            全部配音
+          </button>
+        )}
+
         <span className="ml-auto font-mono text-[11px] tabular-nums text-muted-foreground/60">
           {speechCount} 讲解 · {cueCount} 动作
         </span>
-        <button type="button" onClick={() => setOpen((v) => !v)} aria-label={open ? '收起' : '展开'}>
-          <ChevronDown
-            className={cn('size-4 text-muted-foreground/60 transition-transform duration-200', open && 'rotate-180')}
-          />
+        {/* pan the timeline viewport left/right */}
+        {!lineMode && (
+          <div className="ml-1 flex items-center border-l border-gray-200/70 pl-1 dark:border-gray-700/60">
+            <button
+              type="button"
+              onClick={() => panViewport(-1)}
+              title="左移视口"
+              aria-label="左移视口"
+              className="grid size-7 place-items-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <ChevronsLeft className="size-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => panViewport(1)}
+              title="右移视口"
+              aria-label="右移视口"
+              className="grid size-7 place-items-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <ChevronsRight className="size-4" />
+            </button>
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={() => setLineMode((v) => !v)}
+          title={lineMode ? '展开轨道' : '收起为轴线'}
+          aria-label={lineMode ? '展开轨道' : '收起为轴线'}
+          className="ml-1 grid size-7 place-items-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+        >
+          {lineMode ? <UnfoldVertical className="size-4" /> : <FoldVertical className="size-4" />}
         </button>
       </div>
 
-      {open && (
-        <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
-          <div className="relative flex h-full min-w-max items-stretch px-3.5 py-4">
-            <DropZone
-              active={dragOver === 0}
-              flex={actions.length === 0}
-              onEnter={() => setDragOver(0)}
-              onDrop={() => handleDrop(0)}
-            />
-            {actions.length === 0 && (
-              <span className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[12px] text-muted-foreground/60">
-                把上方的动作拖到这里开始编排，或让 MAIC Agent 生成讲解。
-              </span>
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
+        <div className="relative h-full min-w-max">
+            {/* the timeline axis (top) — nodes hang below it; hidden when empty
+                so the placeholder hint doesn't collide with the line */}
+            {actions.length > 0 && (
+              <div
+                className="pointer-events-none absolute inset-x-3 bg-gradient-to-r from-border/30 via-border to-border/30"
+                style={{ top: AXIS_FROM_TOP - 1, height: 2 }}
+              />
             )}
-            {items.map(({ action, index, key, speechIndex: si }) => (
-              <div key={key} className="relative flex h-full items-stretch">
-                <motion.div
-                  initial={reduce ? false : { opacity: 0, x: 8 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ duration: 0.22, delay: reduce ? 0 : Math.min(index * 0.02, 0.24), ease: 'easeOut' }}
-                  className="relative h-full"
-                >
-                  {action.type === 'speech' ? (
-                    <SpeechClip
-                      text={(action as { text?: string }).text ?? ''}
-                      index={si}
-                      actionId={key}
-                      audioId={(action as { audioId?: string }).audioId}
-                      ttsActive={ttsActive}
-                      audioUrl={(action as { audioUrl?: string }).audioUrl}
-                      autoFocus={key === focusId}
-                      onFocused={() => setFocusId(null)}
-                      onCommit={(text) => commit(setSpeechText(actions, index, text))}
-                      onGenerated={() => commit(setAudioId(actions, index, speechAudioId(key)))}
-                      onDelete={() => commit(removeAt(actions, index))}
-                      onDragStart={() => {
-                        dragRef.current = { kind: 'move', from: index };
-                      }}
-                      onDragEnd={() => {
-                        dragRef.current = null;
-                        setDragOver(null);
-                      }}
+            <div className="relative flex h-full items-stretch px-3.5">
+              {actions.length === 0 && (
+                <span className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[12px] text-muted-foreground/60">
+                  把上方的动作拖到轴上开始编排，或让 MAIC Agent 生成讲解。
+                </span>
+              )}
+              <DropZone
+                active={dragOver === 0}
+                flex={actions.length === 0}
+                onEnter={() => setDragOver(0)}
+                onDrop={() => handleDrop(0)}
+              />
+              {items.map(({ action, index, key, speechIndex: si }) => {
+                const onDragStart = (e: React.DragEvent) => {
+                  dragRef.current = { kind: 'move', from: index };
+                  setBlankDragImage(e);
+                };
+                const onDragEnd = () => {
+                  dragRef.current = null;
+                  setDragOver(null);
+                };
+                const onPick = () =>
+                  useCanvasStore.getState().setPickTarget({ sceneId, actionId: key, cueType: action.type });
+                const dot = (
+                  <NodeDot action={action} onTip={setTip} onPick={onPick} onDragStart={onDragStart} onDragEnd={onDragEnd} />
+                );
+                return (
+                  <div key={key} className="relative flex h-full items-stretch">
+                    <motion.div
+                      initial={reduce ? false : { opacity: 0, y: -6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.22, delay: reduce ? 0 : Math.min(index * 0.02, 0.24), ease: 'easeOut' }}
+                      className="flex h-full flex-col items-center"
+                      style={{ paddingTop: AXIS_FROM_TOP - 12 }}
+                    >
+                      {lineMode ? (
+                        <div className="w-9">{dot}</div>
+                      ) : (
+                        <>
+                          {dot}
+                          <div className="my-1 h-2.5 w-px bg-border" />
+                          <div className="min-h-0 w-full flex-1">
+                            {action.type === 'speech' ? (
+                              <SpeechClip
+                                text={(action as { text?: string }).text ?? ''}
+                                index={si}
+                                actionId={key}
+                                audioId={(action as { audioId?: string }).audioId}
+                                sceneOrder={sceneOrder}
+                                language={language}
+                                ttsActive={ttsActive}
+                                audioUrl={(action as { audioUrl?: string }).audioUrl}
+                                ttsRefresh={ttsRefresh}
+                                autoFocus={key === focusId}
+                                onFocused={() => setFocusId(null)}
+                                onCommit={(text) => commit(setSpeechText(actions, index, text))}
+                                onGenerated={() =>
+                                  commit(
+                                    setAudioIdById(
+                                      useStageStore.getState().scenes.find((s) => s.id === sceneId)?.actions ?? actions,
+                                      key,
+                                      speechAudioId(sceneOrder, key),
+                                    ),
+                                  )
+                                }
+                                onDelete={() => commit(removeAt(actions, index))}
+                                onMoveLeft={() => commit(move(actions, index, index - 1))}
+                                onMoveRight={() => commit(move(actions, index, index + 2))}
+                                canMoveLeft={index > 0}
+                                canMoveRight={index < actions.length - 1}
+                                onDragStart={onDragStart}
+                                onDragEnd={onDragEnd}
+                              />
+                            ) : (
+                              <CueMarker
+                                action={action}
+                                onTip={setTip}
+                                onDelete={() => commit(removeAt(actions, index))}
+                                onPick={onPick}
+                                onMoveLeft={() => commit(move(actions, index, index - 1))}
+                                onMoveRight={() => commit(move(actions, index, index + 2))}
+                                canMoveLeft={index > 0}
+                                canMoveRight={index < actions.length - 1}
+                                onDragStart={onDragStart}
+                                onDragEnd={onDragEnd}
+                              />
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </motion.div>
+                    <DropZone
+                      active={dragOver === index + 1}
+                      onEnter={() => setDragOver(index + 1)}
+                      onDrop={() => handleDrop(index + 1)}
                     />
-                  ) : (
-                    <CueMarker
-                      action={action}
-                      onTip={setTip}
-                      onDelete={() => commit(removeAt(actions, index))}
-                      onPick={() =>
-                        useCanvasStore.getState().setPickTarget({ sceneId, actionIndex: index, cueType: action.type })
-                      }
-                      onDragStart={() => {
-                        dragRef.current = { kind: 'move', from: index };
-                      }}
-                      onDragEnd={() => {
-                        dragRef.current = null;
-                        setDragOver(null);
-                      }}
-                    />
-                  )}
-                </motion.div>
-                <DropZone
-                  active={dragOver === index + 1}
-                  onEnter={() => setDragOver(index + 1)}
-                  onDrop={() => handleDrop(index + 1)}
-                />
-              </div>
-            ))}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
-      )}
 
       {tip && <CueTooltip tip={tip} />}
     </section>

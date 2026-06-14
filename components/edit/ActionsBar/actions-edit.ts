@@ -7,8 +7,12 @@ import type { Action } from '@/lib/types/action';
  * then persists the result with `useStageStore.updateScene(sceneId, { actions })`.
  */
 
-/** Action types the timeline palette can add by drag. */
-export type AddableType = 'speech' | 'spotlight' | 'laser' | 'wb_draw_text';
+/**
+ * Action types the timeline palette can add by drag — only the ones that stand
+ * alone. Whiteboard cues (板书 etc.) need an open→draw→close workflow with
+ * content/positioning, so they aren't bare-addable here.
+ */
+export type AddableType = 'speech' | 'spotlight' | 'laser';
 
 /** Build a fresh action of the given type with a stable id. */
 export function makeAction(type: AddableType, id: string): Action {
@@ -19,8 +23,6 @@ export function makeAction(type: AddableType, id: string): Action {
       return { id, type: 'spotlight', elementId: '' } as unknown as Action;
     case 'laser':
       return { id, type: 'laser', elementId: '' } as unknown as Action;
-    case 'wb_draw_text':
-      return { id, type: 'wb_draw_text', content: '' } as unknown as Action;
   }
 }
 
@@ -59,13 +61,22 @@ export function setSpeechText(actions: Action[], index: number, text: string): A
   return next;
 }
 
-/** Set an action's bound `elementId` (no-op if out of range). */
+/** Element-bound cue types whose `elementId` may be set. */
+const ELEMENT_BOUND_TYPES = new Set(['spotlight', 'laser', 'play_video']);
+
+/** Set an element-bound cue's `elementId` (no-op for other types / out of range). */
 export function setElementId(actions: Action[], index: number, elementId: string): Action[] {
   const a = actions[index];
-  if (!a) return actions;
+  if (!a || !ELEMENT_BOUND_TYPES.has(a.type)) return actions;
   const next = actions.slice();
   next[index] = { ...a, elementId } as Action;
   return next;
+}
+
+/** Like {@link setElementId} but targets an action by id (index-stale-safe). */
+export function setElementIdById(actions: Action[], id: string, elementId: string): Action[] {
+  const index = actions.findIndex((a) => a.id === id);
+  return index < 0 ? actions : setElementId(actions, index, elementId);
 }
 
 /** Stamp a speech action's cached `audioId` (no-op if not a speech action). */
@@ -75,4 +86,10 @@ export function setAudioId(actions: Action[], index: number, audioId: string): A
   const next = actions.slice();
   next[index] = { ...a, audioId } as Action;
   return next;
+}
+
+/** Like {@link setAudioId} but targets an action by id (index-stale-safe). */
+export function setAudioIdById(actions: Action[], id: string, audioId: string): Action[] {
+  const index = actions.findIndex((a) => a.id === id);
+  return index < 0 ? actions : setAudioId(actions, index, audioId);
 }

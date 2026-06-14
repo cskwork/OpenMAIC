@@ -1,5 +1,15 @@
 import { describe, expect, test } from 'vitest';
-import { insertAt, makeAction, move, removeAt, setAudioId, setElementId, setSpeechText } from '@/components/edit/ActionsBar/actions-edit';
+import {
+  insertAt,
+  makeAction,
+  move,
+  removeAt,
+  setAudioId,
+  setAudioIdById,
+  setElementId,
+  setElementIdById,
+  setSpeechText,
+} from '@/components/edit/ActionsBar/actions-edit';
 import type { Action } from '@/lib/types/action';
 
 const A = (id: string, type = 'speech'): Action => ({ id, type } as unknown as Action);
@@ -10,7 +20,6 @@ describe('makeAction', () => {
     expect(makeAction('speech', 's')).toEqual({ id: 's', type: 'speech', text: '' });
     expect(makeAction('spotlight', 'p')).toEqual({ id: 'p', type: 'spotlight', elementId: '' });
     expect(makeAction('laser', 'l')).toEqual({ id: 'l', type: 'laser', elementId: '' });
-    expect(makeAction('wb_draw_text', 'w')).toEqual({ id: 'w', type: 'wb_draw_text', content: '' });
   });
 });
 
@@ -52,9 +61,17 @@ describe('setSpeechText / setElementId', () => {
     expect((setSpeechText(xs, 0, 'hi')[0] as { text?: string }).text).toBe('hi');
     expect(setSpeechText(xs, 1, 'no')).toBe(xs); // unchanged reference (no-op)
   });
-  test('setElementId targets any action', () => {
-    const xs = [A('a', 'spotlight')];
+  test('setElementId only targets element-bound cues, not speech', () => {
+    const xs = [A('a', 'spotlight'), A('b', 'speech')];
     expect((setElementId(xs, 0, 'el_1')[0] as { elementId?: string }).elementId).toBe('el_1');
+    expect(setElementId(xs, 1, 'el_x')).toBe(xs); // no-op: speech is not element-bound
+  });
+  test('setElementIdById / setAudioIdById target by id (index-stale-safe)', () => {
+    const xs = [A('a', 'spotlight'), A('b', 'speech')];
+    expect((setElementIdById(xs, 'a', 'el_1')[0] as { elementId?: string }).elementId).toBe('el_1');
+    expect(setElementIdById(xs, 'missing', 'x')).toBe(xs);
+    expect((setAudioIdById(xs, 'b', 'tts_b')[1] as { audioId?: string }).audioId).toBe('tts_b');
+    expect(setAudioIdById(xs, 'a', 'tts_a')).toBe(xs); // 'a' is not speech → no-op
   });
   test('setAudioId only stamps speech actions', () => {
     const xs = [A('a', 'speech'), A('b', 'spotlight')];

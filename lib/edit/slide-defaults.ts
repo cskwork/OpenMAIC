@@ -1,6 +1,7 @@
 import { nanoid } from 'nanoid';
 import type { Slide, SlideTheme, PPTElement } from '@/lib/types/slides';
 import type { Scene, SlideContent } from '@/lib/types/stage';
+import type { Action } from '@/lib/types/action';
 import { createElementIdMap } from '@/lib/utils/element';
 import { CURRENT_SLIDE_CONTENT_SCHEMA_VERSION } from '@/lib/edit/slide-schema';
 
@@ -80,12 +81,25 @@ export function duplicateSlideScene(source: Scene, copySuffix: string, order: nu
 
   const title = copySuffix ? `${source.title} ${copySuffix}` : source.title;
 
+  // Clone the playback actions too: reseed each action id (so the copy doesn't
+  // share audio-cache keys / React keys with the source), remap element-bound
+  // cues onto the cloned element ids, and drop the stale audioId so the copy
+  // re-derives / regenerates its own narration audio.
+  const clonedActions = source.actions?.map((action) => {
+    const next: Record<string, unknown> = { ...action, id: nanoid() };
+    const elId = next.elementId;
+    if (typeof elId === 'string' && elIdMap[elId]) next.elementId = elIdMap[elId];
+    delete next.audioId;
+    return next as unknown as Action;
+  });
+
   return {
     ...source,
     id: nanoid(),
     title,
     order,
     content,
+    actions: clonedActions,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };

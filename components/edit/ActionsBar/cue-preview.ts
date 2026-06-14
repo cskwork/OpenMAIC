@@ -1,4 +1,5 @@
 import type { Action } from '@/lib/types/action';
+import { useCanvasStore } from '@/lib/store/canvas';
 
 /**
  * Which canvas effect a cue glyph replays on hover.
@@ -23,4 +24,34 @@ export function cuePreviewFor(action: Action): CuePreview {
   if (!elementId) return { kind: 'none' };
   if (action.type === 'laser') return { kind: 'laser', elementId };
   return { kind: 'spotlight', elementId };
+}
+
+// ---- canvas-side effect (single home for the setSpotlight/setLaser dance) ----
+
+/** Clear any spotlight/laser preview from the canvas. */
+export function clearCuePreview(): void {
+  const cs = useCanvasStore.getState();
+  cs.setSpotlight('');
+  cs.clearLaser();
+}
+
+/**
+ * Replay a cue effect for an explicit cue type + element on the canvas, clearing
+ * the sibling effect first so a previous hover never lingers. `laser` drives the
+ * laser pointer, anything else drives the spotlight.
+ */
+export function previewCueEffect(cueType: string, elementId: string): void {
+  clearCuePreview();
+  if (!elementId) return;
+  if (cueType === 'laser') useCanvasStore.getState().setLaser(elementId);
+  else useCanvasStore.getState().setSpotlight(elementId);
+}
+
+/** Apply the preview decided by {@link cuePreviewFor}. */
+export function applyCuePreview(preview: CuePreview): void {
+  if (preview.kind === 'none') {
+    clearCuePreview();
+    return;
+  }
+  previewCueEffect(preview.kind, preview.elementId);
 }

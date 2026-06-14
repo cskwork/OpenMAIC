@@ -13,22 +13,12 @@ import { useState } from 'react';
 import { AlertCircle, Check, ChevronDown, Loader2, Wrench } from 'lucide-react';
 import { makeAssistantToolUI } from '@assistant-ui/react';
 import { cn } from '@/lib/utils/cn';
+import { cueLabel } from '@/components/edit/ActionsBar/cue-meta';
 
 interface RegenerateResult {
   content?: { type: string; text?: string }[];
   details?: { sceneId?: string; actions?: { type?: string }[] };
 }
-
-const TYPE_LABEL: Record<string, string> = {
-  speech: '讲解',
-  spotlight: '聚光',
-  laser: '激光',
-  wb_open: '画板',
-  wb_draw_text: '板书',
-  wb_draw_shape: '图形',
-  wb_draw_latex: '公式',
-  wb_draw_table: '表格',
-};
 
 function summarize(actions: { type?: string }[]): string {
   const counts = new Map<string, number>();
@@ -36,7 +26,7 @@ function summarize(actions: { type?: string }[]): string {
     const t = a?.type ?? 'action';
     counts.set(t, (counts.get(t) ?? 0) + 1);
   }
-  return [...counts.entries()].map(([t, n]) => `${n} ${TYPE_LABEL[t] ?? t}`).join(' · ');
+  return [...counts.entries()].map(([t, n]) => `${n} ${cueLabel(t)}`).join(' · ');
 }
 
 function ToolRow({
