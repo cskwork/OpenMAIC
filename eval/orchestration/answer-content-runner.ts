@@ -50,7 +50,7 @@ import {
   parseStructuredChunk,
   finalizeParser,
 } from '@/lib/orchestration/stateless-generate';
-import type { AgentConfig } from '@/lib/orchestration/registry/types';
+import { type AgentConfig, getActionsForRole } from '@/lib/orchestration/registry/types';
 import type { AgentTurnSummary } from '@/lib/orchestration/types';
 import type { StatelessChatRequest } from '@/lib/types/chat';
 import { resolveEvalModel } from '../shared/resolve-model';
@@ -59,22 +59,6 @@ import { judgeAnswer, type AnswerVerdict } from './answer-content-judge';
 import type { ScenarioAgent } from './types';
 
 const OUTPUT_DIR = 'eval/orchestration/results-answer-content';
-
-const TEACHER_ACTIONS = [
-  'spotlight',
-  'laser',
-  'wb_open',
-  'wb_draw_text',
-  'wb_draw_shape',
-  'wb_draw_latex',
-  'wb_draw_table',
-  'wb_draw_line',
-  'wb_draw_code',
-  'wb_edit_code',
-  'wb_delete',
-  'wb_clear',
-  'wb_close',
-];
 
 // ==================== Types ====================
 
@@ -148,7 +132,9 @@ function buildTeacherConfig(scenario: ContentScenario): AgentConfig {
     persona: spec.persona,
     avatar: '🧑‍🏫',
     color: '#6d28d9',
-    allowedActions: TEACHER_ACTIONS,
+    // Use the canonical role action set (incl. play_video + full whiteboard) so
+    // the assembled prompt's available-actions section matches production.
+    allowedActions: getActionsForRole(spec.role),
     priority: spec.priority,
     createdAt: new Date(0),
     updatedAt: new Date(0),
@@ -241,6 +227,30 @@ function extractTexts(raw: string): string[] {
   return [];
 }
 
+/** Split into sentences across both Latin and CJK terminators, keeping order. */
+function splitSentences(s: string): string[] {
+  return s
+    .split(/(?<=[.!?。！？])\s*/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+/**
+ * The "opening" judged for leads_with_answer: the first ~2 sentences of the
+ * first text block — NOT the whole block (a block often holds several sentences,
+ * and we must catch "first sentence drifts, a later one answers"). Two sentences
+ * let the judge distinguish a brief acknowledgement-then-answer ("Sorry, let me
+ * clarify. The answer is X"), which the prompt allows, from a greeting/lecture
+ * preamble before the answer ("Welcome! …" / "Today we'll discuss parabolas. The
+ * formula is…"), which is the drift this eval is meant to catch.
+ */
+function leadFromTexts(texts: string[]): string {
+  const block = texts[0] ?? '';
+  const sentences = splitSentences(block);
+  if (sentences.length === 0) return block;
+  return sentences.slice(0, 2).join(' ');
+}
+
 // ==================== Sampling ====================
 
 function lastUserMessage(scenario: ContentScenario): string {
@@ -270,7 +280,7 @@ async function sampleVariant(
         `eval-answer-content-${variant}`,
       );
       const texts = extractTexts(gen.text);
-      const leadText = texts[0] ?? '';
+      const leadText = leadFromTexts(texts);
       const fullText = texts.join(' ');
       const verdict = await judgeAnswer(
         judgeModel,

@@ -57,7 +57,7 @@ Fairness for specific request types:
 A reply does NOT address it when it instead: greets ("Welcome!"), launches an opening lecture ("Today we examine…"), pivots to an adjacent (non-requested) topic, reacts to peers, asks a rhetorical lead-in unrelated to the request, or answers a different question than the one asked.
 
 Judge TWO things independently:
-- leads_with_answer: is the literal question/request addressed in the FIRST sentence(s) (field 3)?
+- leads_with_answer: does the literal question/request get addressed in the OPENING (field 3 — the first sentence or two)? A brief acknowledgement of the user's message before the answer is fine and still counts as leading (e.g. "好的" / "Sorry, let me clarify" / "Good catch" / "Sharp eye, Tom!"). But a greeting ("Welcome!" / "同学们好"), a self-introduction, or a topic/lecture preamble ("Today we'll discuss parabolas…") before the answer means it does NOT lead — even if the answer comes right after.
 - answered_anywhere: is it addressed ANYWHERE in the FULL reply (field 4), even if the opening drifted?
 
 Be reasonable, not pedantic about wording. A correct answer phrased differently from the answer key still passes. Judge substance, not politeness.
