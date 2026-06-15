@@ -236,18 +236,18 @@ function splitSentences(s: string): string[] {
 }
 
 /**
- * The "opening" judged for leads_with_answer: the first ~2 sentences of the
- * first text block — NOT the whole block (a block often holds several sentences,
- * and we must catch "first sentence drifts, a later one answers"). Two sentences
- * let the judge distinguish a brief acknowledgement-then-answer ("Sorry, let me
- * clarify. The answer is X"), which the prompt allows, from a greeting/lecture
- * preamble before the answer ("Welcome! …" / "Today we'll discuss parabolas. The
- * formula is…"), which is the drift this eval is meant to catch.
+ * The "opening" judged for leads_with_answer: the first ~2 speech sentences
+ * across ALL ordered text blocks (not just the first block — a reply may be
+ * several `type:"text"` items, e.g. [{"Sure."},{"The derivative is 2x."}]). Two
+ * sentences let the judge distinguish a brief acknowledgement-then-answer
+ * ("Sure. The derivative is 2x."), which the prompt allows, from a
+ * greeting/lecture preamble before the answer ("Welcome! …" / "Today we'll
+ * discuss parabolas. The formula is…"), which is the drift this eval catches.
  */
 function leadFromTexts(texts: string[]): string {
-  const block = texts[0] ?? '';
-  const sentences = splitSentences(block);
-  if (sentences.length === 0) return block;
+  const joined = texts.join(' ');
+  const sentences = splitSentences(joined);
+  if (sentences.length === 0) return joined;
   return sentences.slice(0, 2).join(' ');
 }
 
