@@ -62,21 +62,24 @@ function ThinkingIndicator() {
 }
 
 function AssistantMessage() {
-  const state = useMessage((m) => {
+  // Return a primitive (string), not a fresh object — useMessage is backed by
+  // useSyncExternalStore which compares snapshots by Object.is, so a new object
+  // literal each render would loop forever ("Maximum update depth exceeded").
+  // Running with nothing yet → "thinking"; finished with nothing (user hit Stop
+  // before any token) → "stopped"; otherwise render the parts.
+  const phase = useMessage((m) => {
     const hasContent = m.content.some(
       (p) => (p.type === 'text' && p.text.length > 0) || p.type === 'tool-call',
     );
-    const running = m.status?.type === 'running';
-    // Running with nothing yet → "Thinking…"; finished with nothing (e.g. the
-    // user hit Stop before any token) → a quiet "已停止" instead of a blank bubble.
-    return { showThinking: !hasContent && running, stoppedEmpty: !hasContent && !running };
+    if (hasContent) return 'content';
+    return m.status?.type === 'running' ? 'thinking' : 'stopped';
   });
 
   return (
     <MessagePrimitive.Root className="min-w-0">
-      {state.showThinking ? (
+      {phase === 'thinking' ? (
         <ThinkingIndicator />
-      ) : state.stoppedEmpty ? (
+      ) : phase === 'stopped' ? (
         <span className="text-[12px] text-muted-foreground/60">已停止</span>
       ) : (
         <div className="min-w-0 space-y-2 text-[13px] leading-[1.6] text-foreground/90">
