@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { parseXml } from '../src/parser/XmlParser';
 import { parseTableNode } from '../src/model/nodes/TableNode';
 import { tableToElement } from '../src/serializer/tableSerializer';
@@ -31,10 +31,15 @@ describe('tableSerializer · cell noFill 清掉填充', () => {
     </a:tbl></a:graphicData></a:graphic>
   </p:graphicFrame>`;
 
-  const table = tableToElement(parseTableNode(parseXml(tblXml)), minimalCtx(), 0) as {
-    data: Array<Array<{ fillColor?: string }>>;
-  };
-  const [cellNoFill, cellSolid] = table.data[0];
+  let cellNoFill: { fillColor?: string };
+  let cellSolid: { fillColor?: string };
+
+  beforeAll(() => {
+    const table = tableToElement(parseTableNode(parseXml(tblXml)), minimalCtx(), 0) as {
+      data: Array<Array<{ fillColor?: string }>>;
+    };
+    [cellNoFill, cellSolid] = table.data[0];
+  });
 
   it('noFill 的 cell 没有 fillColor', () => {
     expect(cellNoFill.fillColor).toBeUndefined();
