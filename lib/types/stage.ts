@@ -1,5 +1,5 @@
 // Stage and Scene data types
-import type { Slide } from '@/lib/types/slides';
+import type { Slide } from '@maic/dsl';
 import type { Action } from '@/lib/types/action';
 import type { PBLProjectConfig } from '@/lib/pbl/types';
 import type { WidgetType, WidgetConfig, TeacherAction } from '@/lib/types/widgets';
@@ -58,6 +58,13 @@ export interface Stage {
    * Absent on legacy classrooms, imports, and regular-mode generations.
    */
   interactiveMode?: boolean;
+  /**
+   * True when this classroom was generated with the vocational Task Engine
+   * path enabled. This is distinct from `interactiveMode`: task-engine
+   * classrooms are interactive, but not every interactive classroom is
+   * vocational.
+   */
+  taskEngineMode?: boolean;
 }
 
 /**
