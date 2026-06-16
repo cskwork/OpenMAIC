@@ -10,10 +10,7 @@
 // `Scene` is re-exported as an alias of the app's fully-instantiated
 // `Scene<Action, AppSceneContent>`, so existing `import { Scene }` callers keep
 // the same semantics (actions are `Action[]`, content spans all four kinds).
-import type {
-  Scene as DslScene,
-  SceneContent as DslSceneContent,
-} from '@maic/dsl';
+import type { Scene as DslScene, SceneContent as DslSceneContent } from '@maic/dsl';
 import type { Action } from '@/lib/types/action';
 import type { WidgetType, WidgetConfig, TeacherAction } from '@/lib/types/widgets';
 import type { PBLProjectConfig } from '@/lib/pbl/types';
