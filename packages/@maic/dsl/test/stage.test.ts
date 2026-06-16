@@ -73,6 +73,17 @@ describe('discriminant guards', () => {
       expect.fail('expected slide content');
     }
   });
+
+  it('accepts an app-widened content union (interactive / pbl kinds)', () => {
+    // Regression: the generic Scene lets apps widen TContent beyond the
+    // contract's slide|quiz, so the guards must accept that widened union too
+    // (not just the narrow SceneContent).
+    type InteractiveContent = { type: 'interactive'; url: string };
+    type Widened = SceneContent | InteractiveContent;
+    const c: Widened = { type: 'interactive', url: 'https://example.com' };
+    expect(isSlideContent(c)).toBe(false);
+    expect(isQuizContent(c)).toBe(false);
+  });
 });
 
 describe('Scene<TAction, TContent> generic', () => {
@@ -113,9 +124,10 @@ describe('Scene<TAction, TContent> generic', () => {
 
   it('TAction defaults to never so the default Scene rejects concrete actions at the type level', () => {
     // A default `Scene` with actions supplied must NOT type-check: `never[]`
-    // accepts no concrete element. Asserted via expectTypeOf.
+    // accepts no concrete element. Pin the exact type so the default can't
+    // silently drift to something that would accept a concrete action.
     type DefaultScene = Scene;
-    expectTypeOf<DefaultScene['actions']>().toMatchTypeOf<unknown[] | undefined>();
+    expectTypeOf<DefaultScene['actions']>().toEqualTypeOf<never[] | undefined>();
   });
 });
 

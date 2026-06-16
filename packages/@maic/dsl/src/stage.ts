@@ -205,20 +205,24 @@ export interface Scene<
 // ---------------------------------------------------------------------------
 
 /**
- * Narrow a {@link SceneContent} (or any candidate) to {@link SlideContent}.
+ * Narrow a candidate to {@link SlideContent}. Accepts any value tagged with a
+ * `type: SceneType` discriminant — including an app-widened content union that
+ * adds interactive / pbl kinds beyond the contract's universal two.
  * Pure, no runtime deps.
  */
-export function isSlideContent<T extends SceneContent>(
+export function isSlideContent<T extends { type: SceneType }>(
   content: T,
 ): content is T & SlideContent {
   return content.type === 'slide';
 }
 
 /**
- * Narrow a {@link SceneContent} (or any candidate) to {@link QuizContent}.
+ * Narrow a candidate to {@link QuizContent}. Accepts any value tagged with a
+ * `type: SceneType` discriminant — including an app-widened content union that
+ * adds interactive / pbl kinds beyond the contract's universal two.
  * Pure, no runtime deps.
  */
-export function isQuizContent<T extends SceneContent>(
+export function isQuizContent<T extends { type: SceneType }>(
   content: T,
 ): content is T & QuizContent {
   return content.type === 'quiz';
