@@ -28,9 +28,12 @@ export type {
   QuizOption,
   QuizQuestion,
   QuizContent,
-  isSlideContent,
-  isQuizContent,
 } from '@maic/dsl';
+
+// The two discriminant guards are runtime functions, so they must be value
+// re-exported — a bare `export type {}` erases them and leaves the import as
+// `undefined` at runtime / "cannot be used as a value" at the type level.
+export { isSlideContent, isQuizContent } from '@maic/dsl';
 
 // The contract's `SceneContent` is the universal subset (slide | quiz). Reach it
 // under a distinct name; the app's own `SceneContent` (declared below) is the
