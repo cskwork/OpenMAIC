@@ -13,20 +13,23 @@ import { useState } from 'react';
 import { AlertCircle, Check, ChevronDown, Loader2, Wrench } from 'lucide-react';
 import { makeAssistantToolUI } from '@assistant-ui/react';
 import { cn } from '@/lib/utils/cn';
+import { useI18n } from '@/lib/hooks/use-i18n';
 import { cueLabel } from '@/components/edit/ActionsBar/cue-meta';
+
+type TFn = (key: string, options?: Record<string, unknown>) => string;
 
 interface RegenerateResult {
   content?: { type: string; text?: string }[];
   details?: { sceneId?: string; actions?: { type?: string }[] };
 }
 
-function summarize(actions: { type?: string }[]): string {
+function summarize(actions: { type?: string }[], t: TFn): string {
   const counts = new Map<string, number>();
   for (const a of actions) {
-    const t = a?.type ?? 'action';
-    counts.set(t, (counts.get(t) ?? 0) + 1);
+    const type = a?.type ?? 'action';
+    counts.set(type, (counts.get(type) ?? 0) + 1);
   }
-  return [...counts.entries()].map(([t, n]) => `${n} ${cueLabel(t)}`).join(' · ');
+  return [...counts.entries()].map(([type, n]) => `${n} ${cueLabel(type, t)}`).join(' · ');
 }
 
 function ToolRow({
@@ -38,13 +41,18 @@ function ToolRow({
   failed: boolean;
   result?: RegenerateResult;
 }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const actions = result?.details?.actions ?? [];
   const failText = result?.content?.[0]?.text;
   // Diff/details only after the run completes (design: "diff 仅完成后可展开").
   const expandable = !running && (actions.length > 0 || !!failText || !!result?.details?.sceneId);
 
-  const target = running ? '正在生成…' : failed ? '未生成动作' : `${actions.length} 个动作`;
+  const target = running
+    ? t('edit.regen.running')
+    : failed
+      ? t('edit.regen.noActions')
+      : t('edit.regen.actionsCount', { count: actions.length });
 
   return (
     <div
@@ -63,7 +71,7 @@ function ToolRow({
       >
         <Wrench className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="shrink-0 whitespace-nowrap text-[12.5px] font-semibold text-foreground">
-          重新生成讲解
+          {t('edit.regen.title')}
         </span>
         <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-muted-foreground">
           {target}
@@ -72,17 +80,17 @@ function ToolRow({
         {running ? (
           <span className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[10.5px] font-semibold text-[#5b1fa8] dark:bg-violet-500/10 dark:text-violet-300">
             <Loader2 className="size-3 animate-spin" />
-            生成中
+            {t('edit.regen.generating')}
           </span>
         ) : failed ? (
           <span className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10.5px] font-semibold text-amber-700 dark:bg-amber-500/10 dark:text-amber-400">
             <AlertCircle className="size-3" />
-            未生成
+            {t('edit.regen.notGenerated')}
           </span>
         ) : (
           <span className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-semibold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400">
             <Check className="size-3" />
-            已更新
+            {t('edit.regen.updated')}
           </span>
         )}
 
@@ -101,7 +109,7 @@ function ToolRow({
           {failed && failText ? (
             <p className="text-amber-600 dark:text-amber-500">{failText}</p>
           ) : null}
-          {actions.length > 0 && <p className="font-mono">{summarize(actions)}</p>}
+          {actions.length > 0 && <p className="font-mono">{summarize(actions, t)}</p>}
           {result?.details?.sceneId && (
             <p className="font-mono text-muted-foreground/70">scene {result.details.sceneId}</p>
           )}

@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, GripHorizontal, MousePointerClick } from 'lucide-react';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useStageStore } from '@/lib/store/stage';
+import { useI18n } from '@/lib/hooks/use-i18n';
 import { setElementIdById } from '@/components/edit/ActionsBar/actions-edit';
 import { cueLabel, elementLabel } from '@/components/edit/ActionsBar/cue-meta';
 import { clearCuePreview, previewCueEffect } from '@/components/edit/ActionsBar/cue-preview';
@@ -42,6 +43,7 @@ function elementHostAt(x: number, y: number): HTMLElement | null {
 }
 
 export function ElementPickLayer() {
+  const { t } = useI18n();
   const pickTarget = useCanvasStore.use.pickTarget();
   // Reactive scene lookup so the panel/binding state tracks store updates.
   const scene = useStageStore((s) =>
@@ -152,7 +154,7 @@ export function ElementPickLayer() {
 
   if (!pickTarget) return null;
 
-  const typeLabel = cueLabel(pickTarget.cueType);
+  const typeLabel = cueLabel(pickTarget.cueType, t);
 
   // Hit-test on mousemove, coalesced to one rAF per frame.
   const onCanvasMove = (e: React.MouseEvent) => {
@@ -245,8 +247,10 @@ export function ElementPickLayer() {
 
       {/* instruction banner */}
       <div className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2 rounded-full border border-violet-300/60 bg-popover/95 px-3.5 py-1.5 text-[12px] font-medium text-foreground shadow-lg shadow-black/10 backdrop-blur">
-        <span className="text-violet-600 dark:text-violet-400">为「{typeLabel}」选择元素</span> ·
-        点高亮元素或下方列表 · Esc 取消
+        <span className="text-violet-600 dark:text-violet-400">
+          {t('edit.pick.pickFor', { label: typeLabel })}
+        </span>{' '}
+        · {t('edit.pick.pickHint')}
       </div>
 
       {/* draggable + collapsible element panel, inside the canvas */}
@@ -264,13 +268,13 @@ export function ElementPickLayer() {
         >
           <GripHorizontal className="size-3.5 text-muted-foreground/40" />
           <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">
-            页面元素 · {elements.length}
+            {t('edit.pick.pageElements', { count: elements.length })}
           </span>
           <button
             type="button"
             onClick={() => setCollapsed((v) => !v)}
             className="ml-auto grid size-5 place-items-center rounded text-muted-foreground/60 hover:bg-muted hover:text-foreground"
-            aria-label={collapsed ? '展开' : '折叠'}
+            aria-label={collapsed ? t('edit.pick.expand') : t('edit.pick.collapse')}
           >
             <ChevronDown
               className={`size-3.5 transition-transform ${collapsed ? '-rotate-90' : ''}`}
@@ -282,7 +286,7 @@ export function ElementPickLayer() {
           <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
             {elements.length === 0 ? (
               <p className="px-2 py-3 text-[11px] text-muted-foreground/70">
-                这一页没有可定位的元素。
+                {t('edit.pick.noElements')}
               </p>
             ) : (
               elements.map((el) => (
@@ -302,7 +306,7 @@ export function ElementPickLayer() {
                   }`}
                 >
                   <span className="min-w-0 flex-1 truncate text-foreground/90">
-                    {elementLabel(el)}
+                    {elementLabel(el, t)}
                   </span>
                   <span className="shrink-0 font-mono text-[9px] text-muted-foreground/45">
                     {el.id.slice(0, 6)}
@@ -315,7 +319,7 @@ export function ElementPickLayer() {
 
         {collapsed && (
           <div className="flex items-center gap-1 px-2.5 py-1.5 text-[10px] text-muted-foreground/50">
-            <MousePointerClick className="size-3" /> 点画布上高亮的元素绑定
+            <MousePointerClick className="size-3" /> {t('edit.pick.bindHint')}
           </div>
         )}
       </div>

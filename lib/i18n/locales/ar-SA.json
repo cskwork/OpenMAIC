@@ -263,6 +263,88 @@
         "emptyOption": "السؤال {{n}}: يوجد خيار فارغ",
         "noCorrect": "السؤال {{n}}: حدّد الإجابة الصحيحة"
       }
+    },
+    "cue": {
+      "speech": "السرد",
+      "spotlight": "تسليط الضوء",
+      "laser": "ليزر",
+      "whiteboardOpen": "السبورة",
+      "whiteboardText": "الكتابة",
+      "whiteboardShape": "شكل",
+      "whiteboardLatex": "صيغة",
+      "whiteboardTable": "جدول",
+      "action": "إجراء"
+    },
+    "element": {
+      "text": "نص",
+      "image": "صورة",
+      "shape": "شكل",
+      "line": "خط",
+      "chart": "مخطط",
+      "table": "جدول",
+      "latex": "صيغة",
+      "video": "فيديو",
+      "audio": "صوت",
+      "code": "شفرة"
+    },
+    "agent": {
+      "expand": "توسيع مساعد الذكاء الاصطناعي",
+      "collapse": "طي",
+      "stopped": "تم الإيقاف",
+      "emptyTitle": "ما الذي تريد تغييره؟",
+      "emptyHint": "بعد تحرير هذه الشريحة على اللوحة، دع الذكاء الاصطناعي يعيد إنشاء سرد يطابق المحتوى.",
+      "placeholder": "صف تغييراتك على هذه الشريحة…",
+      "stop": "إيقاف التوليد",
+      "quickRegenerate": "إعادة توليد السرد",
+      "quickColloquial": "اجعله أكثر حوارية",
+      "quickAnalogy": "أضف تشبيهًا واقعيًا"
+    },
+    "timeline": {
+      "title": "نص السرد",
+      "dragToAdd": "اسحب للإضافة",
+      "regenAllTts": "إعادة توليد كل التعليق الصوتي",
+      "voiceAll": "صوّت الكل",
+      "counts": "{{speech}} سرد · {{cue}} إجراءات",
+      "panLeft": "تحريك لليسار",
+      "panRight": "تحريك لليمين",
+      "collapseAxis": "طي إلى المحور",
+      "expandTrack": "توسيع المسار",
+      "emptyHint": "اسحب الإجراءات إلى المحور للبدء، أو دع MAIC Agent يولّد السرد.",
+      "speechPlaceholder": "أدخل سطر السرد هذا…",
+      "reorder": "اسحب لإعادة الترتيب",
+      "moveLeft": "تحريك لليسار",
+      "moveRight": "تحريك لليمين",
+      "pickElement": "اختر عنصرًا",
+      "bound": "مرتبط",
+      "fieldAction": "إجراء",
+      "fieldElement": "عنصر",
+      "fieldContent": "المحتوى"
+    },
+    "tts": {
+      "preview": "معاينة",
+      "regenerate": "إعادة توليد التعليق الصوتي",
+      "statusReady": "مُصوّت",
+      "statusNone": "غير مُصوّت",
+      "statusGenerating": "جارٍ التوليد",
+      "statusError": "فشل"
+    },
+    "pick": {
+      "pickFor": "اختر عنصرًا لـ \"{{label}}\"",
+      "pickHint": "انقر على عنصر مميز أو القائمة أدناه · Esc للإلغاء",
+      "pageElements": "عناصر الصفحة · {{count}}",
+      "expand": "توسيع",
+      "collapse": "طي",
+      "noElements": "لا توجد عناصر يمكن تحديدها في هذه الشريحة.",
+      "bindHint": "انقر على عنصر مميز على اللوحة للربط"
+    },
+    "regen": {
+      "title": "إعادة توليد السرد",
+      "running": "جارٍ التوليد…",
+      "noActions": "لم يتم توليد إجراءات",
+      "actionsCount": "{{count}} إجراءات",
+      "generating": "جارٍ التوليد",
+      "notGenerated": "لم يُولّد",
+      "updated": "تم التحديث"
     }
   },
   "classroomComplete": {

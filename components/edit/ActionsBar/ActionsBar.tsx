@@ -36,6 +36,7 @@ import {
 } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { cn } from '@/lib/utils/cn';
+import { useI18n } from '@/lib/hooks/use-i18n';
 import { useStageStore } from '@/lib/store/stage';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useSettingsStore } from '@/lib/store/settings';
@@ -81,16 +82,23 @@ interface TooltipState {
   anchor: DOMRect;
 }
 
-function propsOf(a: Action): Array<[string, string]> {
-  const rows: Array<[string, string]> = [['动作', cueMeta(a.type).label]];
+type TFn = (key: string, options?: Record<string, unknown>) => string;
+
+function propsOf(a: Action, t: TFn): Array<[string, string]> {
+  const rows: Array<[string, string]> = [[t('edit.timeline.fieldAction'), cueLabel(a.type, t)]];
   const el = (a as { elementId?: string }).elementId;
-  if (el) rows.push(['元素', el]);
+  if (el) rows.push([t('edit.timeline.fieldElement'), el]);
   const content = (a as { content?: string }).content;
-  if (content) rows.push(['内容', content.length > 48 ? `${content.slice(0, 48)}…` : content]);
+  if (content)
+    rows.push([
+      t('edit.timeline.fieldContent'),
+      content.length > 48 ? `${content.slice(0, 48)}…` : content,
+    ]);
   return rows;
 }
 
 function CueTooltip({ tip }: { tip: TooltipState }) {
+  const { t } = useI18n();
   if (typeof document === 'undefined') return null;
   return createPortal(
     <div
@@ -104,7 +112,7 @@ function CueTooltip({ tip }: { tip: TooltipState }) {
       }}
       className="pointer-events-none rounded-lg border border-border/80 bg-popover px-2.5 py-1.5 text-popover-foreground shadow-lg shadow-black/5"
     >
-      {propsOf(tip.action).map(([k, v]) => (
+      {propsOf(tip.action, t).map(([k, v]) => (
         <div key={k} className="flex gap-2 text-[11px] leading-relaxed">
           <span className="shrink-0 text-muted-foreground">{k}</span>
           <span className="font-mono [overflow-wrap:anywhere]">{v}</span>
@@ -135,6 +143,7 @@ function setBlankDragImage(e: React.DragEvent) {
 
 /** Shared delete button — prominent, top-right of a card. */
 function DeleteButton({ onDelete }: { onDelete: () => void }) {
+  const { t } = useI18n();
   return (
     <button
       type="button"
@@ -143,7 +152,7 @@ function DeleteButton({ onDelete }: { onDelete: () => void }) {
         onDelete();
       }}
       className="grid size-5 place-items-center rounded-md text-muted-foreground/55 transition-colors hover:bg-rose-50 hover:text-rose-500 dark:hover:bg-rose-500/15"
-      aria-label="删除"
+      aria-label={t('edit.delete')}
     >
       <Trash2 className="size-3.5" />
     </button>
@@ -162,6 +171,7 @@ function MoveButtons({
   canLeft: boolean;
   canRight: boolean;
 }) {
+  const { t } = useI18n();
   const cls =
     'grid size-5 place-items-center rounded text-muted-foreground/55 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-25 disabled:hover:bg-transparent';
   return (
@@ -174,8 +184,8 @@ function MoveButtons({
           onLeft();
         }}
         className={cls}
-        aria-label="左移"
-        title="左移"
+        aria-label={t('edit.timeline.moveLeft')}
+        title={t('edit.timeline.moveLeft')}
       >
         <ChevronLeft className="size-3.5" />
       </button>
@@ -187,8 +197,8 @@ function MoveButtons({
           onRight();
         }}
         className={cls}
-        aria-label="右移"
-        title="右移"
+        aria-label={t('edit.timeline.moveRight')}
+        title={t('edit.timeline.moveRight')}
       >
         <ChevronRight className="size-3.5" />
       </button>
@@ -218,6 +228,7 @@ function SpeechTtsBar({
   refreshKey?: number;
   onGenerated: () => void;
 }) {
+  const { t } = useI18n();
   const [status, setStatus] = useState<TtsStatus>('none');
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objUrlRef = useRef<string | null>(null);
@@ -282,10 +293,13 @@ function SpeechTtsBar({
   };
 
   const STATUS: Record<TtsStatus, { label: string; cls: string }> = {
-    ready: { label: '已配音', cls: 'text-emerald-600 dark:text-emerald-400' },
-    none: { label: '未配音', cls: 'text-muted-foreground/55' },
-    generating: { label: '生成中', cls: 'text-violet-600 dark:text-violet-400' },
-    error: { label: '失败', cls: 'text-rose-500' },
+    ready: { label: t('edit.tts.statusReady'), cls: 'text-emerald-600 dark:text-emerald-400' },
+    none: { label: t('edit.tts.statusNone'), cls: 'text-muted-foreground/55' },
+    generating: {
+      label: t('edit.tts.statusGenerating'),
+      cls: 'text-violet-600 dark:text-violet-400',
+    },
+    error: { label: t('edit.tts.statusError'), cls: 'text-rose-500' },
   };
   const s = STATUS[status];
 
@@ -299,8 +313,8 @@ function SpeechTtsBar({
         onClick={preview}
         disabled={status !== 'ready'}
         className="grid size-5 place-items-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-30 disabled:hover:bg-transparent"
-        aria-label="试听"
-        title="试听"
+        aria-label={t('edit.tts.preview')}
+        title={t('edit.tts.preview')}
       >
         <Play className="size-3" />
       </button>
@@ -309,8 +323,8 @@ function SpeechTtsBar({
         onClick={regenerate}
         disabled={status === 'generating' || !text.trim()}
         className="grid size-5 place-items-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-30 disabled:hover:bg-transparent"
-        aria-label="重新生成配音"
-        title="重新生成配音"
+        aria-label={t('edit.tts.regenerate')}
+        title={t('edit.tts.regenerate')}
       >
         <RefreshCw className={cn('size-3', status === 'generating' && 'animate-spin')} />
       </button>
@@ -362,6 +376,7 @@ function SpeechClip({
   onDragEnd: () => void;
   onFocused: () => void;
 }) {
+  const { t } = useI18n();
   const ref = useRef<HTMLTextAreaElement>(null);
   const [val, setVal] = useState(text);
   // Has the user typed since the last external sync? If not, external text
@@ -400,7 +415,7 @@ function SpeechClip({
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}
           className="cursor-grab text-muted-foreground/40 transition-colors hover:text-muted-foreground active:cursor-grabbing"
-          aria-label="拖动重排"
+          aria-label={t('edit.timeline.reorder')}
         >
           <GripVertical className="size-3.5" />
         </span>
@@ -409,7 +424,7 @@ function SpeechClip({
         </span>
         <SpeechIcon className="size-3 text-primary/45" />
         <span className="ml-auto mr-0.5 text-[8.5px] font-medium uppercase tracking-[0.12em] text-muted-foreground/40">
-          讲解
+          {t('edit.cue.speech')}
         </span>
         <MoveButtons
           onLeft={onMoveLeft}
@@ -427,7 +442,7 @@ function SpeechClip({
           setVal(e.target.value);
         }}
         onBlur={commit}
-        placeholder="输入这一句讲解…"
+        placeholder={t('edit.timeline.speechPlaceholder')}
         className="flex-1 resize-none bg-transparent px-3 py-2 text-[12.5px] leading-[1.7] text-foreground/85 outline-none placeholder:text-muted-foreground/40 [scrollbar-width:thin]"
       />
       {ttsActive && (
@@ -474,7 +489,9 @@ function CueMarker({
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
 }) {
+  const { t } = useI18n();
   const m = cueMeta(action.type);
+  const label = cueLabel(action.type, t);
   const Icon = m.icon;
   const bound = ELEMENT_BOUND.has(action.type);
   const elementId = (action as { elementId?: string }).elementId ?? '';
@@ -505,7 +522,7 @@ function CueMarker({
           ? 'border-dashed border-amber-400/70'
           : 'border-gray-200/80 dark:border-gray-700/60',
       )}
-      aria-label={m.label}
+      aria-label={label}
     >
       <span className={cn('absolute inset-x-0 top-0 h-[3px]', m.accent)} />
       <div className="flex items-center gap-0.5 px-1 pt-1">
@@ -515,7 +532,7 @@ function CueMarker({
           onDragEnd={onDragEnd}
           onClick={(e) => e.stopPropagation()}
           className="cursor-grab text-muted-foreground/35 transition-colors hover:text-muted-foreground active:cursor-grabbing"
-          aria-label="拖动重排"
+          aria-label={t('edit.timeline.reorder')}
         >
           <GripVertical className="size-3.5" />
         </span>
@@ -533,7 +550,7 @@ function CueMarker({
         <span className={cn('flex size-8 items-center justify-center rounded-full', m.glyph)}>
           <Icon className="size-4" />
         </span>
-        <span className="text-[10px] font-medium text-foreground/70">{m.label}</span>
+        <span className="text-[10px] font-medium text-foreground/70">{label}</span>
         {bound && (
           <span
             className={cn(
@@ -543,7 +560,7 @@ function CueMarker({
                 : 'text-muted-foreground/45',
             )}
           >
-            {needsTarget ? '选元素' : '已绑定'}
+            {needsTarget ? t('edit.timeline.pickElement') : t('edit.timeline.bound')}
           </span>
         )}
       </div>
@@ -565,18 +582,20 @@ function NodeDot({
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
 }) {
+  const { t } = useI18n();
   const isSpeech = action.type === 'speech';
   const bound = ELEMENT_BOUND.has(action.type);
   const elementId = (action as { elementId?: string }).elementId ?? '';
   const needsTarget = bound && !elementId;
   const m = cueMeta(action.type);
+  const label = cueLabel(action.type, t);
   const Icon = m.icon;
   return (
     <span
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      title={isSpeech ? (action as { text?: string }).text?.slice(0, 60) : m.label}
+      title={isSpeech ? (action as { text?: string }).text?.slice(0, 60) : label}
       onMouseEnter={(e) => {
         if (isSpeech) return;
         onTip({ action, anchor: e.currentTarget.getBoundingClientRect() });
@@ -597,7 +616,7 @@ function NodeDot({
           : m.glyph,
         bound ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing',
       )}
-      aria-label={m.label}
+      aria-label={label}
     >
       <Icon className="size-3.5" />
     </span>
@@ -642,6 +661,7 @@ function DropZone({
 }
 
 export function ActionsBar({ sceneId }: { sceneId: string }) {
+  const { t } = useI18n();
   const scene = useStageStore((s) => s.scenes.find((x) => x.id === sceneId));
   const actions = scene?.actions ?? EMPTY;
   const sceneOrder = scene?.order ?? 0;
@@ -683,28 +703,34 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
     if (!speeches.length) return;
     const order = latest()?.order ?? 0;
     setRegenAll(true);
+    // Stamp audioId only for lines that actually synthesized — a skipped/failed
+    // line must not get an id pointing at a blob that was never written.
+    const okIds = new Set<string>();
     try {
       for (const a of speeches) {
         if (!a.id) continue;
         try {
-          await regenerateSpeechAudio(
+          const id = await regenerateSpeechAudio(
             order,
             { id: a.id, text: (a as { text?: string }).text ?? '' },
             language,
           );
+          if (id) okIds.add(a.id);
         } catch {
           /* skip a failed line, keep going */
         }
       }
-      commit((cur) => {
-        let next = cur;
-        for (const a of cur) {
-          if (a.type === 'speech' && a.id)
-            next = setAudioIdById(next, a.id, speechAudioId(order, a.id));
-        }
-        return next;
-      });
-      setTtsRefresh((n) => n + 1);
+      if (okIds.size > 0) {
+        commit((cur) => {
+          let next = cur;
+          for (const a of cur) {
+            if (a.type === 'speech' && a.id && okIds.has(a.id))
+              next = setAudioIdById(next, a.id, speechAudioId(order, a.id));
+          }
+          return next;
+        });
+        setTtsRefresh((n) => n + 1);
+      }
     } finally {
       setRegenAll(false);
     }
@@ -773,7 +799,7 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
         commit((cur) => moveById(cur, p.id, slot));
       }
     },
-    [actions, commit],
+    [commit],
   );
 
   const speechCount = actions.filter((a) => a.type === 'speech').length;
@@ -811,21 +837,23 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
         >
           <span className="size-1.5 rounded-full bg-primary" />
           <span className="text-[12px] font-medium tracking-[0.18em] text-foreground/80">
-            讲解脚本
+            {t('edit.timeline.title')}
           </span>
         </button>
 
         {!lineMode && (
           <div className="ml-3 flex items-center gap-1.5 border-l border-gray-200/70 pl-3 dark:border-gray-700/60">
-            <span className="text-[10px] text-muted-foreground/45">拖入添加</span>
-            {PALETTE.map((t) => {
-              const Icon = cueMeta(t).icon;
+            <span className="text-[10px] text-muted-foreground/45">
+              {t('edit.timeline.dragToAdd')}
+            </span>
+            {PALETTE.map((pt) => {
+              const Icon = cueMeta(pt).icon;
               return (
                 <span
-                  key={t}
+                  key={pt}
                   draggable
                   onDragStart={(e) => {
-                    dragRef.current = { kind: 'new', type: t };
+                    dragRef.current = { kind: 'new', type: pt };
                     setBlankDragImage(e);
                   }}
                   onDragEnd={() => {
@@ -835,7 +863,7 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
                   className="inline-flex cursor-grab items-center gap-1 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground active:cursor-grabbing"
                 >
                   <Icon className="size-3" />
-                  {cueLabel(t)}
+                  {cueLabel(pt, t)}
                 </span>
               );
             })}
@@ -847,17 +875,17 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
             type="button"
             onClick={regenerateAllAudio}
             disabled={regenAll}
-            title="重新生成全部配音"
-            aria-label="重新生成全部配音"
+            title={t('edit.timeline.regenAllTts')}
+            aria-label={t('edit.timeline.regenAllTts')}
             className="ml-1.5 inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground disabled:opacity-50"
           >
             <RefreshCw className={cn('size-3', regenAll && 'animate-spin')} />
-            全部配音
+            {t('edit.timeline.voiceAll')}
           </button>
         )}
 
         <span className="ml-auto font-mono text-[11px] tabular-nums text-muted-foreground/60">
-          {speechCount} 讲解 · {cueCount} 动作
+          {t('edit.timeline.counts', { speech: speechCount, cue: cueCount })}
         </span>
         {/* pan the timeline viewport left/right */}
         {!lineMode && (
@@ -865,8 +893,8 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
             <button
               type="button"
               onClick={() => panViewport(-1)}
-              title="左移视口"
-              aria-label="左移视口"
+              title={t('edit.timeline.panLeft')}
+              aria-label={t('edit.timeline.panLeft')}
               className="grid size-7 place-items-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
             >
               <ChevronsLeft className="size-4" />
@@ -874,8 +902,8 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
             <button
               type="button"
               onClick={() => panViewport(1)}
-              title="右移视口"
-              aria-label="右移视口"
+              title={t('edit.timeline.panRight')}
+              aria-label={t('edit.timeline.panRight')}
               className="grid size-7 place-items-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
             >
               <ChevronsRight className="size-4" />
@@ -885,8 +913,8 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
         <button
           type="button"
           onClick={() => setLineMode((v) => !v)}
-          title={lineMode ? '展开轨道' : '收起为轴线'}
-          aria-label={lineMode ? '展开轨道' : '收起为轴线'}
+          title={lineMode ? t('edit.timeline.expandTrack') : t('edit.timeline.collapseAxis')}
+          aria-label={lineMode ? t('edit.timeline.expandTrack') : t('edit.timeline.collapseAxis')}
           className="ml-1 grid size-7 place-items-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
         >
           {lineMode ? <UnfoldVertical className="size-4" /> : <FoldVertical className="size-4" />}
@@ -906,7 +934,7 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
           <div className="relative flex h-full items-stretch px-3.5">
             {actions.length === 0 && (
               <span className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[12px] text-muted-foreground/60">
-                把上方的动作拖到轴上开始编排，或让 MAIC Agent 生成讲解。
+                {t('edit.timeline.emptyHint')}
               </span>
             )}
             <DropZone

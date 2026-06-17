@@ -490,6 +490,13 @@ export class PlaybackEngine {
           }, readingMs);
         };
 
+        // A speech line with no text (e.g. a freshly inserted blank slide's
+        // seeded clip, or one the user cleared) has nothing to synthesize —
+        // route it straight to the reading timer for a short dwell. Speaking an
+        // empty SpeechSynthesisUtterance doesn't reliably fire onend in Chromium,
+        // which would hang playback on that slide.
+        const hasText = !!speechAction.text.trim();
+
         this.audioPlayer
           .play(speechAction.audioId || '', speechAction.audioUrl)
           .then((audioStarted) => {
@@ -497,6 +504,7 @@ export class PlaybackEngine {
               // No pre-generated audio — try browser-native TTS if selected
               const settings = useSettingsStore.getState();
               if (
+                hasText &&
                 settings.ttsEnabled &&
                 settings.ttsProviderId === 'browser-native-tts' &&
                 typeof window !== 'undefined' &&
@@ -611,8 +619,11 @@ export class PlaybackEngine {
       .split(/(?<=[.!?。！？\n])\s*/)
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
-    // If splitting produced nothing (no punctuation), return the original text
-    return chunks.length > 0 ? chunks : [text];
+    if (chunks.length > 0) return chunks;
+    // Blank/whitespace text → no chunks (so playBrowserTTSChunk finishes cleanly
+    // instead of speaking an empty utterance that never fires onend). Otherwise
+    // the text had no sentence punctuation — speak it as one chunk.
+    return text.trim() ? [text] : [];
   }
 
   /**

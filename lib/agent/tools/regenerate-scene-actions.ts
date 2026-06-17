@@ -156,8 +156,8 @@ export function makeRegenerateSceneActionsTool(
       const { sceneId, previousSpeeches, userProfile } = params;
 
       // ── Resolve trusted scene context from deps (not from model args) ──
-      const ctx_data = deps.getSceneContext(sceneId);
-      if (!ctx_data) {
+      const ctxData = deps.getSceneContext(sceneId);
+      if (!ctxData) {
         return {
           content: [
             {
@@ -170,7 +170,7 @@ export function makeRegenerateSceneActionsTool(
         };
       }
 
-      const { outline, allOutlines, content, stageId, agents, languageDirective } = ctx_data;
+      const { outline, allOutlines, content, stageId, agents, languageDirective } = ctxData;
 
       // Suppress unused variable — stageId is part of the context contract and
       // may be needed by future tool logic (e.g. quota checks, audit logging).

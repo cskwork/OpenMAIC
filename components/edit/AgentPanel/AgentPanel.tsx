@@ -33,6 +33,7 @@ import {
   Square,
 } from 'lucide-react';
 import { useAgentRuntime } from '@/lib/agent/client/use-agent-runtime';
+import { useI18n } from '@/lib/hooks/use-i18n';
 import { MarkdownText } from './markdown-text';
 import { RegenerateSceneActionsUI } from './regenerate-tool-ui';
 
@@ -40,8 +41,13 @@ const MIN_WIDTH = 320;
 const MAX_WIDTH = 640;
 const DEFAULT_WIDTH = 384;
 
-/** Quick-prompt chips — one tap prefills the composer (user reviews, then sends). */
-const QUICK_PROMPTS = ['重新生成讲解旁白', '让讲解更口语一些', '加一个生活化类比'];
+/** Quick-prompt chip i18n keys — one tap prefills the composer with the localized
+ *  text (user reviews, then sends). */
+const QUICK_PROMPT_KEYS = [
+  'edit.agent.quickRegenerate',
+  'edit.agent.quickColloquial',
+  'edit.agent.quickAnalogy',
+];
 
 function UserMessage() {
   return (
@@ -62,6 +68,7 @@ function ThinkingIndicator() {
 }
 
 function AssistantMessage() {
+  const { t } = useI18n();
   // Return a primitive (string), not a fresh object — useMessage is backed by
   // useSyncExternalStore which compares snapshots by Object.is, so a new object
   // literal each render would loop forever ("Maximum update depth exceeded").
@@ -80,7 +87,7 @@ function AssistantMessage() {
       {phase === 'thinking' ? (
         <ThinkingIndicator />
       ) : phase === 'stopped' ? (
-        <span className="text-[12px] text-muted-foreground/60">已停止</span>
+        <span className="text-[12px] text-muted-foreground/60">{t('edit.agent.stopped')}</span>
       ) : (
         <div className="min-w-0 space-y-2 text-[13px] leading-[1.6] text-foreground/90">
           <MessagePrimitive.Parts components={{ Text: MarkdownText }} />
@@ -91,6 +98,7 @@ function AssistantMessage() {
 }
 
 export function AgentPanel({ scene }: { scene?: { id: string; title: string } }) {
+  const { t } = useI18n();
   const runtime = useAgentRuntime({ scene });
 
   // Drag-to-resize from the left edge (pointer capture, direct DOM write).
@@ -144,7 +152,7 @@ export function AgentPanel({ scene }: { scene?: { id: string; title: string } })
     return (
       <aside
         onClick={() => setCollapsed(false)}
-        title="展开 AI 助手"
+        title={t('edit.agent.expand')}
         className="group/rail relative flex h-full w-11 shrink-0 cursor-pointer flex-col items-center gap-3 border-l border-gray-100 bg-white/80 pt-3 backdrop-blur-xl transition-colors hover:bg-violet-50/40 dark:border-gray-800 dark:bg-slate-900/80 dark:hover:bg-violet-500/5 shadow-[-2px_0_24px_rgba(0,0,0,0.02)]"
       >
         <span className="grid size-8 place-items-center rounded-lg text-[#5b1fa8] transition-colors group-hover/rail:bg-violet-100/70 dark:text-violet-300 dark:group-hover/rail:bg-violet-500/15">
@@ -185,8 +193,8 @@ export function AgentPanel({ scene }: { scene?: { id: string; title: string } })
         <button
           type="button"
           onClick={() => setCollapsed(true)}
-          title="收起"
-          aria-label="收起"
+          title={t('edit.agent.collapse')}
+          aria-label={t('edit.agent.collapse')}
           className="ml-auto grid size-7 place-items-center rounded-md text-muted-foreground/55 transition-colors hover:bg-muted hover:text-foreground"
         >
           <PanelRightClose className="size-4" />
@@ -200,9 +208,9 @@ export function AgentPanel({ scene }: { scene?: { id: string; title: string } })
           <ThreadPrimitive.Viewport className="flex-1 space-y-6 overflow-y-auto px-4 py-5 scroll-smooth">
             <ThreadPrimitive.Empty>
               <div className="mx-auto mt-14 flex max-w-[260px] flex-col items-center text-center">
-                <p className="text-sm font-medium text-foreground">有什么想改的？</p>
+                <p className="text-sm font-medium text-foreground">{t('edit.agent.emptyTitle')}</p>
                 <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">
-                  在画布上编辑好这一页后，让 AI 重新生成与内容匹配的讲解旁白。
+                  {t('edit.agent.emptyHint')}
                 </p>
               </div>
             </ThreadPrimitive.Empty>
@@ -218,16 +226,19 @@ export function AgentPanel({ scene }: { scene?: { id: string; title: string } })
               with an @-scene context chip and a square violet send. */}
           <div className="px-3 pb-3 pt-1">
             <div className="scrollbar-hide mb-2 flex gap-1.5 overflow-x-auto pb-0.5">
-              {QUICK_PROMPTS.map((p) => (
-                <ThreadPrimitive.Suggestion
-                  key={p}
-                  prompt={p}
-                  method="replace"
-                  className="shrink-0 whitespace-nowrap rounded-full border border-border bg-muted/50 px-2.5 py-1 text-[11.5px] text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground"
-                >
-                  {p}
-                </ThreadPrimitive.Suggestion>
-              ))}
+              {QUICK_PROMPT_KEYS.map((key) => {
+                const label = t(key);
+                return (
+                  <ThreadPrimitive.Suggestion
+                    key={key}
+                    prompt={label}
+                    method="replace"
+                    className="shrink-0 whitespace-nowrap rounded-full border border-border bg-muted/50 px-2.5 py-1 text-[11.5px] text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground"
+                  >
+                    {label}
+                  </ThreadPrimitive.Suggestion>
+                );
+              })}
             </div>
 
             <ComposerPrimitive.Root className="rounded-[10px] border border-border bg-card shadow-sm transition-[border-color,box-shadow] focus-within:border-violet-400 focus-within:ring-[3px] focus-within:ring-violet-500/10 dark:focus-within:ring-violet-500/20">
@@ -246,7 +257,7 @@ export function AgentPanel({ scene }: { scene?: { id: string; title: string } })
                 minRows={1}
                 maxRows={6}
                 autoFocus
-                placeholder="描述对这一页的修改…"
+                placeholder={t('edit.agent.placeholder')}
                 className="block w-full resize-none bg-transparent px-3 pb-1 pt-2 text-[13px] leading-5 text-foreground outline-none placeholder:text-muted-foreground/50"
               />
 
@@ -261,7 +272,7 @@ export function AgentPanel({ scene }: { scene?: { id: string; title: string } })
                 <ThreadPrimitive.If running>
                   <button
                     type="button"
-                    aria-label="停止生成"
+                    aria-label={t('edit.agent.stop')}
                     onClick={() => {
                       try {
                         runtime.thread.cancelRun();

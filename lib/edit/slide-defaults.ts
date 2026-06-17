@@ -18,6 +18,12 @@ const DEFAULT_THEME: SlideTheme = {
  * Build a fresh blank slide scene for `+ Add slide` in the Pro mode rail.
  * Matches the SceneBuilder default theme so user-added slides look the
  * same as AI-generated ones until customized.
+ *
+ * Seeded with a single empty speech action so the slide is playable from the
+ * moment it's inserted: the playback engine skips a scene with *zero* actions,
+ * which would make a freshly inserted slide silently vanish on play. The empty
+ * clip also surfaces as the first editable line in the script timeline — an
+ * obvious "fill me in" cue for the user / MAIC Agent.
  */
 export function createBlankSlideScene(stageId: string, title: string, order: number): Scene {
   const slide: Slide = {
@@ -35,6 +41,8 @@ export function createBlankSlideScene(stageId: string, title: string, order: num
     canvas: slide,
   };
 
+  const actions: Action[] = [{ id: nanoid(), type: 'speech', text: '' }];
+
   return {
     id: nanoid(),
     stageId,
@@ -42,6 +50,7 @@ export function createBlankSlideScene(stageId: string, title: string, order: num
     title,
     order,
     content,
+    actions,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
