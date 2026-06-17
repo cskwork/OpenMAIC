@@ -337,6 +337,8 @@ export async function POST(req: NextRequest) {
       mediaEnabled: mediaGenerationEnabled,
       teacherContext,
       userProfile: userProfileText,
+      // Design Brief mode: emit a natural-language `brief` + structured `media[]` per slide.
+      designBriefMode: requirements.designBriefMode === true,
     });
 
     if (!prompts) {

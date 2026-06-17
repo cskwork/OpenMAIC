@@ -7,6 +7,14 @@
 - **Key Points**:
   {{keyPoints}}
 
+{{#if brief}}
+## Design Brief (authoritative)
+
+A detailed design brief is provided below. Treat it as the **authoritative** layout and content spec for this slide — the Title/Description/Key Points above are only a summary. Realize the brief faithfully: preserve its visual hierarchy, regions and proportions, and render the content it spells out (tables, formulas, lists, media). When the brief references a media id (e.g. `gen_img_1`, `img_2`), use that exact id as the element `src`.
+
+{{brief}}
+{{/if}}
+
 {{teacherContext}}
 
 ## Available Resources

@@ -279,6 +279,10 @@ Rules:
 | title             | string                   | ✅       | Scene title, concise and clear                                                                   |
 | description       | string                   | ✅       | 1-2 sentences describing teaching purpose                                                        |
 | keyPoints         | string[]                 | ✅       | 3-5 core points                                                                                  |
+{{#if designBriefMode}}
+| brief             | string                   | ✅ (for slide) | Detailed natural-language design brief for `slide` scenes — see "Slide Design Brief" below |
+| media             | SlideMediaItem[]         | ❌ (for slide) | Structured manifest of the images/videos this slide actually needs; the brief references each by id — see "Slide Design Brief" below. Omit when the slide needs no media. |
+{{/if}}
 | teachingObjective | string                   | ❌       | Corresponding learning objective                                                                 |
 | estimatedDuration | number                   | ❌       | Estimated duration (seconds)                                                                     |
 | order             | number                   | ✅       | Sort order, starting from 1                                                                      |
@@ -293,6 +297,65 @@ Rules:
 | widgetType        | string                   | ✅ (for interactive) | Widget type: "simulation", "diagram", "code", "game", "visualization3d"                                                 |
 | widgetOutline     | object                   | ✅ (for interactive) | Widget-specific configuration (see Widget Type Selection)                                                               |
 | pblConfig         | object                   | ❌       | Required for pbl type, contains projectTopic/projectDescription/targetSkills/issueCount/language |
+
+{{#if designBriefMode}}
+### Slide Design Brief (required for every `slide` scene)
+
+For every scene with `"type": "slide"`, add a `brief` field: a detailed natural-language design brief that a layout designer could turn directly into a finished slide. This is the PRIMARY input to the slide renderer — write rich, specific, flowing prose (roughly 120–280 words), not a bullet list. Keep `description` and `keyPoints` short as before; invest the real detail in `brief`.
+
+Each `brief` must cover, in prose:
+
+1. **Page goal** — the single concept this one slide must land and what the viewer grasps at a glance. One slide = one idea; never cram a whole lesson.
+2. **Overall visual style** — the look plus a simple color palette in words (e.g. "white background, deep-blue title, teal accent line, light-gray table"), and whether to avoid images or use them.
+3. **Layout in regions, not pixels** — e.g. a top title band, then a left/right column split with rough proportions ("left column ~60% holds the table, right ~40% the diagram"), and grouping/spacing. NEVER give pixel coordinates, px sizes, or font sizes.
+4. **The actual content of each block, written out** — do NOT say "a table comparing X"; write the real rows, numbers, and formulas. Wrap anything that must appear exactly (formulas, numbers, proper nouns, technical terms) in double quotes, e.g. the formula `"3x + 5 = 17"`, the value `"42%"`, the term `"SYN-ACK"`. On-slide text must be in the course language from `languageDirective`.
+5. **Visual emphasis** — name the focal element and what is secondary.
+6. **Media discipline** — do NOT add decorative images or per-card icons just to fill space; **most slides need ZERO images**. Draw dividers, badges and simple icons with `shape`/`line`, and prefer `table`/`chart`/`latex` to carry information. Only request a real image/video when it carries irreplaceable visual information (an actual diagram, a photograph, an illustrative scene). When you do, put it in the structured `media` manifest below — **never just write "add an icon/picture" in the prose.**
+
+#### The `media` manifest (structured, parallel to `brief`)
+
+When — and only when — a slide genuinely needs an image or video, also output a `media` array listing each one, and have the `brief` refer to each item **by its `id`** (e.g. `right column shows gen_img_1 (a GAD-vs-human scatter plot)`) rather than vaguely saying "add a figure". Each item:
+
+- `id`: `gen_img_1`, `gen_img_2`, … for to-be-generated images (`gen_vid_1`, … for video). Use a real `img_N` id **only** when that image is listed under Available Images.
+- `source`: `"generate"` (AI will create it) or `"asset"` (a real listed `img_N` already exists).
+- `type`: `"image"` or `"video"`.
+- `prompt`: concise English description of what to generate — **REQUIRED for `source:"generate"`**, omit for `"asset"`.
+- `caption`: one short phrase for what it depicts / its role.
+- `aspectRatio`: `"16:9"` | `"4:3"` | `"1:1"` | `"9:16"` (optional, default 16:9).
+
+**Consistency is mandatory**: every id referenced in `brief` MUST appear in `media`, and every id in `media` MUST be referenced in `brief`. If the slide needs no media, omit `media` and do not mention any image id in the brief.
+
+**Example A — a content slide that needs NO media (the common case):**
+
+```json
+{
+  "id": "scene_4",
+  "type": "slide",
+  "title": "Special-Angle Trig Values",
+  "description": "Help students quickly look up trig values for special angles.",
+  "keyPoints": ["quick-reference table", "unit circle", "memory steps"],
+  "brief": "A clean reference slide titled \"Special-Angle Trig Values\". White background, deep-blue title, teal accent line, light blue-gray table; no images. Top ~12% is the title band with a small right-aligned tag \"radians · unit circle · quick table\", and a thin teal rule under it. The body is a left/right split: the left column (~62%) holds the focal table — 6 rows × 5 columns with headers \"angle, radians, sinθ, cosθ, tanθ\" and data \"0°|0|0|1|0\", \"30°|π/6|1/2|√3/2|√3/3\", \"45°|π/4|√2/2|√2/2|1\", \"60°|π/3|√3/2|1/2|√3\", \"90°|π/2|1|0|undefined\"; deep-blue header row, with a light-gray note below it: \"tanθ = sinθ / cosθ, so tanθ is undefined when cosθ = 0\". The right column (~38%) draws a simple unit circle marking the \"30°\", \"45°\", \"60°\" radii, and below it three memory-step cards \"1 convert to radians\", \"2 find the reference angle\", \"3 fix the quadrant sign\" with teal borders.",
+  "order": 4
+}
+```
+
+**Example B — a slide that genuinely needs ONE figure (structured `media` + id reference in the brief):**
+
+```json
+{
+  "id": "scene_6",
+  "type": "slide",
+  "title": "GAD: Right Density, No Overlap, No Fragmentation",
+  "description": "Use a scatter plot to show GAD correlates strongly with human ratings.",
+  "keyPoints": ["GAD=OM+FR", "correlates with human score", "RMSE/ρ"],
+  "media": [
+    { "id": "gen_img_1", "source": "generate", "type": "image", "prompt": "scatter plot showing strong positive correlation between a GAD layout metric on the x-axis and human ratings on the y-axis, clean academic style", "caption": "GAD vs human-rating scatter plot", "aspectRatio": "4:3" }
+  ],
+  "brief": "An academic slide titled \"GAD: Right Density, No Overlap, No Fragmentation\". White background, deep-blue title, teal accents, with a thin rule under the title band. Centered near the top is the formula \"GAD = OM + FR\". Below it a left/right split: the left column explains the three terms in words (Occupancy Matching OM, Fragmentation Reward FR, overall density), and the right column shows gen_img_1 (the GAD-vs-human-rating scatter plot) with a one-line caption beneath it. A centered light-yellow stat box at the bottom reads \"RMSE = 0.580   ρ = 0.820\". No other images or icons besides that scatter plot.",
+  "order": 6
+}
+```
+{{/if}}
 
 ### quizConfig Structure
 

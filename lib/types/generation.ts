@@ -53,6 +53,7 @@ export interface UserRequirements {
   webSearch?: boolean; // Enable web search for richer context
   interactiveMode?: boolean; // Enable Interactive Mode for interactive-first generation
   taskEngineMode?: boolean; // Enable vocational task-engine generation path
+  designBriefMode?: boolean; // Outliner emits a natural-language design `brief` + structured `media[]` per slide scene
 }
 
 // ==================== Stage 1 Output: Scene Outlines (Simplified) ====================
@@ -86,6 +87,28 @@ export interface WidgetOutline {
 }
 
 /**
+ * Structured media item for a slide outline (Design Brief mode).
+ *
+ * Unifies real source images (e.g. PDF-extracted) and to-be-generated media into
+ * ONE manifest that sits parallel to `brief`. The brief references each item by
+ * `id`, so the slide-content model is told exactly which media exist (and whether
+ * each is a real asset or a placeholder) instead of inferring image intent from
+ * prose — which avoids over-emitting decorative image placeholders.
+ */
+export interface SlideMediaItem {
+  /** Id used both in the brief reference and as the slide element `src`. */
+  id: string; // 'img_1' (source asset) | 'gen_img_1' / 'gen_vid_1' (to generate)
+  /** 'asset' = a real image already available; 'generate' = AI-generated placeholder. */
+  source: 'asset' | 'generate';
+  type: 'image' | 'video';
+  /** Generation prompt — required for source:'generate'; omit for 'asset'. */
+  prompt?: string;
+  /** What it depicts / its role on the page; shown to the slide-content model. */
+  caption?: string;
+  aspectRatio?: '16:9' | '4:3' | '1:1' | '9:16';
+}
+
+/**
  * Simplified scene outline
  * Gives AI more freedom, only requiring intent description and key points
  */
@@ -95,6 +118,12 @@ export interface SceneOutline {
   title: string;
   description: string; // 1-2 sentences describing the purpose
   keyPoints: string[]; // 3-5 core key points
+  // Design Brief mode (UserRequirements.designBriefMode): a detailed natural-language
+  // design brief for `slide` scenes, used as the primary slide-content input when present.
+  brief?: string;
+  // Design Brief mode: structured manifest of the images/videos this slide actually
+  // needs; the brief references each by id. Unifies source (asset) and generate.
+  media?: SlideMediaItem[];
   teachingObjective?: string;
   estimatedDuration?: number; // seconds
   order: number;

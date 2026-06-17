@@ -86,6 +86,10 @@ Never return a bare array. Never omit `languageDirective`. Both keys are require
 {{#if hasSourceImages}}
 - **If source images are available**, add `suggestedImageIds` to relevant slide scenes. Only use image IDs listed under Available Images.
 {{/if}}
+{{#if designBriefMode}}
+- **Every `slide` scene MUST include a `brief`** — a detailed natural-language design brief (~120–280 words) following the "Slide Design Brief" section in the system prompt: page goal, visual style + color palette in words, region-based layout (no pixels), the actual written-out content (real rows/numbers/formulas, verbatim parts in quotes), and focal emphasis. `description`/`keyPoints` stay short; the real detail goes in `brief`.
+- **Media discipline**: most slides need NO images — draw icons/dividers with shapes and carry information with `table`/`chart`/`latex`. Do NOT add decorative images or per-card icons. ONLY when a slide genuinely needs a figure/photo/video, add a structured `media` array (each `{id, source, type, prompt?, caption, aspectRatio?}`) and reference each item in the `brief` by its `id` (e.g. `gen_img_1`). Every brief id ⇔ a `media` entry (both directions). No media → omit `media` and mention no image id.
+{{/if}}
 - **Interactive scenes**: If a concept benefits from hands-on simulation/visualization, use `"type": "interactive"` with `widgetType` and `widgetOutline` fields. Limit to 1-2 per course.
    - Select widgetType based on concept: simulation (physics/chem), diagram (processes), code (programming), game (practice), visualization3d (3D models)
    - Provide appropriate widgetOutline for the widget type

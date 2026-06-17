@@ -33,10 +33,34 @@ const log = createLogger('Generation');
  * contamination on the homepage. Using nanoid-based IDs ensures global uniqueness.
  */
 export function uniquifyMediaElementIds(outlines: SceneOutline[]): SceneOutline[] {
+  // Design Brief mode bridge: the outliner emits a structured `media[]` manifest
+  // (parallel to `brief`). Derive the existing `mediaGenerations` (generate items)
+  // and `suggestedImageIds` (asset items) from it so the existing media-orchestrator
+  // dispatches generation. Skipped when mediaGenerations is already populated.
+  const bridged = outlines.map((outline) => {
+    if (!outline.media || outline.media.length === 0) return outline;
+    const gen = outline.media.filter((m) => m.source === 'generate');
+    const assetIds = outline.media.filter((m) => m.source === 'asset').map((m) => m.id);
+    const mediaGenerations =
+      outline.mediaGenerations && outline.mediaGenerations.length > 0
+        ? outline.mediaGenerations
+        : gen.map((m) => ({
+            type: m.type,
+            prompt: m.prompt ?? m.caption ?? '',
+            elementId: m.id,
+            aspectRatio: m.aspectRatio,
+          }));
+    const suggestedImageIds =
+      assetIds.length > 0
+        ? Array.from(new Set([...(outline.suggestedImageIds ?? []), ...assetIds]))
+        : outline.suggestedImageIds;
+    return { ...outline, mediaGenerations, suggestedImageIds };
+  });
+
   const idMap = new Map<string, string>();
 
   // First pass: collect all sequential media IDs and assign unique replacements
-  for (const outline of outlines) {
+  for (const outline of bridged) {
     if (!outline.mediaGenerations) continue;
     for (const mg of outline.mediaGenerations) {
       if (!idMap.has(mg.elementId)) {
@@ -46,17 +70,25 @@ export function uniquifyMediaElementIds(outlines: SceneOutline[]): SceneOutline[
     }
   }
 
-  if (idMap.size === 0) return outlines;
+  if (idMap.size === 0) return bridged;
 
-  // Second pass: replace IDs in mediaGenerations
-  return outlines.map((outline) => {
-    if (!outline.mediaGenerations) return outline;
+  // Rewrite a brief's inline id references (e.g. "right column shows gen_img_1") to
+  // keep them in sync with the uniquified ids. `\d+\b` captures the full number so
+  // gen_img_1 and gen_img_10 stay distinct.
+  const rewriteBrief = (brief: string | undefined): string | undefined =>
+    brief?.replace(/\b(?:gen_(?:img|vid)|img)_\d+\b/g, (token) => idMap.get(token) ?? token);
+
+  // Second pass: replace IDs in mediaGenerations, media[], and the brief together
+  return bridged.map((outline) => {
+    if (!outline.mediaGenerations && !outline.media && !outline.brief) return outline;
     return {
       ...outline,
-      mediaGenerations: outline.mediaGenerations.map((mg) => ({
+      mediaGenerations: outline.mediaGenerations?.map((mg) => ({
         ...mg,
-        elementId: idMap.get(mg.elementId) || mg.elementId,
+        elementId: idMap.get(mg.elementId) ?? mg.elementId,
       })),
+      media: outline.media?.map((m) => ({ ...m, id: idMap.get(m.id) ?? m.id })),
+      brief: rewriteBrief(outline.brief),
     };
   });
 }

@@ -738,6 +738,9 @@ async function generateSlideContent(
     title: outline.title,
     description: outline.description,
     keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
+    // Design Brief mode: when the outline carries a natural-language `brief`, it is
+    // the authoritative layout spec (the prompt prefers it over title/keyPoints).
+    brief: outline.brief?.trim() || '',
     elements: '（根据要点自动生成）',
     assignedImages: assignedImagesText,
     canvas_width: canvasWidth,
