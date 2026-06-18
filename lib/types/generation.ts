@@ -129,6 +129,11 @@ export interface SceneOutline {
   // Widget fields (required for type === 'interactive' in unified mode)
   widgetType?: WidgetType;
   widgetOutline?: WidgetOutline;
+  // Derive-on-confirm cache tag: hash of the intent fields (type+title+
+  // description+keyPoints) the current type-specific config was derived for.
+  // Lets the specializer skip re-derivation when intent is unchanged, and
+  // detect stale config after the user changes type in the editor.
+  specializedFor?: string;
 }
 
 // ==================== Stage 3 Output: Generated Content ====================

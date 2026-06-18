@@ -32,6 +32,15 @@ export { parseJsonResponse, tryParseJson } from './json-repair';
 // Outline generator (Stage 1)
 export { generateSceneOutlinesFromRequirements, applyOutlineFallbacks } from './outline-generator';
 
+// Outline specializer — derive-on-confirm of type-specific config
+export {
+  specializeOutline,
+  computeIntentHash,
+  hasRequiredConfig,
+  resetConfigForType,
+} from './outline-specializer';
+export type { SpecializeDeps } from './outline-specializer';
+
 // Scene generator (Stage 2)
 export {
   generateFullScenes,

@@ -27,6 +27,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { cn } from '@/lib/utils';
 import type { SceneOutline } from '@/lib/types/generation';
+import { resetConfigForType } from '@/lib/generation/outline-specializer';
 
 type SceneType = SceneOutline['type'];
 
@@ -570,7 +571,7 @@ function SceneRow({
             <div className="flex shrink-0 items-center gap-1 pt-0.5">
               <TypePill
                 type={outline.type}
-                onChange={(type) => onUpdate({ type })}
+                onChange={(type) => onUpdate(resetConfigForType(type))}
                 disabled={disabled}
                 label={sceneTypeLabel(outline.type)}
                 theme={theme}

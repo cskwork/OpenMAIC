@@ -9,7 +9,7 @@
 import { NextRequest } from 'next/server';
 import { callLLM } from '@/lib/ai/llm';
 import {
-  applyOutlineFallbacks,
+  specializeOutline,
   generateSceneContent,
   buildVisionUserContent,
 } from '@/lib/generation/generation-pipeline';
@@ -128,8 +128,13 @@ export async function POST(req: NextRequest) {
     };
 
     // ── Apply fallbacks ──
+    // ── Derive-on-confirm: ensure the declared type's config exists ──
+    // The scene `type` is authoritative; if the user changed it in the editor
+    // the matching config is derived here (cached via specializedFor).
     const vocationalActive = resolveVocationalActive(requirements);
-    const effectiveOutline = applyOutlineFallbacks(outline, !!languageModel, {
+    const effectiveOutline = await specializeOutline(outline, {
+      aiCall,
+      hasLanguageModel: !!languageModel,
       allowProceduralSkill: vocationalActive,
     });
 
