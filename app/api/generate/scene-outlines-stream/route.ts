@@ -67,15 +67,38 @@ function extractLanguageDirective(buffer: string): string | null {
  * top-level key near the start of the wrapper object, so it only appears in
  * the buffer head. Returns the decoded title, or null if not yet streamed.
  */
+const COURSE_TITLE_RE = /"courseTitle"\s*:\s*"((?:[^"\\]|\\.)*)"/;
+
+// Normalize a captured title identically to the non-streaming parser
+// (lib/generation/outline-generator.ts): ignore whitespace-only titles and cap
+// length defensively so a hallucinating model cannot push a blank or unbounded
+// value into the stage name. Returning null lets callers fall back / keep scanning.
+function normalizeStreamedTitle(raw: string): string | null {
+  let title: string;
+  try {
+    title = JSON.parse(`"${raw}"`);
+  } catch {
+    title = raw;
+  }
+  const normalized = title.trim();
+  return normalized ? normalized.slice(0, 120) : null;
+}
+
 function extractCourseTitle(buffer: string): string | null {
   const head = buffer.length > 8192 ? buffer.slice(0, 8192) : buffer;
-  const match = head.match(/"courseTitle"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-  if (!match) return null;
-  try {
-    return JSON.parse(`"${match[1]}"`);
-  } catch {
-    return match[1];
-  }
+  const match = head.match(COURSE_TITLE_RE);
+  return match ? normalizeStreamedTitle(match[1]) : null;
+}
+
+/**
+ * Full-buffer fallback, run once after the stream completes: recovers a title
+ * the model emitted after the `outlines` array or beyond the 8KB head window —
+ * cases the head-bound `extractCourseTitle` scan would miss. Only invoked when
+ * the streaming scan produced nothing, so the extra full-buffer regex is paid once.
+ */
+function extractCourseTitleFromComplete(buffer: string): string | null {
+  const match = buffer.match(COURSE_TITLE_RE);
+  return match ? normalizeStreamedTitle(match[1]) : null;
 }
 
 /**
@@ -510,7 +533,15 @@ export async function POST(req: NextRequest) {
               }
 
               // Validate: got outlines?
-              if (parsedOutlines.length > 0) break;
+              if (parsedOutlines.length > 0) {
+                if (!courseTitle) {
+                  // The head-bound streaming scan can miss a title the model
+                  // placed after the outlines array or past the 8KB head window;
+                  // recover it from the now-complete response before finalizing.
+                  courseTitle = extractCourseTitleFromComplete(fullText);
+                }
+                break;
+              }
 
               // Empty result — retry if we have attempts left
               lastError = fullText.trim()

@@ -529,6 +529,12 @@ function GenerationPreviewContent() {
                           setStreamingOutlines([...collected]);
                         } else if (evt.type === 'retry') {
                           collected.length = 0;
+                          // Drop any directive/title latched from the failed
+                          // attempt — the server resets these per attempt, so a
+                          // succeeding attempt that omits them must fall back, not
+                          // inherit the previous attempt's stale values.
+                          directive = undefined;
+                          title = undefined;
                           setStreamingOutlines([]);
                           setStatusMessage(t('generation.outlineRetrying'));
                         } else if (evt.type === 'done') {
@@ -557,6 +563,11 @@ function GenerationPreviewContent() {
                         outlines: collected,
                         languageDirective:
                           directive || 'Teach in the language that matches the user requirement.',
+                        // Carry any title latched from a streaming `courseTitle`
+                        // event here too — symmetric with languageDirective — so
+                        // a stream that ends without an explicit `done` event
+                        // does not silently drop a valid inferred title.
+                        courseTitle: title,
                         taskEngineMode: false,
                       });
                     } else {
