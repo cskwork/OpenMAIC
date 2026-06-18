@@ -7,8 +7,9 @@
  *
  * SSE events:
  *   { type: 'languageDirective', data: string }
+ *   { type: 'courseTitle', data: string }
  *   { type: 'outline', data: SceneOutline, index: number }
- *   { type: 'done', outlines: SceneOutline[], languageDirective: string }
+ *   { type: 'done', outlines: SceneOutline[], languageDirective: string, courseTitle?: string }
  *   { type: 'error', error: string }
  */
 
@@ -52,6 +53,23 @@ function extractLanguageDirective(buffer: string): string | null {
   // which is otherwise O(n²) over the stream.
   const head = buffer.length > 8192 ? buffer.slice(0, 8192) : buffer;
   const match = head.match(/"languageDirective"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  if (!match) return null;
+  try {
+    return JSON.parse(`"${match[1]}"`);
+  } catch {
+    return match[1];
+  }
+}
+
+/**
+ * Extract the courseTitle from the streamed wrapper JSON.
+ * Same head-bound scan as `extractLanguageDirective` — the title is a
+ * top-level key near the start of the wrapper object, so it only appears in
+ * the buffer head. Returns the decoded title, or null if not yet streamed.
+ */
+function extractCourseTitle(buffer: string): string | null {
+  const head = buffer.length > 8192 ? buffer.slice(0, 8192) : buffer;
+  const match = head.match(/"courseTitle"\s*:\s*"((?:[^"\\]|\\.)*)"/);
   if (!match) return null;
   try {
     return JSON.parse(`"${match[1]}"`);
@@ -405,6 +423,7 @@ export async function POST(req: NextRequest) {
 
           let parsedOutlines: SceneOutline[] = [];
           let languageDirective: string | null = null;
+          let courseTitle: string | null = null;
           let lastError: string | undefined;
 
           for (let attempt = 1; attempt <= MAX_STREAM_RETRIES + 1; attempt++) {
@@ -413,6 +432,7 @@ export async function POST(req: NextRequest) {
               let scanFrom = 0;
               parsedOutlines = [];
               languageDirective = null;
+              courseTitle = null;
               const usedOutlineIds = new Set<string>();
               const textStream = streamLLM(
                 streamParams,
@@ -446,6 +466,18 @@ export async function POST(req: NextRequest) {
                       data: languageDirective,
                     });
                     controller.enqueue(encoder.encode(`data: ${ldEvent}\n\n`));
+                  }
+                }
+
+                // Try to extract course title early (same pattern as languageDirective)
+                if (!courseTitle) {
+                  courseTitle = extractCourseTitle(fullText);
+                  if (courseTitle) {
+                    const ctEvent = JSON.stringify({
+                      type: 'courseTitle',
+                      data: courseTitle,
+                    });
+                    controller.enqueue(encoder.encode(`data: ${ctEvent}\n\n`));
                   }
                 }
 
@@ -536,6 +568,7 @@ export async function POST(req: NextRequest) {
               type: 'done',
               outlines: uniquifiedOutlines,
               languageDirective: languageDirective || DEFAULT_LANGUAGE_DIRECTIVE,
+              courseTitle: courseTitle || undefined,
               taskEngineMode,
             });
             controller.enqueue(encoder.encode(`data: ${doneEvent}\n\n`));
