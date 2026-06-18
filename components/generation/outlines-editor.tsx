@@ -27,7 +27,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { cn } from '@/lib/utils';
 import type { SceneOutline } from '@/lib/types/generation';
-import { resetConfigForType } from '@/lib/generation/outline-specializer';
+import { resetConfigForType } from '@/lib/generation/outline-specializer-helpers';
 
 type SceneType = SceneOutline['type'];
 
