@@ -345,7 +345,8 @@
     "fullscreen": "Tela cheia",
     "exitFullscreen": "Sair da tela cheia",
     "editCourse": "Editar curso",
-    "doneEditing": "Concluir edição"
+    "doneEditing": "Concluir edição",
+    "proModeDisabledHint": "A edição não está disponível nesta página — abra um slide do curso para editar no modo Pro."
   },
   "classroomComplete": {
     "title": "Curso concluído",
@@ -1225,7 +1226,8 @@
     "viewDocs": "Documentação da API",
     "webSearchBaseUrl": "URL Base",
     "webSearchServerConfigured": "Chave de API de busca configurada no servidor",
-    "optional": "Opcional"
+    "optional": "Opcional",
+    "ttsBrowserNativeTimelineNotice": "O TTS nativo do navegador não suporta os recursos de áudio da linha do tempo do editor (pré-visualizar, regenerar e narração em lote). Mude para um provedor de TTS gerenciado para gerar e gerenciar o áudio de cada linha."
   },
   "profile": {
     "title": "Perfil",

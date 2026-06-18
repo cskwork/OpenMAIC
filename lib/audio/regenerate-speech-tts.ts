@@ -56,6 +56,23 @@ export async function audioObjectUrl(audioId: string): Promise<string | null> {
 }
 
 /**
+ * Discard the cached audio for a speech line (both its stamped audioId, if any,
+ * and the canonical derived key). Called when the user edits a line's text: the
+ * cache key is derived from sceneOrder+actionId (not the text), so without this
+ * the stale blob would keep replaying for the new wording. After this the line
+ * reads as "not voiced" and must be regenerated.
+ */
+export async function discardSpeechAudio(
+  sceneOrder: number,
+  action: { id?: string; audioId?: string },
+): Promise<void> {
+  if (!action.id) return;
+  const ids = new Set([speechAudioId(sceneOrder, action.id)]);
+  if (action.audioId) ids.add(action.audioId);
+  await db.audioFiles.bulkDelete([...ids]);
+}
+
+/**
  * (Re)generate TTS for one speech line and cache it under the canonical key.
  * Returns the audioId on success, or null when TTS isn't applicable. Throws if
  * synthesis fails. Delegates to the pipeline's `generateAndStoreTTS`.

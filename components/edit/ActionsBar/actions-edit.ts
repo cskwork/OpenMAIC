@@ -67,6 +67,25 @@ export function setSpeechTextById(actions: Action[], id: string, text: string): 
   return index < 0 ? actions : setSpeechText(actions, index, text);
 }
 
+/**
+ * Edit a speech line's text AND drop its stamped audio fields (index-stale-safe).
+ * The cached audio blob is keyed by sceneOrder+actionId, not the text, so an
+ * edit must invalidate it or the stale audio would replay for the new wording —
+ * after this the line reads as un-voiced until regenerated. (Deleting the blob
+ * itself is done separately via `discardSpeechAudio`.)
+ */
+export function setSpeechTextClearAudioById(actions: Action[], id: string, text: string): Action[] {
+  const index = actions.findIndex((a) => a.id === id);
+  const a = actions[index];
+  if (!a || a.type !== 'speech') return actions;
+  const next = actions.slice();
+  const cleaned = { ...a, text } as Action & { audioId?: string; audioUrl?: string };
+  delete cleaned.audioId;
+  delete cleaned.audioUrl;
+  next[index] = cleaned;
+  return next;
+}
+
 /** Remove an action by id (index-stale-safe). */
 export function removeById(actions: Action[], id: string): Action[] {
   const index = actions.findIndex((a) => a.id === id);

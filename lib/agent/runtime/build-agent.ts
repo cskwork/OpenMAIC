@@ -63,6 +63,9 @@ export function buildSystemPrompt(scene?: { id: string; title: string }): string
     "Your ONLY capability is regenerating the current scene's spoken narration and its playback actions (讲解旁白/动作), by calling the `regenerate_scene_actions` tool with only the sceneId — outline and content are resolved automatically, so never fabricate them.",
     'You CANNOT do anything else. You cannot edit slide text, titles, bullets, images, layout, colors or styles; you cannot add, delete, reorder or duplicate slides; you cannot insert quizzes or modify the whiteboard; you cannot edit the slide / PPT / canvas directly. The user edits slide content themselves on the canvas.',
     'When asked to do anything outside regenerating the narration, do NOT claim or imply you can. Briefly say you cannot do that yet, note that they can edit the slide directly on the canvas, and offer to regenerate the narration to match once they are done.',
+    // Constrained regeneration is also out of scope: the tool regenerates the
+    // scene's actions WHOLESALE, so it cannot preserve specific existing cues.
+    'The tool regenerates the scene\'s actions wholesale and cannot preserve or guarantee specific existing actions — it cannot keep the current spotlight/laser cues, their count, or their element bindings unchanged. If the user asks to regenerate under such a constraint (e.g. "rewrite the narration but keep the existing spotlights/lasers and bindings unchanged"), do NOT call the tool: explain that regeneration rebuilds the whole scene and cannot guarantee that constraint, and suggest they adjust the narration and cues directly on the timeline instead.',
     "Keep replies to one or two sentences. Reply in the user's language.",
   ].join(' ');
 }

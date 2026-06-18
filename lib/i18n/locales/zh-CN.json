@@ -151,7 +151,8 @@
     "fullscreen": "全屏",
     "exitFullscreen": "退出全屏",
     "editCourse": "编辑课程",
-    "doneEditing": "完成编辑"
+    "doneEditing": "完成编辑",
+    "proModeDisabledHint": "本页不支持编辑——打开任意课程页即可使用 Pro 模式编辑。"
   },
   "edit": {
     "proMode": "专业模式",
@@ -1225,7 +1226,8 @@
     "viewDocs": "API 文档",
     "webSearchBaseUrl": "Base URL",
     "webSearchServerConfigured": "服务端已配置搜索 API Key",
-    "optional": "可选"
+    "optional": "可选",
+    "ttsBrowserNativeTimelineNotice": "浏览器内置 TTS 不支持编辑器时间轴的音频功能（试听、重新生成、全部配音）。切换到托管 TTS 提供方即可逐句生成和管理音频。"
   },
   "profile": {
     "title": "个人资料",

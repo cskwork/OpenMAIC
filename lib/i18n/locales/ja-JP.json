@@ -151,7 +151,8 @@
     "fullscreen": "全画面表示",
     "exitFullscreen": "全画面表示を終了",
     "editCourse": "コースを編集",
-    "doneEditing": "編集を完了"
+    "doneEditing": "編集を完了",
+    "proModeDisabledHint": "このページでは編集できません。コースのスライドを開くと Pro モードで編集できます。"
   },
   "edit": {
     "proMode": "プロモード",
@@ -1225,7 +1226,8 @@
     "viewDocs": "APIドキュメント",
     "webSearchBaseUrl": "ベースURL",
     "webSearchServerConfigured": "サーバー側で検索APIキーが設定済みです",
-    "optional": "任意"
+    "optional": "任意",
+    "ttsBrowserNativeTimelineNotice": "ブラウザ内蔵 TTS はエディターのタイムライン音声機能（試聴・再生成・一括音声生成）に対応していません。マネージド TTS プロバイダーに切り替えると、行ごとの音声を生成・管理できます。"
   },
   "profile": {
     "title": "プロフィール",

@@ -50,12 +50,13 @@ import {
   moveByIdDir,
   removeById,
   setAudioIdById,
-  setSpeechTextById,
+  setSpeechTextClearAudioById,
   type AddableType,
 } from './actions-edit';
 import {
   audioExists,
   audioObjectUrl,
+  discardSpeechAudio,
   regenerateSpeechAudio,
   resolveSpeechAudioId,
   speechAudioId,
@@ -998,9 +999,21 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
                               ttsRefresh={ttsRefresh}
                               autoFocus={key === focusId}
                               onFocused={() => setFocusId(null)}
-                              onCommit={(text) =>
-                                commit((cur) => setSpeechTextById(cur, key, text))
-                              }
+                              onCommit={(text) => {
+                                // Editing the text invalidates any cached audio
+                                // (the blob is keyed by order+id, not text), so
+                                // drop the stamped fields and delete the blob —
+                                // the line then reads as un-voiced until regen.
+                                const prevAudioId = (action as { audioId?: string }).audioId;
+                                commit((cur) => setSpeechTextClearAudioById(cur, key, text));
+                                // Re-check status only AFTER the blob is gone, so
+                                // the status row can't race the async delete and
+                                // briefly still read "voiced".
+                                void discardSpeechAudio(sceneOrder, {
+                                  id: key,
+                                  audioId: prevAudioId,
+                                }).finally(() => setTtsRefresh((n) => n + 1));
+                              }}
                               onGenerated={() =>
                                 commit((cur) =>
                                   setAudioIdById(cur, key, speechAudioId(sceneOrder, key)),

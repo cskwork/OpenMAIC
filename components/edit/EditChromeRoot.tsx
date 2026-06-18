@@ -8,6 +8,7 @@ import { ActionsBar } from '@/components/edit/ActionsBar/ActionsBar';
 import { HeaderControls } from '@/components/stage/header-controls';
 import { isMaicEditorEnabled } from '@/lib/config/feature-flags';
 import { preloadEditor } from '@/lib/edit/preload-editor';
+import { sceneEditorRegistry } from '@/lib/edit/scene-editor-registry';
 import type { Scene } from '@/lib/types/stage';
 
 interface EditChromeRootProps {
@@ -61,12 +62,22 @@ export function EditChromeRoot({ scene, isEditable, onToggleEditMode }: EditChro
     void preloadEditor();
   }, []);
 
+  // The narration timeline (ActionsBar) and the AI edit panel (AgentPanel) are
+  // slide-narration authoring tools — they only apply to scene types with a
+  // registered editor surface. Read-only scenes (no surface → NOOP + the
+  // "· view-only" badge, e.g. interactive/PBL) get neither, so the timeline
+  // can't add spotlight/laser or edit speech and the agent can't rewrite a
+  // view-only scene's actions. Mirrors the shell's own surface resolution.
+  const authoringEnabled = !!sceneEditorRegistry.resolve(scene.type);
+
   return (
     <EditShell
       scene={scene}
       leftRail={<SlideNavRail />}
-      rightRail={<AgentPanel scene={{ id: scene.id, title: scene.title }} />}
-      bottomRail={<ActionsBar sceneId={scene.id} />}
+      rightRail={
+        authoringEnabled ? <AgentPanel scene={{ id: scene.id, title: scene.title }} /> : undefined
+      }
+      bottomRail={authoringEnabled ? <ActionsBar sceneId={scene.id} /> : undefined}
       commandTrailing={
         <HeaderControls
           mode="edit"

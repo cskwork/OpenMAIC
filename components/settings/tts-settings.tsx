@@ -220,6 +220,15 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
 
   return (
     <div className={cn('space-y-6', isVoxCPM ? 'max-w-5xl' : 'max-w-3xl')}>
+      {/* Browser-native TTS can't produce managed audio files, so the Pro-mode
+          timeline's per-line audio (preview / regenerate / bulk voiceover) is
+          unavailable on it — surface that when this provider is selected. */}
+      {selectedProviderId === 'browser-native-tts' && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+          {t('settings.ttsBrowserNativeTimelineNotice')}
+        </div>
+      )}
+
       {/* Server-configured notice */}
       {isServerConfigured && (
         <div className="rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30 p-3 text-sm text-blue-700 dark:text-blue-300">

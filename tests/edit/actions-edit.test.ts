@@ -13,6 +13,7 @@ import {
   setElementIdById,
   setSpeechText,
   setSpeechTextById,
+  setSpeechTextClearAudioById,
 } from '@/components/edit/ActionsBar/actions-edit';
 import type { Action } from '@/lib/types/action';
 
@@ -102,5 +103,22 @@ describe('setSpeechText / setElementId', () => {
     const xs = [A('a', 'speech'), A('b', 'spotlight')];
     expect((setAudioId(xs, 0, 'tts_a')[0] as { audioId?: string }).audioId).toBe('tts_a');
     expect(setAudioId(xs, 1, 'tts_b')).toBe(xs); // no-op for non-speech
+  });
+  test('setSpeechTextClearAudioById sets text and drops stale audio fields', () => {
+    const xs: Action[] = [
+      { id: 'a', type: 'speech', text: 'old', audioId: 'tts_a', audioUrl: 'blob:x' } as Action,
+      A('b', 'spotlight'),
+    ];
+    const out = setSpeechTextClearAudioById(xs, 'a', 'new') as Array<{
+      text?: string;
+      audioId?: string;
+      audioUrl?: string;
+    }>;
+    expect(out[0].text).toBe('new');
+    expect(out[0].audioId).toBeUndefined();
+    expect(out[0].audioUrl).toBeUndefined();
+    // index-stale-safe + type guard: missing id and non-speech are no-ops
+    expect(setSpeechTextClearAudioById(xs, 'missing', 'x')).toBe(xs);
+    expect(setSpeechTextClearAudioById(xs, 'b', 'x')).toBe(xs);
   });
 });

@@ -151,7 +151,8 @@
     "fullscreen": "Fullscreen",
     "exitFullscreen": "Exit Fullscreen",
     "editCourse": "Edit course",
-    "doneEditing": "Done editing"
+    "doneEditing": "Done editing",
+    "proModeDisabledHint": "Editing isn't available on this page — open a course slide to edit with Pro mode."
   },
   "edit": {
     "proMode": "Pro",
@@ -1225,7 +1226,8 @@
     "viewDocs": "API Docs",
     "webSearchBaseUrl": "Base URL",
     "webSearchServerConfigured": "Server-side search API key is configured",
-    "optional": "Optional"
+    "optional": "Optional",
+    "ttsBrowserNativeTimelineNotice": "Browser-native TTS doesn't support the editor timeline's audio features (preview, regenerate, and bulk voiceover). Switch to a managed TTS provider to generate and manage per-line audio."
   },
   "profile": {
     "title": "Profile",

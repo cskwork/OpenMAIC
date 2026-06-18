@@ -10,10 +10,11 @@
  * resulting action breakdown instead.
  */
 import { useState } from 'react';
-import { AlertCircle, Check, ChevronDown, Loader2, Wrench } from 'lucide-react';
+import { AlertCircle, AtSign, Check, ChevronDown, Loader2, Wrench } from 'lucide-react';
 import { makeAssistantToolUI } from '@assistant-ui/react';
 import { cn } from '@/lib/utils/cn';
 import { useI18n } from '@/lib/hooks/use-i18n';
+import { useStageStore } from '@/lib/store/stage';
 import { cueLabel } from '@/components/edit/ActionsBar/cue-meta';
 
 type TFn = (key: string, options?: Record<string, unknown>) => string;
@@ -32,14 +33,34 @@ function summarize(actions: { type?: string }[], t: TFn): string {
   return [...counts.entries()].map(([type, n]) => `${n} ${cueLabel(type, t)}`).join(' · ');
 }
 
+/**
+ * The page (scene) this regenerate acted on, shown as an `@title` chip — the
+ * chat is a single global thread (Cursor-style), so each tool card carries its
+ * own scene reference instead of splitting history per page.
+ */
+function ScenePill({ sceneId }: { sceneId?: string }) {
+  const title = useStageStore((s) =>
+    sceneId ? (s.scenes.find((x) => x.id === sceneId)?.title ?? null) : null,
+  );
+  if (!title) return null;
+  return (
+    <span className="inline-flex min-w-0 shrink items-center gap-0.5 rounded-md border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10.5px] font-medium text-[#5b1fa8] dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300">
+      <AtSign className="size-2.5 shrink-0 text-violet-500" />
+      <span className="truncate">{title}</span>
+    </span>
+  );
+}
+
 function ToolRow({
   running,
   failed,
   result,
+  sceneId,
 }: {
   running: boolean;
   failed: boolean;
   result?: RegenerateResult;
+  sceneId?: string;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -73,6 +94,7 @@ function ToolRow({
         <span className="shrink-0 whitespace-nowrap text-[12.5px] font-semibold text-foreground">
           {t('edit.regen.title')}
         </span>
+        <ScenePill sceneId={sceneId} />
         <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-muted-foreground">
           {target}
         </span>
@@ -110,9 +132,6 @@ function ToolRow({
             <p className="text-amber-600 dark:text-amber-500">{failText}</p>
           ) : null}
           {actions.length > 0 && <p className="font-mono">{summarize(actions, t)}</p>}
-          {result?.details?.sceneId && (
-            <p className="font-mono text-muted-foreground/70">scene {result.details.sceneId}</p>
-          )}
         </div>
       )}
     </div>
@@ -122,10 +141,11 @@ function ToolRow({
 export const RegenerateSceneActionsUI = makeAssistantToolUI<{ sceneId?: string }, RegenerateResult>(
   {
     toolName: 'regenerate_scene_actions',
-    render: ({ status, result, isError }) => {
+    render: ({ args, status, result, isError }) => {
       const running = status.type === 'running' || status.type === 'requires-action';
       const failed = !running && (isError || status.type === 'incomplete');
-      return <ToolRow running={running} failed={failed} result={result} />;
+      const sceneId = args?.sceneId ?? result?.details?.sceneId;
+      return <ToolRow running={running} failed={failed} result={result} sceneId={sceneId} />;
     },
   },
 );
