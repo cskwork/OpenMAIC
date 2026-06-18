@@ -75,6 +75,8 @@ Never return a bare array. Never omit `languageDirective`. Both keys are require
 
 ### Special Notes
 
+- **Every scene MUST include `brief`** — a rich natural-language design brief (~80–200 words) that is the authoritative content for the scene (see "Scene Brief" in the system prompt). Write the real on-screen content in prose, not a meta-description. Keep `description` and `keyPoints` short.
+
 - **quiz scenes must include quizConfig**:
    ```json
    "quizConfig": {

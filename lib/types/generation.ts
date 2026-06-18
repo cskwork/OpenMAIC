@@ -93,8 +93,12 @@ export interface SceneOutline {
   id: string;
   type: 'slide' | 'quiz' | 'interactive' | 'pbl';
   title: string;
-  description: string; // 1-2 sentences describing the purpose
-  keyPoints: string[]; // 3-5 core key points
+  // Authoritative natural-language design brief (Layer-1). When present it is
+  // the primary input for generation and what the editor edits; description and
+  // keyPoints are demoted to optional secondary/compat fields.
+  brief?: string;
+  description?: string; // demoted: short teaching-purpose summary (optional)
+  keyPoints?: string[]; // demoted: optional core points
   teachingObjective?: string;
   estimatedDuration?: number; // seconds
   order: number;

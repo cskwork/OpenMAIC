@@ -8,6 +8,14 @@ Create an educational GAME widget for: {{title}}
 
 {{description}}
 
+{{#if brief}}
+## Design Brief (authoritative)
+
+When present, treat this as the authoritative spec for the scene; the fields above are a summary.
+
+{{brief}}
+{{/if}}
+
 ## Key Points
 
 {{keyPoints}}

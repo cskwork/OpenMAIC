@@ -5,6 +5,9 @@
 **Project Description**: {{projectDescription}}
 **Key Points**: {{keyPoints}}
 **Description**: {{description}}
+{{#if brief}}
+- **Design Brief (authoritative)**: {{brief}}
+{{/if}}
 {{courseContext}}
 {{agents}}
 

@@ -4,6 +4,9 @@
 
 - **Title**: {{title}}
 - **Description**: {{description}}
+{{#if brief}}
+- **Design Brief (authoritative)**: {{brief}}
+{{/if}}
 - **Key Points**:
   {{keyPoints}}
 

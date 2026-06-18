@@ -13,6 +13,7 @@ export function computeIntentHash(outline: SceneOutline): string {
   const intent = JSON.stringify({
     type: outline.type,
     title: outline.title ?? '',
+    brief: outline.brief ?? '',
     description: outline.description ?? '',
     keyPoints: outline.keyPoints ?? [],
   });

@@ -4,6 +4,14 @@ Create a simulation widget for: {{conceptName}}
 
 {{conceptOverview}}
 
+{{#if brief}}
+## Design Brief (authoritative)
+
+When present, treat this as the authoritative spec for the scene; the fields above are a summary.
+
+{{brief}}
+{{/if}}
+
 ## Key Points
 
 {{keyPoints}}

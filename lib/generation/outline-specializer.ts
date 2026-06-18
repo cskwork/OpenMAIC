@@ -48,7 +48,7 @@ export function derivePblConfig(outline: SceneOutline): NonNullable<SceneOutline
   const skills = outline.keyPoints?.length ? outline.keyPoints : [outline.title];
   return {
     projectTopic: outline.title,
-    projectDescription: outline.description,
+    projectDescription: outline.brief?.trim() || outline.description || outline.title,
     targetSkills: skills,
     issueCount: 3,
   };
@@ -77,9 +77,9 @@ export async function deriveWidgetConfig(
     '- visualization3d: 3D models (molecules, solar system, anatomy, geometry)',
     'Return ONLY JSON: {"widgetType":"<one of the five>","widgetOutline":{"concept":"<short phrase>"}}',
   ].join('\n');
-  const user = `Title: ${outline.title}\nDescription: ${outline.description}\nKey points:\n${(
-    outline.keyPoints ?? []
-  ).join('\n')}`;
+  const user = `Title: ${outline.title}\nBrief: ${outline.brief ?? ''}\nDescription: ${
+    outline.description ?? ''
+  }\nKey points:\n${(outline.keyPoints ?? []).join('\n')}`;
   try {
     const raw = await aiCall(system, user);
     const parsed = parseJsonResponse<{ widgetType?: string; widgetOutline?: WidgetOutline }>(raw);

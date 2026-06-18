@@ -1,5 +1,8 @@
 Title: {{title}}
 Description: {{description}}
+{{#if brief}}
+- **Design Brief (authoritative)**: {{brief}}
+{{/if}}
 Test Points: {{keyPoints}}
 Question Count: {{questionCount}}, Difficulty: {{difficulty}}, Question Types: {{questionTypes}}
 

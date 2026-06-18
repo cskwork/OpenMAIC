@@ -278,6 +278,7 @@ Rules:
 | type              | string                   | ✅       | `"slide"`, `"quiz"`, `"interactive"`, or `"pbl"`                                                 |
 | title             | string                   | ✅       | Scene title, concise and clear                                                                   |
 | description       | string                   | ✅       | 1-2 sentences describing teaching purpose                                                        |
+| brief             | string                   | ✅       | Authoritative natural-language design brief — the PRIMARY content for generation (see "Scene Brief" below) |
 | keyPoints         | string[]                 | ✅       | 3-5 core points                                                                                  |
 | teachingObjective | string                   | ❌       | Corresponding learning objective                                                                 |
 | estimatedDuration | number                   | ❌       | Estimated duration (seconds)                                                                     |
@@ -293,6 +294,18 @@ Rules:
 | widgetType        | string                   | ✅ (for interactive) | Widget type: "simulation", "diagram", "code", "game", "visualization3d"                                                 |
 | widgetOutline     | object                   | ✅ (for interactive) | Widget-specific configuration (see Widget Type Selection)                                                               |
 | pblConfig         | object                   | ❌       | Required for pbl type, contains projectTopic/projectDescription/targetSkills/issueCount/language |
+
+
+### Scene Brief (the primary content of every scene)
+
+For EVERY scene, write `brief`: one rich, specific paragraph (roughly 80–200 words) of flowing natural language that a designer could turn directly into the finished scene. Cover, in prose:
+
+- the single idea this scene must land;
+- the concrete on-screen content, written out — for a slide, the actual text / table rows / formulas; for a quiz, what it assesses and the kind of questions; for an interactive widget, what the learner manipulates and observes; for a pbl scene, the project framing;
+- the intended emphasis / what matters most.
+
+Write the real content, not a meta-description ("a table comparing X" → write the actual rows). On-screen text must be in the course language. `brief` is the authoritative input the downstream generator uses; keep `description` and `keyPoints` as short summaries derived from it.
+
 
 ### quizConfig Structure
 

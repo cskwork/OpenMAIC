@@ -255,3 +255,16 @@ describe('specializeOutline — procedural-skill gating (upstream)', () => {
     expect(out.widgetType).toBe('procedural-skill');
   });
 });
+
+describe('brief as Layer-1 (restructure)', () => {
+  test('brief change invalidates the intent hash', () => {
+    expect(computeIntentHash(base)).not.toBe(computeIntentHash({ ...base, brief: 'a rich brief' }));
+  });
+  test('derivePblConfig prefers brief for projectDescription', () => {
+    const out = derivePblConfig({ ...base, type: 'pbl', brief: 'Build a greenhouse model.' });
+    expect(out.projectDescription).toBe('Build a greenhouse model.');
+  });
+  test('derivePblConfig falls back to description when no brief', () => {
+    expect(derivePblConfig({ ...base, type: 'pbl' }).projectDescription).toBe('How plants make food');
+  });
+});

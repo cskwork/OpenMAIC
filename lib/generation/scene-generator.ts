@@ -736,6 +736,7 @@ async function generateSlideContent(
 
   const prompts = buildPrompt(PROMPT_IDS.SLIDE_CONTENT, {
     title: outline.title,
+    brief: outline.brief?.trim() || '',
     description: outline.description,
     keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
     elements: '（根据要点自动生成）',
@@ -852,6 +853,7 @@ async function generateQuizContent(
 
   const prompts = buildPrompt(PROMPT_IDS.QUIZ_CONTENT, {
     title: outline.title,
+    brief: outline.brief?.trim() || '',
     description: outline.description,
     keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
     questionCount: quizConfig.questionCount,
@@ -1052,6 +1054,7 @@ export async function generateWidgetContent(
       promptId = PROMPT_IDS.SIMULATION_CONTENT;
       variables = {
         conceptName: widgetOutline.concept || outline.title,
+        brief: outline.brief?.trim() || '',
         conceptOverview: outline.description,
         keyPoints: (outline.keyPoints || []).join('\n'),
         variables: widgetOutline.keyVariables?.join(', ') || '',
@@ -1065,6 +1068,7 @@ export async function generateWidgetContent(
       variables = {
         title: outline.title,
         diagramType: widgetOutline.diagramType || 'flowchart',
+        brief: outline.brief?.trim() || '',
         description: outline.description,
         keyPoints: (outline.keyPoints || []).join('\n'),
         languageDirective: languageDirective || '',
@@ -1076,6 +1080,7 @@ export async function generateWidgetContent(
       variables = {
         title: outline.title,
         programmingLanguage: widgetOutline.language || 'python',
+        brief: outline.brief?.trim() || '',
         description: outline.description,
         keyPoints: (outline.keyPoints || []).join('\n'),
         starterCode: '',
@@ -1090,6 +1095,7 @@ export async function generateWidgetContent(
       variables = {
         title: outline.title,
         gameType: widgetOutline.gameType || 'quiz',
+        brief: outline.brief?.trim() || '',
         description: outline.description,
         keyPoints: (outline.keyPoints || []).join('\n'),
         scoring: { correctPoints: 10, speedBonus: 5 },
@@ -1102,6 +1108,7 @@ export async function generateWidgetContent(
       variables = {
         title: outline.title,
         visualizationType: widgetOutline.visualizationType || 'custom',
+        brief: outline.brief?.trim() || '',
         description: outline.description,
         keyPoints: (outline.keyPoints || []).join('\n'),
         objects: widgetOutline.objects || [],
@@ -1120,6 +1127,7 @@ export async function generateWidgetContent(
         title: outline.title,
         procedureType: widgetOutline.procedureType || 'custom',
         task: widgetOutline.task || widgetOutline.concept || outline.title,
+        brief: outline.brief?.trim() || '',
         description: outline.description,
         keyPoints: (outline.keyPoints || []).join('\n'),
         tools: widgetOutline.tools || [],
@@ -1206,6 +1214,7 @@ async function generateWidgetTeacherActions(
 ): Promise<TeacherAction[] | undefined> {
   const prompts = buildPrompt(PROMPT_IDS.WIDGET_TEACHER_ACTIONS, {
     widgetType,
+    brief: outline.brief?.trim() || '',
     description: outline.description,
     keyPoints: (outline.keyPoints || []).join('\n'),
     widgetConfig: JSON.stringify(widgetConfig || {}),
@@ -1264,6 +1273,7 @@ export async function generateSceneActions(
     const prompts = buildPrompt(PROMPT_IDS.SLIDE_ACTIONS, {
       title: outline.title,
       keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
+      brief: outline.brief?.trim() || '',
       description: outline.description,
       elements: elementsText,
       courseContext: buildCourseContext(ctx),
@@ -1294,6 +1304,7 @@ export async function generateSceneActions(
     const prompts = buildPrompt(PROMPT_IDS.QUIZ_ACTIONS, {
       title: outline.title,
       keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
+      brief: outline.brief?.trim() || '',
       description: outline.description,
       questions: questionsText,
       courseContext: buildCourseContext(ctx),
@@ -1321,6 +1332,7 @@ export async function generateSceneActions(
     const prompts = buildPrompt(PROMPT_IDS.INTERACTIVE_ACTIONS, {
       title: outline.title,
       keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
+      brief: outline.brief?.trim() || '',
       description: outline.description,
       conceptName: config?.conceptName || outline.title,
       designIdea: config?.designIdea || '',
@@ -1349,6 +1361,7 @@ export async function generateSceneActions(
     const prompts = buildPrompt(PROMPT_IDS.PBL_ACTIONS, {
       title: outline.title,
       keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
+      brief: outline.brief?.trim() || '',
       description: outline.description,
       projectTopic: pblConfig?.projectTopic || outline.title,
       projectDescription: pblConfig?.projectDescription || outline.description,

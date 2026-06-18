@@ -446,6 +446,8 @@
     "sceneTypeInteractive": "互动",
     "sceneTypePbl": "项目式学习",
     "sceneDescriptionPlaceholder": "简短描述这个场景的目的和内容",
+    "sceneBriefPlaceholder": "设计简报：这一页要讲清什么，把实际内容写出来",
+    "keyPointsToggle": "要点（可选）",
     "quizQuestionCount": "题目数量",
     "quizDifficulty": "难度",
     "quizType": "题型",

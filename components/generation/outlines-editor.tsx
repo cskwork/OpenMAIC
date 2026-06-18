@@ -434,7 +434,10 @@ function SceneRow({
 
   // Auto-resize textareas to content for the typography-first feel.
   useAutoResize(titleRef, outline.title);
-  useAutoResize(descRef, outline.description);
+  useAutoResize(descRef, outline.description ?? '');
+  const briefRef = useRef<HTMLTextAreaElement>(null);
+  useAutoResize(briefRef, outline.brief ?? '');
+  const [kpOpen, setKpOpen] = useState(false);
 
   const addKeyPoint = (raw: string) => {
     const trimmed = raw.trim();
@@ -580,10 +583,26 @@ function SceneRow({
             </div>
           </div>
 
-          {/* Description */}
+          {/* Brief — authoritative scene content (Layer-1) */}
+          <textarea
+            ref={briefRef}
+            value={outline.brief ?? ''}
+            onChange={(event) => onUpdate({ brief: event.target.value })}
+            placeholder={t('generation.sceneBriefPlaceholder')}
+            disabled={disabled}
+            rows={1}
+            className={cn(
+              'block w-full resize-none border-none bg-transparent p-0 text-sm leading-relaxed text-foreground/90',
+              'placeholder:text-muted-foreground/40',
+              'focus:outline-none focus:ring-0',
+              disabled && 'cursor-default',
+            )}
+          />
+
+          {/* Description (short summary) */}
           <textarea
             ref={descRef}
-            value={outline.description}
+            value={outline.description ?? ''}
             onChange={(event) => onUpdate({ description: event.target.value })}
             placeholder={t('generation.sceneDescriptionPlaceholder')}
             disabled={disabled}
@@ -596,7 +615,16 @@ function SceneRow({
             )}
           />
 
-          {/* Key points */}
+          {/* Key points — demoted under a toggle; brief is the primary content */}
+          <button
+            type="button"
+            onClick={() => setKpOpen((v) => !v)}
+            className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground/60 transition-colors hover:text-muted-foreground"
+          >
+            <ChevronDown className={cn('size-3 transition-transform', kpOpen && 'rotate-180')} />
+            {t('generation.keyPointsToggle')}
+          </button>
+          {kpOpen && (
           <div className="flex flex-wrap items-center gap-1.5 pt-1">
             <AnimatePresence initial={false}>
               {(outline.keyPoints ?? []).filter(Boolean).map((point, idx) => (
@@ -635,6 +663,7 @@ function SceneRow({
               />
             )}
           </div>
+          )}
 
           {/* Quiz config (popover) */}
           {outline.type === 'quiz' && !disabled && (

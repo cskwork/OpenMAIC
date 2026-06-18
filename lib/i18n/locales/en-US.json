@@ -446,6 +446,8 @@
     "sceneTypeInteractive": "Interactive",
     "sceneTypePbl": "PBL",
     "sceneDescriptionPlaceholder": "Briefly describe the purpose and content of this scene",
+    "sceneBriefPlaceholder": "Design brief — what this scene should land and its actual content, in prose",
+    "keyPointsToggle": "Key points (optional)",
     "quizQuestionCount": "Question count",
     "quizDifficulty": "Difficulty",
     "quizType": "Question type",
