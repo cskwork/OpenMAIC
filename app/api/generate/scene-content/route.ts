@@ -18,6 +18,7 @@ import type { SceneOutline, PdfImage, ImageMapping } from '@/lib/types/generatio
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { resolveModelFromRequest } from '@/lib/server/resolve-model';
+import { resolveVocationalActive } from '@/lib/config/feature-flags';
 
 const log = createLogger('Scene Content API');
 
@@ -37,6 +38,7 @@ export async function POST(req: NextRequest) {
       stageId,
       agents,
       languageDirective,
+      requirements,
     } = body as {
       outline: SceneOutline;
       allOutlines: SceneOutline[];
@@ -50,6 +52,7 @@ export async function POST(req: NextRequest) {
       stageId: string;
       agents?: AgentInfo[];
       languageDirective?: string;
+      requirements?: { taskEngineMode?: boolean };
     };
 
     // Validate required fields
@@ -70,12 +73,15 @@ export async function POST(req: NextRequest) {
     const outline: SceneOutline = { ...rawOutline };
 
     // ── Model resolution from request headers/body ──
+    // Route per scene-content type (e.g. `scene-content:quiz`); getStageModel
+    // falls back to the base `scene-content` route when the type is unrouted.
+    const stage = outline.type ? (`scene-content:${outline.type}` as const) : 'scene-content';
     const {
       model: languageModel,
       modelInfo,
       modelString,
       thinkingConfig,
-    } = await resolveModelFromRequest(req, body);
+    } = await resolveModelFromRequest(req, body, stage);
     outlineTitle = rawOutline?.title;
     resolvedModelString = modelString;
 
@@ -122,7 +128,10 @@ export async function POST(req: NextRequest) {
     };
 
     // ── Apply fallbacks ──
-    const effectiveOutline = applyOutlineFallbacks(outline, !!languageModel);
+    const vocationalActive = resolveVocationalActive(requirements);
+    const effectiveOutline = applyOutlineFallbacks(outline, !!languageModel, {
+      allowProceduralSkill: vocationalActive,
+    });
 
     // ── Filter images assigned to this outline ──
     let assignedImages: PdfImage[] | undefined;
@@ -155,6 +164,7 @@ export async function POST(req: NextRequest) {
       agents,
       languageDirective,
       thinkingConfig,
+      allowProceduralSkill: vocationalActive,
     });
 
     if (!content) {

@@ -50,13 +50,18 @@
   },
   "import": {
     "classroom": "匯入課堂",
+    "pptx": "匯入 PPTX",
     "parsing": "正在解析 ZIP...",
+    "parsingPptx": "正在解析 PPTX...",
     "validating": "正在驗證資料...",
     "writingMedia": "正在寫入媒體檔案...",
     "writingCourse": "正在寫入課程資料...",
     "success": "課堂匯入成功",
+    "pptxSuccess": "PPTX 解析成功（共 {{count}} 頁，輸出已列印到主控台）",
     "error": {
       "invalidZip": "無效檔案，請選擇有效的 .maic.zip 檔案。",
+      "invalidPptx": "PPTX 解析失敗，請檢查檔案是否有效。",
+      "parserUnavailable": "PPTX 匯入不可用：解析器未部署。請重新執行安裝/同步步驟。",
       "invalidManifest": "無效課堂檔案：manifest.json 缺失或已損壞。",
       "missingData": "無效課堂檔案：缺少必需的課程資料。",
       "storageFull": "匯入失敗：瀏覽器儲存空間已滿，請清理舊課堂後重試。"
@@ -126,6 +131,7 @@
     "voiceLoading": "載入中...",
     "voiceAutoAssign": "聲線將自動分配",
     "noMatchingVoices": "沒有符合的聲音",
+    "noVoice": "無可用音色",
     "searchVoice": "搜尋聲音"
   },
   "proactiveCard": {
@@ -1106,6 +1112,10 @@
     "noVisionWarning": "目前模型不支援視覺能力，圖片仍可放入投影片，但模型無法理解圖片內容來優化選擇和排版",
     "serverConfigured": "服務端",
     "serverConfiguredNotice": "此供應商由服務端託管，無法在此修改。如需使用自己的憑證，請新增一個供應商。",
+    "ttsProviderEnabledLabel": "啟用此提供方",
+    "ttsProviderEnabledHint": "關閉後，此提供方將不會出現在語音選擇器中，也不會被自動指派。",
+    "ttsProviderUnavailableHint": "請先設定此提供方再啟用。",
+    "ttsProviderDisabledByAdmin": "此提供方已被伺服端管理員停用，無法啟用。",
     "optionalOverride": "選填，留空則使用服務端設定",
     "setupNeeded": "請先完成設定",
     "modelNotConfigured": "請選擇一個模型以開始使用",

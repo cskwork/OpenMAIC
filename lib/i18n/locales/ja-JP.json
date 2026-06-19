@@ -50,13 +50,18 @@
   },
   "import": {
     "classroom": "教室をインポート",
+    "pptx": "PPTX をインポート",
     "parsing": "ZIP を解析中...",
+    "parsingPptx": "PPTX を解析中...",
     "validating": "データを検証中...",
     "writingMedia": "メディアファイルを書き込み中...",
     "writingCourse": "コースデータを書き込み中...",
     "success": "教室のインポートが完了しました",
+    "pptxSuccess": "PPTX を解析しました（{{count}} ページ、出力をコンソールに表示しました）",
     "error": {
       "invalidZip": "無効なファイルです。有効な .maic.zip ファイルを選択してください。",
+      "invalidPptx": "PPTX の解析に失敗しました。ファイルが有効か確認してください。",
+      "parserUnavailable": "PPTX インポートは利用できません：パーサーがデプロイされていません。インストール／同期を再実行してください。",
       "invalidManifest": "無効な教室ファイル：manifest.json が見つからないか破損しています。",
       "missingData": "無効な教室ファイル：必要なコースデータが不足しています。",
       "storageFull": "インポート失敗：ブラウザのストレージが一杯です。古い教室を削除してください。"
@@ -126,7 +131,8 @@
     "voiceLoading": "読み込み中...",
     "voiceAutoAssign": "ボイスは自動的に割り当てられます",
     "searchVoice": "音色を検索",
-    "noMatchingVoices": "一致する音色はありません"
+    "noMatchingVoices": "一致する音色はありません",
+    "noVoice": "音声なし"
   },
   "proactiveCard": {
     "discussion": "ディスカッション",
@@ -1195,6 +1201,10 @@
     "noVisionWarning": "現在のモデルは画像認識に対応していません。スライドに画像を配置することは可能ですが、モデルは画像の内容を理解して選択やレイアウトを最適化することができません",
     "serverConfigured": "サーバー",
     "serverConfiguredNotice": "このプロバイダーはサーバーで管理されており、ここでは編集できません。独自の認証情報を使うには、別のプロバイダーを追加してください。",
+    "ttsProviderEnabledLabel": "このプロバイダーを有効化",
+    "ttsProviderEnabledHint": "オフにすると、このプロバイダーは音声選択に表示されず、自動割り当てもされません。",
+    "ttsProviderUnavailableHint": "有効化する前にこのプロバイダーを設定してください。",
+    "ttsProviderDisabledByAdmin": "このプロバイダーはサーバー管理者によって無効化されており、有効化できません。",
     "optionalOverride": "任意 — 空欄の場合はサーバー設定を使用",
     "setupNeeded": "設定が必要です",
     "modelNotConfigured": "モデルを選択して開始してください",

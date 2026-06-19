@@ -50,13 +50,18 @@
   },
   "import": {
     "classroom": "Import Classroom",
+    "pptx": "Import PPTX",
     "parsing": "Parsing ZIP...",
+    "parsingPptx": "Parsing PPTX...",
     "validating": "Validating data...",
     "writingMedia": "Writing media files...",
     "writingCourse": "Writing course data...",
     "success": "Classroom imported successfully",
+    "pptxSuccess": "PPTX parsed successfully ({{count}} slides, output logged to console)",
     "error": {
       "invalidZip": "Invalid file. Please select a valid .maic.zip file.",
+      "invalidPptx": "Failed to parse PPTX. Please check the file is valid.",
+      "parserUnavailable": "PPTX import is unavailable: the parser bundle is not deployed. Re-run install/sync.",
       "invalidManifest": "Invalid classroom file: manifest.json is missing or corrupted.",
       "missingData": "Invalid classroom file: missing required course data.",
       "storageFull": "Import failed: browser storage is full. Try clearing old classrooms."
@@ -126,7 +131,8 @@
     "voiceLoading": "Loading...",
     "voiceAutoAssign": "Voices will be auto-assigned",
     "searchVoice": "Search voices",
-    "noMatchingVoices": "No matching voices"
+    "noMatchingVoices": "No matching voices",
+    "noVoice": "No voice"
   },
   "proactiveCard": {
     "discussion": "Discussion",
@@ -1195,6 +1201,10 @@
     "noVisionWarning": "Current model does not support vision. Images can still be placed in slides, but the model cannot understand image content to optimize selection and layout",
     "serverConfigured": "Server",
     "serverConfiguredNotice": "This provider is managed by the server and can't be edited here. To use your own credentials, add a separate provider.",
+    "ttsProviderEnabledLabel": "Enable this provider",
+    "ttsProviderEnabledHint": "When off, this provider is hidden from the voice picker and never auto-assigned.",
+    "ttsProviderUnavailableHint": "Configure this provider before enabling it.",
+    "ttsProviderDisabledByAdmin": "This provider has been disabled by the server administrator and cannot be enabled.",
     "optionalOverride": "Optional — leave empty to use server config",
     "setupNeeded": "Setup required",
     "modelNotConfigured": "Please select a model to get started",

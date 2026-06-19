@@ -18,6 +18,8 @@ import { createLogger } from '@/lib/logger';
 import { isProviderKeyRequired } from '@/lib/ai/providers';
 import { resolveClassroomWebSearchConfig } from '@/lib/server/web-search-config';
 import { resolveModel } from '@/lib/server/resolve-model';
+import { getStageModel } from '@/lib/server/model-routes';
+import { resolveVocationalActive } from '@/lib/config/feature-flags';
 import { buildSearchQuery } from '@/lib/server/search-query-builder';
 import { formatSearchResultsAsContext, searchWeb } from '@/lib/web-search';
 import type { BaiduSubSources, WebSearchProviderId } from '@/lib/web-search/types';
@@ -183,7 +185,8 @@ export async function generateClassroom(
     modelString,
     providerId,
     apiKey,
-  } = await resolveModel({});
+    thinkingConfig: classroomThinking,
+  } = await resolveModel({ stage: 'generate-classroom' });
   log.info(`Using server-configured model: ${modelString}`);
 
   // Fail fast if the resolved provider has no API key configured
@@ -193,6 +196,14 @@ export async function generateClassroom(
         `Set the appropriate key in .env.local or server-providers.yml (e.g. ${providerId.toUpperCase()}_API_KEY).`,
     );
   }
+
+  // The web-search query rewrite is a light, separable stage operators may route
+  // to a cheaper model. It defaults to the classroom model and is only
+  // re-resolved lazily (inside the web-search branch, and only when a route is
+  // configured). This keeps a misconfigured optional route from aborting all
+  // classroom generation, and skips the extra resolution when web search is off.
+  let searchQueryModel = languageModel;
+  let searchQueryThinking = classroomThinking;
 
   const aiCall: AICallFn = async (systemPrompt, userPrompt, _images) => {
     const result = await callLLM(
@@ -205,6 +216,8 @@ export async function generateClassroom(
         maxOutputTokens: modelInfo?.outputWindow,
       },
       'generate-classroom',
+      undefined,
+      classroomThinking,
     );
     return result.text;
   };
@@ -212,7 +225,7 @@ export async function generateClassroom(
   const searchQueryAiCall: AICallFn = async (systemPrompt, userPrompt, _images) => {
     const result = await callLLM(
       {
-        model: languageModel,
+        model: searchQueryModel,
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
@@ -220,6 +233,8 @@ export async function generateClassroom(
         maxOutputTokens: 256,
       },
       'web-search-query-rewrite',
+      undefined,
+      searchQueryThinking,
     );
     return result.text;
   };
@@ -227,6 +242,7 @@ export async function generateClassroom(
   const requirements: UserRequirements = {
     requirement,
   };
+  const vocationalActive = resolveVocationalActive(requirements);
   const pdfText = pdfContent?.text || undefined;
 
   await options.onProgress?.({
@@ -241,6 +257,24 @@ export async function generateClassroom(
   if (input.enableWebSearch) {
     const webSearchConfig = resolveClassroomWebSearchConfig(input);
     if (webSearchConfig) {
+      // Re-resolve the query-rewrite model only when explicitly routed. If
+      // resolution itself fails (e.g. unknown provider in the route), fall back
+      // to the classroom model here; a route with a missing key resolves fine
+      // and surfaces only later in callLLM, which the outer try/catch below
+      // degrades gracefully — either way the pipeline still works.
+      const rewriteRoute = getStageModel('web-search-query-rewrite');
+      if (rewriteRoute) {
+        try {
+          const rewriteResolved = await resolveModel({ stage: 'web-search-query-rewrite' });
+          searchQueryModel = rewriteResolved.model;
+          searchQueryThinking = rewriteResolved.thinkingConfig;
+        } catch (err) {
+          log.warn(
+            `web-search-query-rewrite route "${rewriteRoute}" unavailable; using classroom model for query rewrite`,
+            err,
+          );
+        }
+      }
       try {
         const searchQuery = await buildSearchQuery(requirement, pdfText, searchQueryAiCall);
 
@@ -296,8 +330,10 @@ export async function generateClassroom(
     throw new Error(outlinesResult.error || 'Failed to generate scene outlines');
   }
 
-  const { languageDirective, outlines } = outlinesResult.data;
-  log.info(`Generated ${outlines.length} scene outlines (languageDirective: ${languageDirective})`);
+  const { languageDirective, courseTitle, outlines } = outlinesResult.data;
+  log.info(
+    `Generated ${outlines.length} scene outlines (languageDirective: ${languageDirective}, courseTitle: ${courseTitle ?? 'n/a'})`,
+  );
 
   await options.onProgress?.({
     step: 'generating_outlines',
@@ -326,7 +362,7 @@ export async function generateClassroom(
   const stageId = nanoid(10);
   const stage: Stage = {
     id: stageId,
-    name: outlines[0]?.title || requirement.slice(0, 50),
+    name: courseTitle || outlines[0]?.title || requirement.slice(0, 50),
     description: undefined,
     languageDirective,
     videoManifest: buildVideoManifestFromOutlines(outlines),
@@ -360,7 +396,9 @@ export async function generateClassroom(
   let generatedScenes = 0;
 
   for (const [index, outline] of outlines.entries()) {
-    const safeOutline = applyOutlineFallbacks(outline, true);
+    const safeOutline = applyOutlineFallbacks(outline, true, {
+      allowProceduralSkill: vocationalActive,
+    });
     const progressStart = 30 + Math.floor((index / Math.max(outlines.length, 1)) * 60);
 
     await options.onProgress?.({
@@ -371,7 +409,11 @@ export async function generateClassroom(
       totalScenes: outlines.length,
     });
 
-    const content = await generateSceneContent(safeOutline, aiCall, { agents, languageDirective });
+    const content = await generateSceneContent(safeOutline, aiCall, {
+      agents,
+      languageDirective,
+      allowProceduralSkill: vocationalActive,
+    });
     if (!content) {
       log.warn(`Skipping scene "${safeOutline.title}" — content generation failed`);
       continue;
