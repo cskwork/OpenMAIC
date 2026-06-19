@@ -303,6 +303,55 @@
       "generating": "생성 중",
       "notGenerated": "생성 안 됨",
       "updated": "업데이트됨"
+    },
+    "background": {
+      "image": "이미지",
+      "label": "배경",
+      "solid": "단색"
+    },
+    "image": {
+      "flipH": "좌우 반전",
+      "flipV": "상하 반전",
+      "replace": "이미지 교체"
+    },
+    "quiz": {
+      "addOption": "선택지 추가",
+      "addQuestion": "문항 추가",
+      "analysisLabel": "해설",
+      "analysisPlaceholder": "문항이 채점된 후 표시됩니다…",
+      "commentPromptLabel": "채점 기준",
+      "commentPromptPlaceholder": "이 주관식 답안을 어떻게 채점해야 하나요?",
+      "deleteOption": "선택지 삭제",
+      "deleteQuestion": "문항 삭제",
+      "empty": "아직 문항이 없습니다",
+      "emptyHint": "위의 “문항 추가” 버튼으로 첫 문항을 만드세요.",
+      "markCorrect": "정답으로 표시",
+      "moveDown": "아래로 이동",
+      "moveUp": "위로 이동",
+      "optionPlaceholder": "선택지 내용",
+      "optionsLabel": "선택지",
+      "pointsLabel": "배점",
+      "questionLabel": "문항",
+      "questionPlaceholder": "문항을 입력하세요…",
+      "reorder": "끌어서 순서 변경",
+      "shortAnswerGradingNote": "주관식은 아래 기준에 따라 항상 AI가 채점합니다.",
+      "typeLabel": "유형",
+      "untitledQuestion": "제목 없는 문항",
+      "hint": {
+        "emptyOption": "문항 {{n}}: 선택지 내용이 비어 있습니다",
+        "emptyText": "문항 {{n}}: 문항 내용을 입력하세요",
+        "fewOptions": "문항 {{n}}: 선택지를 두 개 이상 추가하세요",
+        "noCorrect": "문항 {{n}}: 정답을 표시하세요"
+      },
+      "type": {
+        "multiple": "복수 선택",
+        "short_answer": "주관식",
+        "single": "단일 선택"
+      }
+    },
+    "zorder": {
+      "toFront": "맨 앞으로 가져오기",
+      "toBack": "맨 뒤로 보내기"
     }
   },
   "classroomComplete": {
