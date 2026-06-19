@@ -50,9 +50,14 @@ export async function POST(req: NextRequest) {
     return new Response('message is required', { status: 400 });
   }
 
+  // Resolve via the 'maic-agent' stage so operators can route the editor agent
+  // to a dedicated model via MODEL_ROUTES (per-stage config). When unrouted it
+  // falls back to the client's active frontend model config (x-model headers +
+  // thinkingConfig body), then DEFAULT_MODEL — see resolveModel.
   const { model, modelInfo, thinkingConfig, modelString } = await resolveModelFromRequest(
     req,
     body,
+    'maic-agent',
   );
 
   const aiCall = async (system: string, prompt: string): Promise<string> => {
