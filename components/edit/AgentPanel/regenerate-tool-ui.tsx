@@ -44,7 +44,7 @@ function ScenePill({ sceneId }: { sceneId?: string }) {
   );
   if (!title) return null;
   return (
-    <span className="inline-flex min-w-0 shrink items-center gap-0.5 rounded-md border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10.5px] font-medium text-[#5b1fa8] dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300">
+    <span className="inline-flex min-w-0 max-w-[50%] shrink-0 items-center gap-0.5 rounded-md border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10.5px] font-medium text-[#5b1fa8] dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300">
       <AtSign className="size-2.5 shrink-0 text-violet-500" />
       <span className="truncate">{title}</span>
     </span>
@@ -69,12 +69,6 @@ function ToolRow({
   // Diff/details only after the run completes (design: "diff 仅完成后可展开").
   const expandable = !running && (actions.length > 0 || !!failText || !!result?.details?.sceneId);
 
-  const target = running
-    ? t('edit.regen.running')
-    : failed
-      ? t('edit.regen.noActions')
-      : t('edit.regen.actionsCount', { count: actions.length });
-
   return (
     <div
       className={cn(
@@ -91,13 +85,12 @@ function ToolRow({
         )}
       >
         <Wrench className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="shrink-0 whitespace-nowrap text-[12.5px] font-semibold text-foreground">
+        {/* Title yields first (truncates) so the @scene pill stays readable on a
+            narrow rail; the pill is capped + truncates rather than collapsing. */}
+        <span className="min-w-0 shrink truncate text-[12.5px] font-semibold text-foreground">
           {t('edit.regen.title')}
         </span>
         <ScenePill sceneId={sceneId} />
-        <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-muted-foreground">
-          {target}
-        </span>
 
         {running ? (
           <span className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[10.5px] font-semibold text-[#5b1fa8] dark:bg-violet-500/10 dark:text-violet-300">
