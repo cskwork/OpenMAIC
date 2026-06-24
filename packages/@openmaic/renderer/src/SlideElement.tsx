@@ -80,7 +80,13 @@ export function SlideElement({
     <div
       className="slide-element"
       id={`${idPrefix}${elementInfo.id}`}
-      style={{ zIndex: elementIndex, color: fontColor, fontFamily: fontName }}
+      style={{
+        position: 'absolute',
+        inset: 0,
+        zIndex: elementIndex,
+        color: fontColor,
+        fontFamily: fontName,
+      }}
       onClick={onElementClick ? (e) => onElementClick(elementInfo, e) : undefined}
     >
       {Component === 'text' && elementInfo.type === 'text' && (

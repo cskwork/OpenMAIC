@@ -249,6 +249,60 @@ interface MergedParagraphStyle {
   tabStopsPx?: number[];
 }
 
+function buildMergedParagraphStyle(
+  textBody: TextBody,
+  paragraph: TextParagraph,
+  category: 'title' | 'body' | 'other',
+  placeholder: PlaceholderInfo | undefined,
+  ctx: RenderContext,
+): MergedParagraphStyle {
+  const merged: MergedParagraphStyle = {};
+  const level = paragraph.level;
+
+  // Level 1: master defaultTextStyle
+  mergeParagraphProps(merged, findStyleAtLevel(ctx.master.defaultTextStyle, level));
+
+  // Level 2: master text styles by category
+  const masterTextStyle =
+    category === 'title'
+      ? ctx.master.textStyles.titleStyle
+      : category === 'body'
+        ? ctx.master.textStyles.bodyStyle
+        : ctx.master.textStyles.otherStyle;
+  mergeParagraphProps(merged, findStyleAtLevel(masterTextStyle, level));
+
+  // Level 3: master placeholder lstStyle
+  if (placeholder) {
+    const masterPh = findPlaceholderNode(ctx.master.placeholders, placeholder);
+    if (masterPh) {
+      const lstStyle = getPlaceholderLstStyle(masterPh);
+      mergeParagraphProps(merged, findStyleAtLevel(lstStyle, level));
+    }
+  }
+
+  // Level 4: layout placeholder lstStyle
+  if (placeholder) {
+    const layoutPh = findPlaceholderNode(
+      ctx.layout.placeholders.map((e) => e.node),
+      placeholder,
+    );
+    if (layoutPh) {
+      const lstStyle = getPlaceholderLstStyle(layoutPh);
+      mergeParagraphProps(merged, findStyleAtLevel(lstStyle, level));
+    }
+  }
+
+  // Level 5: shape lstStyle
+  mergeParagraphProps(merged, findStyleAtLevel(textBody.listStyle, level));
+
+  // Level 6: paragraph pPr
+  if (paragraph.properties) {
+    mergeParagraphProps(merged, paragraph.properties);
+  }
+
+  return merged;
+}
+
 function mergeParagraphProps(target: MergedParagraphStyle, pPr: SafeXmlNode): void {
   if (!pPr.exists()) return;
 
@@ -755,6 +809,113 @@ function formatRunTextForHtml(raw: string): string {
   return leadingPrefix + t;
 }
 
+type SupportedTextWarp = 'textArchUp' | 'textArchDown';
+
+function getSupportedTextWarp(textBody: TextBody): SupportedTextWarp | undefined {
+  const warp = textBody.bodyProperties?.child('prstTxWarp');
+  const preset = warp?.exists() ? warp.attr('prst') : undefined;
+  return preset === 'textArchUp' || preset === 'textArchDown' ? preset : undefined;
+}
+
+function textRunToGlyphs(text: string): string[] {
+  return Array.from(text.replace(/\s+/g, ' '));
+}
+
+function bodyTextHeightPx(textBody: TextBody, options: RenderTextBodyOptions | undefined): number {
+  if (!options?.frameHeightPx || options.frameHeightPx <= 0) return 72;
+  const bp = textBody.bodyProperties;
+  const DEFAULT_V_INSET = 45720;
+  const tIns = bp?.numAttr('tIns') ?? DEFAULT_V_INSET;
+  const bIns = bp?.numAttr('bIns') ?? DEFAULT_V_INSET;
+  return Math.max(24, options.frameHeightPx - emuToPx(tIns + bIns));
+}
+
+function renderTextWarp(
+  textBody: TextBody,
+  category: 'title' | 'body' | 'other',
+  placeholder: PlaceholderInfo | undefined,
+  ctx: RenderContext,
+  options: RenderTextBodyOptions | undefined,
+  warp: SupportedTextWarp,
+): string {
+  const glyphs: { text: string; style: string }[] = [];
+
+  for (const paragraph of textBody.paragraphs) {
+    const level = paragraph.level;
+    const merged = buildMergedParagraphStyle(textBody, paragraph, category, placeholder, ctx);
+
+    for (const run of paragraph.runs) {
+      if (run.text === '\n' || run.ommlXml) continue;
+
+      const runStyle: MergedRunStyle = {};
+      if (merged.defRPrs) {
+        for (const drp of merged.defRPrs) mergeRunProps(runStyle, drp, ctx);
+      }
+      if (run.properties) {
+        mergeRunProps(runStyle, run.properties, ctx);
+      }
+      if (runStyle.color === undefined && textBody.listStyle) {
+        const lstStyleLevel = findStyleAtLevel(textBody.listStyle, level);
+        const lstDefRPr = lstStyleLevel.exists() ? lstStyleLevel.child('defRPr') : undefined;
+        if (lstDefRPr?.exists()) {
+          const fallbackStyle: MergedRunStyle = {};
+          mergeRunProps(fallbackStyle, lstDefRPr, ctx);
+          if (fallbackStyle.color !== undefined) runStyle.color = fallbackStyle.color;
+        }
+      }
+
+      let runText = run.text ?? '';
+      if (run.properties) {
+        const symNode = run.properties.child('sym');
+        const symTypeface = symNode.exists() ? symNode.attr('typeface') : undefined;
+        if (isSymbolFont(symTypeface)) {
+          runText = Array.from(runText)
+            .map((ch) => symbolFontCharToUnicode(ch, symTypeface!))
+            .join('');
+        }
+      }
+
+      const style = runStylesToCssString(runStyle, run, options, ctx);
+      for (const ch of textRunToGlyphs(runText)) {
+        glyphs.push({ text: ch, style });
+      }
+    }
+  }
+
+  if (glyphs.length === 0) return '';
+
+  const count = glyphs.length;
+  const totalAngle = Math.min(76, Math.max(40, count * 6.5));
+  const maxAngle = totalAngle / 2;
+  const maxRad = (maxAngle * Math.PI) / 180;
+  const xRadiusPct = Math.min(44, Math.max(30, count * 3.9));
+  const yAmplitudePct = 12;
+  const centerYPct = warp === 'textArchUp' ? 18 : 82;
+  const heightPx = bodyTextHeightPx(textBody, options);
+
+  let html = `<div data-pptx-text-warp="${warp}" style="position: relative;width: 100%;height: ${heightPx.toFixed(2)}px;white-space: nowrap;">`;
+  for (let i = 0; i < glyphs.length; i++) {
+    const ratio = count === 1 ? 0 : (i / (count - 1)) * 2 - 1;
+    const angle = ratio * maxAngle;
+    const rad = (angle * Math.PI) / 180;
+    const curve = maxRad > 0 ? (1 - Math.cos(Math.abs(rad))) / (1 - Math.cos(maxRad)) : 0;
+    const x = 50 + (maxRad > 0 ? (Math.sin(rad) / Math.sin(maxRad)) * xRadiusPct : 0);
+    const y =
+      warp === 'textArchUp'
+        ? centerYPct + yAmplitudePct * curve
+        : centerYPct - yAmplitudePct * curve;
+    const rotation = warp === 'textArchUp' ? angle : -angle;
+    const text = glyphs[i].text === ' ' ? '&nbsp;' : formatRunTextForHtml(glyphs[i].text);
+    const style =
+      `${glyphs[i].style};position: absolute;left: ${x.toFixed(2)}%;top: ${y.toFixed(2)}%;` +
+      `line-height: 1;transform: translate(-50%, -50%) rotate(${rotation.toFixed(2)}deg);` +
+      'transform-origin: center center;white-space: nowrap;';
+    html += `<span style="${style}">${text}</span>`;
+  }
+  html += '</div>';
+  return html;
+}
+
 // ---------------------------------------------------------------------------
 // Main Render Function
 // ---------------------------------------------------------------------------
@@ -798,6 +959,10 @@ export interface RenderTextBodyOptions {
    * stop overshoots the box we cap the indent so a usable text column remains.
    */
   frameWidthPx?: number;
+  /** Text frame height in output CSS coordinates. Used by preset text-warp layouts. */
+  frameHeightPx?: number;
+  /** Force paragraph text to stay on one line when PPT will grow/rotate the box instead of wrapping. */
+  forceNoWrap?: boolean;
 }
 
 /**
@@ -814,7 +979,7 @@ export function renderTextBody(
 
   const category = getPlaceholderCategory(placeholder);
   let bulletCounter = 0;
-  const noWrap = textBody.bodyProperties?.attr('wrap') === 'none';
+  const noWrap = options?.forceNoWrap || textBody.bodyProperties?.attr('wrap') === 'none';
   // ECMA-376: 默认状态下首段的 spcBef 与末段的 spcAft 都要丢掉，只有 bodyPr@spcFirstLastPara="1"
   // 时才把它们当真。我们之前对所有段一律渲染成 margin-top，结果首段被多挤了 spcBef pt，
   // 例如 slide 4 "第一讲 / 初识清华" cell 在 cy=63pt + 17.2pt 上下内边距下只剩 46pt 排两行
@@ -825,6 +990,11 @@ export function renderTextBody(
   const lastParaIdx = textBody.paragraphs.length - 1;
 
   let html = '';
+  const textWarp = getSupportedTextWarp(textBody);
+
+  if (textWarp) {
+    html = renderTextWarp(textBody, category, placeholder, ctx, options, textWarp);
+  } else {
 
   let paraIdx = 0;
   for (const paragraph of textBody.paragraphs) {
@@ -834,48 +1004,7 @@ export function renderTextBody(
     const level = paragraph.level;
 
     // ---- Build merged paragraph style (7-level inheritance) ----
-    const merged: MergedParagraphStyle = {};
-
-    // Level 1: master defaultTextStyle
-    mergeParagraphProps(merged, findStyleAtLevel(ctx.master.defaultTextStyle, level));
-
-    // Level 2: master text styles by category
-    const masterTextStyle =
-      category === 'title'
-        ? ctx.master.textStyles.titleStyle
-        : category === 'body'
-          ? ctx.master.textStyles.bodyStyle
-          : ctx.master.textStyles.otherStyle;
-    mergeParagraphProps(merged, findStyleAtLevel(masterTextStyle, level));
-
-    // Level 3: master placeholder lstStyle
-    if (placeholder) {
-      const masterPh = findPlaceholderNode(ctx.master.placeholders, placeholder);
-      if (masterPh) {
-        const lstStyle = getPlaceholderLstStyle(masterPh);
-        mergeParagraphProps(merged, findStyleAtLevel(lstStyle, level));
-      }
-    }
-
-    // Level 4: layout placeholder lstStyle
-    if (placeholder) {
-      const layoutPh = findPlaceholderNode(
-        ctx.layout.placeholders.map((e) => e.node),
-        placeholder,
-      );
-      if (layoutPh) {
-        const lstStyle = getPlaceholderLstStyle(layoutPh);
-        mergeParagraphProps(merged, findStyleAtLevel(lstStyle, level));
-      }
-    }
-
-    // Level 5: shape lstStyle
-    mergeParagraphProps(merged, findStyleAtLevel(textBody.listStyle, level));
-
-    // Level 6: paragraph pPr
-    if (paragraph.properties) {
-      mergeParagraphProps(merged, paragraph.properties);
-    }
+    const merged = buildMergedParagraphStyle(textBody, paragraph, category, placeholder, ctx);
 
     // ---- Apply paragraph styles (equivalent to paraDiv.style.* in TextRenderer) ----
     const paraCssParts: string[] = [];
@@ -1482,6 +1611,7 @@ export function renderTextBody(
     }
 
     html += closeTag;
+  }
   }
 
   // Apply bodyPr text insets (lIns/rIns/tIns/bIns) as a wrapping div with padding.
