@@ -3,29 +3,25 @@
   "version": "0.1.0",
   "description": "React component for rendering PPTist-style Slide JSON, extracted from OpenMAIC.",
   "type": "module",
-  "main": "./dist/index.cjs",
+  "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": "./dist/index.js"
     },
     "./elements": {
       "types": "./dist/elements/index.d.ts",
-      "import": "./dist/elements/index.js",
-      "require": "./dist/elements/index.cjs"
+      "import": "./dist/elements/index.js"
     },
     "./types": {
       "types": "./dist/types/index.d.ts",
-      "import": "./dist/types/index.js",
-      "require": "./dist/types/index.cjs"
+      "import": "./dist/types/index.js"
     },
     "./snapshot": {
       "types": "./dist/snapshot/index.d.ts",
-      "import": "./dist/snapshot/index.js",
-      "require": "./dist/snapshot/index.cjs"
+      "import": "./dist/snapshot/index.js"
     },
     "./fonts.css": "./fonts.css"
   },
@@ -44,7 +40,7 @@
     "build": "node scripts/generate-fonts-css.mjs && rm -rf dist && rollup -c && tsc --emitDeclarationOnly --declarationDir dist",
     "dev": "rollup -c -w",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "pnpm run build && pnpm run typecheck"
+    "prepublishOnly": "pnpm run build"
   },
   "keywords": [
     "slide",

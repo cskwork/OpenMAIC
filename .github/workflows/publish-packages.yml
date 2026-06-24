@@ -7,7 +7,12 @@ name: Publish @openmaic packages
 # a recursive publish must never touch them.
 #
 # Triggers:
-#   - push a tag like `@openmaic/dsl@0.1.0` (real publish)
+#   - push a tag like `@openmaic/dsl@0.1.0` (real publish). NOTE: any @openmaic/*
+#     tag runs `pnpm -r publish` over all three packages — pnpm skips versions
+#     already on the registry, so in steady state this is idempotent. The tag is a
+#     release marker, not a per-package gate: an unpublished version bump for a
+#     sibling package sitting in the repo will also be published by any tag. Bump
+#     only the package(s) you intend to release in the same change.
 #   - manual run via the Actions tab (dry-run by default; uncheck to publish)
 #
 # Prerequisites (one-time, see issue #778):
@@ -59,6 +64,14 @@ jobs:
           --filter "@openmaic/renderer"
           --filter "@openmaic/importer"
           run build
+
+      # Gate BEFORE any publish: a failure here aborts before a single package
+      # reaches the registry. npm versions are immutable, so this prevents a
+      # partial release (e.g. dsl published, then a sibling's test fails).
+      - name: Test & typecheck (pre-publish gate)
+        run: |
+          pnpm --filter "@openmaic/dsl" --filter "@openmaic/importer" run test
+          pnpm --filter "@openmaic/dsl" --filter "@openmaic/renderer" run typecheck
 
       # Always review tarball contents before any publish.
       - name: Inspect tarball contents (dry-run pack)

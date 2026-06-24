@@ -42,19 +42,22 @@ const entries = {
   'snapshot/index': 'src/snapshot/index.ts',
 };
 
-const buildBundle = (format) => ({
+// ESM-only: @openmaic/dsl (kept external) is ESM-only, so a CJS renderer bundle
+// could not `require('@openmaic/dsl')`. Ship ESM only and don't advertise a
+// `require` entry we can't honor. Consumers use bundlers (Next/Vite) or native ESM.
+const buildBundle = () => ({
   input: entries,
   external,
   onwarn,
   output: {
     dir: 'dist',
-    format,
-    entryFileNames: format === 'cjs' ? '[name].cjs' : '[name].js',
-    chunkFileNames: format === 'cjs' ? 'chunks/[name]-[hash].cjs' : 'chunks/[name]-[hash].js',
+    format: 'es',
+    entryFileNames: '[name].js',
+    chunkFileNames: 'chunks/[name]-[hash].js',
     preserveModulesRoot: 'src',
     sourcemap: true,
   },
   plugins,
 });
 
-export default [buildBundle('es'), buildBundle('cjs')];
+export default buildBundle();
