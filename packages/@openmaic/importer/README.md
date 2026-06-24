@@ -1,5 +1,11 @@
 # 🎨 pptxtojson
 
+> ⚠️ **Browser-only.** This package parses `.pptx` in the browser and depends on
+> DOM APIs (`XMLHttpRequest`, `DOMMatrix`, `Path2D`, via a browser-targeted
+> pdf.js build). It is built for browser / bundler (webpack, Vite, Next client)
+> environments — importing it in a pure Node.js process throws at load. Use it
+> from client code, not from a Node server runtime.
+
 <p>
     <a href="https://www.github.com/pipipi-pikachu/pptxtojson/stargazers" target="_black"><img src="https://img.shields.io/github/stars/pipipi-pikachu/pptxtojson?logo=github" alt="stars" /></a>
     <a href="https://www.github.com/pipipi-pikachu/pptxtojson/network/members" target="_black"><img src="https://img.shields.io/github/forks/pipipi-pikachu/pptxtojson?logo=github" alt="forks" /></a>
