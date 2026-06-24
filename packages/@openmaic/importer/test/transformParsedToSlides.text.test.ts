@@ -6,6 +6,7 @@ describe('transformParsedToSlides · text frame geometry', () => {
   it('does not clamp overflowing width for quarter-turn spAutoFit text', async () => {
     const json = {
       size: { width: 960, height: 540 },
+      themeColors: [],
       slides: [
         {
           fill: { type: 'color', value: '#ffffff' },
@@ -38,7 +39,7 @@ describe('transformParsedToSlides · text frame geometry', () => {
     };
 
     const { slides } = await transformParsedToSlides(
-      json as Parameters<typeof transformParsedToSlides>[0],
+      json as unknown as Parameters<typeof transformParsedToSlides>[0],
       createMockImportContext({ viewportWidth: 1280 }),
     );
 

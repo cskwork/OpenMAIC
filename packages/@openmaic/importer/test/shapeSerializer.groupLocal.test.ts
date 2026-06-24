@@ -36,7 +36,9 @@ describe('shapeSerializer · group 局部坐标的亚像素形状', () => {
       </a:ln>
     `);
 
-    expect(el.type).toBe('shape');
+    if (el.type !== 'shape') {
+      throw new Error(`Expected shape element, got ${el.type}`);
+    }
     expect(el.height).toBeLessThan(0.75);
     expect(el.path).toContain(String(el.height));
     expect(el.borderWidth).toBeGreaterThan(0);
@@ -59,7 +61,9 @@ describe('shapeSerializer · group 局部坐标的亚像素形状', () => {
       true,
     );
 
-    expect(el.type).toBe('text');
+    if (el.type !== 'text') {
+      throw new Error(`Expected text element, got ${el.type}`);
+    }
     expect(el.content).toContain('white-space: nowrap');
   });
 
