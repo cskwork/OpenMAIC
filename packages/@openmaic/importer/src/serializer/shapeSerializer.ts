@@ -822,9 +822,7 @@ export async function renderShape(
   const isConnectorShape = node.source.localName === 'cxnSp';
   const fillKind = node.fill?.localName;
   const hasAreaFill =
-    !!fillKind &&
-    fillKind !== 'noFill' &&
-    (fillKind !== 'grpFill' || !!ctx.groupFillNode);
+    !!fillKind && fillKind !== 'noFill' && (fillKind !== 'grpFill' || !!ctx.groupFillNode);
   // Treat sub-pixel extents as flat only for stroke-like shapes. Group-local
   // custom geometries can have tiny raw extents and later scale into large
   // filled polygons; clearing their fill makes whole bands/maps disappear.

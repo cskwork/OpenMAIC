@@ -63,18 +63,13 @@ describe('shapeSerializer · grpFill 继承父 group 填充', () => {
     const el = await renderShape(
       parseShapeNode(
         parseXml(
-          shapeXml(
-            '<a:grpFill/>',
-            '<a:fillRef idx="1"><a:schemeClr val="accent1"/></a:fillRef>',
-          ),
+          shapeXml('<a:grpFill/>', '<a:fillRef idx="1"><a:schemeClr val="accent1"/></a:fillRef>'),
         ),
       ),
       minimalCtx({
         theme: {
           ...minimalCtx().theme,
-          fillStyles: [
-            parseXml(`<a:solidFill ${NS}><a:srgbClr val="FF0000"/></a:solidFill>`),
-          ],
+          fillStyles: [parseXml(`<a:solidFill ${NS}><a:srgbClr val="FF0000"/></a:solidFill>`)],
         },
       }),
       0,
