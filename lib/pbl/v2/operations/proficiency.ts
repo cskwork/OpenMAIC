@@ -454,7 +454,7 @@ export function analyzeQuizAccuracy(results: PriorQuizResult[]): ProficiencySign
   let totalScored = 0;
   let totalCorrect = 0;
   for (const r of results) {
-    const scored = r.totalQuestions - r.unscoredCount;
+    const scored = r.correctCount + r.incorrectCount;
     if (scored <= 0) continue;
     totalScored += scored;
     totalCorrect += r.correctCount;

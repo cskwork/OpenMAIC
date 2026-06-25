@@ -333,6 +333,24 @@ function orderedMicrotasks(milestone: PBLMilestone): PBLMicrotask[] {
   return milestone.microtasks.slice().sort((a, b) => a.order - b.order);
 }
 
+function nextInstructionTarget(
+  project: PBLProjectV2,
+  milestone: PBLMilestone,
+  microtask: PBLMicrotask,
+): { nextMicrotaskTitle?: string; nextMilestoneTitle?: string } {
+  const tasks = orderedMicrotasks(milestone);
+  const index = tasks.findIndex((t) => t.id === microtask.id);
+  const nextTask = index >= 0 ? tasks[index + 1] : undefined;
+  if (nextTask) {
+    return { nextMicrotaskTitle: nextTask.title };
+  }
+
+  const milestones = project.milestones.slice().sort((a, b) => a.order - b.order);
+  const milestoneIndex = milestones.findIndex((m) => m.id === milestone.id);
+  const nextMilestone = milestoneIndex >= 0 ? milestones[milestoneIndex + 1] : undefined;
+  return { nextMilestoneTitle: nextMilestone?.title };
+}
+
 /** True when advancing `microtaskId` would complete the milestone —
  *  every other microtask is already terminal (completed / skipped). */
 function isLastMicrotaskOfMilestone(milestone: PBLMilestone, microtaskId: string): boolean {
@@ -976,10 +994,32 @@ export function stripLeakedToolJson(text: string): { text: string; changed: bool
   return { text: nextText.trim(), changed };
 }
 
-export function cleanInstructorCommitText(text: string): { text: string; changed: boolean } {
+export function cleanInstructorCommitText(
+  text: string,
+  opts: {
+    nextMicrotaskTitle?: string;
+    nextMilestoneTitle?: string;
+    stripFinalReverseQuestion?: boolean;
+  } = {},
+): { text: string; changed: boolean } {
   const withoutToolJson = stripLeakedToolJson(text);
   const deduped = dedupeAdjacentRepeatedSentences(withoutToolJson.text);
-  return { text: deduped.text, changed: withoutToolJson.changed || deduped.changed };
+  const hasNextContext = !!opts.nextMicrotaskTitle || !!opts.nextMilestoneTitle;
+  const prematureNext = hasNextContext
+    ? stripPrematureNextTaskSetup(deduped.text, opts.nextMicrotaskTitle, opts.nextMilestoneTitle)
+    : { text: deduped.text, stripped: false };
+  const orphanQuestion =
+    opts.stripFinalReverseQuestion || prematureNext.stripped
+      ? stripOrphanTrailingQuestion(prematureNext.text)
+      : { text: prematureNext.text, changed: false };
+  return {
+    text: orphanQuestion.text,
+    changed:
+      withoutToolJson.changed ||
+      deduped.changed ||
+      prematureNext.stripped ||
+      orphanQuestion.changed,
+  };
 }
 
 export function cleanSetupFollowupText(text: string): { text: string; changed: boolean } {
@@ -1551,7 +1591,11 @@ export async function* runInstructorTurn(
   // (e.g. a lone record_observation tool call) — so the client never shows a
   // blank screen with no way to retry.
   // -------------------------------------------------------------------
-  const assistantCommit = cleanInstructorCommitText(assistantText);
+  const assistantCommit = cleanInstructorCommitText(assistantText, {
+    ...nextInstructionTarget(project, milestone, microtask),
+    stripFinalReverseQuestion:
+      phase === 'setup' && !!project.scenario && milestone.scenarioStage === 'wrapup',
+  });
   const shownText = assistantCommit.text;
   if (shownText.trim() && instructor) {
     lastCommittedMessageTs = new Date().toISOString();

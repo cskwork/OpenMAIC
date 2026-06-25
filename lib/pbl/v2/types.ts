@@ -623,8 +623,8 @@ export interface PriorQuizResult {
   /** Short-answer questions without `hasAnswer` cannot be auto-graded
    *  and are excluded from the accuracy ratio. */
   unscoredCount: number;
-  /** `correctCount / (totalQuestions - unscoredCount)`, or null when
-   *  no question was auto-gradable. */
+  /** `correctCount / (correctCount + incorrectCount)`, or null when
+   *  no submitted result was auto-gradable. */
   accuracy: number | null;
 }
 

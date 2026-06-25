@@ -365,6 +365,22 @@ describe('analyzeQuizAccuracy', () => {
     expect(s!.direction).toBe(0);
   });
 
+  it('uses actual scored results when a stored quiz result omits unanswered questions', () => {
+    const r: PriorQuizResult = {
+      sceneId: 'q1',
+      sceneTitle: 'q',
+      totalQuestions: 5,
+      correctCount: 1,
+      incorrectCount: 0,
+      unscoredCount: 0,
+      accuracy: 1,
+    };
+
+    const s = analyzeQuizAccuracy([r]);
+    expect(s!.direction).toBe(1);
+    expect(s!.note).toContain('1/1 correct');
+  });
+
   it('uses cap weight (high pre-PBL trust)', () => {
     const r: PriorQuizResult = {
       sceneId: 'q1',

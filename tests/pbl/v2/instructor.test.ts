@@ -305,6 +305,44 @@ describe('PBL v2 — Instructor advance handoff text cleanup', () => {
     expect(result.text).toBe('可以，这一步已经能把剩余金额显示出来了。');
   });
 
+  it('wires next-task cleanup into committed instructor text when context is provided', () => {
+    const result = cleanInstructorCommitText(
+      [
+        '很好，你已经验证了值传递为什么不会改变原变量。',
+        '',
+        '现在进入第三步：运行程序并观察值传递的局限。我们先运行一次，看看输出。',
+      ].join('\n'),
+      { nextMicrotaskTitle: '运行程序并观察值传递的局限' },
+    );
+
+    expect(result.changed).toBe(true);
+    expect(result.text).toBe('很好，你已经验证了值传递为什么不会改变原变量。');
+  });
+
+  it('does not strip transition language from generic committed text without next-task context', () => {
+    const text = '下一步我们把代码运行一次，看看终端输出是否符合预期。';
+    expect(cleanInstructorCommitText(text)).toEqual({ text, changed: false });
+  });
+
+  it('keeps normal teaching questions unless the commit context asks for statement-only text', () => {
+    const text = '你觉得 input() 返回的是什么类型呢？';
+    expect(cleanInstructorCommitText(text)).toEqual({ text, changed: false });
+    expect(cleanInstructorCommitText(text, { stripFinalReverseQuestion: true })).toEqual({
+      text,
+      changed: false,
+    });
+  });
+
+  it('removes orphan final reverse-questions for statement-only commits', () => {
+    const result = cleanInstructorCommitText(
+      '很好，你已经让程序正确输出了问候。input() 拿到的内容为什么要先存进变量再用呢？',
+      { stripFinalReverseQuestion: true },
+    );
+
+    expect(result.changed).toBe(true);
+    expect(result.text).toBe('很好，你已经让程序正确输出了问候。');
+  });
+
   it('keeps the old-task wrap-up and removes a same-message next-task opener', () => {
     const result = stripPrematureNextTaskSetup(
       [
