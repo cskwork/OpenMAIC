@@ -113,4 +113,31 @@ describe('widget actions direct pipeline', () => {
       }),
     ]);
   });
+
+  it('defaults widget_setState.state to {} when the LLM omits it', async () => {
+    const aiCall: AICallFn = async () =>
+      JSON.stringify([
+        {
+          type: 'action',
+          name: 'widget_setState',
+          params: { content: 'Update the widget.' },
+        },
+      ]);
+    const content = {
+      html: '<!DOCTYPE html><html><body></body></html>',
+      widgetType: 'simulation',
+    } as unknown as GeneratedInteractiveContent;
+
+    const actions = await generateSceneActions(baseInteractiveOutline(), content, aiCall, {
+      languageDirective: 'Teach in English.',
+    });
+
+    expect(actions).toEqual([
+      expect.objectContaining({
+        type: 'widget_setState',
+        state: {},
+        content: 'Update the widget.',
+      }),
+    ]);
+  });
 });
