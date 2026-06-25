@@ -162,6 +162,25 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
     });
   });
 
+  it('falls back to legacy v1 for ordinary PBL when both v2 attempts fail', async () => {
+    const legacyConfig = { agents: [{ id: 'coach' }], issueboard: { issues: [{ id: 'issue-1' }] } };
+
+    generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(new Error('single-call failed'));
+    generatePBLV2ProjectMock.mockRejectedValueOnce(new Error('loop failed'));
+    generatePBLContentMock.mockResolvedValue(legacyConfig);
+
+    const { generateSceneContent } = await import('@/lib/generation/scene-generator');
+    const content = (await generateSceneContent(pblOutline(), vi.fn(), {
+      languageModel: mockModel(),
+      languageDirective: 'Reply in English.',
+    })) as GeneratedPBLContent | null;
+
+    expect(generatePBLV2ProjectSingleCallMock).toHaveBeenCalledTimes(1);
+    expect(generatePBLV2ProjectMock).toHaveBeenCalledTimes(1);
+    expect(generatePBLContentMock).toHaveBeenCalledTimes(1);
+    expect(content).toEqual({ projectConfig: legacyConfig });
+  });
+
   it('does not fall back to legacy v1 when scenario PBL v2 generation fails', async () => {
     generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(new Error('single-call failed'));
     generatePBLV2ProjectMock.mockRejectedValueOnce(new Error('loop failed'));
