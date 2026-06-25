@@ -138,7 +138,7 @@ export function parseActionsFromStructuredOutput(
 
   // Step 7: Filter by allowedActions whitelist (defense in depth for role-based isolation)
   // Catches hallucinated actions not in the agent's permitted set, e.g. a student agent
-  // mimicking spotlight/laser after seeing teacher actions in chat history.
+  // mimicking spotlight/laser after seeing widget actions in chat history.
   if (allowedActions && allowedActions.length > 0) {
     const before = result.length;
     result = result.filter((a) => a.type === 'speech' || allowedActions.includes(a.type));

@@ -9,19 +9,24 @@ function combined(prompt: { system: string; user: string } | null) {
   return `${prompt!.system}\n${prompt!.user}`;
 }
 
-describe('procedural-skill teacher action selector contract', () => {
-  test('widget-teacher-actions prompt documents procedural-skill stable targets', () => {
+describe('procedural-skill widget action selector contract', () => {
+  test('interactive-actions prompt documents procedural-skill stable widget action targets', () => {
     const text = combined(
-      buildPrompt(PROMPT_IDS.WIDGET_TEACHER_ACTIONS, {
+      buildPrompt(PROMPT_IDS.INTERACTIVE_ACTIONS, {
+        title: 'Device Inspection Practice',
+        conceptName: 'Device inspection',
         widgetType: 'procedural-skill',
         description: 'Practice a generic inspection procedure.',
         keyPoints: '1. Follow ordered steps\n2. Check completion criteria',
+        designIdea: 'A procedural practice widget with step controls and progress feedback.',
         widgetConfig: JSON.stringify({
           type: 'procedural-skill',
           task: 'Inspect a training device',
           steps: [{ id: 'step-1', title: 'Inspect visible condition' }],
           successCriteria: ['Device is ready for use'],
         }),
+        courseContext: '',
+        agents: '',
         languageDirective: 'Teach in English.',
       }),
     );
@@ -32,10 +37,10 @@ describe('procedural-skill teacher action selector contract', () => {
     expect(text).toContain('#progress-display');
     expect(text).toContain('#reset-btn');
     expect(text).toContain('completedSteps');
-    expect(text).toContain('highlight');
-    expect(text).toContain('annotation');
-    expect(text).toContain('reveal');
-    expect(text).toContain('setState');
+    expect(text).toContain('widget_highlight');
+    expect(text).toContain('widget_annotation');
+    expect(text).toContain('widget_reveal');
+    expect(text).toContain('widget_setState');
     expect(text).not.toMatch(UNRESOLVED_PLACEHOLDER);
   });
 
