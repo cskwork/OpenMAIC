@@ -489,7 +489,7 @@ function buildHighlights(
   checks: number,
   totalErrors: number,
   toughest: { title: string; errors: number } | null,
-  stageDetails: StageDetail[],
+  _stageDetails: StageDetail[],
 ): Highlight[] {
   const highlights: Highlight[] = [];
   const totalEvidence = unlocks + checks;
