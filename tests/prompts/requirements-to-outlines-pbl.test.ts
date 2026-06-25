@@ -25,6 +25,7 @@ describe('requirements-to-outlines PBL prompt', () => {
     expect(text).toContain('Role-play scenario PBL');
     expect(text).toContain('scenarioRoleplay: true');
     expect(text).toContain('scenarioBrief');
+    expect(text).toContain('downstream runtime switch');
     expect(text).toContain('Omit `scenarioRoleplay` and `scenarioBrief`');
     expect(text).not.toContain('{{');
   });

@@ -224,6 +224,8 @@ Some PBL projects are best learned by *practising an interpersonal or situationa
 
 Leave **both unset** for ordinary build-an-artefact PBL projects (this is the default). Only use `scenarioRoleplay` when the practice of the interaction is the point. This does not change how you choose the scene `type` — it is still `pbl`; these two fields are an optional flavour *inside* a PBL scene.
 
+**Important:** `pblConfig.scenarioRoleplay` is the downstream runtime switch. If the user explicitly asks for a role-play / scenario-simulation PBL, do not return an ordinary PBL; set `scenarioRoleplay: true` and include a concrete `scenarioBrief`.
+
 ---
 
 ## Output Format
