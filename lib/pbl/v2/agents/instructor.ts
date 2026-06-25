@@ -1551,67 +1551,65 @@ export async function* runInstructorTurn(
   // (e.g. a lone record_observation tool call) — so the client never shows a
   // blank screen with no way to retry.
   // -------------------------------------------------------------------
-  if (!mainTurnAdvanced) {
-    const assistantCommit = cleanInstructorCommitText(assistantText);
-    const shownText = assistantCommit.text;
-    if (shownText.trim() && instructor) {
-      lastCommittedMessageTs = new Date().toISOString();
-      const assistantMsg: PBLChatMessage = {
-        id: 'msg_' + Date.now().toString(16) + Math.random().toString(16).slice(2, 6),
-        agentId: instructor.id,
-        roleType: 'instructor',
-        content: shownText,
-        ts: lastCommittedMessageTs,
-        microtaskId: microtask.id,
-      };
-      if (instructorThread) instructorThread.messages.push(assistantMsg);
-      yield {
-        type: 'project_patch',
-        patch: { kind: 'message', message: assistantMsg },
-      };
-    } else if (didAdjustDifficulty && instructor) {
-      // The learner asked to change difficulty and the model adjusted it via the
-      // tool but wrote no text. The tier change is silent (underlying, never
-      // surfaced) AND no chat patch is emitted for a no-op change, so without
-      // this the learner would see nothing at all. Commit a neutral, localized,
-      // tier-agnostic confirmation (it never names beginner/intermediate/advanced)
-      // so the turn always has a visible reply. Only adjust_difficulty triggers
-      // this — record_observation stays silent. Sits BELOW
-      // the prose branch (the model's own text wins) and ABOVE the empty-output
-      // fallback (so a difficulty-only turn shows the ack, not a retry error).
-      lastCommittedMessageTs = new Date().toISOString();
-      const ackMsg: PBLChatMessage = {
-        id: 'msg_' + Date.now().toString(16) + Math.random().toString(16).slice(2, 6),
-        agentId: instructor.id,
-        roleType: 'instructor',
-        content: difficultyAdjustAck(project.language),
-        ts: lastCommittedMessageTs,
-        microtaskId: microtask.id,
-      };
-      if (instructorThread) instructorThread.messages.push(ackMsg);
-      yield {
-        type: 'project_patch',
-        patch: { kind: 'message', message: ackMsg },
-      };
-    } else if (
-      shouldReportEmptyOutput({
-        mainTurnAdvanced,
-        assistantText: shownText,
-        producedAck: didAdjustDifficulty,
-      })
-    ) {
-      // Empty-bubble fallback: the turn produced NOTHING the learner can
-      // perceive — no scenario auto-completion, no committed text, no difficulty
-      // ack. Applies to greeting / setup openers and to any instructing turn
-      // that went silent (for example a lone record_observation). Emitted after
-      // project patches so the client, which aborts the stream on the first
-      // `error` frame, never drops a later patch to a premature error.
-      yield {
-        type: 'error',
-        code: 'EMPTY_LLM_OUTPUT',
-        message: '导师本轮没有产生新的内容。请稍后再试，或者把你的问题再说得具体一些。',
-      };
-    }
+  const assistantCommit = cleanInstructorCommitText(assistantText);
+  const shownText = assistantCommit.text;
+  if (shownText.trim() && instructor) {
+    lastCommittedMessageTs = new Date().toISOString();
+    const assistantMsg: PBLChatMessage = {
+      id: 'msg_' + Date.now().toString(16) + Math.random().toString(16).slice(2, 6),
+      agentId: instructor.id,
+      roleType: 'instructor',
+      content: shownText,
+      ts: lastCommittedMessageTs,
+      microtaskId: microtask.id,
+    };
+    if (instructorThread) instructorThread.messages.push(assistantMsg);
+    yield {
+      type: 'project_patch',
+      patch: { kind: 'message', message: assistantMsg },
+    };
+  } else if (didAdjustDifficulty && instructor) {
+    // The learner asked to change difficulty and the model adjusted it via the
+    // tool but wrote no text. The tier change is silent (underlying, never
+    // surfaced) AND no chat patch is emitted for a no-op change, so without
+    // this the learner would see nothing at all. Commit a neutral, localized,
+    // tier-agnostic confirmation (it never names beginner/intermediate/advanced)
+    // so the turn always has a visible reply. Only adjust_difficulty triggers
+    // this — record_observation stays silent. Sits BELOW
+    // the prose branch (the model's own text wins) and ABOVE the empty-output
+    // fallback (so a difficulty-only turn shows the ack, not a retry error).
+    lastCommittedMessageTs = new Date().toISOString();
+    const ackMsg: PBLChatMessage = {
+      id: 'msg_' + Date.now().toString(16) + Math.random().toString(16).slice(2, 6),
+      agentId: instructor.id,
+      roleType: 'instructor',
+      content: difficultyAdjustAck(project.language),
+      ts: lastCommittedMessageTs,
+      microtaskId: microtask.id,
+    };
+    if (instructorThread) instructorThread.messages.push(ackMsg);
+    yield {
+      type: 'project_patch',
+      patch: { kind: 'message', message: ackMsg },
+    };
+  } else if (
+    shouldReportEmptyOutput({
+      mainTurnAdvanced,
+      assistantText: shownText,
+      producedAck: didAdjustDifficulty,
+    })
+  ) {
+    // Empty-bubble fallback: the turn produced NOTHING the learner can
+    // perceive — no scenario auto-completion, no committed text, no difficulty
+    // ack. Applies to greeting / setup openers and to any instructing turn
+    // that went silent (for example a lone record_observation). Emitted after
+    // project patches so the client, which aborts the stream on the first
+    // `error` frame, never drops a later patch to a premature error.
+    yield {
+      type: 'error',
+      code: 'EMPTY_LLM_OUTPUT',
+      message: '导师本轮没有产生新的内容。请稍后再试，或者把你的问题再说得具体一些。',
+    };
   }
 
   // -------------------------------------------------------------------
@@ -1628,7 +1626,6 @@ export async function* runInstructorTurn(
   // ordinary projects and all other stages are untouched.
   // -------------------------------------------------------------------
   if (
-    !mainTurnAdvanced &&
     phase === 'setup' &&
     !!project.scenario &&
     milestone.scenarioStage === 'wrapup' &&
@@ -1788,7 +1785,6 @@ async function* runSetupFollowup(args: SetupFollowupArgs): AsyncGenerator<PBLSSE
     const assistantText = cleaned.text;
     if (assistantText.startsWith(emittedPreview) && assistantText.length > emittedPreview.length) {
       yield { type: 'token', delta: assistantText.slice(emittedPreview.length) };
-      emittedPreview = assistantText;
     }
     if (finalCleanedChanged) {
       log.info('[setup-followup] cleaned old-task recap from next-task opener.');
