@@ -40,19 +40,34 @@ export function migrateSlideContent(content: SlideContent): SlideContent {
 /**
  * InteractiveContent migration. The legacy widget-actions pipeline persisted a
  * `teacherActions` authoring layer alongside the materialized `actions` stream;
- * that field is now dead (playback reads only `scene.actions`). Drop it from
- * existing documents on load. Pure + idempotent: returns the same reference
- * when there's nothing to drop. No schemaVersion is needed yet — the sole
- * change is removing an inert field, which is naturally idempotent.
+ * that field is now dead (playback reads only `scene.actions`). Legacy documents
+ * carry it in two places — at the top level and nested inside `widgetConfig`
+ * (every WidgetConfig variant used to declare it) — so drop both on load. Pure +
+ * idempotent: returns the same reference when there's nothing to drop. No
+ * schemaVersion is needed yet — the sole change is removing an inert field,
+ * which is naturally idempotent.
  */
 export function migrateInteractiveContent(content: InteractiveContent): InteractiveContent {
-  if (!('teacherActions' in content)) {
+  const legacy = content as InteractiveContent & {
+    teacherActions?: unknown;
+    widgetConfig?: Record<string, unknown> & { teacherActions?: unknown };
+  };
+  const hasTop = 'teacherActions' in legacy;
+  const hasNested = legacy.widgetConfig != null && 'teacherActions' in legacy.widgetConfig;
+  if (!hasTop && !hasNested) {
     return content;
   }
-  const { teacherActions: _teacherActions, ...rest } = content as InteractiveContent & {
-    teacherActions?: unknown;
-  };
-  return rest;
+  const { teacherActions: _top, widgetConfig, ...rest } = legacy;
+  const next = rest as InteractiveContent & { widgetConfig?: Record<string, unknown> };
+  if (widgetConfig !== undefined) {
+    if (hasNested) {
+      const { teacherActions: _nested, ...widgetRest } = widgetConfig;
+      next.widgetConfig = widgetRest;
+    } else {
+      next.widgetConfig = widgetConfig;
+    }
+  }
+  return next;
 }
 
 /**

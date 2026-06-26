@@ -8,9 +8,13 @@ import {
 import type { InteractiveContent, Scene, SlideContent } from '@/lib/types/stage';
 import type { Slide } from '@openmaic/dsl';
 
-// `teacherActions` was removed from InteractiveContent; legacy persisted
-// documents still carry it as an extra runtime key.
-type LegacyInteractiveContent = InteractiveContent & { teacherActions?: unknown[] };
+// `teacherActions` was removed from InteractiveContent and from every
+// WidgetConfig variant; legacy persisted documents still carry it both at the
+// top level and nested inside widgetConfig.
+type LegacyInteractiveContent = Omit<InteractiveContent, 'widgetConfig'> & {
+  teacherActions?: unknown[];
+  widgetConfig?: Record<string, unknown>;
+};
 
 function makeSlide(): Slide {
   return {
@@ -133,6 +137,34 @@ describe('migrateInteractiveContent', () => {
 
   it('returns the same reference when there is nothing to drop', () => {
     const clean = makeInteractiveContent();
+    expect(migrateInteractiveContent(clean)).toBe(clean);
+  });
+
+  it('drops teacherActions nested inside widgetConfig, preserving other config', () => {
+    const legacy = makeInteractiveContent({
+      widgetConfig: { teacherActions: [{ id: 'a' }], variables: [{ name: 'x' }] },
+    });
+    const result = migrateInteractiveContent(legacy) as InteractiveContent & {
+      widgetConfig?: Record<string, unknown>;
+    };
+    expect('teacherActions' in (result.widgetConfig ?? {})).toBe(false);
+    expect(result.widgetConfig).toEqual({ variables: [{ name: 'x' }] });
+  });
+
+  it('drops both top-level and widgetConfig teacherActions', () => {
+    const legacy = makeInteractiveContent({
+      teacherActions: [{ id: 'top' }],
+      widgetConfig: { teacherActions: [{ id: 'nested' }] },
+    });
+    const result = migrateInteractiveContent(legacy) as InteractiveContent & {
+      widgetConfig?: Record<string, unknown>;
+    };
+    expect('teacherActions' in result).toBe(false);
+    expect('teacherActions' in (result.widgetConfig ?? {})).toBe(false);
+  });
+
+  it('returns the same reference when widgetConfig has no teacherActions', () => {
+    const clean = makeInteractiveContent({ widgetConfig: { variables: [] } });
     expect(migrateInteractiveContent(clean)).toBe(clean);
   });
 
