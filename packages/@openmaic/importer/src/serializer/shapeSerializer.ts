@@ -1234,7 +1234,7 @@ function textBodyRenderOptions(
   // Frame width is always useful (clamps the leading tab-fold indent for narrow
   // boxes), independent of whether the shape carries a style/fontRef.
   const frameWidthPx = node.size.w > 0 ? node.size.w : undefined;
-  const frameHeightPx = node.size.h > 0 ? pxToPt(node.size.h) : undefined;
+  const frameHeightPx = node.size.h > 0 ? node.size.h : undefined;
   const shapeStyle = node.source.child('style');
   const fontRef = shapeStyle.exists() ? shapeStyle.child('fontRef') : undefined;
   const fontRefColor =

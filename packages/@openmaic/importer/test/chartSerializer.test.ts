@@ -66,4 +66,34 @@ describe('chartSerializer', () => {
     });
     expect(el.colors[0]).toBe('#6124C3');
   });
+
+  it('keeps blank date-formatted category labels blank', () => {
+    const chartXml = `<c:chartSpace ${NS}>
+      <c:chart><c:plotArea>
+        <c:lineChart>
+          <c:ser>
+            <c:tx><c:strRef><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>累计用户</c:v></c:pt></c:strCache></c:strRef></c:tx>
+            <c:cat><c:numRef><c:numCache><c:formatCode>m&quot;月&quot;d&quot;日&quot;;@</c:formatCode><c:ptCount val="2"/><c:pt idx="0"><c:v>46098</c:v></c:pt><c:pt idx="1"><c:v>   </c:v></c:pt></c:numCache></c:numRef></c:cat>
+            <c:val><c:numRef><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>16504</c:v></c:pt><c:pt idx="1"><c:v>107753</c:v></c:pt></c:numCache></c:numRef></c:val>
+          </c:ser>
+        </c:lineChart>
+      </c:plotArea></c:chart>
+    </c:chartSpace>`;
+
+    const el = chartToElement(
+      chartNode(),
+      minimalCtx({
+        presentation: {
+          charts: new Map([['ppt/charts/chart1.xml', parseXml(chartXml)]]),
+        } as unknown as ReturnType<typeof minimalCtx>['presentation'],
+      }),
+      0,
+    );
+
+    const data = el.data as Exclude<typeof el.data, [number[], number[]]>;
+    expect(data[0].xlabels).toEqual({
+      '0': '3月17日',
+      '1': '   ',
+    });
+  });
 });

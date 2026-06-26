@@ -75,6 +75,7 @@ function extractStringValues(refNode: SafeXmlNode): string[] {
 
 function formatExcelSerialDate(raw: string, formatCode: string): string {
   if (!/m.*月.*d.*日/i.test(formatCode)) return raw;
+  if (raw.trim() === '') return raw;
   const serial = Number(raw);
   if (!Number.isFinite(serial)) return raw;
   const utc = Date.UTC(1899, 11, 30) + serial * 24 * 60 * 60 * 1000;

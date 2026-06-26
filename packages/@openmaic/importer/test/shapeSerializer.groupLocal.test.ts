@@ -13,11 +13,12 @@ function renderShapeXml(
   txBodyInner = '<a:bodyPr/><a:p/>',
   rot = '',
   txBox = false,
+  ext = '<a:ext cx="17870" cy="1871"/>',
 ) {
   const xml = `<p:sp ${NS}>
     <p:nvSpPr><p:cNvPr id="15" name="shape"/><p:cNvSpPr${txBox ? ' txBox="1"' : ''}/><p:nvPr/></p:nvSpPr>
     <p:spPr>
-      <a:xfrm${rot ? ` rot="${rot}"` : ''}><a:off x="821" y="1546"/><a:ext cx="17870" cy="1871"/></a:xfrm>
+      <a:xfrm${rot ? ` rot="${rot}"` : ''}><a:off x="821" y="1546"/>${ext}</a:xfrm>
       ${spPrInner}
     </p:spPr>
     <p:txBody>${txBodyInner}</p:txBody>
@@ -56,7 +57,7 @@ describe('shapeSerializer · group 局部坐标的亚像素形状', () => {
        <a:p>
          <a:pPr algn="ctr"/>
          <a:r><a:rPr sz="800"/><a:t>Copyright © 元知进化Cog Evol. All Rights Reserved</a:t></a:r>
-       </a:p>`,
+      </a:p>`,
       '16200000',
       true,
     );
@@ -96,7 +97,6 @@ describe('shapeSerializer · group 局部坐标的亚像素形状', () => {
       '',
       true,
     );
-
     expect(up.content).toContain('data-pptx-text-warp="textArchUp"');
     expect(up.content).toContain('transform: translate(-50%, -50%) rotate(');
     expect(down.content).toContain('data-pptx-text-warp="textArchDown"');
@@ -117,6 +117,7 @@ describe('shapeSerializer · group 局部坐标的亚像素形状', () => {
        </a:p>`,
       '',
       true,
+      '<a:ext cx="952500" cy="952500"/>',
     );
     const down = await renderShapeXml(
       `
@@ -139,6 +140,7 @@ describe('shapeSerializer · group 局部坐标的亚像素形状', () => {
     const upTops = extractTopPercentages(up.content);
     const downTops = extractTopPercentages(down.content);
 
+    expect(up.content).toContain('height: 90.40px');
     expect(Math.max(...upTops)).toBeLessThanOrEqual(32);
     expect(Math.min(...downTops)).toBeGreaterThanOrEqual(68);
   });
