@@ -32,4 +32,18 @@ describe('SlideElement', () => {
     expect(html).toContain('class="slide-element-hit-target"');
     expect(html).toContain('pointer-events:auto');
   });
+
+  it('keeps read-only rendered elements non-interactive so parent cards can receive clicks', () => {
+    const html = renderToStaticMarkup(
+      createElement(SlideElement, {
+        elementInfo: textElement,
+        elementIndex: 3,
+      }),
+    );
+
+    expect(html).toContain('class="slide-element"');
+    expect(html).toContain('pointer-events:none');
+    expect(html).toContain('class="slide-element-hit-target"');
+    expect(html).not.toContain('pointer-events:auto');
+  });
 });

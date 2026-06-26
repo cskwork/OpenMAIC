@@ -121,7 +121,10 @@ export function SlideElement({
       }}
       onClick={onElementClick ? (e) => onElementClick(elementInfo, e) : undefined}
     >
-      <div className="slide-element-hit-target" style={{ pointerEvents: 'auto' }}>
+      <div
+        className="slide-element-hit-target"
+        style={onElementClick ? { pointerEvents: 'auto' } : undefined}
+      >
         {renderedElement}
       </div>
     </div>
