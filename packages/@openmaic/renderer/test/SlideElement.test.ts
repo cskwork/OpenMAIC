@@ -1,8 +1,8 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import type { PPTTextElement } from '@/packages/@openmaic/dsl/src';
-import { SlideElement } from '@/packages/@openmaic/renderer/src/SlideElement';
+import type { PPTTextElement } from '../../dsl/src';
+import { SlideElement } from '../src/SlideElement';
 
 const textElement: PPTTextElement = {
   id: 'text-1',
