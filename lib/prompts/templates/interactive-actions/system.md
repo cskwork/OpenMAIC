@@ -79,6 +79,14 @@ For procedural-skill widgets, prefer these stable targets when they are present:
 
 For simulation widgets, prefer IDs like `#angle-slider`, `#velocity-slider`, `#result-display`, or selectors from the embedded widget config.
 
+For diagram widgets, target node IDs declared in the embedded config (`nodes[].id`, revealed in `revealOrder`), e.g. `#n1`, `#n2`.
+
+For visualization3d widgets, prefer canonical control IDs: `#canvas-container`, `#controls`, `#zoom-in-btn`, `#zoom-out-btn`, `#speed-slider`, `#reset-btn`, `#info`.
+
+For game widgets, prefer `#start-btn` and the element IDs declared in the embedded widget config.
+
+For any widget type, only use a `target` you can derive from the conventions above or from the embedded widget config. If no stable selector is known for the widget (for example, free-form code widgets), use `widget_setState` or a speech-only beat instead of guessing a `target` that may not exist in the page.
+
 ## Design Principles
 
 The user prompt includes a Course Outline and Position indicator. Use them to determine the tone.

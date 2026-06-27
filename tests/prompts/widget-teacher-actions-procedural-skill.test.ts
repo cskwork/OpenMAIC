@@ -44,6 +44,35 @@ describe('procedural-skill widget action selector contract', () => {
     expect(text).not.toMatch(UNRESOLVED_PLACEHOLDER);
   });
 
+  test('interactive-actions prompt documents stable targets for diagram, game, and visualization3d, and forbids guessing', () => {
+    const text = combined(
+      buildPrompt(PROMPT_IDS.INTERACTIVE_ACTIONS, {
+        title: 'Orbit Explorer',
+        conceptName: 'Orbital mechanics',
+        widgetType: 'visualization3d',
+        description: 'Explore a 3D orbit.',
+        keyPoints: '1. Observe the orbit',
+        designIdea: 'A 3D visualization with zoom and speed controls.',
+        widgetConfig: JSON.stringify({ type: 'visualization3d' }),
+        courseContext: '',
+        agents: '',
+        languageDirective: 'Teach in English.',
+      }),
+    );
+
+    // diagram: node ids from config
+    expect(text).toContain('diagram');
+    expect(text).toContain('revealOrder');
+    // visualization3d canonical controls
+    expect(text).toContain('#zoom-in-btn');
+    expect(text).toContain('#canvas-container');
+    // game
+    expect(text).toContain('#start-btn');
+    // conservative no-guess rule (covers code widgets with no stable selectors)
+    expect(text).toContain('instead of guessing');
+    expect(text).not.toMatch(UNRESOLVED_PLACEHOLDER);
+  });
+
   test('procedural-skill content prompt exposes matching teacher-action targets', () => {
     const text = combined(
       buildPrompt(PROMPT_IDS.PROCEDURAL_SKILL_CONTENT, {
