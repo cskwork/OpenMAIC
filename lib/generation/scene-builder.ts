@@ -222,6 +222,7 @@ export function buildCompleteScene(
       content: {
         type: 'pbl',
         projectConfig: content.projectConfig,
+        ...(content.projectV2 ? { projectV2: content.projectV2 } : {}),
       },
       actions,
       createdAt: Date.now(),

@@ -14,6 +14,7 @@ import type { Scene as DslScene, SceneContent as DslSceneContent } from '@openma
 import type { Action } from '@/lib/types/action';
 import type { WidgetType, WidgetConfig } from '@/lib/types/widgets';
 import type { PBLProjectConfig } from '@/lib/pbl/types';
+import type { PBLProjectV2 } from '@/lib/pbl/v2/types';
 
 export type {
   SceneType,
@@ -75,6 +76,8 @@ export interface InteractiveContent {
 export interface PBLContent {
   type: 'pbl';
   projectConfig: PBLProjectConfig;
+  /** PBL v2 payload used by the new web-PBL runtime, while preserving v1 compatibility. */
+  projectV2?: PBLProjectV2;
 }
 
 /**
