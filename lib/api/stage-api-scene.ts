@@ -45,12 +45,22 @@ export function createSceneAPI(store: StageStore) {
         // Determine order
         const order = params.order ?? state.scenes.length;
 
-        // Create default content or use the provided content
+        // Create default content or use the provided content. `params.type` is
+        // authoritative: reject a `content.type` that disagrees, and pin the
+        // merged content's `type` to it so the scene's discriminant can't be
+        // silently overridden by a partial content override.
         let content: SceneContent;
         if (params.content) {
+          if (params.content.type !== undefined && params.content.type !== params.type) {
+            return {
+              success: false,
+              error: `content.type '${params.content.type}' does not match scene type '${params.type}'`,
+            };
+          }
           content = {
             ...createDefaultContent(params.type),
             ...params.content,
+            type: params.type,
           } as SceneContent;
         } else {
           content = createDefaultContent(params.type);
