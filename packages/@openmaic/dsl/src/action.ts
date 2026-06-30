@@ -276,6 +276,36 @@ export const SYNC_ACTIONS: ActionType[] = [
   'widget_reveal',
 ];
 
+/** Frozen set of every valid {@link ActionType}, for cheap membership checks. */
+export const ACTION_TYPES = [
+  'spotlight',
+  'laser',
+  'play_video',
+  'speech',
+  'wb_open',
+  'wb_draw_text',
+  'wb_draw_shape',
+  'wb_draw_chart',
+  'wb_draw_latex',
+  'wb_draw_table',
+  'wb_draw_line',
+  'wb_draw_code',
+  'wb_edit_code',
+  'wb_clear',
+  'wb_delete',
+  'wb_close',
+  'discussion',
+  'widget_highlight',
+  'widget_setState',
+  'widget_annotation',
+  'widget_reveal',
+] as const satisfies readonly ActionType[];
+
+/** Narrow an unknown value to a valid {@link ActionType}. Pure, no runtime deps. */
+export function isActionType(value: unknown): value is ActionType {
+  return typeof value === 'string' && (ACTION_TYPES as readonly string[]).includes(value);
+}
+
 // ==================== Canvas utility types (non-action) ====================
 
 /**
