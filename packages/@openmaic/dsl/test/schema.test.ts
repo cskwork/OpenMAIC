@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import Ajv from 'ajv';
-// JS codegen helper — no .d.ts; vitest/esbuild resolves it at runtime.
-// @ts-expect-error untyped .mjs helper
+// JS codegen helper (the build-only generator); vitest/esbuild resolves it at
+// runtime and tsc infers its exports via allowJs.
 import { generateSchema } from '../scripts/gen-schema.mjs';
 
 // Generate every root schema once (the generator parses the TS program a single
@@ -44,7 +44,16 @@ describe('generated JSON Schema — SerializedScene', () => {
     type: 'slide',
     title: 't',
     order: 0,
-    content: { type: 'slide', canvas: { id: 'c', viewportSize: 1920, viewportRatio: 0.5625, theme: { themeColors: [], fontColor: '#000', fontName: 'Arial', backgroundColor: '#fff' }, elements: [] } },
+    content: {
+      type: 'slide',
+      canvas: {
+        id: 'c',
+        viewportSize: 1920,
+        viewportRatio: 0.5625,
+        theme: { themeColors: [], fontColor: '#000', fontName: 'Arial', backgroundColor: '#fff' },
+        elements: [],
+      },
+    },
   };
   it('accepts a well-formed slide scene', () => {
     expect(v(slideScene)).toBe(true);

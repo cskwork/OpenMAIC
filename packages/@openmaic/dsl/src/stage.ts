@@ -20,7 +20,12 @@ import type { Action } from './action.js';
 export type SceneType = 'slide' | 'quiz' | 'interactive' | 'pbl';
 
 /** Frozen set of every valid {@link SceneType}, for cheap membership checks. */
-export const SCENE_TYPES = ['slide', 'quiz', 'interactive', 'pbl'] as const satisfies readonly SceneType[];
+export const SCENE_TYPES = [
+  'slide',
+  'quiz',
+  'interactive',
+  'pbl',
+] as const satisfies readonly SceneType[];
 
 // Compile-time exhaustiveness: every SceneType must appear in SCENE_TYPES.
 // `satisfies` above proves the converse (each entry is a valid SceneType); this

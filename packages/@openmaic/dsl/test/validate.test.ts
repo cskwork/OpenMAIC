@@ -1,10 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  validateStage,
-  validateScene,
-  validateAction,
-  type ValidationResult,
-} from '@openmaic/dsl';
+import { validateStage, validateScene, validateAction, type ValidationResult } from '@openmaic/dsl';
 
 function errors(r: ValidationResult): string[] {
   return r.valid ? [] : r.errors.map((e) => e.path);
@@ -12,7 +7,9 @@ function errors(r: ValidationResult): string[] {
 
 describe('validateStage', () => {
   it('accepts a well-formed stage', () => {
-    expect(validateStage({ id: 's', name: 'n', createdAt: 1, updatedAt: 2 })).toEqual({ valid: true });
+    expect(validateStage({ id: 's', name: 'n', createdAt: 1, updatedAt: 2 })).toEqual({
+      valid: true,
+    });
   });
   it('collects every missing required field', () => {
     const r = validateStage({ id: 's' });
@@ -51,7 +48,13 @@ describe('validateScene', () => {
     expect(errors(r)).toContain('/content/type');
   });
   it('validates nested actions and points at the bad one', () => {
-    const r = validateScene({ ...ok, actions: [{ id: 'a', type: 'speech' }, { id: 'b', type: 'nope' }] });
+    const r = validateScene({
+      ...ok,
+      actions: [
+        { id: 'a', type: 'speech' },
+        { id: 'b', type: 'nope' },
+      ],
+    });
     expect(errors(r)).toContain('/actions/1/type');
   });
 });

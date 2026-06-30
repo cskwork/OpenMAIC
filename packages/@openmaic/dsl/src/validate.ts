@@ -20,20 +20,30 @@ export interface ValidationIssue {
   message: string;
 }
 
-export type ValidationResult =
-  | { valid: true }
-  | { valid: false; errors: ValidationIssue[] };
+export type ValidationResult = { valid: true } | { valid: false; errors: ValidationIssue[] };
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-function reqString(o: Record<string, unknown>, key: string, path: string, errors: ValidationIssue[]): void {
-  if (typeof o[key] !== 'string') errors.push({ path: `${path}/${key}`, message: `expected string \`${key}\`` });
+function reqString(
+  o: Record<string, unknown>,
+  key: string,
+  path: string,
+  errors: ValidationIssue[],
+): void {
+  if (typeof o[key] !== 'string')
+    errors.push({ path: `${path}/${key}`, message: `expected string \`${key}\`` });
 }
 
-function reqNumber(o: Record<string, unknown>, key: string, path: string, errors: ValidationIssue[]): void {
-  if (typeof o[key] !== 'number') errors.push({ path: `${path}/${key}`, message: `expected number \`${key}\`` });
+function reqNumber(
+  o: Record<string, unknown>,
+  key: string,
+  path: string,
+  errors: ValidationIssue[],
+): void {
+  if (typeof o[key] !== 'number')
+    errors.push({ path: `${path}/${key}`, message: `expected number \`${key}\`` });
 }
 
 function done(errors: ValidationIssue[]): ValidationResult {
@@ -47,7 +57,10 @@ function checkAction(doc: unknown, path: string, errors: ValidationIssue[]): voi
   }
   reqString(doc, 'id', path, errors);
   if (!isActionType(doc.type)) {
-    errors.push({ path: `${path}/type`, message: `unknown action type: ${JSON.stringify(doc.type)}` });
+    errors.push({
+      path: `${path}/type`,
+      message: `unknown action type: ${JSON.stringify(doc.type)}`,
+    });
   }
 }
 
@@ -63,14 +76,20 @@ function checkScene(doc: unknown, path: string, errors: ValidationIssue[]): void
 
   const sceneType = doc.type;
   if (!isSceneType(sceneType)) {
-    errors.push({ path: `${path}/type`, message: `unknown scene type: ${JSON.stringify(sceneType)}` });
+    errors.push({
+      path: `${path}/type`,
+      message: `unknown scene type: ${JSON.stringify(sceneType)}`,
+    });
   }
 
   const content = doc.content;
   if (!isObject(content)) {
     errors.push({ path: `${path}/content`, message: 'scene `content` must be an object' });
   } else if (!isSceneType(content.type)) {
-    errors.push({ path: `${path}/content/type`, message: `unknown content type: ${JSON.stringify(content.type)}` });
+    errors.push({
+      path: `${path}/content/type`,
+      message: `unknown content type: ${JSON.stringify(content.type)}`,
+    });
   } else {
     // Scene-level and content-level discriminants must agree.
     if (isSceneType(sceneType) && content.type !== sceneType) {
@@ -83,9 +102,15 @@ function checkScene(doc: unknown, path: string, errors: ValidationIssue[]): void
     // app-side kinds (interactive/pbl) carry app-defined shapes that this
     // envelope-level validator deliberately leaves to the consuming app.
     if (content.type === 'slide' && !isObject(content.canvas)) {
-      errors.push({ path: `${path}/content/canvas`, message: 'slide content requires an object `canvas`' });
+      errors.push({
+        path: `${path}/content/canvas`,
+        message: 'slide content requires an object `canvas`',
+      });
     } else if (content.type === 'quiz' && !Array.isArray(content.questions)) {
-      errors.push({ path: `${path}/content/questions`, message: 'quiz content requires a `questions` array' });
+      errors.push({
+        path: `${path}/content/questions`,
+        message: 'quiz content requires a `questions` array',
+      });
     }
   }
 
@@ -101,7 +126,8 @@ function checkScene(doc: unknown, path: string, errors: ValidationIssue[]): void
 /** Validate a {@link Stage} aggregate (course metadata; scenes are separate). */
 export function validateStage(doc: unknown): ValidationResult {
   const errors: ValidationIssue[] = [];
-  if (!isObject(doc)) return { valid: false, errors: [{ path: '/', message: 'stage must be an object' }] };
+  if (!isObject(doc))
+    return { valid: false, errors: [{ path: '/', message: 'stage must be an object' }] };
   reqString(doc, 'id', '', errors);
   reqString(doc, 'name', '', errors);
   reqNumber(doc, 'createdAt', '', errors);
