@@ -26,34 +26,51 @@ export interface ValidationIssue {
 
 export type ValidationResult = { valid: true } | { valid: false; errors: ValidationIssue[] };
 
+/** Runtime kind of a required field, checked with `typeof` / `Array.isArray`. */
+type FieldKind = 'string' | 'number' | 'boolean' | 'object' | 'array';
+
 /**
- * Required fields beyond `ActionBase` (`id`) for each action variant, used for a
- * presence check. Kept in lockstep with the generated `action.schema.json` by a
+ * Required fields beyond `ActionBase` (`id`) for each action variant, with the
+ * runtime kind each must have. Checked for presence AND shape. Kept in lockstep
+ * (both directions, names + kinds) with the generated `action.schema.json` by a
  * test — the schema, derived from the TS types, is the source of truth.
  */
-const ACTION_REQUIRED_FIELDS: Record<ActionType, readonly string[]> = {
-  spotlight: ['elementId'],
-  laser: ['elementId'],
-  play_video: ['elementId'],
-  speech: ['text'],
-  wb_open: [],
-  wb_draw_text: ['content', 'x', 'y'],
-  wb_draw_shape: ['shape', 'x', 'y', 'width', 'height'],
-  wb_draw_chart: ['chartType', 'x', 'y', 'width', 'height', 'data'],
-  wb_draw_latex: ['latex', 'x', 'y'],
-  wb_draw_table: ['x', 'y', 'width', 'height', 'data'],
-  wb_draw_line: ['startX', 'startY', 'endX', 'endY'],
-  wb_draw_code: ['language', 'code', 'x', 'y'],
-  wb_edit_code: ['elementId', 'operation'],
-  wb_clear: [],
-  wb_delete: ['elementId'],
-  wb_close: [],
-  discussion: ['topic'],
-  widget_highlight: ['target'],
-  widget_setState: ['state'],
-  widget_annotation: ['target'],
-  widget_reveal: ['target'],
+const ACTION_REQUIRED_FIELDS: Record<ActionType, Readonly<Record<string, FieldKind>>> = {
+  spotlight: { elementId: 'string' },
+  laser: { elementId: 'string' },
+  play_video: { elementId: 'string' },
+  speech: { text: 'string' },
+  wb_open: {},
+  wb_draw_text: { content: 'string', x: 'number', y: 'number' },
+  wb_draw_shape: { shape: 'string', x: 'number', y: 'number', width: 'number', height: 'number' },
+  wb_draw_chart: {
+    chartType: 'string',
+    x: 'number',
+    y: 'number',
+    width: 'number',
+    height: 'number',
+    data: 'object',
+  },
+  wb_draw_latex: { latex: 'string', x: 'number', y: 'number' },
+  wb_draw_table: { x: 'number', y: 'number', width: 'number', height: 'number', data: 'array' },
+  wb_draw_line: { startX: 'number', startY: 'number', endX: 'number', endY: 'number' },
+  wb_draw_code: { language: 'string', code: 'string', x: 'number', y: 'number' },
+  wb_edit_code: { elementId: 'string', operation: 'string' },
+  wb_clear: {},
+  wb_delete: { elementId: 'string' },
+  wb_close: {},
+  discussion: { topic: 'string' },
+  widget_highlight: { target: 'string' },
+  widget_setState: { state: 'object' },
+  widget_annotation: { target: 'string' },
+  widget_reveal: { target: 'string' },
 };
+
+function matchesKind(value: unknown, kind: FieldKind): boolean {
+  if (kind === 'array') return Array.isArray(value);
+  if (kind === 'object') return isObject(value);
+  return typeof value === kind;
+}
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -96,12 +113,19 @@ function checkAction(doc: unknown, path: string, errors: ValidationIssue[]): voi
     });
     return; // can't check variant fields without a known type
   }
-  for (const field of ACTION_REQUIRED_FIELDS[doc.type]) {
-    if (doc[field] === undefined)
+  for (const [field, kind] of Object.entries(ACTION_REQUIRED_FIELDS[doc.type])) {
+    const value = doc[field];
+    if (value === undefined) {
       errors.push({
         path: `${path}/${field}`,
         message: `${doc.type} action requires \`${field}\``,
       });
+    } else if (!matchesKind(value, kind)) {
+      errors.push({
+        path: `${path}/${field}`,
+        message: `${doc.type} action field \`${field}\` must be ${kind}`,
+      });
+    }
   }
 }
 

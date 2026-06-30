@@ -4,7 +4,7 @@
  * Factory function that creates the scene namespace of the Stage API.
  */
 
-import { makeScene, type Scene, type SceneContent } from '@/lib/types/stage';
+import { makeScene, type Scene, type ScenePatch, type SceneContent } from '@/lib/types/stage';
 import type { StageStore, APIResult, CreateSceneParams } from './stage-api-types';
 import { generateId, validateSceneId, getScene, createDefaultContent } from './stage-api-defaults';
 
@@ -119,7 +119,7 @@ export function createSceneAPI(store: StageStore) {
      * @param updates - Fields to update
      * @returns Whether successful
      */
-    update(sceneId: string, updates: Partial<Scene>): APIResult<boolean> {
+    update(sceneId: string, updates: ScenePatch): APIResult<boolean> {
       try {
         const state = store.getState();
 
@@ -127,9 +127,13 @@ export function createSceneAPI(store: StageStore) {
           return { success: false, error: `Scene not found: ${sceneId}` };
         }
 
-        const newScenes = state.scenes.map((scene) =>
-          scene.id === sceneId ? { ...scene, ...updates, updatedAt: Date.now() } : scene,
-        );
+        const newScenes = state.scenes.map((scene) => {
+          if (scene.id !== sceneId) return scene;
+          // Rebind `type` to the (possibly updated) content's kind so a
+          // content-only or type-only patch can't desync the discriminant.
+          const content = updates.content ?? scene.content;
+          return makeScene({ ...scene, ...updates, updatedAt: Date.now() }, content);
+        });
 
         store.setState({ scenes: newScenes });
 

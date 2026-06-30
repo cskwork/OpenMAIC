@@ -82,6 +82,11 @@ describe('validateAction', () => {
     const d = validateAction({ id: 'a', type: 'discussion' });
     expect(errors(d)).toContain('/topic');
   });
+  it('flags a variant-required field of the wrong type', () => {
+    // present but mis-typed: elementId must be a string, not a number.
+    const r = validateAction({ id: 'a', type: 'spotlight', elementId: 123 });
+    expect(errors(r)).toContain('/elementId');
+  });
   it('requires a string id', () => {
     const r = validateAction({ type: 'laser', elementId: 'e' });
     expect(errors(r)).toContain('/id');

@@ -72,29 +72,62 @@ describe('generated JSON Schema — SerializedScene', () => {
 
 describe('validateAction variant fields stay in lockstep with the Action schema', () => {
   // The schema is generated from the TS types, so it is the source of truth for
-  // each variant's required fields. This pins the hand-written required-field
-  // map in validate.ts to it: if an interface gains/loses a required field, the
-  // schema changes and this fails until validate.ts is updated.
+  // each variant's required fields and their types. These checks pin the
+  // hand-written required-field map in validate.ts to it BOTH ways: it cannot
+  // under-list (a schema-required field validateAction ignores), over-list (an
+  // optional field validateAction wrongly demands), or mis-type a field.
   const schema = schemas.Action as {
     definitions: Record<
       string,
       {
         anyOf?: { $ref: string }[];
-        properties?: Record<string, { const?: string }>;
+        properties?: Record<string, { const?: string; type?: string }>;
         required?: string[];
       }
     >;
   };
+  const GOOD: Record<string, unknown> = {
+    string: 's',
+    number: 1,
+    boolean: true,
+    object: {},
+    array: [],
+  };
+  const BAD: Record<string, unknown> = {
+    string: 1,
+    number: 's',
+    boolean: 's',
+    object: 's',
+    array: {},
+  };
+  const paths = (doc: unknown) => {
+    const r = validateAction(doc);
+    return r.valid ? [] : r.errors.map((e) => e.path);
+  };
+
   const branches = schema.definitions.Action.anyOf ?? [];
   for (const branch of branches) {
     const def = schema.definitions[branch.$ref.split('/').pop() as string];
     const type = def.properties?.type?.const;
     if (!type) continue;
     const required = (def.required ?? []).filter((f) => f !== 'id' && f !== 'type');
-    it(`validateAction enforces ${type}'s required fields [${required.join(', ')}]`, () => {
-      const r = validateAction({ id: 'a', type });
-      const paths = r.valid ? [] : r.errors.map((e) => e.path);
-      for (const f of required) expect(paths).toContain(`/${f}`);
+    const kinds = Object.fromEntries(required.map((f) => [f, def.properties?.[f]?.type]));
+
+    it(`validateAction accepts a fully-typed ${type} (no over-listing)`, () => {
+      const good = Object.fromEntries(required.map((f) => [f, GOOD[kinds[f] ?? 'string']]));
+      expect(validateAction({ id: 'a', type, ...good })).toEqual({ valid: true });
+    });
+
+    it(`validateAction flags ${type}'s missing/mis-typed required fields [${required.join(', ')}]`, () => {
+      for (const f of required) {
+        // missing → flagged
+        expect(paths({ id: 'a', type })).toContain(`/${f}`);
+        // present but wrong-typed → flagged
+        const st = kinds[f];
+        if (typeof st === 'string' && st in BAD) {
+          expect(paths({ id: 'a', type, [f]: BAD[st] })).toContain(`/${f}`);
+        }
+      }
     });
   }
 });
