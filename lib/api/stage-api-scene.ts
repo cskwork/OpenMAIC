@@ -4,7 +4,7 @@
  * Factory function that creates the scene namespace of the Stage API.
  */
 
-import type { Scene, SceneContent } from '@/lib/types/stage';
+import { makeScene, type Scene, type SceneContent } from '@/lib/types/stage';
 import type { StageStore, APIResult, CreateSceneParams } from './stage-api-types';
 import { generateId, validateSceneId, getScene, createDefaultContent } from './stage-api-defaults';
 
@@ -56,17 +56,18 @@ export function createSceneAPI(store: StageStore) {
           content = createDefaultContent(params.type);
         }
 
-        const newScene: Scene = {
-          id: sceneId,
-          stageId: state.stage.id,
-          type: params.type,
-          title: params.title,
-          order,
+        const newScene: Scene = makeScene(
+          {
+            id: sceneId,
+            stageId: state.stage.id,
+            title: params.title,
+            order,
+            actions: params.actions,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          },
           content,
-          actions: params.actions,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        };
+        );
 
         const newScenes = [...state.scenes, newScene].sort((a, b) => a.order - b.order);
 

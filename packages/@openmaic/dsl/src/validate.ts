@@ -1,27 +1,59 @@
 /**
  * Pure, dependency-free structural validators for the slide DSL contract.
  *
- * These are cheap, zero-dependency *structural pre-checks*: they verify object
- * shape, the envelope's required fields, and that discriminants are known
- * contract values. They are a deliberate **strict subset** of the shipped JSON
- * Schema (`@openmaic/dsl/schema/*`): passing a validator does NOT prove a
- * document is schema-valid. The JSON Schema is the authoritative, exhaustive
- * per-field validator (it checks variant-specific fields like an action's
- * `elementId`); reach for it, with your own validator (e.g. ajv), at real trust
- * boundaries (untrusted LLM / agent output, persistence). These functions add
- * no dependency and describe the same contract shape — the schema just checks
- * more of it. No runtime dependencies.
+ * This is the contract's authoritative, zero-dependency validation boundary for
+ * in-process (TS / JS) producers and consumers — generators, importers, the
+ * runtime engine. It checks object shape, required fields (including each action
+ * variant's), known discriminants, and the scene `type` <-> `content` binding
+ * that the public {@link Scene} type enforces. Producers can rely on it without
+ * shipping a schema validator, because it adds no runtime dependency.
+ *
+ * The shipped JSON Schema (`@openmaic/dsl/schema/*`) is the cross-language
+ * mirror of the same contract — reach for it from non-TS consumers, or when you
+ * want exhaustive value-level (type / format) checking. These validators are a
+ * structural subset (presence + discriminants); the schema additionally checks
+ * each field's value shape. Both describe the same contract. No runtime
+ * dependencies.
  */
 import { isActionType } from './action.js';
-import { isSceneType } from './stage.js';
+import type { ActionType } from './action.js';
 
 export interface ValidationIssue {
-  /** JSON-pointer-ish path to the offending value, e.g. `/actions/0/type`. */
+  /** JSON-pointer-ish path to the offending value, e.g. `/actions/0/elementId`. */
   path: string;
   message: string;
 }
 
 export type ValidationResult = { valid: true } | { valid: false; errors: ValidationIssue[] };
+
+/**
+ * Required fields beyond `ActionBase` (`id`) for each action variant, used for a
+ * presence check. Kept in lockstep with the generated `action.schema.json` by a
+ * test — the schema, derived from the TS types, is the source of truth.
+ */
+const ACTION_REQUIRED_FIELDS: Record<ActionType, readonly string[]> = {
+  spotlight: ['elementId'],
+  laser: ['elementId'],
+  play_video: ['elementId'],
+  speech: ['text'],
+  wb_open: [],
+  wb_draw_text: ['content', 'x', 'y'],
+  wb_draw_shape: ['shape', 'x', 'y', 'width', 'height'],
+  wb_draw_chart: ['chartType', 'x', 'y', 'width', 'height', 'data'],
+  wb_draw_latex: ['latex', 'x', 'y'],
+  wb_draw_table: ['x', 'y', 'width', 'height', 'data'],
+  wb_draw_line: ['startX', 'startY', 'endX', 'endY'],
+  wb_draw_code: ['language', 'code', 'x', 'y'],
+  wb_edit_code: ['elementId', 'operation'],
+  wb_clear: [],
+  wb_delete: ['elementId'],
+  wb_close: [],
+  discussion: ['topic'],
+  widget_highlight: ['target'],
+  widget_setState: ['state'],
+  widget_annotation: ['target'],
+  widget_reveal: ['target'],
+};
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -62,6 +94,14 @@ function checkAction(doc: unknown, path: string, errors: ValidationIssue[]): voi
       path: `${path}/type`,
       message: `unknown action type: ${JSON.stringify(doc.type)}`,
     });
+    return; // can't check variant fields without a known type
+  }
+  for (const field of ACTION_REQUIRED_FIELDS[doc.type]) {
+    if (doc[field] === undefined)
+      errors.push({
+        path: `${path}/${field}`,
+        message: `${doc.type} action requires \`${field}\``,
+      });
   }
 }
 
@@ -75,38 +115,37 @@ function checkScene(doc: unknown, path: string, errors: ValidationIssue[]): void
   reqString(doc, 'title', path, errors);
   reqNumber(doc, 'order', path, errors);
 
-  if (!isSceneType(doc.type)) {
+  // The scene `type` is bound to its `content` (see `Scene`): a slide scene
+  // carries slide content, a quiz scene quiz content. The contract owns the
+  // slide/quiz kinds; app-widened kinds validate their own scenes.
+  const t = doc.type;
+  if (t !== 'slide' && t !== 'quiz') {
     errors.push({
       path: `${path}/type`,
-      message: `unknown scene type: ${JSON.stringify(doc.type)}`,
+      message: `unknown scene type: ${JSON.stringify(t)} (the contract owns 'slide' and 'quiz')`,
     });
   }
 
-  // `content` must be one of the contract-owned content kinds (slide/quiz),
-  // mirroring `SceneContent` in the public type and the generated schema. App
-  // widened content kinds (interactive/pbl) are the consuming app's to validate.
-  // The scene-level `type` and `content.type` are validated independently — the
-  // public `Scene` type does not bind them, so neither does this validator.
   const content = doc.content;
   if (!isObject(content)) {
     errors.push({ path: `${path}/content`, message: 'scene `content` must be an object' });
-  } else if (content.type === 'slide') {
-    if (!isObject(content.canvas))
+  } else if (t === 'slide' || t === 'quiz') {
+    if (content.type !== t) {
+      errors.push({
+        path: `${path}/content/type`,
+        message: `content type ${JSON.stringify(content.type)} does not match scene type ${JSON.stringify(t)}`,
+      });
+    } else if (t === 'slide' && !isObject(content.canvas)) {
       errors.push({
         path: `${path}/content/canvas`,
         message: 'slide content requires an object `canvas`',
       });
-  } else if (content.type === 'quiz') {
-    if (!Array.isArray(content.questions))
+    } else if (t === 'quiz' && !Array.isArray(content.questions)) {
       errors.push({
         path: `${path}/content/questions`,
         message: 'quiz content requires a `questions` array',
       });
-  } else {
-    errors.push({
-      path: `${path}/content/type`,
-      message: `unknown content type: ${JSON.stringify(content.type)} (expected 'slide' or 'quiz')`,
-    });
+    }
   }
 
   if (doc.actions !== undefined) {
@@ -137,7 +176,7 @@ export function validateScene(doc: unknown): ValidationResult {
   return done(errors);
 }
 
-/** Validate a single {@link Action}. */
+/** Validate a single {@link Action}, including its variant-required fields. */
 export function validateAction(doc: unknown): ValidationResult {
   const errors: ValidationIssue[] = [];
   checkAction(doc, '', errors);

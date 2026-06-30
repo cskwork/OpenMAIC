@@ -42,24 +42,24 @@ describe('validateScene', () => {
     const r = validateScene({ ...ok, type: 'quiz', content: { type: 'quiz' } });
     expect(errors(r)).toContain('/content/questions');
   });
-  it('flags app-widened content kinds (contract owns only slide/quiz)', () => {
+  it('flags app-widened scene kinds (contract owns only slide/quiz)', () => {
     const r = validateScene({ ...ok, type: 'pbl', content: { type: 'pbl' } });
-    expect(errors(r)).toContain('/content/type');
+    expect(errors(r)).toContain('/type');
   });
-  it('does not bind scene.type to content.type (the public Scene type does not either)', () => {
-    // The contract leaves scene/content agreement out of the type, so the
-    // structural validator does too; per-shape rules live in the JSON Schema.
-    expect(
-      validateScene({ ...ok, type: 'quiz', content: { type: 'slide', canvas: { id: 'c' } } }),
-    ).toEqual({
-      valid: true,
+  it('flags a scene whose content.type disagrees with its type', () => {
+    const r = validateScene({
+      ...ok,
+      type: 'quiz',
+      content: { type: 'slide', canvas: { id: 'c' } },
     });
+    expect(r.valid).toBe(false);
+    expect(errors(r)).toContain('/content/type');
   });
   it('validates nested actions and points at the bad one', () => {
     const r = validateScene({
       ...ok,
       actions: [
-        { id: 'a', type: 'speech' },
+        { id: 'a', type: 'speech', text: 'hi' },
         { id: 'b', type: 'nope' },
       ],
     });
@@ -68,15 +68,22 @@ describe('validateScene', () => {
 });
 
 describe('validateAction', () => {
-  it('accepts a known action type', () => {
-    expect(validateAction({ id: 'a', type: 'spotlight' })).toEqual({ valid: true });
+  it('accepts a well-formed action (variant fields present)', () => {
+    expect(validateAction({ id: 'a', type: 'spotlight', elementId: 'e' })).toEqual({ valid: true });
   });
   it('rejects an unknown action type', () => {
     const r = validateAction({ id: 'a', type: 'frobnicate' });
     expect(errors(r)).toContain('/type');
   });
+  it('flags a known action type missing a variant-required field', () => {
+    // cosarah's example: a spotlight with no elementId is unusable at runtime.
+    const r = validateAction({ id: 'a', type: 'spotlight' });
+    expect(errors(r)).toContain('/elementId');
+    const d = validateAction({ id: 'a', type: 'discussion' });
+    expect(errors(d)).toContain('/topic');
+  });
   it('requires a string id', () => {
-    const r = validateAction({ type: 'laser' });
+    const r = validateAction({ type: 'laser', elementId: 'e' });
     expect(errors(r)).toContain('/id');
   });
 });

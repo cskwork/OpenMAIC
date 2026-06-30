@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import Ajv from 'ajv';
+import { validateAction } from '@openmaic/dsl';
 // JS codegen helper (the build-only generator); vitest/esbuild resolves it at
 // runtime and tsc infers its exports via allowJs.
 import { generateSchema } from '../scripts/gen-schema.mjs';
@@ -64,4 +65,36 @@ describe('generated JSON Schema — SerializedScene', () => {
   it('rejects content that is not a contract content kind (slide/quiz)', () => {
     expect(v({ ...slideScene, content: { type: 'pbl' } })).toBe(false);
   });
+  it('rejects a scene whose type disagrees with its content (type<->content bound)', () => {
+    expect(v({ ...slideScene, type: 'quiz' })).toBe(false);
+  });
+});
+
+describe('validateAction variant fields stay in lockstep with the Action schema', () => {
+  // The schema is generated from the TS types, so it is the source of truth for
+  // each variant's required fields. This pins the hand-written required-field
+  // map in validate.ts to it: if an interface gains/loses a required field, the
+  // schema changes and this fails until validate.ts is updated.
+  const schema = schemas.Action as {
+    definitions: Record<
+      string,
+      {
+        anyOf?: { $ref: string }[];
+        properties?: Record<string, { const?: string }>;
+        required?: string[];
+      }
+    >;
+  };
+  const branches = schema.definitions.Action.anyOf ?? [];
+  for (const branch of branches) {
+    const def = schema.definitions[branch.$ref.split('/').pop() as string];
+    const type = def.properties?.type?.const;
+    if (!type) continue;
+    const required = (def.required ?? []).filter((f) => f !== 'id' && f !== 'type');
+    it(`validateAction enforces ${type}'s required fields [${required.join(', ')}]`, () => {
+      const r = validateAction({ id: 'a', type });
+      const paths = r.valid ? [] : r.errors.map((e) => e.path);
+      for (const f of required) expect(paths).toContain(`/${f}`);
+    });
+  }
 });
