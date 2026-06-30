@@ -1,15 +1,16 @@
 /**
  * Pure, dependency-free structural validators for the slide DSL contract.
  *
- * Lightweight, fail-loud boundary checks (LLM / agent output, persistence):
- * they verify object shape, the structural envelope's required fields, that
- * discriminants are known, and that a scene's `type` agrees with its
- * `content.type`. They do NOT exhaustively check per-variant fields, and the
- * app-side `interactive` / `pbl` content kinds (whose shapes live in the
- * consuming app, not this contract) are validated only at the envelope level.
- * For exhaustive per-field validation of the contract-owned kinds, use the
- * shipped JSON Schema (`@openmaic/dsl/schema/*`) with your own validator
- * (e.g. ajv). No runtime dependencies.
+ * These are cheap, zero-dependency *structural pre-checks*: they verify object
+ * shape, the envelope's required fields, and that discriminants are known
+ * contract values. They are a deliberate **strict subset** of the shipped JSON
+ * Schema (`@openmaic/dsl/schema/*`): passing a validator does NOT prove a
+ * document is schema-valid. The JSON Schema is the authoritative, exhaustive
+ * per-field validator (it checks variant-specific fields like an action's
+ * `elementId`); reach for it, with your own validator (e.g. ajv), at real trust
+ * boundaries (untrusted LLM / agent output, persistence). These functions add
+ * no dependency and describe the same contract shape — the schema just checks
+ * more of it. No runtime dependencies.
  */
 import { isActionType } from './action.js';
 import { isSceneType } from './stage.js';
@@ -74,44 +75,38 @@ function checkScene(doc: unknown, path: string, errors: ValidationIssue[]): void
   reqString(doc, 'title', path, errors);
   reqNumber(doc, 'order', path, errors);
 
-  const sceneType = doc.type;
-  if (!isSceneType(sceneType)) {
+  if (!isSceneType(doc.type)) {
     errors.push({
       path: `${path}/type`,
-      message: `unknown scene type: ${JSON.stringify(sceneType)}`,
+      message: `unknown scene type: ${JSON.stringify(doc.type)}`,
     });
   }
 
+  // `content` must be one of the contract-owned content kinds (slide/quiz),
+  // mirroring `SceneContent` in the public type and the generated schema. App
+  // widened content kinds (interactive/pbl) are the consuming app's to validate.
+  // The scene-level `type` and `content.type` are validated independently — the
+  // public `Scene` type does not bind them, so neither does this validator.
   const content = doc.content;
   if (!isObject(content)) {
     errors.push({ path: `${path}/content`, message: 'scene `content` must be an object' });
-  } else if (!isSceneType(content.type)) {
-    errors.push({
-      path: `${path}/content/type`,
-      message: `unknown content type: ${JSON.stringify(content.type)}`,
-    });
-  } else {
-    // Scene-level and content-level discriminants must agree.
-    if (isSceneType(sceneType) && content.type !== sceneType) {
-      errors.push({
-        path: `${path}/content/type`,
-        message: `content type ${JSON.stringify(content.type)} does not match scene type ${JSON.stringify(sceneType)}`,
-      });
-    }
-    // Only the contract-owned content kinds (slide/quiz) are validated here;
-    // app-side kinds (interactive/pbl) carry app-defined shapes that this
-    // envelope-level validator deliberately leaves to the consuming app.
-    if (content.type === 'slide' && !isObject(content.canvas)) {
+  } else if (content.type === 'slide') {
+    if (!isObject(content.canvas))
       errors.push({
         path: `${path}/content/canvas`,
         message: 'slide content requires an object `canvas`',
       });
-    } else if (content.type === 'quiz' && !Array.isArray(content.questions)) {
+  } else if (content.type === 'quiz') {
+    if (!Array.isArray(content.questions))
       errors.push({
         path: `${path}/content/questions`,
         message: 'quiz content requires a `questions` array',
       });
-    }
+  } else {
+    errors.push({
+      path: `${path}/content/type`,
+      message: `unknown content type: ${JSON.stringify(content.type)} (expected 'slide' or 'quiz')`,
+    });
   }
 
   if (doc.actions !== undefined) {

@@ -38,11 +38,14 @@ import { isTextElement, DSL_VERSION, SYNC_ACTIONS } from '@openmaic/dsl';
 
 ## Runtime layer (schema + validators)
 
-The contract is enforceable in two complementary ways — both honoring the
-zero-runtime-dependency invariant:
+The contract is enforceable at two layers — an authoritative schema plus a
+cheap structural pre-check — both generated from / aligned to the same public TS
+types, and both honoring the zero-runtime-dependency invariant:
 
-1. **JSON Schema artifacts** — `Stage`, the default `Scene<Action, SceneContent>`,
-   and `Action` are emitted as standalone JSON Schema at build time and shipped:
+1. **JSON Schema artifacts (authoritative)** — `Stage`, the default
+   `Scene<Action, SceneContent>`, and `Action` are emitted as standalone JSON
+   Schema at build time and shipped. This is the exhaustive, per-field validator
+   — use it at real trust boundaries (untrusted LLM / agent output, persistence):
 
    ```ts
    import stageSchema from '@openmaic/dsl/schema/stage.schema.json' with { type: 'json' };
@@ -55,15 +58,16 @@ zero-runtime-dependency invariant:
    `ts-json-schema-generator`, a **devDependency** — it never enters the runtime
    dependency set.
 
-2. **Pure validators** — for the common in-process case, `validate*` are
-   hand-written, zero-dependency, fail-loud structural checks layered on the
-   guards. They verify object shape, the structural envelope's required fields,
-   known discriminants, and that a scene's `type` agrees with its
-   `content.type` — ideal as a gate on untrusted input (LLM / agent output) or
-   at a persistence boundary. They intentionally do **not** check per-variant
-   fields, and the app-side `interactive` / `pbl` content kinds are validated
-   only at the envelope level; for exhaustive per-field validation of the
-   contract-owned kinds, use the JSON Schema above.
+2. **Pure validators (cheap pre-check)** — `validate*` are hand-written,
+   zero-dependency structural checks layered on the guards: object shape, the
+   envelope's required fields, and known contract discriminants. They are a
+   deliberate **strict subset** of the JSON Schema above — a fast, dependency-free
+   in-process sanity check. Passing one does **not** prove a document is
+   schema-valid (they do not check variant-specific fields such as an action's
+   `elementId`), and they describe the same contract shape as the schema rather
+   than a stricter or different one — so for an authoritative check, use the
+   schema. They do not bind a scene's `type` to its `content.type` (the public
+   `Scene` type does not either).
 
    ```ts
    import { validateStage, validateScene, validateAction } from '@openmaic/dsl';

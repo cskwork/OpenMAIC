@@ -42,10 +42,18 @@ describe('validateScene', () => {
     const r = validateScene({ ...ok, type: 'quiz', content: { type: 'quiz' } });
     expect(errors(r)).toContain('/content/questions');
   });
-  it('flags a scene whose content.type disagrees with its type', () => {
-    const r = validateScene({ ...ok, type: 'slide', content: { type: 'quiz', questions: [] } });
-    expect(r.valid).toBe(false);
+  it('flags app-widened content kinds (contract owns only slide/quiz)', () => {
+    const r = validateScene({ ...ok, type: 'pbl', content: { type: 'pbl' } });
     expect(errors(r)).toContain('/content/type');
+  });
+  it('does not bind scene.type to content.type (the public Scene type does not either)', () => {
+    // The contract leaves scene/content agreement out of the type, so the
+    // structural validator does too; per-shape rules live in the JSON Schema.
+    expect(
+      validateScene({ ...ok, type: 'quiz', content: { type: 'slide', canvas: { id: 'c' } } }),
+    ).toEqual({
+      valid: true,
+    });
   });
   it('validates nested actions and points at the bad one', () => {
     const r = validateScene({

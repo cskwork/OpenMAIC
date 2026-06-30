@@ -61,7 +61,7 @@ describe('generated JSON Schema — SerializedScene', () => {
   it('rejects a scene missing required fields', () => {
     expect(v({ id: 'sc' })).toBe(false);
   });
-  it('rejects a scene whose type disagrees with its content (discriminants bound)', () => {
-    expect(v({ ...slideScene, type: 'quiz' })).toBe(false);
+  it('rejects content that is not a contract content kind (slide/quiz)', () => {
+    expect(v({ ...slideScene, content: { type: 'pbl' } })).toBe(false);
   });
 });
