@@ -4,9 +4,16 @@ import Ajv from 'ajv';
 // @ts-expect-error untyped .mjs helper
 import { generateSchema } from '../scripts/gen-schema.mjs';
 
-function validator(root: 'Stage' | 'SerializedScene' | 'Action') {
-  const ajv = new Ajv({ allErrors: true, strict: false });
-  return ajv.compile(generateSchema(root));
+// Generate every root schema once (the generator parses the TS program a single
+// time and is reused), then compile per case — no repeated heavy codegen.
+const schemas = {
+  Stage: generateSchema('Stage'),
+  Action: generateSchema('Action'),
+  SerializedScene: generateSchema('SerializedScene'),
+} as const;
+
+function validator(root: keyof typeof schemas) {
+  return new Ajv({ allErrors: true, strict: false }).compile(schemas[root]);
 }
 
 describe('generated JSON Schema — Stage', () => {
