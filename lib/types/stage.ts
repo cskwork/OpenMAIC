@@ -10,7 +10,7 @@
 // `Scene` is re-exported as an alias of the app's fully-instantiated
 // `Scene<Action, AppSceneContent>`, so existing `import { Scene }` callers keep
 // the same semantics (actions are `Action[]`, content spans all four kinds).
-import type { Scene as DslScene, SceneContent as DslSceneContent, SceneCore } from '@openmaic/dsl';
+import type { Scene as DslScene, SceneContent as DslSceneContent } from '@openmaic/dsl';
 import type { Action } from '@/lib/types/action';
 import type { WidgetType, WidgetConfig } from '@/lib/types/widgets';
 import type { PBLProjectConfig } from '@/lib/pbl/types';
@@ -102,7 +102,18 @@ export type SceneContent = AppSceneContent;
  * callers keep their original semantics (actions are `Action[]`, content spans
  * all four kinds).
  */
-export type AppScene = DslScene<Action, SceneContent>;
+export type AppScene = DslScene<Action, SceneContent> & {
+  /**
+   * Stable id of the generation outline this scene was built from. Lets editor
+   * agent tools resolve a scene's outline by identity instead of by the mutable
+   * `order`, which Pro-mode insert / reorder / delete rebalances (matching by
+   * `order` after a reorder attaches another slide's outline). An app-layer
+   * annotation only — not part of the `@openmaic/dsl` Scene contract. Absent on
+   * inserted scenes and pre-existing data, where callers fall back to a
+   * scene-derived outline.
+   */
+  outlineId?: string;
+};
 export type Scene = AppScene;
 
 /**
@@ -117,7 +128,7 @@ export type Scene = AppScene;
  * that keeps `type` and `content` as independently-optional wide unions, which is
  * exactly what a shallow-merge patch needs.
  */
-export type ScenePatch = Partial<SceneCore<Action>> & {
+export type ScenePatch = Partial<Omit<AppScene, 'type' | 'content'>> & {
   type?: SceneContent['type'];
   content?: SceneContent;
 };
@@ -136,7 +147,7 @@ export type ScenePatch = Partial<SceneCore<Action>> & {
  * impossible to violate at a call site.
  */
 export function makeScene<C extends SceneContent>(
-  core: SceneCore<Action>,
+  core: Omit<AppScene, 'type' | 'content'>,
   content: C,
 ): Extract<AppScene, { type: C['type'] }> {
   return { ...core, type: content.type, content } as Extract<AppScene, { type: C['type'] }>;
