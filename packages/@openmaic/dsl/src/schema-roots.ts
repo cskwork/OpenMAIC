@@ -6,6 +6,11 @@
  * default `Scene<Action, SceneContent>`. Internal to schema codegen — it is
  * intentionally NOT re-exported from `index.ts`, so it does not widen the
  * public type surface.
+ *
+ * Scope: `SceneContent` is the contract-owned union (`SlideContent | QuizContent`),
+ * so the generated `scene.schema.json` covers those kinds. The app-side
+ * `interactive` / `pbl` content kinds are not part of the contract — apps that
+ * widen `Scene`'s `TContent` own the schema for their own content shapes.
  */
 import type { Scene, SceneContent } from './stage.js';
 import type { Action } from './action.js';

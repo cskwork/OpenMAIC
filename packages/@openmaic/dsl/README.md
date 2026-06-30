@@ -57,10 +57,13 @@ zero-runtime-dependency invariant:
 
 2. **Pure validators** — for the common in-process case, `validate*` are
    hand-written, zero-dependency, fail-loud structural checks layered on the
-   guards. They verify discriminants, required fields, and known nested
-   discriminants — ideal as a gate on untrusted input (LLM / agent output) or at
-   a persistence boundary. Exhaustive per-field validation is delegated to the
-   JSON Schema above.
+   guards. They verify object shape, the structural envelope's required fields,
+   known discriminants, and that a scene's `type` agrees with its
+   `content.type` — ideal as a gate on untrusted input (LLM / agent output) or
+   at a persistence boundary. They intentionally do **not** check per-variant
+   fields, and the app-side `interactive` / `pbl` content kinds are validated
+   only at the envelope level; for exhaustive per-field validation of the
+   contract-owned kinds, use the JSON Schema above.
 
    ```ts
    import { validateStage, validateScene, validateAction } from '@openmaic/dsl';

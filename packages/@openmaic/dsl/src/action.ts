@@ -301,6 +301,14 @@ export const ACTION_TYPES = [
   'widget_reveal',
 ] as const satisfies readonly ActionType[];
 
+// Compile-time exhaustiveness: every ActionType must appear in ACTION_TYPES.
+// `satisfies` above proves the converse (each entry is a valid ActionType); this
+// fails the build if the Action union gains a member the tuple is missing — so
+// the validators never silently reject a valid, newly-added action type.
+type _ActionTypesExhaustive = [ActionType] extends [(typeof ACTION_TYPES)[number]] ? true : never;
+const _actionTypesExhaustive: _ActionTypesExhaustive = true;
+void _actionTypesExhaustive;
+
 /** Narrow an unknown value to a valid {@link ActionType}. Pure, no runtime deps. */
 export function isActionType(value: unknown): value is ActionType {
   return typeof value === 'string' && (ACTION_TYPES as readonly string[]).includes(value);

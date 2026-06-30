@@ -45,6 +45,11 @@ describe('validateScene', () => {
     const r = validateScene({ ...ok, type: 'quiz', content: { type: 'quiz' } });
     expect(errors(r)).toContain('/content/questions');
   });
+  it('flags a scene whose content.type disagrees with its type', () => {
+    const r = validateScene({ ...ok, type: 'slide', content: { type: 'quiz', questions: [] } });
+    expect(r.valid).toBe(false);
+    expect(errors(r)).toContain('/content/type');
+  });
   it('validates nested actions and points at the bad one', () => {
     const r = validateScene({ ...ok, actions: [{ id: 'a', type: 'speech' }, { id: 'b', type: 'nope' }] });
     expect(errors(r)).toContain('/actions/1/type');

@@ -19,6 +19,21 @@ import type { Action } from './action.js';
 /** All scene kinds the contract is aware of. Feature kinds (interactive/pbl) are still valid `type` values — their *content* shapes live in the app and are composed in via {@link Scene}'s `TContent` parameter. */
 export type SceneType = 'slide' | 'quiz' | 'interactive' | 'pbl';
 
+/** Frozen set of every valid {@link SceneType}, for cheap membership checks. */
+export const SCENE_TYPES = ['slide', 'quiz', 'interactive', 'pbl'] as const satisfies readonly SceneType[];
+
+// Compile-time exhaustiveness: every SceneType must appear in SCENE_TYPES.
+// `satisfies` above proves the converse (each entry is a valid SceneType); this
+// fails the build if the union gains a member the tuple is missing.
+type _SceneTypesExhaustive = [SceneType] extends [(typeof SCENE_TYPES)[number]] ? true : never;
+const _sceneTypesExhaustive: _SceneTypesExhaustive = true;
+void _sceneTypesExhaustive;
+
+/** Narrow an unknown value to a valid {@link SceneType}. Pure, no runtime deps. */
+export function isSceneType(value: unknown): value is SceneType {
+  return typeof value === 'string' && (SCENE_TYPES as readonly string[]).includes(value);
+}
+
 /** Lifecycle / interaction mode a {@link Stage} can be operated in. */
 export type StageMode = 'autonomous' | 'playback' | 'edit';
 

@@ -2,13 +2,17 @@
  * Pure, dependency-free structural validators for the slide DSL contract.
  *
  * Lightweight, fail-loud boundary checks (LLM / agent output, persistence):
- * they verify discriminants, required fields, and that nested discriminants are
- * known values. Exhaustive per-field validation is delegated to the shipped
- * JSON Schema (`@openmaic/dsl/schema/*`) for consumers that bring their own
- * validator (e.g. ajv). No runtime dependencies.
+ * they verify object shape, the structural envelope's required fields, that
+ * discriminants are known, and that a scene's `type` agrees with its
+ * `content.type`. They do NOT exhaustively check per-variant fields, and the
+ * app-side `interactive` / `pbl` content kinds (whose shapes live in the
+ * consuming app, not this contract) are validated only at the envelope level.
+ * For exhaustive per-field validation of the contract-owned kinds, use the
+ * shipped JSON Schema (`@openmaic/dsl/schema/*`) with your own validator
+ * (e.g. ajv). No runtime dependencies.
  */
 import { isActionType } from './action.js';
-import type { SceneType } from './stage.js';
+import { isSceneType } from './stage.js';
 
 export interface ValidationIssue {
   /** JSON-pointer-ish path to the offending value, e.g. `/actions/0/type`. */
@@ -19,8 +23,6 @@ export interface ValidationIssue {
 export type ValidationResult =
   | { valid: true }
   | { valid: false; errors: ValidationIssue[] };
-
-const SCENE_TYPES = ['slide', 'quiz', 'interactive', 'pbl'] as const satisfies readonly SceneType[];
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -59,19 +61,32 @@ function checkScene(doc: unknown, path: string, errors: ValidationIssue[]): void
   reqString(doc, 'title', path, errors);
   reqNumber(doc, 'order', path, errors);
 
-  if (typeof doc.type !== 'string' || !(SCENE_TYPES as readonly string[]).includes(doc.type)) {
-    errors.push({ path: `${path}/type`, message: `unknown scene type: ${JSON.stringify(doc.type)}` });
+  const sceneType = doc.type;
+  if (!isSceneType(sceneType)) {
+    errors.push({ path: `${path}/type`, message: `unknown scene type: ${JSON.stringify(sceneType)}` });
   }
 
   const content = doc.content;
   if (!isObject(content)) {
     errors.push({ path: `${path}/content`, message: 'scene `content` must be an object' });
-  } else if (typeof content.type !== 'string' || !(SCENE_TYPES as readonly string[]).includes(content.type)) {
+  } else if (!isSceneType(content.type)) {
     errors.push({ path: `${path}/content/type`, message: `unknown content type: ${JSON.stringify(content.type)}` });
-  } else if (content.type === 'slide' && !isObject(content.canvas)) {
-    errors.push({ path: `${path}/content/canvas`, message: 'slide content requires an object `canvas`' });
-  } else if (content.type === 'quiz' && !Array.isArray(content.questions)) {
-    errors.push({ path: `${path}/content/questions`, message: 'quiz content requires a `questions` array' });
+  } else {
+    // Scene-level and content-level discriminants must agree.
+    if (isSceneType(sceneType) && content.type !== sceneType) {
+      errors.push({
+        path: `${path}/content/type`,
+        message: `content type ${JSON.stringify(content.type)} does not match scene type ${JSON.stringify(sceneType)}`,
+      });
+    }
+    // Only the contract-owned content kinds (slide/quiz) are validated here;
+    // app-side kinds (interactive/pbl) carry app-defined shapes that this
+    // envelope-level validator deliberately leaves to the consuming app.
+    if (content.type === 'slide' && !isObject(content.canvas)) {
+      errors.push({ path: `${path}/content/canvas`, message: 'slide content requires an object `canvas`' });
+    } else if (content.type === 'quiz' && !Array.isArray(content.questions)) {
+      errors.push({ path: `${path}/content/questions`, message: 'quiz content requires a `questions` array' });
+    }
   }
 
   if (doc.actions !== undefined) {
