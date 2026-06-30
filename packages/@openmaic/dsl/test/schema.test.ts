@@ -38,7 +38,21 @@ describe('generated JSON Schema — Action', () => {
 
 describe('generated JSON Schema — SerializedScene', () => {
   const v = validator('SerializedScene');
+  const slideScene = {
+    id: 'sc',
+    stageId: 'st',
+    type: 'slide',
+    title: 't',
+    order: 0,
+    content: { type: 'slide', canvas: { id: 'c', viewportSize: 1920, viewportRatio: 0.5625, theme: { themeColors: [], fontColor: '#000', fontName: 'Arial', backgroundColor: '#fff' }, elements: [] } },
+  };
+  it('accepts a well-formed slide scene', () => {
+    expect(v(slideScene)).toBe(true);
+  });
   it('rejects a scene missing required fields', () => {
     expect(v({ id: 'sc' })).toBe(false);
+  });
+  it('rejects a scene whose type disagrees with its content (discriminants bound)', () => {
+    expect(v({ ...slideScene, type: 'quiz' })).toBe(false);
   });
 });
