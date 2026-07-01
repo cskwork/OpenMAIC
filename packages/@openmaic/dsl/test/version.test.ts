@@ -39,6 +39,14 @@ describe('dslVersionOf', () => {
     expect(dslVersionOf(null)).toBe(UNVERSIONED_DSL_VERSION);
     expect(dslVersionOf('nope')).toBe(UNVERSIONED_DSL_VERSION);
   });
+  it('throws on a present-but-malformed stamp (no silent bypass)', () => {
+    // "1", "0.1", "0.1.0-beta" would otherwise parse into a comparable version
+    // and skip migration entirely.
+    for (const bad of ['1', '0.1', '0.1.0-beta', 'x.y.z', '']) {
+      expect(() => dslVersionOf({ [DSL_VERSION_KEY]: bad })).toThrow(/invalid dslVersion/);
+    }
+    expect(() => dslVersionOf({ [DSL_VERSION_KEY]: 3 })).toThrow(/invalid dslVersion/);
+  });
 });
 
 describe('needsMigration', () => {
@@ -46,6 +54,16 @@ describe('needsMigration', () => {
     expect(needsMigration({ id: 'legacy' })).toBe(true);
     expect(needsMigration({ [DSL_VERSION_KEY]: DSL_VERSION })).toBe(false);
     expect(needsMigration({ [DSL_VERSION_KEY]: '99.0.0' })).toBe(false);
+  });
+  it('is false for non-objects (mirrors migrate no-op — never disagree)', () => {
+    for (const v of [42, null, undefined, 'x', []]) {
+      expect(needsMigration(v)).toBe(false);
+      // the invariant: needsMigration and migrate agree on every input
+      expect(needsMigration(migrate(v))).toBe(false);
+    }
+  });
+  it('throws on a malformed stamp rather than silently reporting no migration', () => {
+    expect(() => needsMigration({ [DSL_VERSION_KEY]: '0.1.0-beta' })).toThrow(/invalid dslVersion/);
   });
 });
 
@@ -82,6 +100,13 @@ describe('migrate', () => {
   it('fails loud when the ladder has no path from the document version', () => {
     // A version older than DSL_VERSION but with no matching `from` entry.
     expect(() => migrate({ id: 'x', [DSL_VERSION_KEY]: '0.0.5' })).toThrow(/no migration path/);
+  });
+
+  it('fails loud on a malformed version stamp (no silent no-op)', () => {
+    expect(() => migrate({ id: 'x', [DSL_VERSION_KEY]: '0.1' })).toThrow(/invalid dslVersion/);
+    expect(() => migrate({ id: 'x', [DSL_VERSION_KEY]: '0.1.0-beta' })).toThrow(
+      /invalid dslVersion/,
+    );
   });
 
   it('returns non-object inputs unchanged', () => {

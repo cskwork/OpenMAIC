@@ -98,10 +98,15 @@ function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-/** Parse an `x.y.z` version into numeric parts; non-numeric parts become 0. */
+/** A well-formed `x.y.z` version: exactly three non-negative integer parts. */
+function isValidVersion(v: string): boolean {
+  return /^\d+\.\d+\.\d+$/.test(v);
+}
+
+/** Parse a validated `x.y.z` version into numeric parts. */
 function parseVersion(v: string): [number, number, number] {
-  const parts = v.split('.').map((p) => Number.parseInt(p, 10));
-  return [parts[0] || 0, parts[1] || 0, parts[2] || 0];
+  const [x, y, z] = v.split('.').map((p) => Number.parseInt(p, 10));
+  return [x, y, z];
 }
 
 /** Pure semver-ish compare over `x.y.z`. Returns <0, 0, or >0. */
@@ -115,18 +120,36 @@ function compareVersions(a: string, b: string): number {
 }
 
 /**
- * Read the serialized-contract version a document was written at. Documents
- * with no {@link DSL_VERSION_KEY} stamp are treated as {@link UNVERSIONED_DSL_VERSION}.
+ * Read the serialized-contract version a document was written at.
+ *
+ * - A non-object, or an object with no {@link DSL_VERSION_KEY} field, is treated
+ *   as {@link UNVERSIONED_DSL_VERSION} (legacy / pre-versioning data).
+ * - A **present but malformed** stamp (not a well-formed `x.y.z` string) is
+ *   corrupt data making a false version claim, so this **throws** rather than
+ *   letting a bad stamp silently compare as some arbitrary version and bypass
+ *   migration.
  */
 export function dslVersionOf(doc: unknown): string {
-  if (isObject(doc) && typeof doc[DSL_VERSION_KEY] === 'string') {
-    return doc[DSL_VERSION_KEY] as string;
+  if (!isObject(doc)) return UNVERSIONED_DSL_VERSION;
+  const raw = doc[DSL_VERSION_KEY];
+  if (raw === undefined) return UNVERSIONED_DSL_VERSION;
+  if (typeof raw !== 'string' || !isValidVersion(raw)) {
+    throw new Error(
+      `@openmaic/dsl: invalid ${DSL_VERSION_KEY} stamp ${JSON.stringify(raw)} (expected "x.y.z")`,
+    );
   }
-  return UNVERSIONED_DSL_VERSION;
+  return raw;
 }
 
-/** True when `doc` is written at an older version than {@link DSL_VERSION}. */
+/**
+ * True when `doc` is a migratable document written at an older version than
+ * {@link DSL_VERSION}. A non-object is not a migratable document, so this is
+ * `false` for it — mirroring {@link migrate}'s no-op, so the two never disagree
+ * (a caller looping `while (needsMigration(x)) x = migrate(x)` always terminates).
+ * Throws on an object carrying a malformed stamp (see {@link dslVersionOf}).
+ */
 export function needsMigration(doc: unknown): boolean {
+  if (!isObject(doc)) return false;
   return compareVersions(dslVersionOf(doc), DSL_VERSION) < 0;
 }
 
@@ -143,20 +166,25 @@ function stampVersion(doc: unknown, version: string): unknown {
  *   returned untouched rather than silently downgraded (mirrors the app's
  *   `migrateSlideContent`). The caller may not render it correctly, but its
  *   on-disk shape survives for the next compatible reader.
- * - Fail-loud: if the ladder has no contiguous path from the document's version
- *   up to {@link DSL_VERSION}, this throws rather than returning a half-migrated
- *   document.
+ * - Fail-loud: throws (rather than returning a half-migrated document) if the
+ *   ladder has no contiguous path from the document's version up to
+ *   {@link DSL_VERSION}, or if the document carries a malformed version stamp
+ *   (see {@link dslVersionOf}).
+ * - A non-object is not a migratable document: it is returned unchanged (and
+ *   {@link needsMigration} agrees it needs nothing).
  *
  * Pure: never mutates the input; each step returns a fresh object stamped with
  * its target version.
  */
 export function migrate(doc: unknown): unknown {
+  if (!isObject(doc)) return doc;
+
   let version = dslVersionOf(doc);
 
   // Already current, or written ahead of us — leave the document as-is.
   if (compareVersions(version, DSL_VERSION) >= 0) return doc;
 
-  let current = doc;
+  let current: unknown = doc;
   // Walk the ladder one step at a time. Guard against a malformed (cyclic /
   // non-advancing) registry so a bad entry can't spin forever.
   for (let step = 0; step < DSL_MIGRATIONS.length + 1; step++) {
