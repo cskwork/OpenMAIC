@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   DSL_VERSION,
   UNVERSIONED_DSL_VERSION,
+  INITIAL_DSL_VERSION,
   DSL_VERSION_KEY,
   DSL_MIGRATIONS,
   dslVersionOf,
@@ -19,8 +20,13 @@ describe('DSL_MIGRATIONS ladder invariants', () => {
     expect(DSL_MIGRATIONS[DSL_MIGRATIONS.length - 1].to).toBe(DSL_VERSION);
   });
 
-  it('begins by lifting legacy (unversioned) documents', () => {
+  it('begins by lifting legacy (unversioned) documents to a pinned endpoint', () => {
     expect(DSL_MIGRATIONS[0].from).toBe(UNVERSIONED_DSL_VERSION);
+    // The endpoint is the *pinned* initial version, not the moving DSL_VERSION —
+    // so a future step appended from INITIAL_DSL_VERSION isn't skipped once
+    // DSL_VERSION moves past it. (They're equal today; the assertion guards the
+    // intent, not the current value.)
+    expect(DSL_MIGRATIONS[0].to).toBe(INITIAL_DSL_VERSION);
   });
 });
 

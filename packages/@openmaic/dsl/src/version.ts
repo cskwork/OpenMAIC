@@ -29,9 +29,19 @@ export type DslVersion = typeof DSL_VERSION;
 /**
  * The version a document is treated as when it carries no {@link DSL_VERSION_KEY}
  * stamp: everything written before the version field existed. The first
- * migration lifts these legacy documents to {@link DSL_VERSION}.
+ * migration lifts these legacy documents forward.
  */
 export const UNVERSIONED_DSL_VERSION = '0.0.0' as const;
+
+/**
+ * The first shipped serialized-contract version — a **pinned literal**, not the
+ * moving {@link DSL_VERSION}. Migration endpoints must be immutable: they name a
+ * fixed point in the ladder, so they cannot reference `DSL_VERSION` (which moves
+ * every time the shape changes). It equals `DSL_VERSION` today; the two diverge
+ * the moment the first real shape change bumps `DSL_VERSION` and appends a step
+ * from here.
+ */
+export const INITIAL_DSL_VERSION = '0.1.0' as const;
 
 /**
  * Envelope property that carries the serialized-contract version on a document.
@@ -66,18 +76,22 @@ export interface DslMigration {
 
 /**
  * Ordered migration ladder. Each entry's `to` is the next entry's `from`, and
- * the last entry's `to` is {@link DSL_VERSION} (both checked by a test).
+ * the last entry's `to` is {@link DSL_VERSION} (both checked by a test). Every
+ * `from` / `to` is a **pinned literal** — never the moving `DSL_VERSION`
+ * constant — so appending a future step can't retroactively re-target an
+ * existing one.
  *
- * The first entry stamps legacy (pre-`dslVersion`) documents up to the current
- * contract version. It is intentionally a no-op *transform*: bringing `Action`
- * into the contract (#811) and adding validators (#817) did not alter any
- * serialized document, so the current on-disk shape already *is* 0.1.0. The
+ * The first entry stamps legacy (pre-`dslVersion`) documents up to
+ * {@link INITIAL_DSL_VERSION}. It is intentionally a no-op *transform*: bringing
+ * `Action` into the contract (#811) and adding validators (#817) did not alter
+ * any serialized document, so the current on-disk shape already *is* 0.1.0. The
  * entry exists to wire the pipeline end to end and to give real documents a
  * version stamp to migrate forward from. When the serialized shape first
- * changes, bump {@link DSL_VERSION} *then* and append a real transform.
+ * changes, bump {@link DSL_VERSION} *then* and append a real transform from
+ * `INITIAL_DSL_VERSION` to the new pinned version.
  */
 export const DSL_MIGRATIONS: readonly DslMigration[] = [
-  { from: UNVERSIONED_DSL_VERSION, to: DSL_VERSION, migrate: (doc) => doc },
+  { from: UNVERSIONED_DSL_VERSION, to: INITIAL_DSL_VERSION, migrate: (doc) => doc },
 ];
 
 function isObject(v: unknown): v is Record<string, unknown> {
