@@ -10,10 +10,7 @@ import { describe, expect, it } from 'vitest';
 
 import { generateSceneActions } from '@/lib/generation/scene-generator';
 import type { AICallFn } from '@/lib/generation/pipeline-types';
-import type {
-  GeneratedInteractiveContent,
-  SceneOutline,
-} from '@/lib/types/generation';
+import type { GeneratedInteractiveContent, SceneOutline } from '@/lib/types/generation';
 
 function baseOutline(): SceneOutline {
   return {
