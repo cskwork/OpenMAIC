@@ -194,6 +194,13 @@ export interface GeneratedInteractiveContent {
   scientificModel?: ScientificModel;
   widgetType?: WidgetType;
   widgetConfig?: WidgetConfig;
+  /**
+   * Human-readable listing of interactable elements (ids + notable classes)
+   * extracted from the generated widget HTML. Fed to the interactive-actions
+   * prompt so the model selects real selectors rather than guessing from
+   * naming conventions.
+   */
+  elementInventory?: string;
 }
 
 // ==================== Legacy Types (for compatibility) ====================

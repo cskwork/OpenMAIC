@@ -219,4 +219,20 @@ describe('planRegenerateApply — edit_interactive_html', () => {
       ),
     ).toEqual({ snapshot: null, patch: null });
   });
+
+  it('writes elementInventory from details onto the patched content', () => {
+    const plan = planRegenerateApply(
+      {
+        sceneId: 'w1',
+        html: '<html><body><button id="new-btn">Go</button></body></html>',
+        elementInventory: 'Elements with id:\n#new-btn <button>',
+      },
+      interactiveScene(),
+      'edit_interactive_html',
+    );
+    const content = plan.patch?.content as unknown as {
+      elementInventory?: string;
+    };
+    expect(content.elementInventory).toContain('#new-btn');
+  });
 });

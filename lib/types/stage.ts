@@ -65,6 +65,14 @@ export interface InteractiveContent {
   // Ultra Mode widget fields
   widgetType?: WidgetType;
   widgetConfig?: WidgetConfig;
+  /**
+   * Inventory of interactable elements extracted from the widget HTML at
+   * generation time. Persisted so downstream re-generation paths (e.g. the
+   * pro-mode `regenerate_scene_actions` agent tool) can feed real selectors
+   * back into the interactive-actions prompt instead of falling back to
+   * convention-guessing. See extractInteractiveElements().
+   */
+  elementInventory?: string;
 }
 
 /**

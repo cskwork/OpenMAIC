@@ -1309,6 +1309,7 @@ export async function generateWidgetContent(
     html: postProcessInteractiveHtml(html),
     widgetType,
     widgetConfig,
+    elementInventory: extractInteractiveElements(html),
   };
 }
 
@@ -1326,6 +1327,136 @@ function extractWidgetConfig(html: string): WidgetConfig | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Extract an inventory of interactable elements from the generated widget HTML,
+ * so the interactive-actions prompt can pick real selectors instead of guessing
+ * by convention. Returns an empty string when no elements are found.
+ */
+export function extractInteractiveElements(html: string): string {
+  if (!html) return '';
+
+  // Strip <script> / <style> so we don't inventory JS variables or CSS rules.
+  const dom = html
+    .replace(/<script\b[\s\S]*?<\/script>/gi, '')
+    .replace(/<style\b[\s\S]*?<\/style>/gi, '');
+
+  // Match an opening tag with its attribute string. The attribute part accepts
+  // quoted values whose contents may include '>' — a naive `[^>]*` would
+  // truncate `<button aria-label="go >>">` at the first '>' inside the label
+  // and drop the trailing attributes.
+  const tagRegex =
+    /<([a-zA-Z][a-zA-Z0-9-]*)((?:\s+[a-zA-Z_:][\w:-]*(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'<>`=]+))?)*)\s*\/?>/g;
+  const seenIds = new Set<string>();
+  const seenClasses = new Set<string>();
+  const idLines: string[] = [];
+  const classLines: string[] = [];
+  const MAX_IDS = 60;
+  const MAX_CLASSES = 30;
+
+  for (const match of dom.matchAll(tagRegex)) {
+    const tag = match[1].toLowerCase();
+    if (tag === 'br' || tag === 'meta' || tag === 'link') continue;
+    const attrs = match[2] || '';
+
+    const id = attrAt(attrs, 'id');
+    const classAttr = attrAt(attrs, 'class');
+    const ariaLabel = attrAt(attrs, 'aria-label');
+    const role = attrAt(attrs, 'role');
+    const dataStepId = attrAt(attrs, 'data-step-id');
+    const dataAction = attrAt(attrs, 'data-action');
+    const name = attrAt(attrs, 'name');
+    const typeAttr = attrAt(attrs, 'type');
+
+    if (id && !seenIds.has(id) && idLines.length < MAX_IDS) {
+      seenIds.add(id);
+      const parts: string[] = [`#${id}`, `<${tag}${typeAttr ? ` type=${typeAttr}` : ''}>`];
+      if (classAttr) parts.push(`class="${classAttr.trim()}"`);
+      if (role) parts.push(`role=${role}`);
+      if (ariaLabel) parts.push(`aria-label="${ariaLabel}"`);
+      if (dataStepId) parts.push(`data-step-id="${dataStepId}"`);
+      if (dataAction) parts.push(`data-action="${dataAction}"`);
+      if (name) parts.push(`name=${name}`);
+      idLines.push(parts.join(' '));
+    }
+
+    if (classAttr) {
+      for (const cls of classAttr.split(/\s+/).filter(Boolean)) {
+        if (isUtilityClass(cls)) continue;
+        if (!seenClasses.has(cls) && classLines.length < MAX_CLASSES) {
+          seenClasses.add(cls);
+          classLines.push(`.${cls} <${tag}>`);
+        }
+      }
+    }
+  }
+
+  const sections: string[] = [];
+  if (idLines.length) sections.push(`Elements with id:\n${idLines.join('\n')}`);
+  if (classLines.length) sections.push(`Notable classes:\n${classLines.join('\n')}`);
+  return sections.join('\n\n');
+}
+
+/**
+ * Heuristic to skip Tailwind/utility class names so semantic classes survive
+ * under the inventory cap. Errs on the side of dropping — if a class name
+ * looks like a utility (color/spacing/typography/layout token), don't include it.
+ * The trade-off: we may miss the odd hand-authored class that starts with e.g.
+ * `flex-`, but the inventory is meant for teacher-action targeting where
+ * semantic hooks (`.pairing-rules`, `.dna-card`, `.btn-launch`) matter far more
+ * than layout classes.
+ */
+// Common Tailwind category prefixes. Anchored with `-` so we don't match
+// e.g. `.flex-container` (semantic) — Tailwind's `flex` is bare, and its
+// modifiers are `flex-col`, `flex-1`, `flex-wrap` etc.
+const UTILITY_PREFIXES = [
+  'p-', 'px-', 'py-', 'pt-', 'pr-', 'pb-', 'pl-',
+  'm-', 'mx-', 'my-', 'mt-', 'mr-', 'mb-', 'ml-',
+  'w-', 'h-', 'min-w-', 'min-h-', 'max-w-', 'max-h-',
+  'text-', 'font-', 'leading-', 'tracking-',
+  'bg-', 'border-', 'ring-', 'shadow-', 'opacity-',
+  'rounded-', 'divide-', 'space-',
+  'gap-', 'grid-', 'col-', 'row-',
+  'top-', 'right-', 'bottom-', 'left-', 'inset-',
+  'z-', 'order-',
+  'flex-', 'items-', 'justify-', 'content-', 'self-', 'place-',
+  'overflow-', 'whitespace-', 'break-',
+  'transition-', 'duration-', 'ease-', 'delay-', 'animate-',
+  'translate-', 'rotate-', 'scale-', 'skew-', 'origin-',
+  'cursor-', 'select-', 'pointer-events-',
+  'accent-', 'caret-', 'fill-', 'stroke-',
+  'aspect-',
+];
+// Exact single-token Tailwind utilities (no dash).
+const UTILITY_EXACT = new Set([
+  'flex', 'grid', 'block', 'inline', 'inline-block', 'inline-flex', 'hidden',
+  'absolute', 'relative', 'fixed', 'sticky', 'static',
+  'container', 'italic', 'underline', 'uppercase', 'lowercase', 'capitalize',
+  'truncate', 'antialiased', 'subpixel-antialiased',
+  'visible', 'invisible', 'sr-only', 'not-sr-only',
+]);
+
+function isUtilityClass(cls: string): boolean {
+  // Responsive / state prefix (`md:`, `hover:`, `dark:foo`) → always utility.
+  if (cls.includes(':')) return true;
+  // Arbitrary-value utilities: `w-[240px]`, `text-[10px]`.
+  if (cls.includes('[')) return true;
+  if (UTILITY_PREFIXES.some((p) => cls.startsWith(p))) return true;
+  return UTILITY_EXACT.has(cls);
+}
+
+function attrAt(attrs: string, name: string): string | undefined {
+  // Require whitespace before the attribute name so `id=` doesn't match inside
+  // `data-step-id="…"`. Accept quoted OR unquoted values — HTML5 allows the
+  // latter (e.g. `<div id=main class=card>`) and models occasionally emit it.
+  const re = new RegExp(
+    `(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'<>\`]+))`,
+    'i',
+  );
+  const m = attrs.match(re);
+  if (!m) return undefined;
+  return m[1] ?? m[2] ?? m[3];
 }
 
 /**
@@ -1413,6 +1544,14 @@ export async function generateSceneActions(
   if (outline.type === 'interactive' && 'html' in content) {
     const config = outline.interactiveConfig;
     const agentsText = formatAgentsForPrompt(agents);
+    // Prefer the persisted inventory produced at generation time; fall back to
+    // an on-the-fly extraction from the HTML so legacy scenes (predating this
+    // field) and freshly hand-edited scenes still get real selectors instead
+    // of the "no elements" sentinel.
+    const inventory =
+      content.elementInventory ||
+      (content.html ? extractInteractiveElements(content.html) : '') ||
+      '(no interactive elements detected)';
     const prompts = buildPrompt(PROMPT_IDS.INTERACTIVE_ACTIONS, {
       title: outline.title,
       keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
@@ -1421,6 +1560,7 @@ export async function generateSceneActions(
       designIdea: config?.designIdea || '',
       widgetType: content.widgetType || outline.widgetType || '',
       widgetConfig: JSON.stringify(content.widgetConfig || {}),
+      elementInventory: inventory,
       courseContext: buildCourseContext(ctx),
       agents: agentsText,
       languageDirective: languageDirective || '',
