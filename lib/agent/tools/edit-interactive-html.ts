@@ -22,7 +22,6 @@
 import { Type, type Static } from 'typebox';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { applyHtmlEdits, type Edit } from '@/lib/edit/html-edit';
-import { extractInteractiveElements } from '@/lib/generation/scene-generator';
 import type { RegenerateActionsDeps, SceneContext } from './regenerate-scene-actions';
 
 // ── Params (trust boundary: only id + edits; html comes from deps) ───────────
@@ -67,12 +66,6 @@ export interface EditInteractiveHtmlDetails {
   html: string | null;
   /** Number of edits applied (0 on failure). */
   editCount: number;
-  /**
-   * Refreshed inventory of interactable elements extracted from the edited HTML.
-   * Kept in sync with `html` so a subsequent `regenerate_scene_actions` sees the
-   * post-edit selectors rather than the pre-edit ones. Absent on failure.
-   */
-  elementInventory?: string;
 }
 
 // ── Factory ──────────────────────────────────────────────────────────────────
@@ -153,7 +146,6 @@ export function makeEditInteractiveHtmlTool(
           sceneId,
           html: newHtml,
           editCount: edits.length,
-          elementInventory: extractInteractiveElements(newHtml),
         },
       };
     },

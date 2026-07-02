@@ -127,4 +127,85 @@ describe('extractInteractiveElements', () => {
     // Semantic class name preserved
     expect(inventory).toContain('.card');
   });
+
+  test('ignores HTML comments so commented-out markup does not forge inventory', () => {
+    const html = `
+      <!-- <button id="old-btn" class="ghost">Removed</button> -->
+      <button id="real-btn">Real</button>
+    `;
+    const inventory = extractInteractiveElements(html);
+    expect(inventory).toContain('#real-btn');
+    expect(inventory).not.toContain('#old-btn');
+    expect(inventory).not.toContain('.ghost');
+  });
+
+  test('drops content after an unterminated <script open so template ids leak', () => {
+    // A truncated generation leaves the <script> unclosed. Anything after it
+    // is inside JS template strings and must not be inventoried.
+    const html =
+      '<button id="visible">Go</button>' +
+      '<script>document.getElementById("visible").innerHTML = `<div id="ghost-id">no</div>`;';
+    const inventory = extractInteractiveElements(html);
+    expect(inventory).toContain('#visible');
+    expect(inventory).not.toContain('#ghost-id');
+  });
+
+  test('does not forge phantom attributes from within a quoted attribute value', () => {
+    // The reviewer's regression: an aria-label that contains substrings
+    // resembling other attributes must not lift them into the inventory. A
+    // per-attribute regex would fabricate `name=alpha` and `#fake` from the
+    // aria-label's contents; the tag-grammar-aware parser must not.
+    const html = '<button id="go" aria-label="try name=alpha or id=fake"></button>';
+    const inventory = extractInteractiveElements(html);
+    expect(inventory).toContain('#go');
+    expect(inventory).toContain('aria-label="try name=alpha or id=fake"');
+    // The `#go` row must terminate at the closing quote of the aria-label —
+    // no ` name=...` segment lifted out of the label body.
+    const goLine = inventory.split('\n').find((line) => line.startsWith('#go')) || '';
+    expect(goLine).toMatch(/aria-label="[^"]*"$/);
+    // And a phantom `#fake` id row must never appear.
+    expect(inventory.split('\n')).not.toContain('#fake <button>');
+  });
+
+  test('collapses whitespace in attribute values and caps their length', () => {
+    const longLabel = 'a'.repeat(500);
+    const html =
+      '<button id="one" aria-label="line one\n  line two   line three"></button>' +
+      `<button id="two" aria-label="${longLabel}"></button>`;
+    const inventory = extractInteractiveElements(html);
+    // Multiline / repeated-space label is collapsed to a single line so it
+    // cannot forge extra inventory rows or fake prompt sections.
+    expect(inventory).toContain('aria-label="line one line two line three"');
+    // Long value is truncated so a hostile label cannot swallow the prompt.
+    const twoLine = inventory.split('\n').find((line) => line.includes('#two')) || '';
+    expect(twoLine.length).toBeLessThan(longLabel.length);
+    expect(twoLine).toContain('…');
+  });
+
+  test('keeps semantic classes that collide with utility prefixes when declared in <style>', () => {
+    // `.grid-cell`, `.fill-blank`, `.text-input`, `.select-btn`, `.ring-carbon`,
+    // etc. all look like Tailwind utilities by prefix but are the widget
+    // author's own hooks. When declared in the page's <style> block they must
+    // survive the utility filter.
+    const html = `
+      <style>
+        .grid-cell { padding: 4px; }
+        .fill-blank { border: 1px solid; }
+        .text-input:focus { outline: none; }
+        .select-btn { cursor: pointer; }
+        .ring-carbon { stroke: black; }
+      </style>
+      <div class="grid-cell fill-blank">
+        <input class="text-input" />
+        <button class="select-btn">Pick</button>
+        <span class="ring-carbon"></span>
+      </div>
+    `;
+    const inventory = extractInteractiveElements(html);
+    expect(inventory).toContain('.grid-cell');
+    expect(inventory).toContain('.fill-blank');
+    expect(inventory).toContain('.text-input');
+    expect(inventory).toContain('.select-btn');
+    expect(inventory).toContain('.ring-carbon');
+  });
 });

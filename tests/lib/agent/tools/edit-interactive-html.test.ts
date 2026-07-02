@@ -61,8 +61,6 @@ describe('edit_interactive_html tool', () => {
     expect(res.details.editCount).toBe(1);
     expect(res.details.html).toContain('getElementById("go").addEventListener');
     expect(res.details.html).not.toContain('strt');
-    // Refreshed inventory pairs with the edited HTML — see fix-widget-html-inventory.
-    expect(res.details.elementInventory).toContain('#go');
   });
 
   it('errors (no apply) when an edit cannot be anchored', async () => {

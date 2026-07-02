@@ -1309,7 +1309,6 @@ export async function generateWidgetContent(
     html: postProcessInteractiveHtml(html),
     widgetType,
     widgetConfig,
-    elementInventory: extractInteractiveElements(html),
   };
 }
 
@@ -1337,10 +1336,23 @@ function extractWidgetConfig(html: string): WidgetConfig | undefined {
 export function extractInteractiveElements(html: string): string {
   if (!html) return '';
 
-  // Strip <script> / <style> so we don't inventory JS variables or CSS rules.
-  const dom = html
+  // Collect class names declared in the page's own <style> blocks so we can
+  // keep semantic hooks (e.g. `.grid-cell`, `.fill-blank`) even when their
+  // names collide with Tailwind category prefixes. Do this BEFORE stripping.
+  const styledClasses = collectStyledClassNames(html);
+
+  // Strip <script> / <style> / HTML comments so we don't inventory JS
+  // variables, CSS rules, or commented-out markup. Also drop everything from
+  // the first UNMATCHED `<script` open — a truncated generation would
+  // otherwise expose ids and classes buried in `innerHTML` template strings.
+  let dom = html
     .replace(/<script\b[\s\S]*?<\/script>/gi, '')
-    .replace(/<style\b[\s\S]*?<\/style>/gi, '');
+    .replace(/<style\b[\s\S]*?<\/style>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '');
+  const unterminatedScript = dom.search(/<script\b/i);
+  if (unterminatedScript !== -1) {
+    dom = dom.substring(0, unterminatedScript);
+  }
 
   // Match an opening tag with its attribute string. The attribute part accepts
   // quoted values whose contents may include '>' — a naive `[^>]*` would
@@ -1358,32 +1370,35 @@ export function extractInteractiveElements(html: string): string {
   for (const match of dom.matchAll(tagRegex)) {
     const tag = match[1].toLowerCase();
     if (tag === 'br' || tag === 'meta' || tag === 'link') continue;
-    const attrs = match[2] || '';
+    const attrs = parseAttrs(match[2] || '');
 
-    const id = attrAt(attrs, 'id');
-    const classAttr = attrAt(attrs, 'class');
-    const ariaLabel = attrAt(attrs, 'aria-label');
-    const role = attrAt(attrs, 'role');
-    const dataStepId = attrAt(attrs, 'data-step-id');
-    const dataAction = attrAt(attrs, 'data-action');
-    const name = attrAt(attrs, 'name');
-    const typeAttr = attrAt(attrs, 'type');
+    const id = attrs.id;
+    const classAttr = attrs.class;
+    const ariaLabel = attrs['aria-label'];
+    const role = attrs.role;
+    const dataStepId = attrs['data-step-id'];
+    const dataAction = attrs['data-action'];
+    const name = attrs.name;
+    const typeAttr = attrs.type;
 
     if (id && !seenIds.has(id) && idLines.length < MAX_IDS) {
       seenIds.add(id);
-      const parts: string[] = [`#${id}`, `<${tag}${typeAttr ? ` type=${typeAttr}` : ''}>`];
-      if (classAttr) parts.push(`class="${classAttr.trim()}"`);
-      if (role) parts.push(`role=${role}`);
-      if (ariaLabel) parts.push(`aria-label="${ariaLabel}"`);
-      if (dataStepId) parts.push(`data-step-id="${dataStepId}"`);
-      if (dataAction) parts.push(`data-action="${dataAction}"`);
-      if (name) parts.push(`name=${name}`);
+      const parts: string[] = [
+        `#${id}`,
+        `<${tag}${typeAttr ? ` type=${cleanAttrValue(typeAttr)}` : ''}>`,
+      ];
+      if (classAttr) parts.push(`class="${cleanAttrValue(classAttr)}"`);
+      if (role) parts.push(`role=${cleanAttrValue(role)}`);
+      if (ariaLabel) parts.push(`aria-label="${cleanAttrValue(ariaLabel)}"`);
+      if (dataStepId) parts.push(`data-step-id="${cleanAttrValue(dataStepId)}"`);
+      if (dataAction) parts.push(`data-action="${cleanAttrValue(dataAction)}"`);
+      if (name) parts.push(`name=${cleanAttrValue(name)}`);
       idLines.push(parts.join(' '));
     }
 
     if (classAttr) {
       for (const cls of classAttr.split(/\s+/).filter(Boolean)) {
-        if (isUtilityClass(cls)) continue;
+        if (!styledClasses.has(cls) && isUtilityClass(cls)) continue;
         if (!seenClasses.has(cls) && classLines.length < MAX_CLASSES) {
           seenClasses.add(cls);
           classLines.push(`.${cls} <${tag}>`);
@@ -1399,13 +1414,65 @@ export function extractInteractiveElements(html: string): string {
 }
 
 /**
+ * Whitespace-collapse an attribute value and cap its length. Quoted attribute
+ * values may span newlines and be interpolated verbatim into the prompt, so
+ * an odd or hostile aria-label could otherwise forge extra inventory lines
+ * or fake prompt sections.
+ */
+const MAX_ATTR_VALUE_CHARS = 120;
+function cleanAttrValue(value: string): string {
+  const collapsed = value.replace(/\s+/g, ' ').trim();
+  return collapsed.length > MAX_ATTR_VALUE_CHARS
+    ? collapsed.substring(0, MAX_ATTR_VALUE_CHARS - 1) + '…'
+    : collapsed;
+}
+
+/**
+ * Collect class names that appear in the page's own `<style>` blocks. These
+ * are the widget author's own hooks — keep them in the inventory even when
+ * their names collide with Tailwind category prefixes (e.g. `.grid-cell` vs
+ * `grid-cols-2`, `.text-input` vs `text-lg`).
+ */
+function collectStyledClassNames(html: string): Set<string> {
+  const styled = new Set<string>();
+  const styleBlockRegex = /<style\b[^>]*>([\s\S]*?)<\/style>/gi;
+  const classNameRegex = /\.([a-zA-Z_][\w-]*)/g;
+  for (const block of html.matchAll(styleBlockRegex)) {
+    for (const m of block[1].matchAll(classNameRegex)) {
+      styled.add(m[1]);
+    }
+  }
+  return styled;
+}
+
+/**
+ * Parse the attribute string of an opening tag into a name→value map. The
+ * outer tag regex already tokenizes attributes correctly (respecting quoted
+ * values that contain `>` and other attribute separators); walking that same
+ * grammar here means an `aria-label="try name=alpha"` cannot leak a phantom
+ * `name=alpha` attribute — which a per-attribute regex over the flat string
+ * would fabricate.
+ */
+const ATTR_TOKEN_REGEX =
+  /([a-zA-Z_:][\w:-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`=]+)))?/g;
+function parseAttrs(attrs: string): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const m of attrs.matchAll(ATTR_TOKEN_REGEX)) {
+    const name = m[1].toLowerCase();
+    if (map[name] !== undefined) continue;
+    map[name] = m[2] ?? m[3] ?? m[4] ?? '';
+  }
+  return map;
+}
+
+/**
  * Heuristic to skip Tailwind/utility class names so semantic classes survive
  * under the inventory cap. Errs on the side of dropping — if a class name
- * looks like a utility (color/spacing/typography/layout token), don't include it.
- * The trade-off: we may miss the odd hand-authored class that starts with e.g.
- * `flex-`, but the inventory is meant for teacher-action targeting where
- * semantic hooks (`.pairing-rules`, `.dna-card`, `.btn-launch`) matter far more
- * than layout classes.
+ * looks like a utility (color/spacing/typography/layout token), don't include
+ * it. Semantic hooks whose names collide with utility prefixes (e.g.
+ * `.grid-cell`, `.fill-blank`, `.text-input`, `.select-btn`, `.ring-carbon`)
+ * are preserved by the caller when the same class is declared in the page's
+ * own `<style>` block.
  */
 // Common Tailwind category prefixes. Anchored with `-` so we don't match
 // e.g. `.flex-container` (semantic) — Tailwind's `flex` is bare, and its
@@ -1520,16 +1587,6 @@ function isUtilityClass(cls: string): boolean {
   return UTILITY_EXACT.has(cls);
 }
 
-function attrAt(attrs: string, name: string): string | undefined {
-  // Require whitespace before the attribute name so `id=` doesn't match inside
-  // `data-step-id="…"`. Accept quoted OR unquoted values — HTML5 allows the
-  // latter (e.g. `<div id=main class=card>`) and models occasionally emit it.
-  const re = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'<>\`]+))`, 'i');
-  const m = attrs.match(re);
-  if (!m) return undefined;
-  return m[1] ?? m[2] ?? m[3];
-}
-
 /**
  * Step 3.2: Generate Actions based on content and script
  */
@@ -1615,12 +1672,10 @@ export async function generateSceneActions(
   if (outline.type === 'interactive' && 'html' in content) {
     const config = outline.interactiveConfig;
     const agentsText = formatAgentsForPrompt(agents);
-    // Prefer the persisted inventory produced at generation time; fall back to
-    // an on-the-fly extraction from the HTML so legacy scenes (predating this
-    // field) and freshly hand-edited scenes still get real selectors instead
-    // of the "no elements" sentinel.
+    // Always recompute the inventory from the current html so it matches what
+    // the tool actually reads — persisting the field would go stale relative
+    // to `postProcessInteractiveHtml` output and to any in-turn html edits.
     const inventory =
-      content.elementInventory ||
       (content.html ? extractInteractiveElements(content.html) : '') ||
       '(no interactive elements detected)';
     const prompts = buildPrompt(PROMPT_IDS.INTERACTIVE_ACTIONS, {

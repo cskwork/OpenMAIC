@@ -66,8 +66,6 @@ export interface RegenerateDetails {
   content?: GeneratedSlideContent | null;
   /** Present for `edit_interactive_html` — the edited interactive page HTML. */
   html?: string | null;
-  /** Refreshed inventory of interactable elements (paired with `html`). */
-  elementInventory?: string;
   actions?: Action[];
 }
 
@@ -105,18 +103,16 @@ export function planRegenerateApply(
   // `edit_interactive_html` carries the edited interactive-page HTML. Snapshot
   // the current scene, then write the new html onto the existing
   // InteractiveContent — preserving the page's other fields (url / widgetType /
-  // widgetConfig). Also refresh elementInventory (paired with the html) so a
-  // subsequent regenerate_scene_actions sees the post-edit selectors. The iframe
-  // reloads when content.html changes.
+  // widgetConfig). Note: `sceneContextMap` is built once per agent turn and is
+  // NOT written back, so a `regenerate_scene_actions` in the SAME turn still
+  // sees the pre-edit html; the post-edit selectors are only guaranteed for
+  // tool calls in the next turn. The iframe reloads when content.html changes.
   if (toolName === 'edit_interactive_html' && typeof details.html === 'string') {
     const prev = scene?.content as InteractiveContent | undefined;
     if (!prev || prev.type !== 'interactive') return { snapshot: null, patch: null };
     const runtime: InteractiveContent = {
       ...prev,
       html: details.html,
-      ...(typeof details.elementInventory === 'string'
-        ? { elementInventory: details.elementInventory }
-        : {}),
     };
     const snapshot = scene
       ? { sceneId, content: scene.content, actions: scene.actions ?? [] }

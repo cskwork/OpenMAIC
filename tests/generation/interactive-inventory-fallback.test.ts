@@ -1,10 +1,9 @@
 /**
- * Regression: when a scene's persisted `elementInventory` is missing (legacy
- * scenes generated before the field existed, or scenes handed to
- * `generateSceneActions` from a caller that omits it), the interactive-actions
- * prompt should still receive real selectors — extracted on the fly from
- * `content.html` — rather than the "(no interactive elements detected)"
- * sentinel that would send the model back to convention-guessing.
+ * The interactive-actions prompt always receives an element inventory computed
+ * from the scene's current html — never a persisted field. This test locks in
+ * that behavior: any interactive scene with html gets real selectors, and the
+ * "(no interactive elements detected)" sentinel is only used when the html is
+ * absent or truly has no inventoried elements.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -14,10 +13,10 @@ import type { GeneratedInteractiveContent, SceneOutline } from '@/lib/types/gene
 
 function baseOutline(): SceneOutline {
   return {
-    id: 'scene-inventory-fallback',
+    id: 'scene-inventory-recompute',
     type: 'interactive',
-    title: 'Inventory fallback test',
-    description: 'legacy scene without persisted inventory',
+    title: 'Inventory recompute test',
+    description: 'always recompute from html',
     keyPoints: ['key point'],
     order: 0,
     widgetType: 'game',
@@ -25,8 +24,8 @@ function baseOutline(): SceneOutline {
   };
 }
 
-describe('generateSceneActions — legacy inventory fallback', () => {
-  it('extracts inventory from content.html when the persisted field is absent', async () => {
+describe('generateSceneActions — element inventory', () => {
+  it('recomputes the inventory from content.html on every call', async () => {
     let lastUser = '';
     const aiCall: AICallFn = async (_system, user) => {
       lastUser = user;
@@ -47,8 +46,6 @@ describe('generateSceneActions — legacy inventory fallback', () => {
         description: 'd',
         scoring: { correctPoints: 10, speedBonus: 5 },
       },
-      // Deliberately no elementInventory — simulates a scene stored before
-      // fix-widget-html-inventory, or one whose caller forgot to persist it.
     };
 
     await generateSceneActions(baseOutline(), content, aiCall, {
