@@ -1453,8 +1453,7 @@ function collectStyledClassNames(html: string): Set<string> {
  * `name=alpha` attribute — which a per-attribute regex over the flat string
  * would fabricate.
  */
-const ATTR_TOKEN_REGEX =
-  /([a-zA-Z_:][\w:-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`=]+)))?/g;
+const ATTR_TOKEN_REGEX = /([a-zA-Z_:][\w:-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`=]+)))?/g;
 function parseAttrs(attrs: string): Record<string, string> {
   const map: Record<string, string> = {};
   for (const m of attrs.matchAll(ATTR_TOKEN_REGEX)) {
