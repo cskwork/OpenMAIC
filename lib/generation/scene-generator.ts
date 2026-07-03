@@ -1362,10 +1362,13 @@ export function extractInteractiveElements(html: string): string {
     /<([a-zA-Z][a-zA-Z0-9-]*)((?:\s+[a-zA-Z_:][\w:-]*(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'<>`=]+))?)*)\s*\/?>/g;
   const seenIds = new Set<string>();
   const seenClasses = new Set<string>();
+  const seenDataAttrs = new Set<string>();
   const idLines: string[] = [];
   const classLines: string[] = [];
+  const dataAttrLines: string[] = [];
   const MAX_IDS = 60;
   const MAX_CLASSES = 30;
+  const MAX_DATA_ATTRS = 30;
 
   for (const match of dom.matchAll(tagRegex)) {
     const tag = match[1].toLowerCase();
@@ -1396,6 +1399,26 @@ export function extractInteractiveElements(html: string): string {
       idLines.push(parts.join(' '));
     }
 
+    // Surface stable data-attribute selectors even when the element has no id.
+    // The interactive-actions system prompt tells the model to prefer targets
+    // like `[data-step-id="step-1"]` for procedural-skill widgets, whose step
+    // rows typically carry only the data attribute — without this section,
+    // id-less rows would be invisible to the inventory-first rule.
+    if (!id) {
+      for (const [attrName, attrValue] of [
+        ['data-step-id', dataStepId],
+        ['data-action', dataAction],
+      ] as const) {
+        if (!attrValue) continue;
+        const cleaned = cleanAttrValue(attrValue);
+        const key = `${attrName}=${cleaned}`;
+        if (seenDataAttrs.has(key)) continue;
+        if (dataAttrLines.length >= MAX_DATA_ATTRS) break;
+        seenDataAttrs.add(key);
+        dataAttrLines.push(`[${attrName}="${cleaned}"] <${tag}>`);
+      }
+    }
+
     if (classAttr) {
       for (const cls of classAttr.split(/\s+/).filter(Boolean)) {
         if (!styledClasses.has(cls) && isUtilityClass(cls)) continue;
@@ -1409,6 +1432,7 @@ export function extractInteractiveElements(html: string): string {
 
   const sections: string[] = [];
   if (idLines.length) sections.push(`Elements with id:\n${idLines.join('\n')}`);
+  if (dataAttrLines.length) sections.push(`Stable data attributes:\n${dataAttrLines.join('\n')}`);
   if (classLines.length) sections.push(`Notable classes:\n${classLines.join('\n')}`);
   return sections.join('\n\n');
 }

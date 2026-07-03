@@ -208,4 +208,43 @@ describe('extractInteractiveElements', () => {
     expect(inventory).toContain('.select-btn');
     expect(inventory).toContain('.ring-carbon');
   });
+
+  test('surfaces id-less elements via a Stable data attributes section', () => {
+    // The interactive-actions system prompt tells the model to target
+    // `[data-step-id="step-1"]` for procedural-skill widgets whose step rows
+    // typically have no id. Those elements must appear in the inventory or
+    // the "prefer inventory" rule silently sends the model back to convention
+    // guessing on exactly the widget family the conventions already served.
+    const html = `
+      <ol>
+        <li data-step-id="step-1">Inspect the device</li>
+        <li data-step-id="step-2">Confirm the reading</li>
+      </ol>
+      <button data-action="check">Check</button>
+      <button id="reset-btn" data-action="reset">Reset</button>
+    `;
+    const inventory = extractInteractiveElements(html);
+
+    // id-less rows land in the new section.
+    expect(inventory).toContain('Stable data attributes:');
+    expect(inventory).toContain('[data-step-id="step-1"] <li>');
+    expect(inventory).toContain('[data-step-id="step-2"] <li>');
+    expect(inventory).toContain('[data-action="check"] <button>');
+
+    // Elements that already carry an id keep their data-* as row decoration
+    // and MUST NOT be duplicated as a standalone Stable data-attributes row —
+    // the model already has a real selector for them.
+    expect(inventory).toContain('#reset-btn');
+    expect(inventory).not.toContain('[data-action="reset"] <button>');
+  });
+
+  test('does not emit the sentinel when only id-less data-attribute targets exist', () => {
+    // A procedural widget whose rows are all data-only should not fall back
+    // to "(no interactive elements detected)" — the extractor must surface
+    // its stable data selectors instead.
+    const html = '<li data-step-id="step-1">Only step</li>';
+    const inventory = extractInteractiveElements(html);
+    expect(inventory).toContain('[data-step-id="step-1"] <li>');
+    expect(inventory).not.toBe('');
+  });
 });
