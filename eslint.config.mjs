@@ -76,6 +76,10 @@ const eslintConfig = defineConfig([
           ],
         },
       ],
+      // Cover every statically-analyzable `@/…` dynamic form: string-literal and
+      // template-literal sources, for `import()`, `require()` and `require.resolve()`.
+      // (Genuinely computed sources like `import(someVar)` are undecidable by lint
+      // and out of scope for any rule — the boundary catches all static forms.)
       'no-restricted-syntax': [
         'error',
         {
@@ -84,9 +88,31 @@ const eslintConfig = defineConfig([
             '@openmaic/renderer must not dynamically import from the host app (@/…). Inject host concerns via props/callbacks.',
         },
         {
+          selector: 'ImportExpression[source.quasis.0.value.cooked=/^@\\//]',
+          message:
+            '@openmaic/renderer must not dynamically import from the host app (@/…). Inject host concerns via props/callbacks.',
+        },
+        {
           selector: "CallExpression[callee.name='require'][arguments.0.value=/^@\\//]",
           message:
             '@openmaic/renderer must not require() from the host app (@/…). Inject host concerns via props/callbacks.',
+        },
+        {
+          selector: "CallExpression[callee.name='require'][arguments.0.quasis.0.value.cooked=/^@\\//]",
+          message:
+            '@openmaic/renderer must not require() from the host app (@/…). Inject host concerns via props/callbacks.',
+        },
+        {
+          selector:
+            "CallExpression[callee.object.name='require'][callee.property.name='resolve'][arguments.0.value=/^@\\//]",
+          message:
+            '@openmaic/renderer must not require.resolve() a host-app path (@/…). Inject host concerns via props/callbacks.',
+        },
+        {
+          selector:
+            "CallExpression[callee.object.name='require'][callee.property.name='resolve'][arguments.0.quasis.0.value.cooked=/^@\\//]",
+          message:
+            '@openmaic/renderer must not require.resolve() a host-app path (@/…). Inject host concerns via props/callbacks.',
         },
       ],
     },
