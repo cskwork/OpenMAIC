@@ -49,11 +49,18 @@ const eslintConfig = defineConfig([
     },
   },
   // Package boundary (machine-enforced): @openmaic/renderer is a standalone,
-  // app-agnostic package that depends only on @openmaic/dsl plus its declared
-  // peers. It must never reach back into the host app through the `@/…` path
-  // alias, so a deadline can't punch a "temporary" store/undo/media dependency
-  // through the package API. Host concerns (document + undo ownership, media
-  // resolution, i18n, hotkeys) are injected via props/callbacks instead.
+  // app-agnostic package. It must never reach back into the host app through
+  // the `@/…` path alias, so a deadline can't punch a "temporary"
+  // store/undo/media dependency through the package API. Host concerns
+  // (document + undo ownership, media resolution, i18n, hotkeys) are injected
+  // via props/callbacks instead.
+  //
+  // Coverage: `no-restricted-imports` handles static `import` / `export … from`
+  // (including `import type`); `no-restricted-syntax` closes the dynamic
+  // `import('@/…')` and `require('@/…')` bypasses, which the base rule does not
+  // catch (it registers no ImportExpression/CallExpression handler). Relative
+  // parent escapes (`../../app`) are outside this alias rule's scope; the
+  // package's own standalone `tsc` (rootDir: src) rejects those at build time.
   {
     files: ['packages/@openmaic/renderer/**/*.{ts,tsx,js,jsx,mjs,cjs}'],
     rules: {
@@ -67,6 +74,19 @@ const eslintConfig = defineConfig([
                 '@openmaic/renderer must not import from the host app (@/…). Depend only on @openmaic/dsl and declared peers; inject host concerns (stores, undo, media resolution, i18n, hotkeys) via props/callbacks.',
             },
           ],
+        },
+      ],
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'ImportExpression[source.value=/^@\\//]',
+          message:
+            '@openmaic/renderer must not dynamically import from the host app (@/…). Inject host concerns via props/callbacks.',
+        },
+        {
+          selector: "CallExpression[callee.name='require'][arguments.0.value=/^@\\//]",
+          message:
+            '@openmaic/renderer must not require() from the host app (@/…). Inject host concerns via props/callbacks.',
         },
       ],
     },
