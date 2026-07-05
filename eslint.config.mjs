@@ -98,7 +98,8 @@ const eslintConfig = defineConfig([
             '@openmaic/renderer must not require() from the host app (@/…). Inject host concerns via props/callbacks.',
         },
         {
-          selector: "CallExpression[callee.name='require'][arguments.0.quasis.0.value.cooked=/^@\\//]",
+          selector:
+            "CallExpression[callee.name='require'][arguments.0.quasis.0.value.cooked=/^@\\//]",
           message:
             '@openmaic/renderer must not require() from the host app (@/…). Inject host concerns via props/callbacks.',
         },
