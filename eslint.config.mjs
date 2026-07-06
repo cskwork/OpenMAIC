@@ -61,9 +61,11 @@ const eslintConfig = defineConfig([
   //
   // - `no-restricted-imports` covers static `import` / `export … from`
   //   (including `import type`).
-  // - `no-restricted-syntax` covers the dynamic call forms the base rule can't
-  //   see — `import()`, `require()`, `require.resolve()` — on single string- or
-  //   template-literal specifiers.
+  // - `no-restricted-syntax` covers the resolve/import call forms the base rule
+  //   can't see — `import()`, `require()`, `require.resolve()`,
+  //   `import.meta.resolve()` — on single string- or template-literal specifiers.
+  //   Together with the static forms above, this is the complete set of ways to
+  //   reference a module by a single literal specifier.
   //
   // Deliberately out of scope (not decidable by lint, and evasion-only): a
   // specifier assembled from non-literal parts — `import('@/lib/' + x)`,
@@ -119,6 +121,18 @@ const eslintConfig = defineConfig([
             "CallExpression[callee.object.name='require'][callee.property.name='resolve'][arguments.0.quasis.0.value.cooked=/^@\\//]",
           message:
             '@openmaic/renderer must not require.resolve() a host-app path (@/…). Inject host concerns via props/callbacks.',
+        },
+        {
+          selector:
+            "CallExpression[callee.object.type='MetaProperty'][callee.property.name='resolve'][arguments.0.value=/^@\\//]",
+          message:
+            '@openmaic/renderer must not import.meta.resolve() a host-app path (@/…). Inject host concerns via props/callbacks.',
+        },
+        {
+          selector:
+            "CallExpression[callee.object.type='MetaProperty'][callee.property.name='resolve'][arguments.0.quasis.0.value.cooked=/^@\\//]",
+          message:
+            '@openmaic/renderer must not import.meta.resolve() a host-app path (@/…). Inject host concerns via props/callbacks.',
         },
       ],
     },
