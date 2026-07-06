@@ -100,11 +100,18 @@ export class BrowserAssetProvider implements StorageProvider {
     if (cached) return cached;
     const pending = this.readAsUrl(ref);
     this.urls.set(ref, pending);
-    // Don't cache a miss: a later put(sameBytes) + resolve must be able to
-    // succeed. Only a real URL stays memoized (and is revoked on remove).
-    const url = await pending;
-    if (url === null) this.urls.delete(ref);
-    return url;
+    try {
+      const url = await pending;
+      // Don't cache a miss: a later put(sameBytes) + resolve must succeed. Only
+      // a real URL stays memoized (and is revoked on remove).
+      if (url === null) this.urls.delete(ref);
+      return url;
+    } catch (err) {
+      // Don't cache a transient failure either — otherwise every later
+      // resolve(ref) replays the same rejection, defeating openDb's retry.
+      this.urls.delete(ref);
+      throw err;
+    }
   }
 
   private async readAsUrl(ref: AssetRef): Promise<string | null> {

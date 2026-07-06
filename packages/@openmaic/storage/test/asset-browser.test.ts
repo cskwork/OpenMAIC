@@ -14,6 +14,34 @@ runStorageProviderContract(
   },
 );
 
+// A transient failure in resolve() must not be cached: the next resolve(ref)
+// has to retry, not replay the rejection.
+test('BrowserAssetProvider recovers after a transient resolve failure', async () => {
+  const real = new IDBFactory();
+  const ref = await new BrowserAssetProvider({ indexedDB: real, dbName: 'flaky-db' }).put(
+    new Blob(['seed'], { type: 'text/plain' }),
+  );
+
+  let failNextOpen = true;
+  const flaky = {
+    open: (name: string, version?: number) => {
+      if (failNextOpen) {
+        failNextOpen = false;
+        throw new Error('transient open failure');
+      }
+      return real.open(name, version);
+    },
+    deleteDatabase: real.deleteDatabase.bind(real),
+    cmp: real.cmp.bind(real),
+    databases: real.databases?.bind(real),
+  } as unknown as IDBFactory;
+
+  const provider = new BrowserAssetProvider({ indexedDB: flaky, dbName: 'flaky-db' });
+  await expect(provider.resolve(ref)).rejects.toThrow(); // first open throws
+  const url = await provider.resolve(ref); // retry must succeed, not replay the rejection
+  expect(url).not.toBeNull();
+});
+
 // Backend-specific: the content-addressing contract asserts identical bytes
 // yield the same ref; this asserts they actually collapse to ONE stored row,
 // so a backend that appended duplicates couldn't pass silently.
