@@ -55,84 +55,34 @@ const eslintConfig = defineConfig([
   // (document + undo ownership, media resolution, i18n, hotkeys) are injected
   // via props/callbacks instead.
   //
-  // Scope: reject *app imports* via the `@/…` alias — precisely, in import
-  // contexts only, so a legitimate `@/…` string that is not an import is not a
-  // false positive.
+  // Policy: the package must contain NO `@/…` path-alias string at all. `@/` is
+  // exclusively the host-app import alias, and the package authors zero such
+  // strings, so we match the string prefix wherever it appears rather than
+  // chasing individual call shapes. This is complete against every single-literal
+  // module-reference form — static / `import type` / `export … from`, dynamic
+  // `import()`, `require()`, `require.resolve()`, `import.meta.resolve()`, their
+  // computed-property (`require['resolve']`) and template-literal variants, and
+  // string-concatenation operands (`'@/lib/' + x`) — because all of them contain
+  // a `@/` literal. One rule, one report per violation.
   //
-  // - `no-restricted-imports` covers static `import` / `export … from`
-  //   (including `import type`).
-  // - `no-restricted-syntax` covers the resolve/import call forms the base rule
-  //   can't see — `import()`, `require()`, `require.resolve()`,
-  //   `import.meta.resolve()` — on single string- or template-literal specifiers.
-  //   Together with the static forms above, this is the complete set of ways to
-  //   reference a module by a single literal specifier.
-  //
-  // Deliberately out of scope (not decidable by lint, and evasion-only): a
-  // specifier assembled from non-literal parts — `import('@/lib/' + x)`,
-  // `import(dynamicVar)`, an aliased `require` — and relative parent escapes
-  // (`../../app`). These are caught by building/publishing the package in
+  // Out of scope (undecidable by lint, evasion-only): a specifier assembled
+  // entirely from non-`@/` pieces (`'@' + '/x'`, a variable) and relative parent
+  // escapes (`../../app`). Those are caught by building/publishing the package in
   // isolation (only `@openmaic/dsl` + declared peers external), not by this rule.
   {
     files: ['packages/@openmaic/renderer/**/*.{ts,tsx,js,jsx,mjs,cjs}'],
     rules: {
-      'no-restricted-imports': [
-        'error',
-        {
-          patterns: [
-            {
-              group: ['@/*', '@/**'],
-              message:
-                '@openmaic/renderer must not import from the host app (@/…). Depend only on @openmaic/dsl and declared peers; inject host concerns (stores, undo, media resolution, i18n, hotkeys) via props/callbacks.',
-            },
-          ],
-        },
-      ],
       'no-restricted-syntax': [
         'error',
         {
-          selector: 'ImportExpression[source.value=/^@\\//]',
+          selector: 'Literal[value=/^@\\//]',
           message:
-            '@openmaic/renderer must not dynamically import from the host app (@/…). Inject host concerns via props/callbacks.',
+            '@openmaic/renderer must not reference a host-app path (@/…). This package authors no `@/…` strings — depend only on @openmaic/dsl and declared peers, and inject host concerns (stores, undo, media resolution, i18n, hotkeys) via props/callbacks.',
         },
         {
-          selector: 'ImportExpression[source.quasis.0.value.cooked=/^@\\//]',
+          selector: 'TemplateElement[value.cooked=/^@\\//]',
           message:
-            '@openmaic/renderer must not dynamically import from the host app (@/…). Inject host concerns via props/callbacks.',
-        },
-        {
-          selector: "CallExpression[callee.name='require'][arguments.0.value=/^@\\//]",
-          message:
-            '@openmaic/renderer must not require() from the host app (@/…). Inject host concerns via props/callbacks.',
-        },
-        {
-          selector:
-            "CallExpression[callee.name='require'][arguments.0.quasis.0.value.cooked=/^@\\//]",
-          message:
-            '@openmaic/renderer must not require() from the host app (@/…). Inject host concerns via props/callbacks.',
-        },
-        {
-          selector:
-            "CallExpression[callee.object.name='require'][callee.property.name='resolve'][arguments.0.value=/^@\\//]",
-          message:
-            '@openmaic/renderer must not require.resolve() a host-app path (@/…). Inject host concerns via props/callbacks.',
-        },
-        {
-          selector:
-            "CallExpression[callee.object.name='require'][callee.property.name='resolve'][arguments.0.quasis.0.value.cooked=/^@\\//]",
-          message:
-            '@openmaic/renderer must not require.resolve() a host-app path (@/…). Inject host concerns via props/callbacks.',
-        },
-        {
-          selector:
-            "CallExpression[callee.object.type='MetaProperty'][callee.property.name='resolve'][arguments.0.value=/^@\\//]",
-          message:
-            '@openmaic/renderer must not import.meta.resolve() a host-app path (@/…). Inject host concerns via props/callbacks.',
-        },
-        {
-          selector:
-            "CallExpression[callee.object.type='MetaProperty'][callee.property.name='resolve'][arguments.0.quasis.0.value.cooked=/^@\\//]",
-          message:
-            '@openmaic/renderer must not import.meta.resolve() a host-app path (@/…). Inject host concerns via props/callbacks.',
+            '@openmaic/renderer must not reference a host-app path (@/…) in a template literal. Depend only on @openmaic/dsl and declared peers; inject host concerns via props/callbacks.',
         },
       ],
     },
