@@ -92,7 +92,22 @@ export class BrowserAssetProvider implements StorageProvider {
     const { ref, bytes } = await this.computeRef(data);
     const asset: StoredAsset = { bytes, contentType: meta?.contentType ?? data.type ?? '' };
     await this.tx('readwrite', (store) => store.put(asset, ref));
+    // A re-put with the same bytes but different metadata (e.g. a corrected
+    // contentType) overwrites the stored asset; drop any cached object URL for
+    // this ref so resolve() reflects the latest write instead of a stale one.
+    // Without this, resolved MIME would depend on cache warmth (a fresh
+    // provider would see the new type, this one the old).
+    await this.invalidateUrl(ref);
     return ref;
+  }
+
+  /** Revoke and forget the cached object URL for a ref, if any. */
+  private async invalidateUrl(ref: AssetRef): Promise<void> {
+    const pending = this.urls.get(ref);
+    if (!pending) return;
+    this.urls.delete(ref);
+    const url = await pending.catch(() => null);
+    if (url) URL.revokeObjectURL(url);
   }
 
   async resolve(ref: AssetRef): Promise<string | null> {
@@ -122,11 +137,6 @@ export class BrowserAssetProvider implements StorageProvider {
 
   async remove(ref: AssetRef): Promise<void> {
     await this.tx('readwrite', (store) => store.delete(ref));
-    const pending = this.urls.get(ref);
-    if (pending) {
-      this.urls.delete(ref);
-      const url = await pending.catch(() => null);
-      if (url) URL.revokeObjectURL(url);
-    }
+    await this.invalidateUrl(ref);
   }
 }

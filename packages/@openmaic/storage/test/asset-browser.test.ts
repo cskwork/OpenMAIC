@@ -14,6 +14,20 @@ runStorageProviderContract(
   },
 );
 
+// Re-putting the same bytes with a corrected contentType must not leave a
+// stale cached object URL: resolve() has to reflect the latest write, not
+// whatever was cached first (otherwise MIME depends on cache warmth).
+test('BrowserAssetProvider re-put updates the resolved contentType', async () => {
+  const provider = new BrowserAssetProvider({ indexedDB: new IDBFactory(), dbName: 'mime-db' });
+  const ref = await provider.put(new Blob(['pixels'], { type: '' }));
+  const first = await provider.resolve(ref);
+  expect(blobForObjectUrl(first!)?.type).toBe('');
+
+  await provider.put(new Blob(['pixels'], { type: 'image/png' }));
+  const second = await provider.resolve(ref);
+  expect(blobForObjectUrl(second!)?.type).toBe('image/png');
+});
+
 // A transient failure in resolve() must not be cached: the next resolve(ref)
 // has to retry, not replay the rejection.
 test('BrowserAssetProvider recovers after a transient resolve failure', async () => {
