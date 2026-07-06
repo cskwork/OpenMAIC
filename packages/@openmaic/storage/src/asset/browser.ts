@@ -31,8 +31,12 @@ export class BrowserAssetProvider implements StorageProvider {
   private readonly idb: IDBFactory;
   private readonly dbName: string;
   private dbPromise?: Promise<IDBDatabase>;
-  /** ref → object URL, so repeated `resolve` returns one stable URL per asset. */
-  private readonly urls = new Map<AssetRef, string>();
+  /**
+   * ref → the in-flight/settled object-URL resolution. Keyed on the promise so
+   * concurrent `resolve(ref)` calls share one `URL.createObjectURL` (never
+   * orphaning a second URL), and repeated `resolve` returns one stable URL.
+   */
+  private readonly urls = new Map<AssetRef, Promise<string | null>>();
 
   constructor(options: BrowserAssetProviderOptions = {}) {
     this.idb = options.indexedDB ?? globalThis.indexedDB;
@@ -40,13 +44,19 @@ export class BrowserAssetProvider implements StorageProvider {
   }
 
   private openDb(): Promise<IDBDatabase> {
-    this.dbPromise ??= new Promise((resolve, reject) => {
+    // Do NOT cache a rejected open: a transient failure (private-mode IDB, a
+    // one-off VersionError) would otherwise brick the provider for the whole
+    // session. Clear the memo on failure so the next call retries.
+    this.dbPromise ??= new Promise<IDBDatabase>((resolve, reject) => {
       const req = this.idb.open(this.dbName, 1);
       req.onupgradeneeded = () => {
         if (!req.result.objectStoreNames.contains(STORE)) req.result.createObjectStore(STORE);
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
+    }).catch((err) => {
+      this.dbPromise = undefined;
+      throw err;
     });
     return this.dbPromise;
   }
@@ -59,9 +69,16 @@ export class BrowserAssetProvider implements StorageProvider {
     return new Promise<T>((resolve, reject) => {
       const transaction = db.transaction(STORE, mode);
       const req = run(transaction.objectStore(STORE));
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-      transaction.onabort = () => reject(transaction.error);
+      let result: T;
+      req.onsuccess = () => {
+        result = req.result;
+      };
+      // Resolve on commit, not on the request success: a write that succeeds
+      // as a request can still abort at commit (e.g. QuotaExceededError), and
+      // reporting that as success would claim durability the store never gave.
+      transaction.oncomplete = () => resolve(result);
+      transaction.onerror = () => reject(transaction.error ?? req.error);
+      transaction.onabort = () => reject(transaction.error ?? req.error);
     });
   }
 
@@ -81,19 +98,28 @@ export class BrowserAssetProvider implements StorageProvider {
   async resolve(ref: AssetRef): Promise<string | null> {
     const cached = this.urls.get(ref);
     if (cached) return cached;
+    const pending = this.readAsUrl(ref);
+    this.urls.set(ref, pending);
+    // Don't cache a miss: a later put(sameBytes) + resolve must be able to
+    // succeed. Only a real URL stays memoized (and is revoked on remove).
+    const url = await pending;
+    if (url === null) this.urls.delete(ref);
+    return url;
+  }
+
+  private async readAsUrl(ref: AssetRef): Promise<string | null> {
     const asset = await this.tx<StoredAsset | undefined>('readonly', (store) => store.get(ref));
     if (!asset) return null;
-    const url = URL.createObjectURL(new Blob([asset.bytes], { type: asset.contentType }));
-    this.urls.set(ref, url);
-    return url;
+    return URL.createObjectURL(new Blob([asset.bytes], { type: asset.contentType }));
   }
 
   async remove(ref: AssetRef): Promise<void> {
     await this.tx('readwrite', (store) => store.delete(ref));
-    const url = this.urls.get(ref);
-    if (url) {
-      URL.revokeObjectURL(url);
+    const pending = this.urls.get(ref);
+    if (pending) {
       this.urls.delete(ref);
+      const url = await pending.catch(() => null);
+      if (url) URL.revokeObjectURL(url);
     }
   }
 }

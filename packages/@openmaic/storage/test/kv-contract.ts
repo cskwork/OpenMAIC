@@ -70,6 +70,16 @@ export function runKVStoreContract(name: string, makeStore: () => KVStore): void
       expect([...(await kv.keys())].sort()).toEqual(['a', 'b']);
     });
 
+    test('set(undefined) clears the key instead of corrupting it', async () => {
+      const kv = makeStore();
+      await kv.set('k', 'v');
+      await kv.set('k', undefined);
+      // Must return null, not throw — a stored literal "undefined" would throw
+      // on the JSON.parse in get().
+      expect(await kv.get('k')).toBeNull();
+      expect(await kv.keys()).not.toContain('k');
+    });
+
     test('remove is scoped', async () => {
       const kv = makeStore();
       await kv.set('k', 'device-val', 'device');

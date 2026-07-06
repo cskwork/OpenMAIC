@@ -45,7 +45,15 @@ export class BrowserKVStore implements KVStore {
   }
 
   async set<T>(key: string, value: T, scope: KVScope = DEFAULT_KV_SCOPE): Promise<void> {
-    this.storage.setItem(this.storageKey(key, scope), JSON.stringify(value));
+    const json = JSON.stringify(value);
+    // `JSON.stringify` yields `undefined` for values JSON can't represent
+    // (`undefined`, a function, a symbol). Storing that coerces to the literal
+    // string "undefined", which then throws on read — so treat it as a removal
+    // rather than writing an unreadable entry.
+    if (json === undefined) {
+      return this.remove(key, scope);
+    }
+    this.storage.setItem(this.storageKey(key, scope), json);
   }
 
   async remove(key: string, scope: KVScope = DEFAULT_KV_SCOPE): Promise<void> {

@@ -4,6 +4,7 @@
 // shims only cover the ambient APIs (object URLs, IndexedDB factory type,
 // crypto) a real browser supplies.
 import { webcrypto } from 'node:crypto';
+import { beforeEach } from 'vitest';
 
 // Node ≥20 exposes `globalThis.crypto`, but guard for older/edge runners so
 // content-hashing (crypto.subtle.digest) works the same as in a browser.
@@ -30,6 +31,13 @@ URL.revokeObjectURL = (url: string): void => {
 export function blobForObjectUrl(url: string): Blob | undefined {
   return objectUrls.get(url);
 }
+
+// Reset the object-URL registry between tests so nothing bleeds across cases
+// (the override is a global; without this the map grows for the whole run).
+beforeEach(() => {
+  objectUrls.clear();
+  seq = 0;
+});
 
 /**
  * Test-only in-memory `Storage` (localStorage-shaped) for injecting into the

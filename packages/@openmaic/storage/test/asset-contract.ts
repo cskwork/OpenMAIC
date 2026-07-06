@@ -8,7 +8,11 @@ import type { StorageProvider } from '@openmaic/dsl';
 type ReadUrl = (url: string) => Promise<Uint8Array>;
 
 const bytes = (s: string): Uint8Array => new TextEncoder().encode(s);
-const blob = (s: string, type = 'text/plain'): Blob => new Blob([bytes(s)], { type });
+// Build the Blob from the string directly (a string is a valid BlobPart). A
+// `Uint8Array` BlobPart trips TS 5.7+'s `Uint8Array<ArrayBufferLike>` vs
+// `ArrayBufferView<ArrayBuffer>` narrowing under the root tsconfig; the bytes
+// are UTF-8 either way, so `bytes(s)` stays the source of truth for comparison.
+const blob = (s: string, type = 'text/plain'): Blob => new Blob([s], { type });
 
 export function runStorageProviderContract(
   name: string,
@@ -43,6 +47,16 @@ export function runStorageProviderContract(
       const url = await p.resolve(ref);
       expect(url).not.toBeNull();
       expect(await readUrl(url!)).toEqual(bytes('round-trip me'));
+    });
+
+    test('concurrent resolve of the same ref yields one shared URL', async () => {
+      const p = makeProvider();
+      const ref = await p.put(blob('shared'));
+      // Two in-flight resolves must not each mint a URL (the second would orphan
+      // the first, which only `remove` could ever revoke). They share one.
+      const [a, b] = await Promise.all([p.resolve(ref), p.resolve(ref)]);
+      expect(a).not.toBeNull();
+      expect(a).toBe(b);
     });
 
     test('resolve returns null for an unknown ref', async () => {
