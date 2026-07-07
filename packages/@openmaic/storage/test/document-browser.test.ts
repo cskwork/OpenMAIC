@@ -324,4 +324,90 @@ describe('BrowserDocumentStore with an app-widened scene union', () => {
     const got = await store.getScene('stage-1', 'm1');
     expect(got!.content.data.get('k')).toBe(2);
   });
+
+  test('re-saves a scene whose Map/Set was only reordered', async () => {
+    // Map/Set iteration order is observable and IndexedDB preserves it, so an
+    // order-only edit (same entries, reordered) is a real change and must not be
+    // skipped by the write-diff.
+    interface OrderScene {
+      id: string;
+      stageId: string;
+      title: string;
+      order: number;
+      type: 'interactive';
+      content: { type: 'interactive'; m: Map<string, number>; s: Set<string> };
+    }
+    const store = new BrowserDocumentStore<OrderScene>({
+      indexedDB: new IDBFactory(),
+      validateScene: () => ({ valid: true }),
+    });
+    const base: OrderScene = {
+      id: 'o1',
+      stageId: 'stage-1',
+      title: 'W',
+      order: 0,
+      type: 'interactive',
+      content: {
+        type: 'interactive',
+        m: new Map([
+          ['a', 1],
+          ['b', 2],
+        ]),
+        s: new Set(['x', 'y']),
+      },
+    };
+    const stage = { id: 'stage-1', name: 'C', createdAt: 1, updatedAt: 2 };
+    await store.saveDocument({ stage, scenes: [base] });
+
+    // Same entries, reversed order — no membership/value change.
+    const reordered: OrderScene = {
+      ...base,
+      content: {
+        type: 'interactive',
+        m: new Map([
+          ['b', 2],
+          ['a', 1],
+        ]),
+        s: new Set(['y', 'x']),
+      },
+    };
+    await store.saveDocument({ stage: { ...stage, updatedAt: 3 }, scenes: [reordered] });
+
+    const got = await store.getScene('stage-1', 'o1');
+    expect([...got!.content.m.keys()]).toEqual(['b', 'a']);
+    expect([...got!.content.s]).toEqual(['y', 'x']);
+  });
+
+  test('re-saves a scene whose plain-object key order changed', async () => {
+    // Own string-key insertion order is observable and IndexedDB preserves it, so
+    // a key-order-only change is a real edit (same treatment as Map/Set).
+    interface ObjScene {
+      id: string;
+      stageId: string;
+      title: string;
+      order: number;
+      type: 'interactive';
+      content: { type: 'interactive'; cfg: Record<string, number> };
+    }
+    const store = new BrowserDocumentStore<ObjScene>({
+      indexedDB: new IDBFactory(),
+      validateScene: () => ({ valid: true }),
+    });
+    const base: ObjScene = {
+      id: 'p1',
+      stageId: 'stage-1',
+      title: 'W',
+      order: 0,
+      type: 'interactive',
+      content: { type: 'interactive', cfg: { a: 1, b: 2 } },
+    };
+    const stage = { id: 'stage-1', name: 'C', createdAt: 1, updatedAt: 2 };
+    await store.saveDocument({ stage, scenes: [base] });
+
+    const reordered: ObjScene = { ...base, content: { type: 'interactive', cfg: { b: 2, a: 1 } } };
+    await store.saveDocument({ stage: { ...stage, updatedAt: 3 }, scenes: [reordered] });
+
+    const got = await store.getScene('stage-1', 'p1');
+    expect(Object.keys(got!.content.cfg)).toEqual(['b', 'a']);
+  });
 });

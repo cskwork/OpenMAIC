@@ -39,8 +39,8 @@ a browser.
   would bake in a provider + expiry and break portability).
 - **Document normalization.** The DSL `document` is a portable embedded
   aggregate; `DocumentStore` normalizes it into per-entity rows so scene-level
-  saves stay cheap (writes diff and touch only changed scenes) and reassembles
-  it on read. Each document is stamped with a `dslVersion`; reads run the DSL
+  writes (`putScene`) stay cheap, and reassembles it on read. Each document is
+  stamped with a `dslVersion`; reads run the DSL
   migration ladder forward, and writes are validated against the DSL gate
   (`validateStage` / `validateScene`) so schema drift fails loud. The outline is
   an opaque, app-owned snapshot carried alongside — persisted verbatim, neither

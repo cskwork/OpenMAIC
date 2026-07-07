@@ -81,8 +81,10 @@ export interface DocumentSummary {
 export interface DocumentStore<TScene extends SceneLike = Scene> {
   /**
    * Validate the aggregate, stamp it at the current DSL version, split it into
-   * rows, and write only the children that changed (deleting removed scenes).
-   * Atomic: an invalid stage or scene throws before anything is written.
+   * rows, write every scene, and delete scenes no longer present. Atomic: an
+   * invalid stage or scene throws before anything is written. (Reliably diffing
+   * opaque scene content is not attempted; cheap per-scene writes use
+   * {@link putScene}.)
    */
   saveDocument(doc: MaicDocument<TScene>): Promise<void>;
 
