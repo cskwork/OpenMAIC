@@ -69,8 +69,9 @@ function assertValid(result: ReturnType<typeof validateStage>, label: string): v
  *   mismatch would store the scene where no read path for `stageId` can find it
  *   (silent data loss).
  * - `id` must be a string: the other half of the compound key.
- * - `order` must be a number: the read-time sort key; a non-number sorts as `NaN`
- *   and silently scrambles scene order on read.
+ * - `order` must be a finite number: the read-time sort key. A non-number — or
+ *   `NaN` / `Infinity`, which are `typeof number` — makes `a.order - b.order`
+ *   return `NaN` and silently scrambles scene order on read.
  *
  * The DSL `validateScene` happens to check all three, but an app that injects its
  * own validator may not — so the store re-asserts them rather than trust the
@@ -87,9 +88,9 @@ function assertStorableScene(scene: SceneLike, stageId: string): void {
         `${JSON.stringify(s.stageId)} but belongs to document ${JSON.stringify(stageId)}`,
     );
   }
-  if (typeof s.order !== 'number') {
+  if (typeof s.order !== 'number' || !Number.isFinite(s.order)) {
     throw new Error(
-      `@openmaic/storage: scene ${JSON.stringify(s.id)} order must be a number, got ` +
+      `@openmaic/storage: scene ${JSON.stringify(s.id)} order must be a finite number, got ` +
         `${JSON.stringify(s.order)}`,
     );
   }

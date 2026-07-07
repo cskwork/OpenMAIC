@@ -168,6 +168,15 @@ export function runDocumentStoreContract(name: string, makeStore: () => Document
       expect(await store.getScene('other-stage', 'stray')).toBeNull();
     });
 
+    test('rejects a scene with a non-finite order', async () => {
+      const store = makeStore();
+      const doc = makeDocument();
+      // NaN/Infinity are `typeof number` but break the read-time `order` sort.
+      (doc.scenes[0] as { order: number }).order = NaN;
+      await expect(store.saveDocument(doc)).rejects.toThrow();
+      expect(await store.loadDocument('stage-1')).toBeNull();
+    });
+
     test('rejects duplicate scene ids within a document', async () => {
       const store = makeStore();
       const doc = makeDocument('stage-1');
