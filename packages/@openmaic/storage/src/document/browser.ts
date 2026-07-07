@@ -95,6 +95,74 @@ function assertStorableScene(scene: SceneLike, stageId: string): void {
   }
 }
 
+function isPlainObject(v: object): boolean {
+  const proto = Object.getPrototypeOf(v) as unknown;
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Structural deep-equality used *only* to decide whether the write-diff may skip
+ * re-writing an unchanged scene. It must never report two different values as
+ * equal — a false positive would silently drop an edit — so anything it does not
+ * confidently recognize (a class instance, a Blob, a typed array) is treated as
+ * NOT equal, biasing the diff toward a harmless spurious write.
+ *
+ * A plain `JSON.stringify` compare is unsafe here because the store is generic
+ * over opaque app scene content, and IndexedDB persists structured-clone values
+ * (`Map` / `Set` / `Date`, `NaN`, `undefined` members, …) that JSON flattens or
+ * drops — so two genuinely different scenes could stringify identically. This
+ * recognizes the common cases (primitives incl. `NaN`, plain objects, arrays,
+ * `Map`, `Set`, `Date`) and declines to prove equality for anything else.
+ */
+function structuralEquals(a: unknown, b: unknown, depth = 0): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  // Bound recursion: cyclic or pathologically deep content is treated as "not
+  // provably equal" (→ write) rather than risking a stack overflow. Safe, since a
+  // spurious write never loses data; ordinary scene content is shallow.
+  if (depth > 100) return false;
+
+  if (a instanceof Date || b instanceof Date) {
+    return a instanceof Date && b instanceof Date && a.getTime() === b.getTime();
+  }
+
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!structuralEquals(a[i], b[i], depth + 1)) return false;
+    return true;
+  }
+
+  if (a instanceof Map || b instanceof Map) {
+    if (!(a instanceof Map) || !(b instanceof Map) || a.size !== b.size) return false;
+    // Object keys from two separate structured-clone copies are distinct refs, so
+    // `b.has(k)` fails for them → NOT equal → write (a safe spurious write, never
+    // a false positive). Primitive keys compare correctly.
+    for (const [k, v] of a)
+      if (!b.has(k) || !structuralEquals(v, b.get(k), depth + 1)) return false;
+    return true;
+  }
+
+  if (a instanceof Set || b instanceof Set) {
+    if (!(a instanceof Set) || !(b instanceof Set) || a.size !== b.size) return false;
+    for (const v of a) if (!b.has(v)) return false;
+    return true;
+  }
+
+  // Plain objects only. A non-plain object (class instance, typed array, Blob)
+  // may carry state not visible through own-enumerable keys, so decline to prove
+  // equality and let the diff write.
+  if (!isPlainObject(a) || !isPlainObject(b)) return false;
+  const ra = a as Record<string, unknown>;
+  const rb = b as Record<string, unknown>;
+  const keys = Object.keys(ra);
+  if (keys.length !== Object.keys(rb).length) return false;
+  for (const k of keys) {
+    if (!Object.prototype.hasOwnProperty.call(rb, k) || !structuralEquals(ra[k], rb[k], depth + 1))
+      return false;
+  }
+  return true;
+}
+
 /**
  * True when a document / stage row is stamped *ahead* of this client's
  * `DSL_VERSION` (`needsMigration` false means version >= current; a version that
@@ -265,16 +333,18 @@ export class BrowserDocumentStore<
       }
       stages.put(stageRow);
 
-      // Diff scenes: write only new/changed rows, delete removed ones. Bias to
-      // write when equality is uncertain — a spurious identical write is
-      // harmless (idempotent); a missed write would lose an edit.
+      // Diff scenes: write only new/changed rows, delete removed ones. Equality
+      // is decided by `structuralEquals`, which is safe for opaque app scene
+      // content (unlike a JSON compare) and biases to write when uncertain — a
+      // spurious identical write is harmless (idempotent); a missed write would
+      // lose an edit.
       const scenes = tx.objectStore(SCENES);
       const existing = await reqP<TScene[]>(scenes.index(SCENES_BY_STAGE).getAll(stageId));
       const existingById = new Map(existing.map((s) => [s.id, s]));
       const incomingIds = new Set(sceneRows.map((s) => s.id));
       for (const scene of sceneRows) {
         const prev = existingById.get(scene.id);
-        if (!prev || JSON.stringify(prev) !== JSON.stringify(scene)) scenes.put(scene);
+        if (!prev || !structuralEquals(prev, scene)) scenes.put(scene);
       }
       for (const prev of existing) {
         if (!incomingIds.has(prev.id)) scenes.delete([stageId, prev.id]);
@@ -306,6 +376,10 @@ export class BrowserDocumentStore<
   }
 
   async listDocuments(): Promise<DocumentSummary[]> {
+    // Deliberately version-agnostic: the summary fields do not depend on the DSL
+    // version and no content is migrated or returned here, so a corrupt/unknown
+    // `dslVersion` stamp is not read — one bad row must not break the whole list
+    // (it still fails loud when the document itself is loaded).
     return this.txRun([STAGES, SCENES], 'readonly', async (tx) => {
       const stageRows = await reqP<StageRow[]>(tx.objectStore(STAGES).getAll());
       const index = tx.objectStore(SCENES).index(SCENES_BY_STAGE);

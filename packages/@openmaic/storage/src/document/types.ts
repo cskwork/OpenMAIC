@@ -92,7 +92,13 @@ export interface DocumentStore<TScene extends SceneLike = Scene> {
    */
   loadDocument(stageId: string): Promise<MaicDocument<TScene> | null>;
 
-  /** A summary per stored document. */
+  /**
+   * A summary per stored document. Returns only version-independent fields
+   * (id / name / timestamps / sceneCount) and never migrates or reads content,
+   * so — unlike the content APIs — it intentionally tolerates a corrupt or
+   * unrecognized `dslVersion` stamp rather than failing the whole listing on one
+   * bad row (a broken document still surfaces fail-loud when actually opened).
+   */
   listDocuments(): Promise<DocumentSummary[]>;
 
   /**

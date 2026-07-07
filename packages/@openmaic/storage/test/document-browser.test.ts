@@ -165,6 +165,22 @@ describe('BrowserDocumentStore migrate-on-read', () => {
     // corrupt stored stamp also fails loud (recoverable via deleteDocument).
     await expect(store.saveDocument(makeDocument())).rejects.toThrow();
   });
+
+  test('listDocuments tolerates a malformed version stamp', async () => {
+    const idb = new IDBFactory();
+    const dbName = 'maic-documents-list-malformed';
+    const store = new BrowserDocumentStore({ indexedDB: idb, dbName });
+    await store.saveDocument(makeDocument());
+    await reStampStage(idb, dbName, 'stage-1', 'not-a-version');
+
+    // listDocuments returns only version-independent summary fields and never
+    // migrates or reads content, so a corrupt stamp does not break the whole list
+    // (one bad row must not make the picker unusable) — content reads still fail loud.
+    const list = await store.listDocuments();
+    expect(list.map((d) => d.id)).toEqual(['stage-1']);
+    expect(list[0]).toMatchObject({ name: 'Intro Course', sceneCount: 2 });
+    await expect(store.loadDocument('stage-1')).rejects.toThrow();
+  });
 });
 
 // The store is generic over the scene type: an app can persist its own widened
@@ -269,5 +285,43 @@ describe('BrowserDocumentStore with an app-widened scene union', () => {
     };
     await expect(store.saveDocument(mismatched)).rejects.toThrow();
     expect(await store.loadDocument('stage-1')).toBeNull();
+  });
+
+  test('re-saves a scene whose opaque structured-clone content changed', async () => {
+    // IndexedDB persists Map/Set/Date/… that JSON.stringify flattens to `{}`, so the
+    // write-diff must not compare opaque app content via JSON — a real edit to a
+    // Map value would otherwise stringify identically and be silently skipped.
+    interface MapScene {
+      id: string;
+      stageId: string;
+      title: string;
+      order: number;
+      type: 'interactive';
+      content: { type: 'interactive'; data: Map<string, number> };
+    }
+    const store = new BrowserDocumentStore<MapScene>({
+      indexedDB: new IDBFactory(),
+      validateScene: () => ({ valid: true }),
+    });
+    const base: MapScene = {
+      id: 'm1',
+      stageId: 'stage-1',
+      title: 'W',
+      order: 0,
+      type: 'interactive',
+      content: { type: 'interactive', data: new Map([['k', 1]]) },
+    };
+    const stage = { id: 'stage-1', name: 'C', createdAt: 1, updatedAt: 2 };
+    await store.saveDocument({ stage, scenes: [base] });
+
+    // Only the Map value changes; JSON.stringify(base) === JSON.stringify(edited).
+    const edited: MapScene = {
+      ...base,
+      content: { type: 'interactive', data: new Map([['k', 2]]) },
+    };
+    await store.saveDocument({ stage: { ...stage, updatedAt: 3 }, scenes: [edited] });
+
+    const got = await store.getScene('stage-1', 'm1');
+    expect(got!.content.data.get('k')).toBe(2);
   });
 });
