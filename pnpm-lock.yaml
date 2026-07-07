@@ -95,6 +95,9 @@ importers:
       '@napi-rs/canvas':
         specifier: ^0.1.88
         version: 0.1.96
+      '@openmaic/choreography':
+        specifier: workspace:*
+        version: link:packages/@openmaic/choreography
       '@openmaic/dsl':
         specifier: workspace:*
         version: link:packages/@openmaic/dsl
@@ -387,6 +390,25 @@ importers:
       vue-to-react:
         specifier: ^1.0.0
         version: 1.0.0
+
+  packages/@openmaic/choreography:
+    dependencies:
+      '@openmaic/dsl':
+        specifier: workspace:*
+        version: link:../dsl
+    devDependencies:
+      ajv:
+        specifier: ^8.17.1
+        version: 8.18.0
+      ts-json-schema-generator:
+        specifier: ~2.4.0
+        version: 2.4.0
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.8(@opentelemetry/api@1.9.0)(@types/node@22.19.15)(jsdom@9.12.0)(msw@2.12.10(@types/node@22.19.15)(typescript@5.9.3))(vite@8.0.0(@emnapi/core@1.8.1)(@emnapi/runtime@1.8.1)(@types/node@22.19.15)(esbuild@0.27.7)(jiti@2.6.1)(terser@5.48.0)(tsx@4.21.0)(yaml@2.9.0))
 
   packages/@openmaic/dsl:
     devDependencies:

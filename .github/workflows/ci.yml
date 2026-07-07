@@ -44,6 +44,12 @@ jobs:
       - name: Unit Tests (importer)
         run: pnpm --filter @openmaic/importer test
 
+      - name: Unit Tests (choreography)
+        run: pnpm --filter @openmaic/choreography test
+
+      - name: Typecheck (choreography)
+        run: pnpm --filter @openmaic/choreography typecheck
+
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest

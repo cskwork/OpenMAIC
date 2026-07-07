@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { resolvePlaybackCursor, EMPTY_SCENE_DWELL } from '@/lib/playback/engine-cursor';
-import type { Action } from '@/lib/types/action';
-import type { Scene } from '@/lib/types/stage';
+import { resolvePlaybackCursor, EMPTY_SCENE_DWELL } from '@openmaic/choreography';
+import type { Action, Scene } from '@openmaic/dsl';
 
 const a = (id: string): Action => ({ id, type: 'speech', text: id }) as Action;
 const sc = (id: string, actions: Action[]): Scene =>

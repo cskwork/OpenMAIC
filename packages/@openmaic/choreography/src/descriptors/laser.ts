@@ -1,0 +1,113 @@
+import type { AnimationDescriptor } from './types.js';
+
+/**
+ * laser.v1 — a laser dot flies in from the nearest off-screen corner to the
+ * element center, with a pulsing ring and a glowing core.
+ *
+ * Values captured verbatim from the `LaserOverlay` effect component
+ * (`motion/react`):
+ * - dot fly-in: left/top 500ms expo-out `[0.22,1,0.36,1]`; opacity 150ms;
+ *   start corner is `center > 50 ? 105 : -5` (percent) per axis.
+ * - exit: 250ms ease-in `[0.4,0,1,1]` back to the start corner.
+ * - ring: infinite pulse, scale 1→2.8, opacity 0.6→0, 1500ms easeOut, 300ms
+ *   repeat delay.
+ * - core: 10px square, glow `0 0 8px 2px {color}60`.
+ *
+ * Color default `#ff0000` (the app store default; the component's own default is
+ * `#ff3b30`, but the store value wins at runtime).
+ */
+export const laserV1: AnimationDescriptor = {
+  id: 'laser.v1',
+  version: 1,
+  effect: 'laser',
+  params: { color: '#ff0000' },
+  zIndex: 101,
+  layers: [
+    {
+      id: 'dot',
+      tracks: [
+        {
+          property: 'left',
+          from: { axis: 'centerX', threshold: 50, whenAbove: 105, whenBelow: -5 },
+          to: { ref: 'centerX' },
+          durationMs: 500,
+          easing: { type: 'cubicBezier', points: [0.22, 1, 0.36, 1] },
+          phase: 'enter',
+        },
+        {
+          property: 'top',
+          from: { axis: 'centerY', threshold: 50, whenAbove: 105, whenBelow: -5 },
+          to: { ref: 'centerY' },
+          durationMs: 500,
+          easing: { type: 'cubicBezier', points: [0.22, 1, 0.36, 1] },
+          phase: 'enter',
+        },
+        {
+          property: 'opacity',
+          from: 0,
+          to: 1,
+          durationMs: 150,
+          phase: 'enter',
+        },
+        {
+          property: 'left',
+          from: { ref: 'centerX' },
+          to: { axis: 'centerX', threshold: 50, whenAbove: 105, whenBelow: -5 },
+          durationMs: 250,
+          easing: { type: 'cubicBezier', points: [0.4, 0, 1, 1] },
+          phase: 'exit',
+        },
+        {
+          property: 'top',
+          from: { ref: 'centerY' },
+          to: { axis: 'centerY', threshold: 50, whenAbove: 105, whenBelow: -5 },
+          durationMs: 250,
+          easing: { type: 'cubicBezier', points: [0.4, 0, 1, 1] },
+          phase: 'exit',
+        },
+        {
+          property: 'opacity',
+          from: 1,
+          to: 0,
+          durationMs: 250,
+          easing: { type: 'cubicBezier', points: [0.4, 0, 1, 1] },
+          phase: 'exit',
+        },
+      ],
+    },
+    {
+      id: 'ring',
+      staticProps: { border: '1.5px solid {color}' },
+      tracks: [
+        {
+          property: 'scale',
+          from: 1,
+          to: 2.8,
+          durationMs: 1500,
+          easing: { type: 'named', name: 'easeOut' },
+          repeat: 'infinite',
+          repeatDelayMs: 300,
+        },
+        {
+          property: 'opacity',
+          from: 0.6,
+          to: 0,
+          durationMs: 1500,
+          easing: { type: 'named', name: 'easeOut' },
+          repeat: 'infinite',
+          repeatDelayMs: 300,
+        },
+      ],
+    },
+    {
+      id: 'core',
+      staticProps: {
+        width: 10,
+        height: 10,
+        backgroundColor: '{color}',
+        boxShadow: '0 0 8px 2px {color}60',
+      },
+      tracks: [],
+    },
+  ],
+};

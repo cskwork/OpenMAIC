@@ -111,6 +111,32 @@ const eslintConfig = defineConfig([
       ],
     },
   },
+  // Package boundary (machine-enforced): @openmaic/choreography is a standalone,
+  // app-agnostic orchestration spec (timing + action timeline + animation
+  // descriptors). Same policy as the boundaries above — it must contain NO
+  // `@/…` host-app path-alias string, so a deadline can't punch a "temporary"
+  // host dependency through the spec. It depends only on @openmaic/dsl and
+  // carries no React/DOM/render-backend concept, so the exporter can interpret
+  // it in a pure Node environment; both the app runtime and the exporter import
+  // the package, never the reverse.
+  {
+    files: ['packages/@openmaic/choreography/**/*.{ts,tsx,js,jsx,mjs,cjs}'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'Literal[value=/^@\\//]',
+          message:
+            '@openmaic/choreography must not reference a host-app path (@/…). This package authors no `@/…` strings — depend only on @openmaic/dsl. The app and exporter interpret the spec; neither is imported by it.',
+        },
+        {
+          selector: 'TemplateElement[value.cooked=/^@\\//]',
+          message:
+            '@openmaic/choreography must not reference a host-app path (@/…) in a template literal. Depend only on @openmaic/dsl.',
+        },
+      ],
+    },
+  },
 ]);
 
 export default eslintConfig;

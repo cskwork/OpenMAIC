@@ -1,0 +1,59 @@
+{
+  "name": "@openmaic/choreography",
+  "version": "0.0.1",
+  "description": "The MAIC orchestration spec: the pure, single source of truth for playback timing, the index→time action timeline, and versioned animation descriptors. Depends only on @openmaic/dsl; both the app runtime and the video exporter interpret it, so neither owns the semantics.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./schema/*": "./dist/schema/*"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "rm -rf dist && tsc -p tsconfig.json && node scripts/gen-schema.mjs",
+    "build:schema": "node scripts/gen-schema.mjs",
+    "dev": "tsc -p tsconfig.json --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "pnpm run build"
+  },
+  "keywords": [
+    "maic",
+    "choreography",
+    "orchestration",
+    "timing",
+    "animation",
+    "spec"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/THU-MAIC/OpenMAIC",
+    "directory": "packages/@openmaic/choreography"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "dependencies": {
+    "@openmaic/dsl": "workspace:*"
+  },
+  "devDependencies": {
+    "ajv": "^8.17.1",
+    "ts-json-schema-generator": "~2.4.0",
+    "typescript": "^5",
+    "vitest": "^4.1.8"
+  }
+}
