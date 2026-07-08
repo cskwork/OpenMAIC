@@ -155,19 +155,29 @@ describe('isIsoTimestamp', () => {
     expect(isIsoTimestamp('2024-02-29T00:00:00Z')).toBe(true); // real leap day
   });
 
-  it('rejects day-of-month overflow that Date.parse normalizes instead of failing', () => {
-    // V8 rolls these into the next month rather than returning NaN; the explicit
-    // day round-trip is what rejects them, engine-independently.
+  it('rejects calendar-impossible day-of-month, incl. leap-year rules', () => {
+    // V8 NORMALIZES full ISO datetimes like Feb 30 into the next month (a real
+    // instant, not NaN), so Date.parse cannot reject these; the component-level
+    // day-in-month check is what rejects them, engine-independently.
     expect(isIsoTimestamp('2026-02-30T00:00:00.000Z')).toBe(false);
-    expect(isIsoTimestamp('2026-02-29T00:00:00Z')).toBe(false); // 2026 is not a leap year
-    expect(isIsoTimestamp('2026-04-31T00:00:00Z')).toBe(false); // April has 30 days
+    expect(isIsoTimestamp('2026-02-29T00:00:00.000Z')).toBe(false); // 2026 is not a leap year
+    expect(isIsoTimestamp('2024-02-29T00:00:00.000Z')).toBe(true); // divisible by 4 -> leap
+    expect(isIsoTimestamp('2026-04-31T00:00:00.000Z')).toBe(false); // April has 30 days
+    expect(isIsoTimestamp('2100-02-29T00:00:00.000Z')).toBe(false); // century, not /400 -> not leap
+    expect(isIsoTimestamp('2000-02-29T00:00:00.000Z')).toBe(true); // divisible by 400 -> leap
   });
 
-  it('rejects field-range violations (Date.parse yields NaN)', () => {
+  it('rejects field-range violations', () => {
     expect(isIsoTimestamp('2026-13-01T00:00:00Z')).toBe(false); // month 13
     expect(isIsoTimestamp('2026-01-01T25:00:00Z')).toBe(false); // hour 25
+    expect(isIsoTimestamp('2026-01-01T24:00:00.000Z')).toBe(false); // hour 24 (no end-of-day form)
     expect(isIsoTimestamp('2026-01-01T00:60:00Z')).toBe(false); // minute 60
-    expect(isIsoTimestamp('2026-01-01T00:00:60Z')).toBe(false); // second 60
+    expect(isIsoTimestamp('2026-01-01T00:00:60Z')).toBe(false); // second 60 (leap second not accepted)
+  });
+
+  it('rejects out-of-range numeric zone offsets', () => {
+    expect(isIsoTimestamp('2026-01-01T00:00:00+25:00')).toBe(false); // offset hours 25
+    expect(isIsoTimestamp('2026-01-01T00:00:00+00:60')).toBe(false); // offset minutes 60
   });
 
   it('rejects zoneless and date-only forms (the regex requires a zone + time)', () => {
