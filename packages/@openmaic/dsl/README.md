@@ -170,10 +170,29 @@ A `RuntimeSession` carries its **own** version envelope field,
 rides its **own** version line: `RUNTIME_DSL_VERSION` and a dedicated
 `RUNTIME_DSL_MIGRATIONS` ladder, walked by `migrateRuntime` (not `migrate`), with
 `runtimeDslVersionOf` / `needsRuntimeMigration` as the runtime-line counterparts
-of `dslVersionOf` / `needsMigration`. The two lines stamp **different fields**,
-so neither ladder reads the other's version — but disjoint fields alone are not
-enough: a session lacking `dslVersion` would still read as *unversioned* to the
-document runner and be lifted onto the wrong line. The **cross-line guard** —
+of `dslVersionOf` / `needsMigration`.
+
+Unlike the document line, the runtime line has **no unversioned epoch**. Real
+pre-versioning documents exist, so `migrate` lifts an unstamped document from
+`UNVERSIONED_DSL_VERSION` via its first ladder entry. Nothing legitimately
+predates the runtime envelope, though — it is a brand-new contract, and the
+future `RuntimeStore` stamps `RUNTIME_DSL_VERSION` at write time. So a
+`RuntimeSession` is **born stamped** (`runtimeDslVersion` is a **required** field,
+not optional), `RUNTIME_DSL_MIGRATIONS` ships **empty** (no legacy-lift entry;
+the first real runtime shape change appends a step from the pinned
+`INITIAL_RUNTIME_DSL_VERSION` and bumps `RUNTIME_DSL_VERSION`), and an unstamped
+object reaching any runtime-line function (`migrateRuntime`,
+`needsRuntimeMigration`, `runtimeDslVersionOf`) **throws** — it is a misrouted
+legacy document or an unstamped producer write, not legacy data to lift.
+(Non-objects stay exempt: they are not migratable aggregates and read as
+unversioned on every line.) An empty ladder is still fully functional — a
+stamped-current session early-returns as already current, and a session stamped
+at an unknown older version hits the "no migration path" fail-loud.
+
+The two lines stamp **different fields**, so neither ladder reads the other's
+version — but disjoint fields alone are not enough: a session lacking
+`dslVersion` would still read as *unversioned* to the document runner and be
+lifted onto the wrong line. The **cross-line guard** —
 enforced in the shared envelope reader, so the plain `dslVersionOf` /
 `runtimeDslVersionOf` reads, the `needs*Migration` predicates, and the runners
 all give one answer per envelope — closes this with three-case semantics: (1) own line's stamp present → migrate normally
@@ -184,7 +203,8 @@ other line's aggregate misrouted here is byte-identical to this line's data
 carrying a stray foreign stamp; migrating would mangle the former, returning it
 unchanged would permanently orphan the latter from its own line — so it is
 treated like a malformed stamp and fails loud. `validateRuntimeSession`
-likewise rejects a stray `dslVersion` on a session at the door. The runner
+likewise rejects a session **missing** its `runtimeDslVersion` (born stamped, no
+legacy epoch) and a **stray** `dslVersion` on a session at the door. The runner
 mechanism (contiguous ladder, idempotent, forward-compatible, fail-loud) is
 shared; only the ladder, target version, own stamp field, and the sibling field
 the guard checks differ.

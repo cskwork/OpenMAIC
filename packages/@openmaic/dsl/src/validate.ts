@@ -290,19 +290,28 @@ export function validateRuntimeSession(doc: unknown): ValidationResult {
   if (typeof doc.updatedAt === 'string' && doc.updatedAt !== '' && !isIsoTimestamp(doc.updatedAt)) {
     errors.push({ path: '/updatedAt', message: 'expected ISO 8601 `updatedAt`' });
   }
-  // `runtimeDslVersion` is optional, but a present stamp must be a well-formed
-  // `x.y.z` string: `migrateRuntime`/`runtimeDslVersionOf` throw on a malformed
-  // stamp, so accepting a string like `'legacy'` here would only defer the
-  // failure to read time.
-  if (doc.runtimeDslVersion !== undefined) {
-    if (typeof doc.runtimeDslVersion !== 'string') {
-      errors.push({ path: '/runtimeDslVersion', message: 'expected string `runtimeDslVersion`' });
-    } else if (!isWellFormedDslVersion(doc.runtimeDslVersion)) {
-      errors.push({
-        path: '/runtimeDslVersion',
-        message: 'malformed `runtimeDslVersion`: expected x.y.z',
-      });
-    }
+  // `runtimeDslVersion` is REQUIRED on a session: sessions are stamped at write
+  // time and the runtime line has no unversioned epoch (nothing legitimately
+  // predates the runtime envelope), so an absent stamp is a bug — a misrouted
+  // legacy document or an unstamped producer write — not legacy data to lift.
+  // Kept as its own block (not folded into the required-field table) so an
+  // absent stamp gets a specific message and is reported exactly once at
+  // `/runtimeDslVersion`. A present stamp must be a well-formed `x.y.z` string:
+  // `migrateRuntime`/`runtimeDslVersionOf` throw on a malformed stamp, so
+  // accepting a string like `'legacy'` here would only defer the failure to
+  // read time.
+  if (doc.runtimeDslVersion === undefined) {
+    errors.push({
+      path: '/runtimeDslVersion',
+      message: 'missing `runtimeDslVersion`; runtime sessions are stamped at write time',
+    });
+  } else if (typeof doc.runtimeDslVersion !== 'string') {
+    errors.push({ path: '/runtimeDslVersion', message: 'expected string `runtimeDslVersion`' });
+  } else if (!isWellFormedDslVersion(doc.runtimeDslVersion)) {
+    errors.push({
+      path: '/runtimeDslVersion',
+      message: 'malformed `runtimeDslVersion`: expected x.y.z',
+    });
   }
   // A session versions on `runtimeDslVersion`; the document line's `dslVersion`
   // is never part of a session's shape. This is the one deliberate exception to

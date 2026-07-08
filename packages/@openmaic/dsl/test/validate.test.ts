@@ -109,18 +109,33 @@ describe('validateRuntimeSession', () => {
     status: 'active',
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
+    // Required: sessions are born stamped, the runtime line has no unversioned epoch.
+    runtimeDslVersion: '0.1.0',
   };
 
   it('accepts a minimal valid session', () => {
     expect(validateRuntimeSession(good)).toEqual({ valid: true });
   });
 
-  it('accepts an app-defined kind and an optional runtimeDslVersion', () => {
+  it('accepts an app-defined kind alongside the required runtimeDslVersion', () => {
     expect(
       validateRuntimeSession({ ...good, kind: 'myWidget', runtimeDslVersion: '0.1.0' }),
     ).toEqual({
       valid: true,
     });
+  });
+
+  it('rejects a session missing runtimeDslVersion, reported once at /runtimeDslVersion', () => {
+    // The stamp is required now: an absent one is a bug (a misrouted legacy
+    // document or an unstamped producer write), not legacy data to lift, since
+    // the runtime line has no unversioned epoch. Reported exactly once.
+    const { runtimeDslVersion: _v, ...noStamp } = good;
+    const result = validateRuntimeSession(noStamp);
+    expect(result.valid).toBe(false);
+    if (result.valid) throw new Error('unreachable');
+    const stampErrors = result.errors.filter((e) => e.path === '/runtimeDslVersion');
+    expect(stampErrors).toHaveLength(1);
+    expect(stampErrors[0].message).toMatch(/missing/);
   });
 
   it('rejects non-objects', () => {
@@ -141,6 +156,8 @@ describe('validateRuntimeSession', () => {
       '/status',
       '/createdAt',
       '/updatedAt',
+      // Required now: an empty session is missing the runtime stamp too.
+      '/runtimeDslVersion',
     ]) {
       expect(paths).toContain(p);
     }

@@ -30,12 +30,18 @@
  * Versioning: a session carries its OWN version field, `runtimeDslVersion`
  * (distinct from a document's `dslVersion`), and rides its OWN version line —
  * `RUNTIME_DSL_VERSION` + `migrateRuntime`, not the document's `DSL_VERSION` +
- * `migrate`. The two lines stamp different envelope fields, so neither ladder
- * reads the other's version — but disjoint fields alone would still let a
- * misrouted session be lifted (as unversioned) on the document line. The
- * cross-line guard in `runLadder` closes this: a runner throws on any
- * aggregate that carries the sibling line's stamp but not its own, surfacing
- * the misroute instead of guessing — and vice versa (see `version.ts`).
+ * `migrate`. The stamp is **required** on a session: sessions are born stamped
+ * at write time and the runtime line has **no unversioned epoch** (nothing
+ * legitimately predates this brand-new envelope, unlike real pre-versioning
+ * documents). So an unstamped object reaching the runtime line is a bug — a
+ * misrouted legacy document or an unstamped producer write — and fails loud
+ * (`noRuntimeEpochError`) rather than being lifted like a legacy document. The
+ * two lines stamp different envelope fields, so neither ladder reads the other's
+ * version — but disjoint fields alone would still let a misrouted session be
+ * lifted (as unversioned) on the document line. The cross-line guard in
+ * `runLadder` closes this: a runner throws on any aggregate that carries the
+ * sibling line's stamp but not its own, surfacing the misroute instead of
+ * guessing — and vice versa (see `version.ts`).
  *
  * No runtime dependencies. Pure types + plain data constants only.
  */
@@ -177,20 +183,31 @@ export function isCoreRuntimeKind(value: unknown): value is CoreRuntimeKind {
  * `(stageId, learnerKey)` plus a `kind`; a learner may hold several sessions
  * of the same kind on one stage (e.g. repeated quiz attempts).
  *
- * Extends {@link RuntimeVersioned}, so a session carries an optional
- * `runtimeDslVersion` serialized-contract stamp (absent on legacy data) — a
- * DIFFERENT envelope field from a document's `dslVersion`. Stamping +
- * migrate-on-read run on the runtime line only: a session is stamped with
- * `RUNTIME_DSL_VERSION` and migrated by `migrateRuntime`, independent of the
- * document's `DSL_VERSION` / `migrate`. The two stamps live on distinct fields
- * so neither ladder reads the other's; the cross-line guard in `runLadder`
- * turns a misrouted migration into a loud error rather than corruption — a
- * runner throws on any aggregate stamped on the sibling line but not its own,
- * and `validateRuntimeSession` rejects a stray `dslVersion` at the door
+ * Extends {@link RuntimeVersioned} but **overrides its stamp to required**: a
+ * session carries a `runtimeDslVersion` serialized-contract stamp — a DIFFERENT
+ * envelope field from a document's `dslVersion`. Sessions are **born stamped**:
+ * producers write `RUNTIME_DSL_VERSION` at creation and there is no unversioned
+ * epoch on the runtime line (nothing legitimately predates the envelope), so a
+ * stored session always carries the stamp; an absent one is a transient
+ * in-memory state at most, never valid stored data. Stamping + migrate-on-read
+ * run on the runtime line only: a session is migrated by `migrateRuntime`,
+ * independent of the document's `DSL_VERSION` / `migrate`. The two stamps live on
+ * distinct fields so neither ladder reads the other's; the cross-line guard in
+ * `runLadder` turns a misrouted migration into a loud error rather than
+ * corruption — a runner throws on any aggregate stamped on the sibling line but
+ * not its own — while a wholly-unstamped object hitting the runtime line throws
+ * `noRuntimeEpochError` (no legacy lift), and `validateRuntimeSession` rejects
+ * both a missing `runtimeDslVersion` and a stray `dslVersion` at the door
  * (see `version.ts`).
  */
 export interface RuntimeSession extends RuntimeVersioned {
   id: string;
+  /**
+   * Runtime-contract version this session was written at. Required: sessions are
+   * born stamped with `RUNTIME_DSL_VERSION`; the runtime line has no unversioned
+   * epoch, so this narrows {@link RuntimeVersioned}'s optional field to mandatory.
+   */
+  runtimeDslVersion: string;
   /** {@link CoreRuntimeKind} or an app-defined kind. */
   kind: string;
   stageId: string;

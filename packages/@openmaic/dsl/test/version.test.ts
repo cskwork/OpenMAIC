@@ -37,35 +37,59 @@ describe('DSL_MIGRATIONS ladder invariants', () => {
 });
 
 describe('RUNTIME_DSL_MIGRATIONS ladder invariants', () => {
-  it('is a contiguous chain ending at RUNTIME_DSL_VERSION', () => {
-    // The runtime ladder is a *separate* version line from the document ladder
-    // (they version independent serialized shapes), but obeys the same
-    // contiguity + terminal-endpoint invariants.
-    expect(RUNTIME_DSL_MIGRATIONS.length).toBeGreaterThan(0);
+  it('is empty today — the runtime line has no unversioned epoch to lift from', () => {
+    // Unlike the document ladder, the runtime ladder ships EMPTY: the runtime
+    // envelope is brand new (nothing legitimately predates it), so there is no
+    // legacy-lift first entry. It stays a valid, fully-functional ladder — an
+    // empty ladder just means every stamped-current session is already at the
+    // target and no walk is needed.
+    expect(RUNTIME_DSL_MIGRATIONS.length).toBe(0);
+  });
+
+  it('IF non-empty (future), is a contiguous chain ending at RUNTIME_DSL_VERSION', () => {
+    // Guards the invariant the *first real* runtime shape change must satisfy:
+    // a contiguous chain whose last `to` reaches RUNTIME_DSL_VERSION. Vacuously
+    // true while empty; becomes a real check the moment a step is appended.
     for (let i = 1; i < RUNTIME_DSL_MIGRATIONS.length; i++) {
       expect(RUNTIME_DSL_MIGRATIONS[i].from).toBe(RUNTIME_DSL_MIGRATIONS[i - 1].to);
     }
-    expect(RUNTIME_DSL_MIGRATIONS[RUNTIME_DSL_MIGRATIONS.length - 1].to).toBe(RUNTIME_DSL_VERSION);
-  });
-
-  it('begins by lifting legacy (unversioned) runtime data', () => {
-    expect(RUNTIME_DSL_MIGRATIONS[0].from).toBe(UNVERSIONED_DSL_VERSION);
+    if (RUNTIME_DSL_MIGRATIONS.length > 0) {
+      expect(RUNTIME_DSL_MIGRATIONS[RUNTIME_DSL_MIGRATIONS.length - 1].to).toBe(
+        RUNTIME_DSL_VERSION,
+      );
+    }
   });
 });
 
 describe('migrateRuntime', () => {
-  it('stamps legacy runtime data onto runtimeDslVersion, not the document key', () => {
-    const out = migrateRuntime({ id: 'sess' }) as Record<string, unknown>;
-    expect(out[RUNTIME_DSL_VERSION_KEY]).toBe(RUNTIME_DSL_VERSION);
-    // The runtime line never touches the document envelope field.
-    expect(out[DSL_VERSION_KEY]).toBeUndefined();
+  it('throws on an unstamped object — the runtime line has no unversioned epoch', () => {
+    // Unlike the document line, an unstamped object is NOT legacy data to lift:
+    // sessions are born stamped, so this is a misrouted legacy document or an
+    // unstamped producer write — fail loud instead of inventing a version.
+    expect(() => migrateRuntime({ id: 'sess' })).toThrow(/no unversioned epoch/);
   });
 
-  it('is idempotent and returns non-objects unchanged', () => {
-    const once = migrateRuntime({ id: 's' });
+  it('is idempotent on a stamped-current session and returns non-objects unchanged', () => {
+    // An already-current (stamped) session early-returns by reference — the
+    // empty ladder needs no walk once the object is at the target version.
+    const once = { id: 's', [RUNTIME_DSL_VERSION_KEY]: RUNTIME_DSL_VERSION };
     expect(migrateRuntime(once)).toBe(once);
+    expect(migrateRuntime(migrateRuntime(once))).toBe(once);
+    // Non-objects are not migratable aggregates: returned as-is on every line,
+    // never subject to the no-epoch throw.
     expect(migrateRuntime(42)).toBe(42);
     expect(migrateRuntime(null)).toBe(null);
+  });
+
+  it('stamps only the runtime envelope field, never the document key', () => {
+    // A doubly-stamped-free session at the current version keeps the runtime
+    // stamp and never grows a `dslVersion`.
+    const out = migrateRuntime({
+      id: 'sess',
+      [RUNTIME_DSL_VERSION_KEY]: RUNTIME_DSL_VERSION,
+    }) as Record<string, unknown>;
+    expect(out[RUNTIME_DSL_VERSION_KEY]).toBe(RUNTIME_DSL_VERSION);
+    expect(out[DSL_VERSION_KEY]).toBeUndefined();
   });
 
   it('leaves a forward-versioned runtime document untouched', () => {
@@ -75,7 +99,8 @@ describe('migrateRuntime', () => {
 
   it('fails loud when the ladder has no path from the runtime version', () => {
     // A runtime version older than RUNTIME_DSL_VERSION with no matching `from`
-    // entry — mirrors the document ladder's unbridgeable-stamp case.
+    // entry — with an empty ladder, ANY stamped-older version hits this. Mirrors
+    // the document ladder's unbridgeable-stamp case.
     expect(() => migrateRuntime({ id: 's', [RUNTIME_DSL_VERSION_KEY]: '0.0.5' })).toThrow(
       /no migration path/,
     );
@@ -127,26 +152,35 @@ describe('cross-line guard (ambiguous envelopes fail loud, not reinterpreted)', 
     expect(migratedRuntime[DSL_VERSION_KEY]).toBe(DSL_VERSION);
   });
 
-  it('an object with NEITHER stamp still gets the legacy lift on both runners', () => {
-    // Case (2): both stamps absent → genuine legacy data, walk the own ladder
-    // as before. The guard must NOT intercept this: each runner lifts it onto
-    // its own line.
+  it('an object with NEITHER stamp: document line lifts it, runtime line throws (no epoch)', () => {
+    // Case (2), but the two lines diverge here. The document line HAS an
+    // unversioned epoch → genuine legacy data, lifted onto its own ladder. The
+    // runtime line has NO unversioned epoch → an unstamped object is a misrouted
+    // legacy document or an unstamped producer write, so it fails loud instead.
     const legacy = { id: 'z', name: 'course' };
     const lifted = migrate(legacy) as Record<string, unknown>;
     expect(lifted[DSL_VERSION_KEY]).toBe(DSL_VERSION);
     expect(lifted[RUNTIME_DSL_VERSION_KEY]).toBeUndefined();
     expect(lifted.name).toBe('course');
 
-    const liftedRuntime = migrateRuntime(legacy) as Record<string, unknown>;
-    expect(liftedRuntime[RUNTIME_DSL_VERSION_KEY]).toBe(RUNTIME_DSL_VERSION);
-    expect(liftedRuntime[DSL_VERSION_KEY]).toBeUndefined();
-    expect(liftedRuntime.name).toBe('course');
+    expect(() => migrateRuntime(legacy)).toThrow(/no unversioned epoch/);
   });
 });
 
 describe('runtimeDslVersionOf', () => {
   it('reads a stamped runtime version', () => {
     expect(runtimeDslVersionOf({ [RUNTIME_DSL_VERSION_KEY]: '9.9.9' })).toBe('9.9.9');
+  });
+  it('throws on an unstamped object (no unversioned epoch)', () => {
+    // The runtime line has no legacy epoch, so an unstamped object does not read
+    // as `0.0.0` here — it throws, matching migrateRuntime / needsRuntimeMigration.
+    expect(() => runtimeDslVersionOf({ id: 'x' })).toThrow(/no unversioned epoch/);
+  });
+  it('reads non-objects as unversioned (not migratable aggregates)', () => {
+    // Non-objects are exempt from the no-epoch throw on every line — they are not
+    // migratable aggregates and read as the unversioned sentinel.
+    expect(runtimeDslVersionOf(null)).toBe(UNVERSIONED_DSL_VERSION);
+    expect(runtimeDslVersionOf('nope')).toBe(UNVERSIONED_DSL_VERSION);
   });
   it('throws on an ambiguous document-stamped envelope (authoritative read)', () => {
     // Reading this as unversioned would report `0.0.0` for data migrateRuntime
@@ -163,8 +197,12 @@ describe('runtimeDslVersionOf', () => {
 });
 
 describe('needsRuntimeMigration', () => {
-  it('is true for unstamped sessions and false at/ahead of the current version', () => {
-    expect(needsRuntimeMigration({ id: 'legacy' })).toBe(true);
+  it('throws on an unstamped session (no epoch) and is false at/ahead of the current version', () => {
+    // No unversioned epoch: an unstamped object is a bug, not legacy data, so the
+    // predicate throws — matching migrateRuntime, so a
+    // `while (needsRuntimeMigration(x)) x = migrateRuntime(x)` loop fails loud on
+    // the same input rather than spinning.
+    expect(() => needsRuntimeMigration({ id: 'legacy' })).toThrow(/no unversioned epoch/);
     expect(needsRuntimeMigration({ [RUNTIME_DSL_VERSION_KEY]: RUNTIME_DSL_VERSION })).toBe(false);
     expect(needsRuntimeMigration({ [RUNTIME_DSL_VERSION_KEY]: '99.0.0' })).toBe(false);
   });

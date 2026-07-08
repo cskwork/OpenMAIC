@@ -77,6 +77,35 @@ describe('runtime envelope shapes (compile-time contract)', () => {
     expect(quiz.payload.phase).toBe('submitted');
   });
 
+  it('requires runtimeDslVersion on a session at the type level (born stamped)', () => {
+    // The stamp is required: a session is born stamped and the runtime line has
+    // no unversioned epoch, so a directly-constructed session omitting it is a
+    // type error. (Envelope-view code operates over `RuntimeVersioned`, whose
+    // field stays optional; this required-ness is specific to `RuntimeSession`.)
+    // @ts-expect-error runtimeDslVersion is required on a RuntimeSession
+    const bad: RuntimeSession = {
+      id: 's1',
+      kind: 'chat',
+      stageId: 'stage1',
+      learnerKey: 'anon:device-1',
+      status: 'active',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    void bad;
+    const good: RuntimeSession = {
+      id: 's1',
+      kind: 'chat',
+      stageId: 'stage1',
+      learnerKey: 'anon:device-1',
+      status: 'active',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      runtimeDslVersion: RUNTIME_DSL_VERSION,
+    };
+    expect(good.runtimeDslVersion).toBe(RUNTIME_DSL_VERSION);
+  });
+
   it('excludes undefined from payload at the type level (aligns with the validator)', () => {
     // The validator rejects `payload: undefined`; the static type must agree, so
     // `undefined` is not assignable to the payload — this is a type error.
@@ -191,12 +220,13 @@ describe('isIsoTimestamp', () => {
 });
 
 describe('runtime envelope rides the dedicated runtime version ladder', () => {
-  it('lifts an unversioned session to the current RUNTIME_DSL_VERSION', () => {
-    // A RuntimeSession persisted before the `runtimeDslVersion` stamp existed:
-    // no envelope field, so `migrateRuntime` treats it as legacy/unversioned and
-    // walks it up the *runtime* ladder, stamping the result. Runtime state
-    // migrates on its own version line, not the document ladder.
-    const legacy: Omit<RuntimeSession, 'runtimeDslVersion'> = {
+  it('throws on an unstamped session — the runtime line has no unversioned epoch', () => {
+    // A session is born stamped (`runtimeDslVersion` is required, written at
+    // creation), so an object arriving WITHOUT the stamp is not legacy data to
+    // lift — it is a misrouted legacy document or an unstamped producer write.
+    // `migrateRuntime` fails loud rather than inventing a version, because the
+    // runtime line has no unversioned epoch (unlike the document line).
+    const unstamped: Omit<RuntimeSession, 'runtimeDslVersion'> = {
       id: 's1',
       kind: 'chat',
       stageId: 'stage1',
@@ -205,10 +235,7 @@ describe('runtime envelope rides the dedicated runtime version ladder', () => {
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:00:00.000Z',
     };
-    const lifted = migrateRuntime(legacy) as RuntimeSession;
-    expect(lifted.runtimeDslVersion).toBe(RUNTIME_DSL_VERSION);
-    // Migration is pure: the payload is carried through untouched, only stamped.
-    expect(lifted).toEqual({ ...legacy, runtimeDslVersion: RUNTIME_DSL_VERSION });
+    expect(() => migrateRuntime(unstamped)).toThrow(/no unversioned epoch/);
   });
 
   it('leaves a current-version session untouched', () => {

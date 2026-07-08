@@ -29,7 +29,13 @@ export type DslVersion = typeof DSL_VERSION;
 /**
  * The version a document is treated as when it carries no {@link DSL_VERSION_KEY}
  * stamp: everything written before the version field existed. The first
- * migration lifts these legacy documents forward.
+ * {@link DSL_MIGRATIONS} entry lifts these legacy documents forward.
+ *
+ * A **document-line-only** concept. The runtime line has no unversioned epoch —
+ * its envelope is brand new and stamped at write time, so it lifts nothing (see
+ * {@link RUNTIME_DSL_MIGRATIONS} / {@link noRuntimeEpochError}). This constant
+ * therefore names the document line's legacy origin; the runtime runner passes
+ * `null` for its legacy version instead of reusing it.
  */
 export const UNVERSIONED_DSL_VERSION = '0.0.0' as const;
 
@@ -77,13 +83,29 @@ export interface DslVersioned {
 }
 
 /**
- * A runtime session that may carry a runtime-contract version stamp. The
- * runtime counterpart of {@link DslVersioned}, stamped by {@link migrateRuntime}
- * on a **different** envelope field ({@link RUNTIME_DSL_VERSION_KEY}) so the two
- * version lines are byte-distinguishable, not convention-separated.
+ * A runtime aggregate that **may** carry a runtime-contract version stamp — the
+ * envelope-layer type the readers ({@link runtimeDslVersionOf}), predicate
+ * ({@link needsRuntimeMigration}), and runner ({@link migrateRuntime}) operate
+ * over, all of which accept `unknown` and tolerate an absent stamp at the type
+ * level. The runtime counterpart of {@link DslVersioned}, stamped by
+ * {@link migrateRuntime} on a **different** envelope field
+ * ({@link RUNTIME_DSL_VERSION_KEY}) so the two version lines are
+ * byte-distinguishable, not convention-separated.
+ *
+ * The field is optional *here* because this is the "may carry" envelope view.
+ * For a {@link RuntimeSession} the stamp is **required** — sessions are born
+ * stamped, there is no unversioned epoch (see {@link RUNTIME_DSL_VERSION}), so an
+ * absent `runtimeDslVersion` is only a transient in-memory state before the
+ * producer stamps it, never a stored one; a stored session without it is a bug
+ * the runtime-line functions and {@link RuntimeSession}'s required override both
+ * reject.
  */
 export interface RuntimeVersioned {
-  /** Runtime-contract version this session was written at. Absent on legacy data. */
+  /**
+   * Runtime-contract version this aggregate was written at. Optional on this
+   * envelope view; {@link RuntimeSession} overrides it to required (born stamped,
+   * no legacy epoch).
+   */
   runtimeDslVersion?: string;
 }
 
@@ -144,6 +166,15 @@ export const DSL_MIGRATIONS: readonly DslMigration[] = [
  * carries the *sibling* line's stamp but not its own, so a misrouted document
  * migration surfaces as an error instead of stamping a foreign `dslVersion`
  * onto a runtime session.
+ *
+ * Unlike {@link DSL_VERSION}, this line has **no unversioned epoch**. Real
+ * pre-versioning *documents* exist, so the document line lifts an unstamped
+ * document from {@link UNVERSIONED_DSL_VERSION}; nothing legitimately predates
+ * the runtime envelope, and the future `RuntimeStore` stamps this version at
+ * write time. So an object reaching a runtime-line function *without* a stamp is
+ * not legacy data — it is a misrouted legacy document or an unstamped producer
+ * write, and fails loud (see {@link noRuntimeEpochError}) rather than being
+ * lifted. {@link RUNTIME_DSL_MIGRATIONS} accordingly ships empty.
  */
 export const RUNTIME_DSL_VERSION = '0.1.0' as const;
 
@@ -154,27 +185,36 @@ export type RuntimeDslVersion = typeof RUNTIME_DSL_VERSION;
  * moving {@link RUNTIME_DSL_VERSION} (see {@link INITIAL_DSL_VERSION} for why
  * migration endpoints must be immutable). Equal to `RUNTIME_DSL_VERSION` today;
  * the two diverge the moment the runtime shape first changes.
+ *
+ * The runtime line **starts here**, not at an unversioned epoch: there is no
+ * pre-versioning runtime data to lift, so {@link RUNTIME_DSL_MIGRATIONS} ships
+ * empty and this pinned version is the `from` of the first real step appended
+ * when the runtime shape first changes.
  */
 export const INITIAL_RUNTIME_DSL_VERSION = '0.1.0' as const;
 
 /**
  * Ordered migration ladder for the runtime contract, wholly independent of
- * {@link DSL_MIGRATIONS}. Same invariants (contiguous chain, last `to` ===
- * {@link RUNTIME_DSL_VERSION}, every endpoint a **pinned literal**), same
- * legacy-lift shape: the first entry stamps pre-`runtimeDslVersion` runtime data
- * up to {@link INITIAL_RUNTIME_DSL_VERSION} as a no-op transform (the runtime
- * shape is brand new, so nothing predates 0.1.0 to reshape — the entry just
- * wires the pipeline and gives real runtime data a version to migrate forward
- * from).
+ * {@link DSL_MIGRATIONS}. Same invariants when non-empty (contiguous chain, last
+ * `to` === {@link RUNTIME_DSL_VERSION}, every endpoint a **pinned literal**), but
+ * — unlike the document ladder — it starts **empty**, with NO legacy-lift entry.
  *
- * It shares {@link UNVERSIONED_DSL_VERSION} as its legacy origin because that
- * constant names "wrote no version stamp" — the absence of a stamp, not a shape.
- * Each ladder reads its own envelope field, so the shared origin value never
- * conflates the two lines.
+ * The runtime line has **no unversioned epoch**. Its envelope is a brand-new
+ * contract: the future `RuntimeStore` stamps {@link RUNTIME_DSL_VERSION} at write
+ * time, so nothing legitimately predates {@link INITIAL_RUNTIME_DSL_VERSION} and
+ * there is no pre-versioning runtime data to lift. An unstamped object reaching
+ * {@link migrateRuntime} is therefore a bug, not legacy data, and fails loud (see
+ * {@link noRuntimeEpochError}) rather than being lifted by a no-op first entry.
+ *
+ * The first real runtime shape change bumps {@link RUNTIME_DSL_VERSION} and
+ * appends a step from the pinned {@link INITIAL_RUNTIME_DSL_VERSION} to the new
+ * version — the same append discipline as {@link DSL_MIGRATIONS}, just without a
+ * pre-seeded legacy row. An empty ladder is fully functional: a session already
+ * stamped at {@link RUNTIME_DSL_VERSION} early-returns from {@link migrateRuntime}
+ * as current, and a session stamped at some unknown older version hits the
+ * "no migration path" fail-loud.
  */
-export const RUNTIME_DSL_MIGRATIONS: readonly DslMigration[] = [
-  { from: UNVERSIONED_DSL_VERSION, to: INITIAL_RUNTIME_DSL_VERSION, migrate: (doc) => doc },
-];
+export const RUNTIME_DSL_MIGRATIONS: readonly DslMigration[] = [];
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -218,8 +258,18 @@ function compareVersions(a: string, b: string): number {
  * envelope rule is enforced, so the plain readers, the `needs*Migration`
  * predicates, and the migration runners all give one answer for one envelope:
  *
- * - A non-object, or an object with neither line's stamp, is treated as
- *   {@link UNVERSIONED_DSL_VERSION} (legacy / pre-versioning data).
+ * - A non-object is not a migratable aggregate: it is treated as
+ *   {@link UNVERSIONED_DSL_VERSION} on every line, an established convention the
+ *   runners (return input) and predicates (false) mirror. `legacyVersion` does
+ *   NOT govern non-objects — only the "object present but wholly unstamped" case.
+ * - An object with neither line's stamp is legacy / pre-versioning data. What
+ *   that means depends on the line: the caller passes `legacyVersion` = the
+ *   version an unstamped aggregate is lifted from ({@link UNVERSIONED_DSL_VERSION}
+ *   for the document line, whose real pre-versioning documents exist), or `null`
+ *   for a line with **no unversioned epoch** (the runtime line — its envelope is
+ *   brand new, nothing legitimately predates it), in which case this **throws**
+ *   {@link noRuntimeEpochError} rather than inventing a version for a misrouted
+ *   legacy document or an unstamped producer write.
  * - A **present but malformed** stamp (not a well-formed `x.y.z` string) is
  *   corrupt data making a false version claim, so this **throws** rather than
  *   letting a bad stamp silently compare as some arbitrary version and bypass
@@ -229,12 +279,18 @@ function compareVersions(a: string, b: string): number {
  *   unversioned would let a version report claim `0.0.0` for data the runner
  *   refuses to migrate.
  */
-function versionOf(doc: unknown, key: string, otherKey: string): string {
+function versionOf(
+  doc: unknown,
+  key: string,
+  otherKey: string,
+  legacyVersion: string | null,
+): string {
   if (!isObject(doc)) return UNVERSIONED_DSL_VERSION;
   const raw = doc[key];
   if (raw === undefined) {
     if (doc[otherKey] !== undefined) throw crossLineError(key, otherKey);
-    return UNVERSIONED_DSL_VERSION;
+    if (legacyVersion === null) throw noRuntimeEpochError();
+    return legacyVersion;
   }
   if (typeof raw !== 'string' || !isWellFormedDslVersion(raw)) {
     throw new Error(
@@ -252,7 +308,7 @@ function versionOf(doc: unknown, key: string, otherKey: string): string {
  * one for data {@link migrate} refuses to touch (see {@link versionOf}).
  */
 export function dslVersionOf(doc: unknown): string {
-  return versionOf(doc, DSL_VERSION_KEY, RUNTIME_DSL_VERSION_KEY);
+  return versionOf(doc, DSL_VERSION_KEY, RUNTIME_DSL_VERSION_KEY, UNVERSIONED_DSL_VERSION);
 }
 
 /**
@@ -260,10 +316,15 @@ export function dslVersionOf(doc: unknown): string {
  * its {@link RUNTIME_DSL_VERSION_KEY} envelope field — the runtime-line
  * counterpart of {@link dslVersionOf}, reading a disjoint field. Same rules,
  * including the cross-line throw on an ambiguous envelope (see
- * {@link versionOf}).
+ * {@link versionOf}), with **one difference**: the runtime line has no
+ * unversioned epoch, so an unstamped object (not a non-object — those still read
+ * as {@link UNVERSIONED_DSL_VERSION}) **throws** {@link noRuntimeEpochError}
+ * rather than reading as `0.0.0`. Sessions are stamped with
+ * {@link RUNTIME_DSL_VERSION} at write time; an unstamped one here is a misrouted
+ * legacy document or an unstamped producer write, both bugs.
  */
 export function runtimeDslVersionOf(doc: unknown): string {
-  return versionOf(doc, RUNTIME_DSL_VERSION_KEY, DSL_VERSION_KEY);
+  return versionOf(doc, RUNTIME_DSL_VERSION_KEY, DSL_VERSION_KEY, null);
 }
 
 /**
@@ -275,13 +336,22 @@ export function runtimeDslVersionOf(doc: unknown): string {
  * as-is), and the same **throw** as {@link runLadder}'s cross-line guard for an
  * ambiguous envelope (own stamp absent, `otherKey` stamp present) — quietly
  * answering either way there would misreport data the runner refuses to touch.
- * Also throws on a malformed own-line stamp (see {@link versionOf}).
+ * Also throws on a malformed own-line stamp, and — when this line has no
+ * unversioned epoch (`legacyVersion === null`) — on an object with no stamp at
+ * all (see {@link versionOf}).
  */
-function needsLadder(doc: unknown, key: string, targetVersion: string, otherKey: string): boolean {
+function needsLadder(
+  doc: unknown,
+  key: string,
+  targetVersion: string,
+  otherKey: string,
+  legacyVersion: string | null,
+): boolean {
   if (!isObject(doc)) return false;
-  // The cross-line throw on an ambiguous envelope comes from `versionOf`
-  // itself, so the predicate, its runner, and the plain readers cannot drift.
-  return compareVersions(versionOf(doc, key, otherKey), targetVersion) < 0;
+  // The cross-line throw on an ambiguous envelope, and the no-epoch throw on a
+  // wholly-unstamped object, both come from `versionOf` itself, so the
+  // predicate, its runner, and the plain readers cannot drift.
+  return compareVersions(versionOf(doc, key, otherKey, legacyVersion), targetVersion) < 0;
 }
 
 /**
@@ -304,6 +374,30 @@ function crossLineError(key: string, otherKey: string): Error {
 }
 
 /**
+ * The error thrown when a runtime-line function is handed an object carrying no
+ * version stamp at all. Unlike the document line — where real pre-versioning
+ * documents exist and are lifted from {@link UNVERSIONED_DSL_VERSION} — the
+ * runtime line has **no unversioned epoch**: its envelope is a brand-new
+ * contract, the future `RuntimeStore` stamps {@link RUNTIME_DSL_VERSION} at write
+ * time, so nothing legitimately predates it. An unstamped object reaching a
+ * runtime-line reader / predicate / runner is therefore a bug — a misrouted
+ * legacy document or an unstamped producer write — and fails loud rather than
+ * being invented a version and lifted. Thrown from {@link versionOf} (the single
+ * reader behind the runners, predicates, and plain readers) when its
+ * `legacyVersion` argument is `null`, so none of them can drift on what an
+ * unstamped runtime object means. Non-objects are exempt: they are not
+ * migratable aggregates and read as {@link UNVERSIONED_DSL_VERSION} on every line.
+ */
+function noRuntimeEpochError(): Error {
+  return new Error(
+    `@openmaic/dsl: object carries no version stamp; the runtime line has no ` +
+      `unversioned epoch — runtime sessions are stamped with "runtimeDslVersion" ` +
+      `at write time, so an unstamped object here is a misrouted legacy document ` +
+      `or an unstamped producer write`,
+  );
+}
+
+/**
  * True when `doc` is a migratable document written at an older version than
  * {@link DSL_VERSION}. The document-line predicate (counterpart:
  * {@link needsRuntimeMigration}, which reads the runtime envelope field). It
@@ -314,7 +408,13 @@ function crossLineError(key: string, otherKey: string): Error {
  * malformed stamp (see {@link dslVersionOf}).
  */
 export function needsMigration(doc: unknown): boolean {
-  return needsLadder(doc, DSL_VERSION_KEY, DSL_VERSION, RUNTIME_DSL_VERSION_KEY);
+  return needsLadder(
+    doc,
+    DSL_VERSION_KEY,
+    DSL_VERSION,
+    RUNTIME_DSL_VERSION_KEY,
+    UNVERSIONED_DSL_VERSION,
+  );
 }
 
 /**
@@ -327,10 +427,13 @@ export function needsMigration(doc: unknown): boolean {
  * cross-line-guard error. Pairing {@link needsMigration} with
  * {@link migrateRuntime} (or vice versa) once the lines diverge would spin or
  * silently skip — always pair a predicate with its own line's runner. Throws on
- * a malformed stamp (see {@link runtimeDslVersionOf}).
+ * a malformed stamp, and — because the runtime line has **no unversioned
+ * epoch** — on a wholly-unstamped object (a misrouted legacy document or an
+ * unstamped producer write; see {@link noRuntimeEpochError}). Non-objects still
+ * answer `false`, as on the document line.
  */
 export function needsRuntimeMigration(doc: unknown): boolean {
-  return needsLadder(doc, RUNTIME_DSL_VERSION_KEY, RUNTIME_DSL_VERSION, DSL_VERSION_KEY);
+  return needsLadder(doc, RUNTIME_DSL_VERSION_KEY, RUNTIME_DSL_VERSION, DSL_VERSION_KEY, null);
 }
 
 /**
@@ -378,7 +481,13 @@ function stampVersion(doc: unknown, version: string, key: string): unknown {
  *
  * 1. Own line's stamp present → migrate normally on this line, regardless of the
  *    other key (a doubly-stamped envelope is each runner's own line's data).
- * 2. Both stamps absent → genuine legacy data → walk this line's ladder as before.
+ * 2. Both stamps absent → depends on the line. A line WITH an unversioned epoch
+ *    (`legacyVersion` non-null, the document line) treats it as genuine legacy
+ *    data and walks its ladder from `legacyVersion`. A line with NO unversioned
+ *    epoch (`legacyVersion === null`, the runtime line) **throws**
+ *    {@link noRuntimeEpochError}: its envelope is brand new and stamped at write
+ *    time, so an unstamped object is a misrouted legacy document or an unstamped
+ *    producer write, not migratable legacy data.
  * 3. Own stamp ABSENT + other line's stamp PRESENT → **throw**. The envelope
  *    cannot say whether this is the other line's aggregate misrouted here or
  *    this line's data carrying a stray foreign stamp — walking the ladder would
@@ -394,15 +503,18 @@ function runLadder(
   targetVersion: string,
   key: string,
   otherKey: string,
+  legacyVersion: string | null,
 ): unknown {
   if (!isObject(doc)) return doc;
 
   // Case (3) of the cross-line guard — own stamp absent, sibling stamp present
   // — throws inside `versionOf` (see `crossLineError` for why neither silent
-  // answer is safe), as does a present-but-malformed own stamp. Enforcing both
-  // in the shared reader keeps the runner, its predicate, and the plain
-  // `*VersionOf` readers in agreement on every envelope.
-  let version = versionOf(doc, key, otherKey);
+  // answer is safe), as does a present-but-malformed own stamp, and — on a line
+  // with no unversioned epoch (`legacyVersion === null`) — a wholly-unstamped
+  // object (see `noRuntimeEpochError`). Enforcing all three in the shared reader
+  // keeps the runner, its predicate, and the plain `*VersionOf` readers in
+  // agreement on every envelope.
+  let version = versionOf(doc, key, otherKey, legacyVersion);
 
   // Already current, or written ahead of us — leave the document as-is.
   if (compareVersions(version, targetVersion) >= 0) return doc;
@@ -429,7 +541,14 @@ function runLadder(
 }
 
 export function migrate(doc: unknown): unknown {
-  return runLadder(doc, DSL_MIGRATIONS, DSL_VERSION, DSL_VERSION_KEY, RUNTIME_DSL_VERSION_KEY);
+  return runLadder(
+    doc,
+    DSL_MIGRATIONS,
+    DSL_VERSION,
+    DSL_VERSION_KEY,
+    RUNTIME_DSL_VERSION_KEY,
+    UNVERSIONED_DSL_VERSION,
+  );
 }
 
 /**
@@ -443,6 +562,13 @@ export function migrate(doc: unknown): unknown {
  * state is stamped and migrated on read through *this* function, never
  * {@link migrate}, so the document and runtime shapes evolve without either
  * ladder consuming the other's data.
+ *
+ * **No unversioned epoch.** Unlike {@link migrate}, this line does not lift an
+ * unstamped object: sessions are born stamped with {@link RUNTIME_DSL_VERSION}
+ * at write time, so a wholly-unstamped object here is a misrouted legacy
+ * document or an unstamped producer write and **throws** {@link noRuntimeEpochError}
+ * (passed `legacyVersion = null`). Non-objects are still returned unchanged, as
+ * on the document line — they are not migratable aggregates.
  */
 export function migrateRuntime(doc: unknown): unknown {
   return runLadder(
@@ -451,5 +577,6 @@ export function migrateRuntime(doc: unknown): unknown {
     RUNTIME_DSL_VERSION,
     RUNTIME_DSL_VERSION_KEY,
     DSL_VERSION_KEY,
+    null,
   );
 }
