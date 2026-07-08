@@ -257,27 +257,33 @@ export function runtimeDslVersionOf(doc: unknown): string {
 /**
  * Shared predicate behind {@link needsMigration} and
  * {@link needsRuntimeMigration}: true when `doc` is an object stamped (on
- * envelope `key`) older than `targetVersion`. A non-object is not a migratable
- * aggregate, so this is `false` for it — mirroring the runners' no-op, so the
- * predicate and its runner never disagree (a `while (needs…(x)) x = migrate…(x)`
- * loop always terminates). Throws on a malformed stamp (see {@link versionOf}).
+ * envelope `key`) older than `targetVersion`. It must return `false` for every
+ * input its runner leaves untouched, so the predicate and its runner never
+ * disagree and a `while (needs…(x)) x = migrate…(x)` loop always terminates.
+ * Two such mirrors: a non-object (not a migratable aggregate — the runners
+ * return it as-is), and a misrouted aggregate under {@link runLadder}'s
+ * cross-line guard (own stamp absent, `otherKey` stamp present — the runner
+ * returns it unchanged, so reporting it as needing migration would spin
+ * forever). Throws on a malformed own-line stamp (see {@link versionOf}).
  */
-function needsLadder(doc: unknown, key: string, targetVersion: string): boolean {
+function needsLadder(doc: unknown, key: string, targetVersion: string, otherKey: string): boolean {
   if (!isObject(doc)) return false;
+  if (doc[key] === undefined && doc[otherKey] !== undefined) return false;
   return compareVersions(versionOf(doc, key), targetVersion) < 0;
 }
 
 /**
  * True when `doc` is a migratable document written at an older version than
  * {@link DSL_VERSION}. The document-line predicate (counterpart:
- * {@link needsRuntimeMigration}, which reads the runtime envelope field). A
- * non-object is not a migratable document, so this is `false` for it — mirroring
- * {@link migrate}'s no-op, so the two never disagree (a caller looping
- * `while (needsMigration(x)) x = migrate(x)` always terminates). Throws on an
- * object carrying a malformed stamp (see {@link dslVersionOf}).
+ * {@link needsRuntimeMigration}, which reads the runtime envelope field). It is
+ * `false` for every input {@link migrate} leaves untouched — a non-object, and a
+ * runtime-line aggregate under the cross-line guard — so the two never disagree
+ * (a caller looping `while (needsMigration(x)) x = migrate(x)` always
+ * terminates). Throws on an object carrying a malformed stamp (see
+ * {@link dslVersionOf}).
  */
 export function needsMigration(doc: unknown): boolean {
-  return needsLadder(doc, DSL_VERSION_KEY, DSL_VERSION);
+  return needsLadder(doc, DSL_VERSION_KEY, DSL_VERSION, RUNTIME_DSL_VERSION_KEY);
 }
 
 /**
@@ -285,13 +291,15 @@ export function needsMigration(doc: unknown): boolean {
  * {@link RUNTIME_DSL_VERSION}. The runtime-line counterpart of
  * {@link needsMigration}: it reads {@link RUNTIME_DSL_VERSION_KEY} and pairs with
  * {@link migrateRuntime}, so a `while (needsRuntimeMigration(x)) x = migrateRuntime(x)`
- * loop always terminates. Pairing {@link needsMigration} with
- * {@link migrateRuntime} (or vice versa) once the lines diverge would spin or
- * silently skip — always pair a predicate with its own line's runner. Throws on
- * a malformed stamp (see {@link runtimeDslVersionOf}).
+ * loop always terminates — including on a misrouted document-line aggregate,
+ * which the cross-line guard makes both the predicate and the runner ignore.
+ * Pairing {@link needsMigration} with {@link migrateRuntime} (or vice versa)
+ * once the lines diverge would spin or silently skip — always pair a predicate
+ * with its own line's runner. Throws on a malformed stamp (see
+ * {@link runtimeDslVersionOf}).
  */
 export function needsRuntimeMigration(doc: unknown): boolean {
-  return needsLadder(doc, RUNTIME_DSL_VERSION_KEY, RUNTIME_DSL_VERSION);
+  return needsLadder(doc, RUNTIME_DSL_VERSION_KEY, RUNTIME_DSL_VERSION, DSL_VERSION_KEY);
 }
 
 /**

@@ -169,14 +169,26 @@ describe('needsRuntimeMigration', () => {
     expect(needsRuntimeMigration({ id: 'legacy' })).toBe(true);
     expect(needsRuntimeMigration({ [RUNTIME_DSL_VERSION_KEY]: RUNTIME_DSL_VERSION })).toBe(false);
     expect(needsRuntimeMigration({ [RUNTIME_DSL_VERSION_KEY]: '99.0.0' })).toBe(false);
-    // A document-line stamp does not satisfy the runtime predicate.
-    expect(needsRuntimeMigration({ [DSL_VERSION_KEY]: RUNTIME_DSL_VERSION })).toBe(true);
   });
   it('agrees with migrateRuntime on non-objects (loop terminates)', () => {
     for (const v of [42, null, undefined, 'x', []]) {
       expect(needsRuntimeMigration(v)).toBe(false);
       expect(needsRuntimeMigration(migrateRuntime(v))).toBe(false);
     }
+  });
+  it('is false for a misrouted document-line aggregate (mirrors the runner guard)', () => {
+    // migrateRuntime returns a document-stamped object untouched (cross-line
+    // guard), so the predicate must not report it as needing migration — a
+    // `while (needsRuntimeMigration(x)) x = migrateRuntime(x)` loop would
+    // otherwise never terminate.
+    const doc = { [DSL_VERSION_KEY]: DSL_VERSION, id: 'doc' };
+    expect(needsRuntimeMigration(doc)).toBe(false);
+    expect(migrateRuntime(doc)).toBe(doc);
+    // Doubly-stamped data is the runtime line's own: predicate and runner both
+    // act on the runtime stamp as usual.
+    expect(
+      needsRuntimeMigration({ [DSL_VERSION_KEY]: DSL_VERSION, [RUNTIME_DSL_VERSION_KEY]: '0.0.0' }),
+    ).toBe(true);
   });
 });
 
@@ -214,6 +226,15 @@ describe('needsMigration', () => {
   });
   it('throws on a malformed stamp rather than silently reporting no migration', () => {
     expect(() => needsMigration({ [DSL_VERSION_KEY]: '0.1.0-beta' })).toThrow(/invalid dslVersion/);
+  });
+  it('is false for a misrouted runtime-line aggregate (mirrors the runner guard)', () => {
+    // migrate returns a runtime-stamped session untouched (cross-line guard),
+    // so the predicate must not report it as needing migration — a
+    // `while (needsMigration(x)) x = migrate(x)` loop would otherwise never
+    // terminate.
+    const session = { [RUNTIME_DSL_VERSION_KEY]: RUNTIME_DSL_VERSION, id: 's' };
+    expect(needsMigration(session)).toBe(false);
+    expect(migrate(session)).toBe(session);
   });
 });
 
