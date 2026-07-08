@@ -7,8 +7,10 @@
  * RFC, with the differences the envelope forces:
  *
  * - **Multi-tenant**: a document has ONE stored aggregate; a stage has MANY
- *   runtime sessions — one or more per `(learnerKey, kind)`. Every query is
- *   therefore partition-scoped, never global.
+ *   runtime sessions — one or more per `(learnerKey, kind)`. Every LISTING is
+ *   therefore partition-scoped — there is deliberately no global listing;
+ *   single-session operations are id-keyed, and {@link RuntimeStore.mergeLearner}
+ *   is the one deliberate cross-stage sweep (the sign-in migration).
  * - **The store owns the version stamp.** The runtime line has no unversioned
  *   epoch, so `createSession` takes {@link RuntimeSessionInit} (no stamp) and
  *   the store stamps `RUNTIME_DSL_VERSION` itself. No code path persists an
@@ -72,16 +74,22 @@ export interface RuntimeStore {
 
   /**
    * All sessions of one learner on one stage (any status, any kind), migrated,
-   * ordered by `createdAt` ascending. The `(stageId, learnerKey)` pair is the
-   * partition key of the runtime layer — there is deliberately no global
-   * listing.
+   * ordered by `createdAt` ascending — by the instant each timestamp denotes,
+   * not by string order (ISO-8601 permits numeric zone offsets). The
+   * `(stageId, learnerKey)` pair is the partition key of the runtime layer —
+   * there is deliberately no global listing. Listings tolerate corrupt rows
+   * by omission (one poison row must not make the whole partition
+   * unenumerable — the `listDocuments` precedent); a direct {@link getSession}
+   * on such an id stays fail-loud, and the delete paths are the cleanup tool.
    */
   listSessions(stageId: string, learnerKey: string): Promise<RuntimeSession[]>;
 
   /**
    * Update one session's lifecycle status. `updatedAt` is caller-supplied
    * (the store is clock-free). Throws if the session is absent, if the stored
-   * copy is future-stamped, or if the envelope would become invalid.
+   * copy is future-stamped, or if the envelope would become invalid — or
+   * throws the runtime version line's own error when the stored row's stamp
+   * is corrupt (absent / malformed / sibling-stamped).
    */
   setSessionStatus(
     sessionId: string,
@@ -98,7 +106,9 @@ export interface RuntimeStore {
    * that inserts, validates the completed envelope
    * (`validateRuntimeRecord`), and runs the parent session's kind payload
    * validator if one is configured. Throws if the parent session is absent,
-   * not `active`, or future-stamped.
+   * not `active`, or future-stamped — or throws the runtime version line's
+   * own error when the stored row's stamp is corrupt (absent / malformed /
+   * sibling-stamped).
    */
   appendRecord<TPayload extends RuntimePayload>(
     init: RuntimeRecordInit<TPayload>,
@@ -113,9 +123,19 @@ export interface RuntimeStore {
 
   /**
    * Re-key every session of `fromLearnerKey` (across ALL stages) to
-   * `toLearnerKey` — the anonymous-learner-signs-in migration. Returns the
-   * number of sessions moved. Idempotent (a second run moves 0) and
+   * `toLearnerKey` — the anonymous-learner-signs-in migration, and the one
+   * deliberate cross-stage sweep in the interface. Returns the number of
+   * sessions moved. Idempotent (a second run — or a self-merge — moves 0) and
    * non-clobbering by construction (sessions are keyed by their own `id`).
+   *
+   * A merge is a write, so it takes the write gates: throws on an empty
+   * learner key, on a future-stamped session (a newer client's data must not
+   * be mutated), or with the runtime version line's own error when a stored
+   * row's stamp is corrupt (absent / malformed / sibling-stamped); every
+   * re-keyed envelope is validated before it is written. Any throw aborts the
+   * WHOLE merge atomically — no partial move ever lands; delete the offending
+   * session to unblock.
+   *
    * Collapsing duplicate same-kind sessions after a merge (e.g. keeping one
    * playback session) is app read-policy, not store behavior.
    */

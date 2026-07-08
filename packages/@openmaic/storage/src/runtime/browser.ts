@@ -251,12 +251,26 @@ export class BrowserRuntimeStore implements RuntimeStore {
         tx.objectStore(SESSIONS).index(SESSIONS_BY_STAGE_LEARNER).getAll([stageId, learnerKey]),
       ),
     );
-    // ISO-8601 timestamps in one zone compare correctly as plain strings (the
-    // contract requires the zone designator), so `createdAt` string order is
-    // chronological order; tie-break on `id` for a deterministic listing.
-    return rows
-      .map(migrateSession)
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    // Listings tolerate corrupt rows by omission (the `listDocuments`
+    // precedent): one poison row must not make the whole partition
+    // unenumerable. A direct `getSession` on such an id stays fail-loud, and
+    // the delete paths remain the cleanup tool.
+    const sessions: RuntimeSession[] = [];
+    for (const row of rows) {
+      try {
+        sessions.push(migrateSession(row));
+      } catch {
+        // omitted: this row's version resolution failed
+      }
+    }
+    // Order by the instant each timestamp denotes, not by the string: ISO-8601
+    // permits numeric zone offsets, and string order disagrees with instant
+    // order across offsets. `Date.parse` is safe here — both strings already
+    // passed `isIsoTimestamp` at write time. Tie-break on `id` for a
+    // deterministic listing.
+    return sessions.sort(
+      (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id),
+    );
   }
 
   async setSessionStatus(
@@ -329,11 +343,20 @@ export class BrowserRuntimeStore implements RuntimeStore {
       }
 
       // Assign the per-session monotonic `seq` inside the same transaction that
-      // inserts: the highest existing key in the session's range, plus one.
+      // inserts: the highest existing key in the session's range, plus one. A
+      // key cursor reads only the compound primary key — deserializing the
+      // whole previous record (payload included) to read one integer would be
+      // O(payload) for no benefit.
       const records = tx.objectStore(RECORDS);
-      const last = await reqP(records.openCursor(sessionRecordRange(init.sessionId), 'prev'));
-      const seq = last ? (last.value as RuntimeRecord).seq + 1 : 0;
+      const last = await reqP(records.openKeyCursor(sessionRecordRange(init.sessionId), 'prev'));
+      const seq = last ? (last.primaryKey as [string, number])[1] + 1 : 0;
       const record: RuntimeRecord<TPayload> = { ...init, seq };
+      // The pre-flight above fails before the transaction opens (no write
+      // started); this assert on the REAL record — with the store-assigned
+      // `seq` — makes the "validates the completed envelope" contract
+      // literally true. validateRuntimeRecord is pure and synchronous, so the
+      // transaction cannot idle out here.
+      assertValid(validateRuntimeRecord(record), `runtime record ${JSON.stringify(init.id)}`);
       records.add(record);
       return record;
     });
@@ -353,15 +376,44 @@ export class BrowserRuntimeStore implements RuntimeStore {
 
   async mergeLearner(fromLearnerKey: string, toLearnerKey: string): Promise<number> {
     // Global re-key (across ALL stages) — the anonymous-learner-signs-in
-    // migration. Sessions are keyed by their own id, so the move is
-    // non-clobbering by construction; records reference sessions by id and are
-    // untouched. Version-agnostic: rows keep their own stamps.
+    // migration, and the one deliberate cross-stage sweep in the interface.
+    // Sessions are keyed by their own id, so the move is non-clobbering by
+    // construction; records reference sessions by id and are untouched.
+    //
+    // A merge is a write, so it takes the same gates as every other write: a
+    // learner key `createSession` would reject must not be written here, a
+    // newer client's session must not be mutated, and every re-keyed envelope
+    // is validated before it is put. Any throw aborts the WHOLE merge
+    // atomically (txRun) — loud and clean beats silently contaminating the
+    // target partition with poison rows; `deleteSession` on the offending id
+    // is the unblock.
+    if (
+      typeof fromLearnerKey !== 'string' ||
+      fromLearnerKey === '' ||
+      typeof toLearnerKey !== 'string' ||
+      toLearnerKey === ''
+    ) {
+      throw new Error('@openmaic/storage: learner keys must be non-empty strings');
+    }
+    // Self-merge: nothing to move — return without opening a transaction, so
+    // "a second run moves 0" holds for the degenerate case too (re-keying
+    // x → x would otherwise count every row, every time).
+    if (fromLearnerKey === toLearnerKey) return 0;
     return this.txRun([SESSIONS], 'readwrite', async (tx) => {
       const sessions = tx.objectStore(SESSIONS);
       const rows = await reqP<RuntimeSession[]>(
         sessions.index(SESSIONS_BY_LEARNER).getAll(fromLearnerKey),
       );
-      for (const row of rows) sessions.put({ ...row, learnerKey: toLearnerKey });
+      for (const row of rows) {
+        // Re-keying is a mutation; a future-stamped session was written by a
+        // newer client and must not be touched. A corrupt stamp (absent /
+        // malformed / sibling-stamped) throws the runtime line's own error
+        // from inside the guard and aborts the merge the same way.
+        if (isFutureRuntimeVersioned(row)) throw futureSessionError(row.id, row);
+        const updated: RuntimeSession = { ...row, learnerKey: toLearnerKey };
+        assertValid(validateRuntimeSession(updated), `runtime session ${JSON.stringify(row.id)}`);
+        sessions.put(updated);
+      }
       return rows.length;
     });
   }

@@ -52,8 +52,10 @@ a browser.
   store over its scene union and injects a matching `validateScene`, so those
   scenes persist and the gate stays fail-loud for the app's shapes.
 - **Runtime layer.** `RuntimeStore` is partitioned by `(stageId, learnerKey)`:
-  a stage has many sessions — one or more per learner — so every query is
-  partition-scoped, never global. Sessions are **born stamped**: the store
+  a stage has many sessions — one or more per learner — so every listing is
+  partition-scoped (there is deliberately no global listing; single-session
+  operations are id-keyed, and `mergeLearner` is the one deliberate
+  cross-stage sweep). Sessions are **born stamped**: the store
   writes `runtimeDslVersion` itself at `createSession`, and the runtime line
   has no unversioned epoch, so an unstamped row fails loud instead of being
   lifted like a legacy document. Records are **append-only** ordered facts

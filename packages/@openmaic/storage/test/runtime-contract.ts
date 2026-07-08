@@ -103,6 +103,30 @@ export function runRuntimeStoreContract(name: string, makeStore: () => RuntimeSt
         ]);
       });
 
+      test('listSessions orders by the instant a timestamp denotes, not by the string', async () => {
+        const store = makeStore();
+        // As strings the Z form sorts first ('2025-…' < '2026-…'); as instants
+        // the offset form is earlier (2026-01-01T00:30+02:00 = 2025-12-31T22:30Z).
+        await store.createSession(
+          makeSession({
+            id: 'zulu',
+            createdAt: '2025-12-31T23:00:00Z',
+            updatedAt: '2025-12-31T23:00:00Z',
+          }),
+        );
+        await store.createSession(
+          makeSession({
+            id: 'offset',
+            createdAt: '2026-01-01T00:30:00+02:00',
+            updatedAt: '2026-01-01T00:30:00+02:00',
+          }),
+        );
+        expect((await store.listSessions('stage-1', 'anon:device-1')).map((s) => s.id)).toEqual([
+          'offset',
+          'zulu',
+        ]);
+      });
+
       test('setSessionStatus transitions active → completed with the supplied updatedAt', async () => {
         const store = makeStore();
         await store.createSession(makeSession());
@@ -236,6 +260,25 @@ export function runRuntimeStoreContract(name: string, makeStore: () => RuntimeSt
 
         // idempotent: a second run finds nothing to move
         expect(await store.mergeLearner('anon:device-1', 'user:42')).toBe(0);
+      });
+
+      test('mergeLearner rejects empty learner keys', async () => {
+        const store = makeStore();
+        // a merge is a write: keys createSession would reject must not be
+        // written by the merge either
+        await expect(store.mergeLearner('', 'user:42')).rejects.toThrow(/non-empty/);
+        await expect(store.mergeLearner('anon:device-1', '')).rejects.toThrow(/non-empty/);
+      });
+
+      test('a self-merge moves nothing and returns 0, repeatably', async () => {
+        const store = makeStore();
+        await store.createSession(makeSession());
+        expect(await store.mergeLearner('anon:device-1', 'anon:device-1')).toBe(0);
+        expect(await store.mergeLearner('anon:device-1', 'anon:device-1')).toBe(0);
+        // the session is untouched under its original key
+        expect((await store.listSessions('stage-1', 'anon:device-1')).map((s) => s.id)).toEqual([
+          'sess-1',
+        ]);
       });
 
       test('deleteLearnerRuntime removes exactly one learner on one stage; idempotent', async () => {

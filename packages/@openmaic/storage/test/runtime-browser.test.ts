@@ -1,15 +1,8 @@
 import { describe, expect, test } from 'vitest';
-import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
+import { IDBFactory } from 'fake-indexeddb';
 import { RUNTIME_DSL_VERSION_KEY } from '@openmaic/dsl';
 import { BrowserRuntimeStore } from '../src/index.js';
 import { makeRecordInit, makeSession, runRuntimeStoreContract } from './runtime-contract.js';
-
-// The runtime backend builds its ranged record reads with the ambient
-// `IDBKeyRange` — in a real browser it is always provided alongside
-// `indexedDB`. Tests inject a fake factory, so supply the matching fake range
-// class as the ambient global (what `fake-indexeddb/auto` would do, minus the
-// ambient factory the store deliberately takes by injection instead).
-globalThis.IDBKeyRange = IDBKeyRange;
 
 // Each store gets its own in-memory IndexedDB factory so contract cases stay
 // isolated without leaning on an ambient global.
@@ -22,14 +15,13 @@ runRuntimeStoreContract(
 // at a foreign version, which the public API (the store always stamps the
 // current version) can't express. Mirrors the document backend's reStampStage. ---
 
-// Open the raw DB the store uses and overwrite the session row's version stamp,
-// simulating a session written by another (older / newer / broken) client.
-// `version: undefined` DELETES the stamp — a corrupt row no producer can write.
-async function reStampSession(
+// Open the raw DB the store uses and rewrite one stored session row in place,
+// simulating a row written by another (older / newer / broken) client.
+async function rewriteSessionRow(
   idb: IDBFactory,
   dbName: string,
   sessionId: string,
-  version: string | undefined,
+  rewrite: (row: Record<string, unknown>) => void,
 ): Promise<void> {
   const db = await new Promise<IDBDatabase>((resolve, reject) => {
     const req = idb.open(dbName);
@@ -42,8 +34,7 @@ async function reStampSession(
     const get = store.get(sessionId);
     get.onsuccess = () => {
       const row = get.result as Record<string, unknown>;
-      if (version === undefined) delete row[RUNTIME_DSL_VERSION_KEY];
-      else row[RUNTIME_DSL_VERSION_KEY] = version;
+      rewrite(row);
       store.put(row);
     };
     tx.oncomplete = () => resolve();
@@ -52,19 +43,35 @@ async function reStampSession(
   db.close();
 }
 
+// Overwrite the session row's version stamp. `version: undefined` DELETES the
+// stamp — a corrupt row no producer can write.
+async function reStampSession(
+  idb: IDBFactory,
+  dbName: string,
+  sessionId: string,
+  version: string | undefined,
+): Promise<void> {
+  await rewriteSessionRow(idb, dbName, sessionId, (row) => {
+    if (version === undefined) delete row[RUNTIME_DSL_VERSION_KEY];
+    else row[RUNTIME_DSL_VERSION_KEY] = version;
+  });
+}
+
 describe('BrowserRuntimeStore migrate-on-read', () => {
-  test('a stale-stamped session fails loud on read (no ladder path yet)', async () => {
+  test('a below-epoch stamp fails loud on read (no ladder path)', async () => {
     const idb = new IDBFactory();
     const dbName = 'maic-runtime-stale';
     const store = new BrowserRuntimeStore({ indexedDB: idb, dbName });
     await store.createSession(makeSession());
     await reStampSession(idb, dbName, 'sess-1', '0.0.9');
 
-    // The runtime ladder is EMPTY today (the initial runtime version IS the
-    // current one), so a past stamp has no migration path and the ladder fails
-    // loud rather than guessing. When the first real runtime migration lands,
-    // this test flips to asserting the lift — a stale session migrated forward
-    // on read, mirroring the document backend's legacy-stamp test.
+    // '0.0.9' predates the runtime line's pinned initial version, so no ladder
+    // will EVER have a path from it — the runtime line has no unversioned
+    // epoch, and its migrations start at the pinned first shipped version.
+    // This below-epoch fail-loud case therefore stays valid forever. When the
+    // first real runtime migration lands, ADD a new test seeding the pinned
+    // initial version and asserting the lift (mirroring the document backend's
+    // legacy-stamp test) — do not repurpose this one.
     await expect(store.getSession('sess-1')).rejects.toThrow(/no migration path/);
   });
 });
@@ -142,5 +149,89 @@ describe('BrowserRuntimeStore corrupt rows', () => {
     // aggregate), never legacy data — it fails loud instead of resurrecting
     // silently at some guessed version.
     await expect(store.getSession('sess-1')).rejects.toThrow(/no unversioned epoch/);
+  });
+
+  test('writes against a stamp-stripped row fail loud too', async () => {
+    const idb = new IDBFactory();
+    const dbName = 'maic-runtime-unstamped-writes';
+    const store = new BrowserRuntimeStore({ indexedDB: idb, dbName });
+    await store.createSession(makeSession());
+    await reStampSession(idb, dbName, 'sess-1', undefined);
+
+    // The write guards read the stored row's version first, so a corrupt stamp
+    // surfaces the runtime line's own error rather than being written through.
+    await expect(
+      store.setSessionStatus('sess-1', 'completed', '2026-01-01T00:01:00.000Z'),
+    ).rejects.toThrow(/no unversioned epoch/);
+    await expect(store.appendRecord(makeRecordInit('sess-1'))).rejects.toThrow(
+      /no unversioned epoch/,
+    );
+  });
+
+  test('a corrupt row is omitted from listings but stays loud on direct read', async () => {
+    const idb = new IDBFactory();
+    const dbName = 'maic-runtime-tolerant-listing';
+    const store = new BrowserRuntimeStore({ indexedDB: idb, dbName });
+    await store.createSession(makeSession({ id: 'h1' }));
+    await store.createSession(makeSession({ id: 'h2' }));
+    await store.createSession(makeSession({ id: 'corrupt' }));
+    await reStampSession(idb, dbName, 'corrupt', undefined);
+
+    // One poison row must not make the whole partition unenumerable: listings
+    // tolerate corrupt rows by omission (the listDocuments precedent), while a
+    // direct read stays fail-loud and the delete paths remain the cleanup tool.
+    expect((await store.listSessions('stage-1', 'anon:device-1')).map((s) => s.id)).toEqual([
+      'h1',
+      'h2',
+    ]);
+    await expect(store.getSession('corrupt')).rejects.toThrow(/no unversioned epoch/);
+  });
+});
+
+describe('BrowserRuntimeStore mergeLearner guards', () => {
+  test('a sibling-stamped row aborts the whole merge atomically', async () => {
+    const idb = new IDBFactory();
+    const dbName = 'maic-runtime-merge-poison';
+    const store = new BrowserRuntimeStore({ indexedDB: idb, dbName });
+    // 'a-healthy' sorts before 'z-poison' in the index walk, so its re-key is
+    // written first and the poison row's throw must roll it back.
+    await store.createSession(makeSession({ id: 'a-healthy' }));
+    await store.createSession(makeSession({ id: 'z-poison' }));
+    await store.createSession(makeSession({ id: 'existing', learnerKey: 'user:42' }));
+    // Sibling-stamped: the document line's stamp present, the runtime line's
+    // absent — the undecidable cross-line state the version readers reject.
+    await rewriteSessionRow(idb, dbName, 'z-poison', (row) => {
+      delete row[RUNTIME_DSL_VERSION_KEY];
+      row.dslVersion = '0.1.0';
+    });
+
+    await expect(store.mergeLearner('anon:device-1', 'user:42')).rejects.toThrow(/misrouted/);
+    // Atomic abort: NOTHING moved — the target partition is unchanged and the
+    // healthy row is still under the source key (its in-tx re-key rolled back).
+    expect((await store.listSessions('stage-1', 'user:42')).map((s) => s.id)).toEqual(['existing']);
+    expect((await store.listSessions('stage-1', 'anon:device-1')).map((s) => s.id)).toEqual([
+      'a-healthy',
+    ]);
+  });
+
+  test('a future-stamped row aborts the merge with nothing moved', async () => {
+    const idb = new IDBFactory();
+    const dbName = 'maic-runtime-merge-future';
+    const store = new BrowserRuntimeStore({ indexedDB: idb, dbName });
+    await store.createSession(makeSession({ id: 'a-healthy' }));
+    await store.createSession(makeSession({ id: 'z-future' }));
+    await store.createSession(makeSession({ id: 'existing', learnerKey: 'user:42' }));
+    await reStampSession(idb, dbName, 'z-future', '9.9.9');
+
+    // Re-keying is a mutation; a newer client's session must not be mutated.
+    await expect(store.mergeLearner('anon:device-1', 'user:42')).rejects.toThrow(
+      /newer than this client/,
+    );
+    expect((await store.listSessions('stage-1', 'user:42')).map((s) => s.id)).toEqual(['existing']);
+    // future rows pass through listings unchanged, so both remain visible here
+    expect((await store.listSessions('stage-1', 'anon:device-1')).map((s) => s.id)).toEqual([
+      'a-healthy',
+      'z-future',
+    ]);
   });
 });
