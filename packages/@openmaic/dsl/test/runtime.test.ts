@@ -106,6 +106,9 @@ describe('runtime payload skeleton guards', () => {
     expect(isQuizAttemptSkeleton({ phase: 'graded', answers: {} })).toBe(false); // bad phase
     expect(isQuizAttemptSkeleton({ phase: 'draft', answers: [] })).toBe(false); // array, not object
     expect(isQuizAttemptSkeleton({ phase: 'draft', answers: null })).toBe(false); // null answers
+    expect(isQuizAttemptSkeleton({ phase: 'draft', answers: new Map() })).toBe(false); // Map, not a plain record
+    expect(isQuizAttemptSkeleton({ phase: 'draft', answers: new Date() })).toBe(false); // class instance, not a plain record
+    expect(isQuizAttemptSkeleton({ phase: 'draft', answers: Object.create(null) })).toBe(true); // null-prototype plain record
     expect(isQuizAttemptSkeleton({ phase: 'draft' })).toBe(false); // missing answers
     expect(isQuizAttemptSkeleton(null)).toBe(false);
   });

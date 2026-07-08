@@ -257,6 +257,10 @@ export function isQuizAttemptSkeleton(value: unknown): value is QuizAttemptSkele
     isQuizAttemptPhase(v.phase) &&
     typeof v.answers === 'object' &&
     v.answers !== null &&
-    !Array.isArray(v.answers)
+    !Array.isArray(v.answers) &&
+    // Require a plain id→answer record: a Map/Date/class instance would pass the
+    // object check but hide its entries from `answers[questionId]` consumers.
+    (Object.getPrototypeOf(v.answers) === Object.prototype ||
+      Object.getPrototypeOf(v.answers) === null)
   );
 }
