@@ -169,6 +169,8 @@ describe('isIsoTimestamp', () => {
 
   it('rejects field-range violations', () => {
     expect(isIsoTimestamp('2026-13-01T00:00:00Z')).toBe(false); // month 13
+    expect(isIsoTimestamp('2026-00-15T00:00:00Z')).toBe(false); // month 00
+    expect(isIsoTimestamp('2026-01-00T00:00:00Z')).toBe(false); // day 00
     expect(isIsoTimestamp('2026-01-01T25:00:00Z')).toBe(false); // hour 25
     expect(isIsoTimestamp('2026-01-01T24:00:00.000Z')).toBe(false); // hour 24 (no end-of-day form)
     expect(isIsoTimestamp('2026-01-01T00:60:00Z')).toBe(false); // minute 60
