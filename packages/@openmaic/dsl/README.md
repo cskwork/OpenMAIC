@@ -173,17 +173,20 @@ rides its **own** version line: `RUNTIME_DSL_VERSION` and a dedicated
 of `dslVersionOf` / `needsMigration`. The two lines stamp **different fields**,
 so neither ladder reads the other's version — but disjoint fields alone are not
 enough: a session lacking `dslVersion` would still read as *unversioned* to the
-document runner and be lifted onto the wrong line. Inertness is delivered by the
-**cross-line guard** in the shared `runLadder`, which follows three-case
-semantics: (1) own line's stamp present → migrate normally on the own line,
-regardless of the other key; (2) both stamps absent → genuine legacy data, walk
-the own ladder; (3) own stamp absent but the sibling line's stamp present → the
-aggregate belongs to the other line, so return it unchanged (never lifted, never
-stamped with a foreign field). So a future `Stage`/`Scene` document migration
-walked over a session is a no-op, and vice versa: misrouted data is inert, not
-silently reinterpreted. The runner mechanism (contiguous ladder, idempotent,
-forward-compatible, fail-loud) is shared; only the ladder, target version, own
-stamp field, and the sibling field the guard checks differ.
+document runner and be lifted onto the wrong line. The **cross-line guard** in
+the shared `runLadder` (mirrored by the `needs*Migration` predicates) closes
+this with three-case semantics: (1) own line's stamp present → migrate normally
+on the own line, regardless of the other key; (2) both stamps absent → genuine
+legacy data, walk the own ladder; (3) own stamp absent but the sibling line's
+stamp present → **throw**. Case (3) is undecidable from the envelope — the
+other line's aggregate misrouted here is byte-identical to this line's data
+carrying a stray foreign stamp; migrating would mangle the former, returning it
+unchanged would permanently orphan the latter from its own line — so it is
+treated like a malformed stamp and fails loud. `validateRuntimeSession`
+likewise rejects a stray `dslVersion` on a session at the door. The runner
+mechanism (contiguous ladder, idempotent, forward-compatible, fail-loud) is
+shared; only the ladder, target version, own stamp field, and the sibling field
+the guard checks differ.
 
 ## Status
 

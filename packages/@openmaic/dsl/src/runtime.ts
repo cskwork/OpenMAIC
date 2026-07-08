@@ -32,10 +32,10 @@
  * `RUNTIME_DSL_VERSION` + `migrateRuntime`, not the document's `DSL_VERSION` +
  * `migrate`. The two lines stamp different envelope fields, so neither ladder
  * reads the other's version — but disjoint fields alone would still let a
- * misrouted session be lifted (as unversioned) on the document line. Inertness
- * is delivered by the cross-line guard in `runLadder`: a runner returns any
- * aggregate that carries the sibling line's stamp but not its own untouched,
- * never stamping a foreign field — and vice versa (see `version.ts`).
+ * misrouted session be lifted (as unversioned) on the document line. The
+ * cross-line guard in `runLadder` closes this: a runner throws on any
+ * aggregate that carries the sibling line's stamp but not its own, surfacing
+ * the misroute instead of guessing — and vice versa (see `version.ts`).
  *
  * No runtime dependencies. Pure types + plain data constants only.
  */
@@ -183,9 +183,10 @@ export function isCoreRuntimeKind(value: unknown): value is CoreRuntimeKind {
  * migrate-on-read run on the runtime line only: a session is stamped with
  * `RUNTIME_DSL_VERSION` and migrated by `migrateRuntime`, independent of the
  * document's `DSL_VERSION` / `migrate`. The two stamps live on distinct fields
- * so neither ladder reads the other's; the cross-line guard in `runLadder` is
- * what makes misrouting a migration inert rather than corrupting — a runner
- * leaves any aggregate stamped on the sibling line but not its own untouched
+ * so neither ladder reads the other's; the cross-line guard in `runLadder`
+ * turns a misrouted migration into a loud error rather than corruption — a
+ * runner throws on any aggregate stamped on the sibling line but not its own,
+ * and `validateRuntimeSession` rejects a stray `dslVersion` at the door
  * (see `version.ts`).
  */
 export interface RuntimeSession extends RuntimeVersioned {

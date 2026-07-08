@@ -88,30 +88,23 @@ describe('migrateRuntime', () => {
   });
 });
 
-describe('cross-line guard (misrouted data is inert, not reinterpreted)', () => {
-  it('migrate() returns a runtime session UNCHANGED — no document lift, no dslVersion added', () => {
+describe('cross-line guard (ambiguous envelopes fail loud, not reinterpreted)', () => {
+  it('migrate() throws on a runtime-stamped object — no document lift, no silent skip', () => {
     // Case (3): own stamp (dslVersion) ABSENT + other line's stamp
-    // (runtimeDslVersion) PRESENT. This object is the runtime line's data,
-    // misrouted into the document runner. The guard — not the disjoint keys —
-    // is what makes it inert: migrate must return it byte-identical, NOT walk
-    // the document ladder over it and stamp a foreign `dslVersion`.
+    // (runtimeDslVersion) PRESENT. Byte-identical to "runtime session misrouted
+    // into the document runner" AND to "document carrying a stray runtime
+    // stamp" — walking the ladder would mangle the former, returning it
+    // unchanged would orphan the latter, so the only safe answer is to throw.
     const session = { id: 's', [RUNTIME_DSL_VERSION_KEY]: RUNTIME_DSL_VERSION };
-    const out = migrate(session);
-    expect(out).toEqual(session);
-    expect(out).not.toHaveProperty(DSL_VERSION_KEY);
-    // Same object back (guard short-circuits before any copy).
-    expect(out).toBe(session);
+    expect(() => migrate(session)).toThrow(/carries "runtimeDslVersion" but no "dslVersion"/);
   });
 
-  it('migrateRuntime() returns a document UNCHANGED — no runtime lift, no runtimeDslVersion added', () => {
+  it('migrateRuntime() throws on a document-stamped object — no runtime lift, no orphaning', () => {
     // Symmetric case (3): own stamp (runtimeDslVersion) ABSENT + document
-    // line's stamp (dslVersion) PRESENT. The document is inert to the runtime
-    // runner: returned untouched, never stamped with `runtimeDslVersion`.
+    // line's stamp (dslVersion) PRESENT. Same undecidable state, mirrored:
+    // fail loud instead of guessing.
     const doc = { id: 'd', [DSL_VERSION_KEY]: DSL_VERSION };
-    const out = migrateRuntime(doc);
-    expect(out).toEqual(doc);
-    expect(out).not.toHaveProperty(RUNTIME_DSL_VERSION_KEY);
-    expect(out).toBe(doc);
+    expect(() => migrateRuntime(doc)).toThrow(/carries "dslVersion" but no "runtimeDslVersion"/);
   });
 
   it('an object carrying BOTH stamps migrates normally on each runner’s own line', () => {
@@ -176,14 +169,15 @@ describe('needsRuntimeMigration', () => {
       expect(needsRuntimeMigration(migrateRuntime(v))).toBe(false);
     }
   });
-  it('is false for a misrouted document-line aggregate (mirrors the runner guard)', () => {
-    // migrateRuntime returns a document-stamped object untouched (cross-line
-    // guard), so the predicate must not report it as needing migration — a
-    // `while (needsRuntimeMigration(x)) x = migrateRuntime(x)` loop would
-    // otherwise never terminate.
+  it('throws on an ambiguous document-stamped envelope (mirrors the runner guard)', () => {
+    // migrateRuntime throws on a document-stamped object (cross-line guard), so
+    // the predicate must throw the same error — quietly answering true would
+    // spin a `while (needsRuntimeMigration(x)) x = migrateRuntime(x)` loop,
+    // quietly answering false would misreport data the runner refuses to touch.
     const doc = { [DSL_VERSION_KEY]: DSL_VERSION, id: 'doc' };
-    expect(needsRuntimeMigration(doc)).toBe(false);
-    expect(migrateRuntime(doc)).toBe(doc);
+    expect(() => needsRuntimeMigration(doc)).toThrow(
+      /carries "dslVersion" but no "runtimeDslVersion"/,
+    );
     // Doubly-stamped data is the runtime line's own: predicate and runner both
     // act on the runtime stamp as usual.
     expect(
@@ -227,14 +221,15 @@ describe('needsMigration', () => {
   it('throws on a malformed stamp rather than silently reporting no migration', () => {
     expect(() => needsMigration({ [DSL_VERSION_KEY]: '0.1.0-beta' })).toThrow(/invalid dslVersion/);
   });
-  it('is false for a misrouted runtime-line aggregate (mirrors the runner guard)', () => {
-    // migrate returns a runtime-stamped session untouched (cross-line guard),
-    // so the predicate must not report it as needing migration — a
-    // `while (needsMigration(x)) x = migrate(x)` loop would otherwise never
-    // terminate.
+  it('throws on an ambiguous runtime-stamped envelope (mirrors the runner guard)', () => {
+    // migrate throws on a runtime-stamped object (cross-line guard), so the
+    // predicate must throw the same error rather than quietly answer either
+    // way — see the needsRuntimeMigration counterpart for the two failure
+    // modes a quiet answer would pick between.
     const session = { [RUNTIME_DSL_VERSION_KEY]: RUNTIME_DSL_VERSION, id: 's' };
-    expect(needsMigration(session)).toBe(false);
-    expect(migrate(session)).toBe(session);
+    expect(() => needsMigration(session)).toThrow(
+      /carries "runtimeDslVersion" but no "dslVersion"/,
+    );
   });
 });
 

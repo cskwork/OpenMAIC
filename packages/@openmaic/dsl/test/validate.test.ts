@@ -174,11 +174,27 @@ describe('validateRuntimeSession', () => {
     });
   });
 
-  it('ignores a stray document-line dslVersion on a session (unknown field)', () => {
-    // A session versions on `runtimeDslVersion`; `dslVersion` is not part of its
-    // contract, so this structural-subset validator neither reads nor rejects
-    // it — even a value that would be malformed as a version stamp is ignored.
-    expect(validateRuntimeSession({ ...good, dslVersion: 'legacy' })).toEqual({ valid: true });
+  it('rejects a stray document-line dslVersion on a session', () => {
+    // A session versions on `runtimeDslVersion`; `dslVersion` never belongs on
+    // its shape. This is the deliberate exception to the structural-subset rule:
+    // a stray sibling stamp is evidence of a misrouted migration, and once
+    // stored it makes the envelope ambiguous to the cross-line guard (which
+    // fails loud on own-stamp-absent + sibling-stamp-present) — so reject it at
+    // the door, whatever its value.
+    for (const stray of ['legacy', '0.1.0']) {
+      const result = validateRuntimeSession({ ...good, dslVersion: stray });
+      expect(result.valid).toBe(false);
+      if (result.valid) throw new Error('unreachable');
+      expect(result.errors.map((e) => e.path)).toContain('/dslVersion');
+    }
+    // Rejected even alongside a well-formed own-line stamp: a doubly-stamped
+    // session is equally the product of a misroute.
+    const doubly = validateRuntimeSession({
+      ...good,
+      runtimeDslVersion: '0.1.0',
+      dslVersion: '0.1.0',
+    });
+    expect(doubly.valid).toBe(false);
   });
 
   it('reports an empty-string createdAt exactly once, at /createdAt', () => {

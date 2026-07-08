@@ -293,9 +293,7 @@ export function validateRuntimeSession(doc: unknown): ValidationResult {
   // `runtimeDslVersion` is optional, but a present stamp must be a well-formed
   // `x.y.z` string: `migrateRuntime`/`runtimeDslVersionOf` throw on a malformed
   // stamp, so accepting a string like `'legacy'` here would only defer the
-  // failure to read time. A session versions on `runtimeDslVersion`, NOT the
-  // document line's `dslVersion`; a stray `dslVersion` on a session is an
-  // unknown field this structural-subset validator ignores.
+  // failure to read time.
   if (doc.runtimeDslVersion !== undefined) {
     if (typeof doc.runtimeDslVersion !== 'string') {
       errors.push({ path: '/runtimeDslVersion', message: 'expected string `runtimeDslVersion`' });
@@ -305,6 +303,19 @@ export function validateRuntimeSession(doc: unknown): ValidationResult {
         message: 'malformed `runtimeDslVersion`: expected x.y.z',
       });
     }
+  }
+  // A session versions on `runtimeDslVersion`; the document line's `dslVersion`
+  // is never part of a session's shape. This is the one deliberate exception to
+  // the structural-subset rule (unknown fields ignored): a stray sibling stamp
+  // is evidence of a misrouted migration, and once stored it makes the envelope
+  // ambiguous to the cross-line guard (`migrate`/`migrateRuntime` fail loud on
+  // own-stamp-absent + sibling-stamp-present), so reject it at the door.
+  if (doc.dslVersion !== undefined) {
+    errors.push({
+      path: '/dslVersion',
+      message:
+        'unexpected document-line `dslVersion` on a runtime session; sessions version on `runtimeDslVersion`',
+    });
   }
   return done(errors);
 }

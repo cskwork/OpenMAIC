@@ -55,14 +55,14 @@ export const DSL_VERSION_KEY = 'dslVersion' as const;
  * version lines stamp different fields, so neither ladder can read, consume, or
  * corrupt the other's stamp.
  *
- * Disjoint keys are necessary but **not sufficient** for inertness: an object
- * carrying only this key still *lacks* {@link DSL_VERSION_KEY}, so the document
- * runner would read it as {@link UNVERSIONED_DSL_VERSION} and walk its legacy
- * ladder over the session — stamping a foreign field and, once a real transform
- * lands, mangling the payload. What actually makes misrouted data inert is the
- * cross-line guard in {@link runLadder}: a runner whose own stamp is absent but
- * whose sibling's stamp is present returns the object untouched. See that
- * function for the three-case semantics.
+ * Disjoint keys are necessary but **not sufficient** to protect misrouted
+ * data: an object carrying only this key still *lacks* {@link DSL_VERSION_KEY},
+ * so the document runner would read it as {@link UNVERSIONED_DSL_VERSION} and
+ * walk its legacy ladder over the session — stamping a foreign field and, once
+ * a real transform lands, mangling the payload. The cross-line guard in
+ * {@link runLadder} closes this: a runner whose own stamp is absent but whose
+ * sibling's stamp is present **throws** rather than guessing. See that function
+ * for the three-case semantics.
  */
 export const RUNTIME_DSL_VERSION_KEY = 'runtimeDslVersion' as const;
 
@@ -140,10 +140,10 @@ export const DSL_MIGRATIONS: readonly DslMigration[] = [
  * The disjoint stamp fields keep each ladder from reading the other's version,
  * but they do not by themselves stop a misrouted aggregate from being lifted on
  * the wrong line (it simply reads as unversioned there). The cross-line guard in
- * {@link runLadder} is what delivers inertness: a runner returns any aggregate
- * that carries the *sibling* line's stamp but not its own untouched, so a
- * misrouted document migration never even stamps its foreign `dslVersion` onto a
- * runtime session.
+ * {@link runLadder} closes this: a runner **throws** on any aggregate that
+ * carries the *sibling* line's stamp but not its own, so a misrouted document
+ * migration surfaces as an error instead of stamping a foreign `dslVersion`
+ * onto a runtime session.
  */
 export const RUNTIME_DSL_VERSION = '0.1.0' as const;
 
@@ -257,30 +257,42 @@ export function runtimeDslVersionOf(doc: unknown): string {
 /**
  * Shared predicate behind {@link needsMigration} and
  * {@link needsRuntimeMigration}: true when `doc` is an object stamped (on
- * envelope `key`) older than `targetVersion`. It must return `false` for every
- * input its runner leaves untouched, so the predicate and its runner never
- * disagree and a `while (needs…(x)) x = migrate…(x)` loop always terminates.
- * Two such mirrors: a non-object (not a migratable aggregate — the runners
- * return it as-is), and a misrouted aggregate under {@link runLadder}'s
- * cross-line guard (own stamp absent, `otherKey` stamp present — the runner
- * returns it unchanged, so reporting it as needing migration would spin
- * forever). Throws on a malformed own-line stamp (see {@link versionOf}).
+ * envelope `key`) older than `targetVersion`. It mirrors its runner on every
+ * input, so the two never disagree and a `while (needs…(x)) x = migrate…(x)`
+ * loop always terminates: `false` for a non-object (the runners return those
+ * as-is), and the same **throw** as {@link runLadder}'s cross-line guard for an
+ * ambiguous envelope (own stamp absent, `otherKey` stamp present) — quietly
+ * answering either way there would misreport data the runner refuses to touch.
+ * Also throws on a malformed own-line stamp (see {@link versionOf}).
  */
 function needsLadder(doc: unknown, key: string, targetVersion: string, otherKey: string): boolean {
   if (!isObject(doc)) return false;
-  if (doc[key] === undefined && doc[otherKey] !== undefined) return false;
+  if (doc[key] === undefined && doc[otherKey] !== undefined) throw crossLineError(key, otherKey);
   return compareVersions(versionOf(doc, key), targetVersion) < 0;
+}
+
+/**
+ * The error thrown by the cross-line guard in {@link runLadder} and
+ * {@link needsLadder} — one constructor so the runner and its predicate can
+ * never drift apart on what the ambiguous state means.
+ */
+function crossLineError(key: string, otherKey: string): Error {
+  return new Error(
+    `@openmaic/dsl: object carries "${otherKey}" but no "${key}" — a misrouted ` +
+      `aggregate from the other version line, or a stray foreign stamp; route it ` +
+      `to the correct runner or repair the envelope before migrating`,
+  );
 }
 
 /**
  * True when `doc` is a migratable document written at an older version than
  * {@link DSL_VERSION}. The document-line predicate (counterpart:
- * {@link needsRuntimeMigration}, which reads the runtime envelope field). It is
- * `false` for every input {@link migrate} leaves untouched — a non-object, and a
- * runtime-line aggregate under the cross-line guard — so the two never disagree
+ * {@link needsRuntimeMigration}, which reads the runtime envelope field). It
+ * mirrors {@link migrate} on every input — `false` for a non-object, the same
+ * cross-line-guard throw for an ambiguous envelope — so the two never disagree
  * (a caller looping `while (needsMigration(x)) x = migrate(x)` always
- * terminates). Throws on an object carrying a malformed stamp (see
- * {@link dslVersionOf}).
+ * terminates or fails loud on the same input). Throws on an object carrying a
+ * malformed stamp (see {@link dslVersionOf}).
  */
 export function needsMigration(doc: unknown): boolean {
   return needsLadder(doc, DSL_VERSION_KEY, DSL_VERSION, RUNTIME_DSL_VERSION_KEY);
@@ -291,12 +303,12 @@ export function needsMigration(doc: unknown): boolean {
  * {@link RUNTIME_DSL_VERSION}. The runtime-line counterpart of
  * {@link needsMigration}: it reads {@link RUNTIME_DSL_VERSION_KEY} and pairs with
  * {@link migrateRuntime}, so a `while (needsRuntimeMigration(x)) x = migrateRuntime(x)`
- * loop always terminates — including on a misrouted document-line aggregate,
- * which the cross-line guard makes both the predicate and the runner ignore.
- * Pairing {@link needsMigration} with {@link migrateRuntime} (or vice versa)
- * once the lines diverge would spin or silently skip — always pair a predicate
- * with its own line's runner. Throws on a malformed stamp (see
- * {@link runtimeDslVersionOf}).
+ * loop always terminates or fails loud on the same input — on a misrouted
+ * document-line aggregate both the predicate and the runner throw the same
+ * cross-line-guard error. Pairing {@link needsMigration} with
+ * {@link migrateRuntime} (or vice versa) once the lines diverge would spin or
+ * silently skip — always pair a predicate with its own line's runner. Throws on
+ * a malformed stamp (see {@link runtimeDslVersionOf}).
  */
 export function needsRuntimeMigration(doc: unknown): boolean {
   return needsLadder(doc, RUNTIME_DSL_VERSION_KEY, RUNTIME_DSL_VERSION, DSL_VERSION_KEY);
@@ -338,20 +350,24 @@ function stampVersion(doc: unknown, version: string, key: string): unknown {
  * only `dslVersion` while the runtime ladder reads and writes only
  * `runtimeDslVersion`; neither can be walked over the other's stamp.
  *
- * **Cross-line guard.** Disjoint stamp keys alone do NOT make misrouted data
- * inert: an aggregate carrying the *other* line's stamp still lacks this line's
+ * **Cross-line guard.** Disjoint stamp keys alone do NOT protect misrouted
+ * data: an aggregate carrying the *other* line's stamp still lacks this line's
  * key, so `versionOf` reads it as {@link UNVERSIONED_DSL_VERSION} and the runner
  * would walk its own legacy ladder over it — stamping a foreign key and, once a
  * real transform lands on either ladder, mangling or throwing on the other
- * line's payload. The inertness comes from this guard, keyed on the presence of
- * the two stamps:
+ * line's payload. The guard is keyed on the presence of the two stamps:
  *
  * 1. Own line's stamp present → migrate normally on this line, regardless of the
  *    other key (a doubly-stamped envelope is each runner's own line's data).
  * 2. Both stamps absent → genuine legacy data → walk this line's ladder as before.
- * 3. Own stamp ABSENT + other line's stamp PRESENT → this is the *other* line's
- *    aggregate, misrouted here. Return it unchanged: never lift it, never stamp
- *    this line's key onto it.
+ * 3. Own stamp ABSENT + other line's stamp PRESENT → **throw**. The envelope
+ *    cannot say whether this is the other line's aggregate misrouted here or
+ *    this line's data carrying a stray foreign stamp — walking the ladder would
+ *    mangle the former, while silently returning it unchanged would permanently
+ *    orphan the latter from its own line (its predicate would report "current"
+ *    forever). An ambiguous envelope is corrupt data, handled like a malformed
+ *    stamp: fail loud. `validateRuntimeSession` rejects a stray `dslVersion` at
+ *    the door for the same reason.
  */
 function runLadder(
   doc: unknown,
@@ -363,11 +379,15 @@ function runLadder(
   if (!isObject(doc)) return doc;
 
   // Cross-line guard, case (3): this line's stamp absent but the other line's
-  // stamp present → the object belongs to the other version line. It is inert
-  // here — returned byte-identical, never lifted or stamped. (Cases (1) own
-  // stamp present and (2) both absent fall through to the normal walk below,
-  // where a present-but-malformed own stamp still throws via `versionOf`.)
-  if (doc[key] === undefined && doc[otherKey] !== undefined) return doc;
+  // stamp present. The envelope cannot distinguish "the other line's aggregate,
+  // misrouted here" from "this line's data carrying a stray foreign stamp" —
+  // the two are byte-identical. Silently walking the ladder would mangle the
+  // former; silently returning unchanged would orphan the latter (valid data
+  // that never becomes eligible for its own line). Neither guess is safe, so
+  // fail loud, like a malformed stamp. (Cases (1) own stamp present and (2)
+  // both absent fall through to the normal walk below, where a
+  // present-but-malformed own stamp still throws via `versionOf`.)
+  if (doc[key] === undefined && doc[otherKey] !== undefined) throw crossLineError(key, otherKey);
 
   let version = versionOf(doc, key);
 
