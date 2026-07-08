@@ -98,8 +98,15 @@ function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-/** A well-formed `x.y.z` version: exactly three non-negative integer parts. */
-function isValidVersion(v: string): boolean {
+/**
+ * A well-formed `x.y.z` version: exactly three non-negative integer parts.
+ *
+ * Exported so the runtime-envelope validators can reject a present-but-malformed
+ * `dslVersion` stamp at their boundary — the same well-formedness rule that
+ * {@link dslVersionOf} / {@link migrate} enforce by throwing — rather than
+ * letting a bad stamp pass a mere `typeof` check and blow up downstream.
+ */
+export function isWellFormedDslVersion(v: string): boolean {
   return /^\d+\.\d+\.\d+$/.test(v);
 }
 
@@ -133,7 +140,7 @@ export function dslVersionOf(doc: unknown): string {
   if (!isObject(doc)) return UNVERSIONED_DSL_VERSION;
   const raw = doc[DSL_VERSION_KEY];
   if (raw === undefined) return UNVERSIONED_DSL_VERSION;
-  if (typeof raw !== 'string' || !isValidVersion(raw)) {
+  if (typeof raw !== 'string' || !isWellFormedDslVersion(raw)) {
     throw new Error(
       `@openmaic/dsl: invalid ${DSL_VERSION_KEY} stamp ${JSON.stringify(raw)} (expected "x.y.z")`,
     );

@@ -21,8 +21,15 @@
  * `actionIndex` written yesterday may dangle after today's edit. Consumers
  * (replay, summaries) MUST tolerate missing or stale anchors.
  *
+ * Timestamps here are ISO 8601 strings — a deliberate divergence from the
+ * document aggregate's epoch-millisecond numbers. The runtime contract
+ * standardizes on ISO (#869), so do NOT mix the two encodings when merging a
+ * runtime feed with document data: convert at the boundary, never compare a
+ * runtime `createdAt` string against a document's numeric timestamp directly.
+ *
  * No runtime dependencies. Pure types + plain data constants only.
  */
+import type { DslVersioned } from './version.js';
 
 /**
  * Lifecycle of a session. Records carry no lifecycle of their own — a chat
@@ -35,7 +42,22 @@
 export type RuntimeSessionStatus = 'active' | 'completed' | 'archived';
 
 /** All session statuses, in lifecycle order. */
-export const RUNTIME_SESSION_STATUSES = ['active', 'completed', 'archived'] as const;
+export const RUNTIME_SESSION_STATUSES = [
+  'active',
+  'completed',
+  'archived',
+] as const satisfies readonly RuntimeSessionStatus[];
+
+// Compile-time exhaustiveness: every RuntimeSessionStatus must appear above.
+// `satisfies` proves each entry is a valid status; this proves the converse, so
+// adding a union member without extending the tuple fails the build.
+type _RuntimeSessionStatusesExhaustive = [RuntimeSessionStatus] extends [
+  (typeof RUNTIME_SESSION_STATUSES)[number],
+]
+  ? true
+  : never;
+const _runtimeSessionStatusesExhaustive: _RuntimeSessionStatusesExhaustive = true;
+void _runtimeSessionStatusesExhaustive;
 
 /** Narrow an unknown value to a valid {@link RuntimeSessionStatus}. */
 export function isRuntimeSessionStatus(value: unknown): value is RuntimeSessionStatus {
@@ -43,14 +65,29 @@ export function isRuntimeSessionStatus(value: unknown): value is RuntimeSessionS
 }
 
 /**
- * Runtime kinds whose payload skeletons the DSL owns. `RuntimeSession.kind`
- * is an open `string` — apps define their own kinds without touching the
- * contract; these are only the ones with a DSL-owned skeleton.
+ * The core runtime kind *names* the contract recognizes — the ones Part B
+ * migrates first. `RuntimeSession.kind` is an open `string`, so apps define
+ * their own kinds without touching the contract; these are just the recognized
+ * ones. Note this is about kind *names*, not skeletons: the DSL ships payload
+ * skeletons for `chat` and `quizAttempt` only. `playback` has NO skeleton by
+ * design — its payload is app-owned; only the kind name is contract-recognized.
  */
 export type CoreRuntimeKind = 'chat' | 'quizAttempt' | 'playback';
 
 /** All core runtime kinds. */
-export const CORE_RUNTIME_KINDS = ['chat', 'quizAttempt', 'playback'] as const;
+export const CORE_RUNTIME_KINDS = [
+  'chat',
+  'quizAttempt',
+  'playback',
+] as const satisfies readonly CoreRuntimeKind[];
+
+// Compile-time exhaustiveness: every CoreRuntimeKind must appear above (see the
+// RUNTIME_SESSION_STATUSES check for the pattern).
+type _CoreRuntimeKindsExhaustive = [CoreRuntimeKind] extends [(typeof CORE_RUNTIME_KINDS)[number]]
+  ? true
+  : never;
+const _coreRuntimeKindsExhaustive: _CoreRuntimeKindsExhaustive = true;
+void _coreRuntimeKindsExhaustive;
 
 /** Narrow an unknown value to a valid {@link CoreRuntimeKind}. */
 export function isCoreRuntimeKind(value: unknown): value is CoreRuntimeKind {
@@ -61,8 +98,13 @@ export function isCoreRuntimeKind(value: unknown): value is CoreRuntimeKind {
  * The unit of learner-runtime identity and lifecycle. Sessions are keyed by
  * `(stageId, learnerKey)` plus a `kind`; a learner may hold several sessions
  * of the same kind on one stage (e.g. repeated quiz attempts).
+ *
+ * Extends {@link DslVersioned}, so a session carries the same optional
+ * `dslVersion` serialized-contract stamp (absent on legacy data) and rides the
+ * same stamping + migrate-on-read ladder as the document aggregate — sharing
+ * one envelope definition instead of re-declaring the field here.
  */
-export interface RuntimeSession {
+export interface RuntimeSession extends DslVersioned {
   id: string;
   /** {@link CoreRuntimeKind} or an app-defined kind. */
   kind: string;
@@ -78,12 +120,6 @@ export interface RuntimeSession {
   createdAt: string;
   /** ISO 8601. */
   updatedAt: string;
-  /**
-   * Serialized-contract version stamp (see `DSL_VERSION_KEY`), same
-   * stamping + migrate-on-read ladder as the document aggregate. Absent on
-   * legacy data.
-   */
-  dslVersion?: string;
 }
 
 /**
@@ -115,11 +151,32 @@ export interface RuntimeRecord<TPayload = unknown> {
   payload: TPayload;
 }
 
+/**
+ * The shape a producer hands to a store's `append`: a {@link RuntimeRecord}
+ * minus its `seq`. Ordering is store-owned — `seq` is the per-session monotonic
+ * key the store assigns on append and cannot be supplied by the caller — so the
+ * creation type omits it structurally rather than trusting producers to leave
+ * it out (and to leave it consistent across concurrent appenders).
+ */
+export type RuntimeRecordInit<TPayload = unknown> = Omit<RuntimeRecord<TPayload>, 'seq'>;
+
 /** Speaker roles the replay renderer can rely on for `chat` records. */
 export type ChatRuntimeRole = 'user' | 'assistant' | 'system';
 
 /** All chat roles. */
-export const CHAT_RUNTIME_ROLES = ['user', 'assistant', 'system'] as const;
+export const CHAT_RUNTIME_ROLES = [
+  'user',
+  'assistant',
+  'system',
+] as const satisfies readonly ChatRuntimeRole[];
+
+// Compile-time exhaustiveness: every ChatRuntimeRole must appear above (see the
+// RUNTIME_SESSION_STATUSES check for the pattern).
+type _ChatRuntimeRolesExhaustive = [ChatRuntimeRole] extends [(typeof CHAT_RUNTIME_ROLES)[number]]
+  ? true
+  : never;
+const _chatRuntimeRolesExhaustive: _ChatRuntimeRolesExhaustive = true;
+void _chatRuntimeRolesExhaustive;
 
 /** Narrow an unknown value to a valid {@link ChatRuntimeRole}. */
 export function isChatRuntimeRole(value: unknown): value is ChatRuntimeRole {
@@ -137,6 +194,18 @@ export interface ChatMessageSkeleton {
 }
 
 /**
+ * Narrow an unknown value to a {@link ChatMessageSkeleton}: an object whose
+ * `role` is a recognized {@link ChatRuntimeRole} and whose `content` is a
+ * string. Structural subset only — app-added fields are ignored, matching how
+ * apps extend the skeleton by intersection. Pure, no runtime deps.
+ */
+export function isChatMessageSkeleton(value: unknown): value is ChatMessageSkeleton {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as { role?: unknown; content?: unknown };
+  return isChatRuntimeRole(v.role) && typeof v.content === 'string';
+}
+
+/**
  * Phases of a quiz attempt. Mirrors the lifecycle the browser app expresses
  * today by creating/deleting storage keys (draft → submitted → reviewed),
  * made explicit so downstream consumers can reason about *when* and *in
@@ -145,7 +214,21 @@ export interface ChatMessageSkeleton {
 export type QuizAttemptPhase = 'draft' | 'submitted' | 'reviewed';
 
 /** All quiz attempt phases, in lifecycle order. */
-export const QUIZ_ATTEMPT_PHASES = ['draft', 'submitted', 'reviewed'] as const;
+export const QUIZ_ATTEMPT_PHASES = [
+  'draft',
+  'submitted',
+  'reviewed',
+] as const satisfies readonly QuizAttemptPhase[];
+
+// Compile-time exhaustiveness: every QuizAttemptPhase must appear above (see the
+// RUNTIME_SESSION_STATUSES check for the pattern).
+type _QuizAttemptPhasesExhaustive = [QuizAttemptPhase] extends [
+  (typeof QUIZ_ATTEMPT_PHASES)[number],
+]
+  ? true
+  : never;
+const _quizAttemptPhasesExhaustive: _QuizAttemptPhasesExhaustive = true;
+void _quizAttemptPhasesExhaustive;
 
 /** Narrow an unknown value to a valid {@link QuizAttemptPhase}. */
 export function isQuizAttemptPhase(value: unknown): value is QuizAttemptPhase {
@@ -159,4 +242,21 @@ export function isQuizAttemptPhase(value: unknown): value is QuizAttemptPhase {
 export interface QuizAttemptSkeleton {
   phase: QuizAttemptPhase;
   answers: Record<string, unknown>;
+}
+
+/**
+ * Narrow an unknown value to a {@link QuizAttemptSkeleton}: an object whose
+ * `phase` is a recognized {@link QuizAttemptPhase} and whose `answers` is a
+ * plain object (the id→answer map — not an array or null). Structural subset
+ * only; the answer values themselves stay app-owned. Pure, no runtime deps.
+ */
+export function isQuizAttemptSkeleton(value: unknown): value is QuizAttemptSkeleton {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as { phase?: unknown; answers?: unknown };
+  return (
+    isQuizAttemptPhase(v.phase) &&
+    typeof v.answers === 'object' &&
+    v.answers !== null &&
+    !Array.isArray(v.answers)
+  );
 }

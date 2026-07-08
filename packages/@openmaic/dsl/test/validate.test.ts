@@ -155,6 +155,27 @@ describe('validateRuntimeSession', () => {
     const result = validateRuntimeSession({ ...good, dslVersion: 1 });
     expect(result.valid).toBe(false);
   });
+
+  it('rejects a present-but-malformed dslVersion stamp', () => {
+    // A well-formed string that is not `x.y.z` would pass the typeof check yet
+    // make `migrate`/`dslVersionOf` throw downstream — reject it at the door.
+    const result = validateRuntimeSession({ ...good, dslVersion: 'legacy' });
+    expect(result.valid).toBe(false);
+    if (result.valid) throw new Error('unreachable');
+    expect(result.errors.map((e) => e.path)).toContain('/dslVersion');
+  });
+
+  it('accepts a well-formed dslVersion stamp', () => {
+    expect(validateRuntimeSession({ ...good, dslVersion: '0.1.0' })).toEqual({ valid: true });
+  });
+
+  it('rejects an empty required string (learnerKey)', () => {
+    // `''` passes typeof but is useless as a partition key.
+    const result = validateRuntimeSession({ ...good, learnerKey: '' });
+    expect(result.valid).toBe(false);
+    if (result.valid) throw new Error('unreachable');
+    expect(result.errors.map((e) => e.path)).toContain('/learnerKey');
+  });
 });
 
 describe('validateRuntimeRecord', () => {
@@ -182,6 +203,42 @@ describe('validateRuntimeRecord', () => {
     expect(result.valid).toBe(false);
     if (result.valid) throw new Error('unreachable');
     expect(result.errors.map((e) => e.path)).toContain('/payload');
+  });
+
+  it('rejects an explicit `payload: undefined` but accepts a null payload', () => {
+    // `'payload' in doc` would pass an explicit-undefined; require a real value.
+    // `null` stays legal — it is a value the app may have deliberately stored.
+    const undef = validateRuntimeRecord({ ...good, payload: undefined });
+    expect(undef.valid).toBe(false);
+    if (undef.valid) throw new Error('unreachable');
+    expect(undef.errors.map((e) => e.path)).toContain('/payload');
+    expect(validateRuntimeRecord({ ...good, payload: null })).toEqual({ valid: true });
+  });
+
+  it('rejects a seq that is not a non-negative integer', () => {
+    // `seq` is the sole replay ordering key; NaN/Infinity/negative/fractional
+    // all pass `typeof === "number"` but would corrupt ordering.
+    for (const seq of [Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5]) {
+      const r = validateRuntimeRecord({ ...good, seq });
+      expect(r.valid).toBe(false);
+      if (r.valid) throw new Error('unreachable');
+      expect(r.errors.map((e) => e.path)).toContain('/seq');
+    }
+    expect(validateRuntimeRecord({ ...good, seq: 0 })).toEqual({ valid: true });
+  });
+
+  it('rejects a negative optional actionIndex', () => {
+    const r = validateRuntimeRecord({ ...good, actionIndex: -1 });
+    expect(r.valid).toBe(false);
+    if (r.valid) throw new Error('unreachable');
+    expect(r.errors.map((e) => e.path)).toContain('/actionIndex');
+  });
+
+  it('rejects an empty required string (id)', () => {
+    const r = validateRuntimeRecord({ ...good, id: '' });
+    expect(r.valid).toBe(false);
+    if (r.valid) throw new Error('unreachable');
+    expect(r.errors.map((e) => e.path)).toContain('/id');
   });
 
   it('rejects wrongly-typed optional anchors', () => {

@@ -5,14 +5,17 @@ import {
   DSL_VERSION,
   QUIZ_ATTEMPT_PHASES,
   RUNTIME_SESSION_STATUSES,
+  isChatMessageSkeleton,
   isChatRuntimeRole,
   isCoreRuntimeKind,
   isQuizAttemptPhase,
+  isQuizAttemptSkeleton,
   isRuntimeSessionStatus,
   migrate,
   type ChatMessageSkeleton,
   type QuizAttemptSkeleton,
   type RuntimeRecord,
+  type RuntimeRecordInit,
   type RuntimeSession,
 } from '@openmaic/dsl';
 
@@ -71,6 +74,40 @@ describe('runtime envelope shapes (compile-time contract)', () => {
       payload: { phase: 'submitted', answers: { q1: 'A' } },
     };
     expect(quiz.payload.phase).toBe('submitted');
+  });
+
+  it('lets a producer construct a RuntimeRecordInit without a store-assigned seq', () => {
+    // Compile-time contract: `seq` is store-owned, so the creation shape omits
+    // it. Supplying `seq` here would be a type error; leaving it out type-checks.
+    const init: RuntimeRecordInit<ChatMessageSkeleton> = {
+      id: 'r1',
+      sessionId: 's1',
+      createdAt: '2026-01-01T00:00:01.000Z',
+      payload: { role: 'assistant', content: 'hi' },
+    };
+    expect(init.id).toBe('r1');
+  });
+});
+
+describe('runtime payload skeleton guards', () => {
+  it('narrows chat message skeletons and rejects malformed ones', () => {
+    expect(isChatMessageSkeleton({ role: 'user', content: 'hi' })).toBe(true);
+    expect(isChatMessageSkeleton({ role: 'assistant', content: '' })).toBe(true);
+    expect(isChatMessageSkeleton({ role: 'tool', content: 'hi' })).toBe(false); // bad role
+    expect(isChatMessageSkeleton({ role: 'user', content: 42 })).toBe(false); // non-string
+    expect(isChatMessageSkeleton({ role: 'user' })).toBe(false); // missing content
+    expect(isChatMessageSkeleton(null)).toBe(false);
+    expect(isChatMessageSkeleton('user')).toBe(false);
+  });
+
+  it('narrows quiz attempt skeletons and rejects malformed ones', () => {
+    expect(isQuizAttemptSkeleton({ phase: 'draft', answers: {} })).toBe(true);
+    expect(isQuizAttemptSkeleton({ phase: 'submitted', answers: { q1: 'A' } })).toBe(true);
+    expect(isQuizAttemptSkeleton({ phase: 'graded', answers: {} })).toBe(false); // bad phase
+    expect(isQuizAttemptSkeleton({ phase: 'draft', answers: [] })).toBe(false); // array, not object
+    expect(isQuizAttemptSkeleton({ phase: 'draft', answers: null })).toBe(false); // null answers
+    expect(isQuizAttemptSkeleton({ phase: 'draft' })).toBe(false); // missing answers
+    expect(isQuizAttemptSkeleton(null)).toBe(false);
   });
 });
 

@@ -18,6 +18,7 @@
 import { isActionType } from './action.js';
 import type { ActionType } from './action.js';
 import { isRuntimeSessionStatus } from './runtime.js';
+import { isWellFormedDslVersion } from './version.js';
 
 export interface ValidationIssue {
   /** JSON-pointer-ish path to the offending value, e.g. `/actions/0/elementId`. */
@@ -99,6 +100,49 @@ function reqNumber(
 
 function done(errors: ValidationIssue[]): ValidationResult {
   return errors.length === 0 ? { valid: true } : { valid: false, errors };
+}
+
+/**
+ * Check a table of root-level envelope fields against their declared runtime
+ * kinds, pushing one {@link ValidationIssue} per violation at path `/<field>`.
+ *
+ * One helper for all three runtime-envelope tables (session-required,
+ * record-required, record-optional) so the presence / kind / emptiness rules
+ * cannot drift between the copies. Two modes:
+ *
+ * - required (`opts.optional` falsy): the field must be present with its kind,
+ *   and a required `'string'` must additionally be **non-empty** — an empty
+ *   `id` / `learnerKey` passes `typeof` yet is useless as an identity/partition
+ *   key, so it is a contract violation, not valid data.
+ * - optional (`opts.optional` true): the field is only checked *when present*,
+ *   and only for its `typeof` kind. Optional anchors (`sceneId`, `subAnchor`)
+ *   stay lax on emptiness — an empty best-effort anchor is the app's business.
+ *
+ * `checkAction`'s variant-field loop is deliberately NOT routed through here:
+ * it uses nested paths and a different "requires"/"must be" message shape.
+ */
+function checkFields(
+  doc: Record<string, unknown>,
+  fields: Readonly<Record<string, FieldKind>>,
+  opts: { optional?: boolean },
+  errors: ValidationIssue[],
+): void {
+  for (const [field, kind] of Object.entries(fields)) {
+    const value = doc[field];
+    if (opts.optional) {
+      if (value !== undefined && !matchesKind(value, kind)) {
+        errors.push({ path: `/${field}`, message: `expected ${kind} \`${field}\`` });
+      }
+      continue;
+    }
+    if (!matchesKind(value, kind)) {
+      errors.push({ path: `/${field}`, message: `expected ${kind} \`${field}\`` });
+      continue;
+    }
+    if (kind === 'string' && value === '') {
+      errors.push({ path: `/${field}`, message: `expected non-empty string \`${field}\`` });
+    }
+  }
 }
 
 function checkAction(doc: unknown, path: string, errors: ValidationIssue[]): void {
@@ -228,19 +272,22 @@ export function validateRuntimeSession(doc: unknown): ValidationResult {
   if (!isObject(doc)) {
     return { valid: false, errors: [{ path: '/', message: 'runtime session must be an object' }] };
   }
-  for (const [field, kind] of Object.entries(RUNTIME_SESSION_REQUIRED_FIELDS)) {
-    if (!matchesKind(doc[field], kind)) {
-      errors.push({ path: `/${field}`, message: `expected ${kind} \`${field}\`` });
-    }
-  }
+  checkFields(doc, RUNTIME_SESSION_REQUIRED_FIELDS, {}, errors);
   if (typeof doc.status === 'string' && !isRuntimeSessionStatus(doc.status)) {
     errors.push({
       path: '/status',
       message: `unknown session status: ${JSON.stringify(doc.status)}`,
     });
   }
-  if (doc.dslVersion !== undefined && typeof doc.dslVersion !== 'string') {
-    errors.push({ path: '/dslVersion', message: 'expected string `dslVersion`' });
+  // `dslVersion` is optional, but a present stamp must be a well-formed `x.y.z`
+  // string: `migrate`/`dslVersionOf` throw on a malformed stamp, so accepting a
+  // string like `'legacy'` here would only defer the failure to read time.
+  if (doc.dslVersion !== undefined) {
+    if (typeof doc.dslVersion !== 'string') {
+      errors.push({ path: '/dslVersion', message: 'expected string `dslVersion`' });
+    } else if (!isWellFormedDslVersion(doc.dslVersion)) {
+      errors.push({ path: '/dslVersion', message: 'malformed `dslVersion`: expected x.y.z' });
+    }
   }
   return done(errors);
 }
@@ -270,17 +317,30 @@ export function validateRuntimeRecord(doc: unknown): ValidationResult {
   if (!isObject(doc)) {
     return { valid: false, errors: [{ path: '/', message: 'runtime record must be an object' }] };
   }
-  for (const [field, kind] of Object.entries(RUNTIME_RECORD_REQUIRED_FIELDS)) {
-    if (!matchesKind(doc[field], kind)) {
-      errors.push({ path: `/${field}`, message: `expected ${kind} \`${field}\`` });
-    }
+  checkFields(doc, RUNTIME_RECORD_REQUIRED_FIELDS, {}, errors);
+  checkFields(doc, RUNTIME_RECORD_OPTIONAL_FIELDS, { optional: true }, errors);
+
+  // `seq` is the sole replay ordering key, so it must be a real array-like
+  // index. `matchesKind(_, 'number')` above already accepts NaN / Infinity /
+  // negative / fractional (all `typeof === 'number'`); narrow to a non-negative
+  // integer here so a malformed value can't silently corrupt replay order.
+  if (typeof doc.seq === 'number' && !(Number.isInteger(doc.seq) && doc.seq >= 0)) {
+    errors.push({ path: '/seq', message: 'expected non-negative integer `seq`' });
   }
-  for (const [field, kind] of Object.entries(RUNTIME_RECORD_OPTIONAL_FIELDS)) {
-    if (doc[field] !== undefined && !matchesKind(doc[field], kind)) {
-      errors.push({ path: `/${field}`, message: `expected ${kind} \`${field}\`` });
-    }
+  // `actionIndex` is an index into a scene's actions when present: same
+  // non-negative-integer rule as `seq` (a wrong-typed value was already flagged
+  // by the optional-field check above, so only refine a present number here).
+  if (
+    typeof doc.actionIndex === 'number' &&
+    !(Number.isInteger(doc.actionIndex) && doc.actionIndex >= 0)
+  ) {
+    errors.push({ path: '/actionIndex', message: 'expected non-negative integer `actionIndex`' });
   }
-  if (!('payload' in doc)) {
+
+  // Require a real payload value, not merely the key. `'payload' in doc` would
+  // pass an explicit `{ payload: undefined }`; reject that. `null` stays legal —
+  // it is a value an app may have deliberately stored.
+  if (doc.payload === undefined) {
     errors.push({ path: '/payload', message: 'expected `payload`' });
   }
   return done(errors);
