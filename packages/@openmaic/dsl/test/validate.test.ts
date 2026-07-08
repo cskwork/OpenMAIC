@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { validateStage, validateScene, validateAction, type ValidationResult } from '@openmaic/dsl';
+import {
+  validateStage,
+  validateScene,
+  validateAction,
+  validateRuntimeSession,
+  validateRuntimeRecord,
+  type ValidationResult,
+} from '@openmaic/dsl';
 
 function errors(r: ValidationResult): string[] {
   return r.valid ? [] : r.errors.map((e) => e.path);
@@ -90,5 +97,106 @@ describe('validateAction', () => {
   it('requires a string id', () => {
     const r = validateAction({ type: 'laser', elementId: 'e' });
     expect(errors(r)).toContain('/id');
+  });
+});
+
+describe('validateRuntimeSession', () => {
+  const good = {
+    id: 's1',
+    kind: 'chat',
+    stageId: 'stage1',
+    learnerKey: 'anon:device-1',
+    status: 'active',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  it('accepts a minimal valid session', () => {
+    expect(validateRuntimeSession(good)).toEqual({ valid: true });
+  });
+
+  it('accepts an app-defined kind and an optional dslVersion', () => {
+    expect(validateRuntimeSession({ ...good, kind: 'myWidget', dslVersion: '0.1.0' })).toEqual({
+      valid: true,
+    });
+  });
+
+  it('rejects non-objects', () => {
+    const result = validateRuntimeSession(null);
+    expect(result.valid).toBe(false);
+  });
+
+  it('reports every missing required field with a path', () => {
+    const result = validateRuntimeSession({});
+    expect(result.valid).toBe(false);
+    if (result.valid) throw new Error('unreachable');
+    const paths = result.errors.map((e) => e.path);
+    for (const p of [
+      '/id',
+      '/kind',
+      '/stageId',
+      '/learnerKey',
+      '/status',
+      '/createdAt',
+      '/updatedAt',
+    ]) {
+      expect(paths).toContain(p);
+    }
+  });
+
+  it('rejects an unknown status value', () => {
+    const result = validateRuntimeSession({ ...good, status: 'paused' });
+    expect(result.valid).toBe(false);
+    if (result.valid) throw new Error('unreachable');
+    expect(result.errors[0].path).toBe('/status');
+  });
+
+  it('rejects a non-string dslVersion', () => {
+    const result = validateRuntimeSession({ ...good, dslVersion: 1 });
+    expect(result.valid).toBe(false);
+  });
+});
+
+describe('validateRuntimeRecord', () => {
+  const good = {
+    id: 'r1',
+    sessionId: 's1',
+    seq: 0,
+    createdAt: '2026-01-01T00:00:01.000Z',
+    payload: { role: 'user', content: 'hi' },
+  };
+
+  it('accepts a minimal valid record (payload is opaque)', () => {
+    expect(validateRuntimeRecord(good)).toEqual({ valid: true });
+  });
+
+  it('accepts optional anchors of the right shape', () => {
+    expect(
+      validateRuntimeRecord({ ...good, sceneId: 'sc1', actionIndex: 2, subAnchor: 'q3' }),
+    ).toEqual({ valid: true });
+  });
+
+  it('rejects a record with no payload key', () => {
+    const { payload: _payload, ...rest } = good;
+    const result = validateRuntimeRecord(rest);
+    expect(result.valid).toBe(false);
+    if (result.valid) throw new Error('unreachable');
+    expect(result.errors.map((e) => e.path)).toContain('/payload');
+  });
+
+  it('rejects wrongly-typed optional anchors', () => {
+    expect(validateRuntimeRecord({ ...good, actionIndex: 'x' }).valid).toBe(false);
+    expect(validateRuntimeRecord({ ...good, sceneId: 5 }).valid).toBe(false);
+    expect(validateRuntimeRecord({ ...good, subAnchor: 5 }).valid).toBe(false);
+  });
+
+  it('rejects missing required fields with paths', () => {
+    const result = validateRuntimeRecord({});
+    expect(result.valid).toBe(false);
+    if (result.valid) throw new Error('unreachable');
+    const paths = result.errors.map((e) => e.path);
+    for (const p of ['/id', '/sessionId', '/seq', '/createdAt', '/payload']) {
+      expect(paths).toContain(p);
+    }
   });
 });

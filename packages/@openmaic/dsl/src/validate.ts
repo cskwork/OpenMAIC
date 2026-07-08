@@ -17,6 +17,7 @@
  */
 import { isActionType } from './action.js';
 import type { ActionType } from './action.js';
+import { isRuntimeSessionStatus } from './runtime.js';
 
 export interface ValidationIssue {
   /** JSON-pointer-ish path to the offending value, e.g. `/actions/0/elementId`. */
@@ -204,5 +205,83 @@ export function validateScene(doc: unknown): ValidationResult {
 export function validateAction(doc: unknown): ValidationResult {
   const errors: ValidationIssue[] = [];
   checkAction(doc, '', errors);
+  return done(errors);
+}
+
+/** Required envelope fields of a runtime session, with their runtime kinds. */
+const RUNTIME_SESSION_REQUIRED_FIELDS: Readonly<Record<string, FieldKind>> = {
+  id: 'string',
+  kind: 'string',
+  stageId: 'string',
+  learnerKey: 'string',
+  status: 'string',
+  createdAt: 'string',
+  updatedAt: 'string',
+};
+
+/**
+ * Validate a runtime session envelope (#869). Payloads live on records, so
+ * this is a pure envelope check; `kind` is an open string by design.
+ */
+export function validateRuntimeSession(doc: unknown): ValidationResult {
+  const errors: ValidationIssue[] = [];
+  if (!isObject(doc)) {
+    return { valid: false, errors: [{ path: '/', message: 'runtime session must be an object' }] };
+  }
+  for (const [field, kind] of Object.entries(RUNTIME_SESSION_REQUIRED_FIELDS)) {
+    if (!matchesKind(doc[field], kind)) {
+      errors.push({ path: `/${field}`, message: `expected ${kind} \`${field}\`` });
+    }
+  }
+  if (typeof doc.status === 'string' && !isRuntimeSessionStatus(doc.status)) {
+    errors.push({
+      path: '/status',
+      message: `unknown session status: ${JSON.stringify(doc.status)}`,
+    });
+  }
+  if (doc.dslVersion !== undefined && typeof doc.dslVersion !== 'string') {
+    errors.push({ path: '/dslVersion', message: 'expected string `dslVersion`' });
+  }
+  return done(errors);
+}
+
+/** Required envelope fields of a runtime record, with their runtime kinds. */
+const RUNTIME_RECORD_REQUIRED_FIELDS: Readonly<Record<string, FieldKind>> = {
+  id: 'string',
+  sessionId: 'string',
+  seq: 'number',
+  createdAt: 'string',
+};
+
+/** Optional anchor fields of a runtime record, with their runtime kinds. */
+const RUNTIME_RECORD_OPTIONAL_FIELDS: Readonly<Record<string, FieldKind>> = {
+  sceneId: 'string',
+  actionIndex: 'number',
+  subAnchor: 'string',
+};
+
+/**
+ * Validate a runtime record envelope (#869). The payload is app-owned and
+ * checked only for presence — per-kind payload validators are injected at
+ * the store boundary, exactly like scene-content validators (#860).
+ */
+export function validateRuntimeRecord(doc: unknown): ValidationResult {
+  const errors: ValidationIssue[] = [];
+  if (!isObject(doc)) {
+    return { valid: false, errors: [{ path: '/', message: 'runtime record must be an object' }] };
+  }
+  for (const [field, kind] of Object.entries(RUNTIME_RECORD_REQUIRED_FIELDS)) {
+    if (!matchesKind(doc[field], kind)) {
+      errors.push({ path: `/${field}`, message: `expected ${kind} \`${field}\`` });
+    }
+  }
+  for (const [field, kind] of Object.entries(RUNTIME_RECORD_OPTIONAL_FIELDS)) {
+    if (doc[field] !== undefined && !matchesKind(doc[field], kind)) {
+      errors.push({ path: `/${field}`, message: `expected ${kind} \`${field}\`` });
+    }
+  }
+  if (!('payload' in doc)) {
+    errors.push({ path: '/payload', message: 'expected `payload`' });
+  }
   return done(errors);
 }
