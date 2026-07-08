@@ -168,6 +168,42 @@ describe('BrowserRuntimeStore corrupt rows', () => {
     );
   });
 
+  test('a version-valid row with a corrupt envelope fails loud on direct read', async () => {
+    const idb = new IDBFactory();
+    const dbName = 'maic-runtime-corrupt-envelope';
+    const store = new BrowserRuntimeStore({ indexedDB: idb, dbName });
+    await store.createSession(makeSession());
+    // The stamp stays valid; another field is corrupted — version resolution
+    // alone would wave this row through.
+    await rewriteSessionRow(idb, dbName, 'sess-1', (row) => {
+      row.createdAt = 'not-iso';
+    });
+
+    await expect(store.getSession('sess-1')).rejects.toThrow(/createdAt/);
+  });
+
+  test('envelope-corrupt rows are omitted from listings like version-corrupt ones', async () => {
+    const idb = new IDBFactory();
+    const dbName = 'maic-runtime-corrupt-envelope-listing';
+    const store = new BrowserRuntimeStore({ indexedDB: idb, dbName });
+    await store.createSession(makeSession({ id: 'h1' }));
+    await store.createSession(makeSession({ id: 'h2' }));
+    await store.createSession(makeSession({ id: 'bad-created' }));
+    await store.createSession(makeSession({ id: 'bad-status' }));
+    await rewriteSessionRow(idb, dbName, 'bad-created', (row) => {
+      row.createdAt = 'not-iso';
+    });
+    await rewriteSessionRow(idb, dbName, 'bad-status', (row) => {
+      row.status = 'paused';
+    });
+
+    // Corrupt-row tolerance covers the whole envelope, not just the stamp.
+    expect((await store.listSessions('stage-1', 'anon:device-1')).map((s) => s.id)).toEqual([
+      'h1',
+      'h2',
+    ]);
+  });
+
   test('a corrupt row is omitted from listings but stays loud on direct read', async () => {
     const idb = new IDBFactory();
     const dbName = 'maic-runtime-tolerant-listing';

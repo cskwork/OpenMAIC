@@ -69,7 +69,12 @@ export interface RuntimeStore {
    */
   createSession(init: RuntimeSessionInit): Promise<RuntimeSession>;
 
-  /** Load one session, migrated to the current runtime version. `undefined` if absent. */
+  /**
+   * Load one session, migrated to the current runtime version. `undefined` if
+   * absent. Fail-loud on a corrupt stored row — whether the corruption is the
+   * version stamp (absent / malformed / sibling-stamped) or the rest of the
+   * envelope (a session the store itself would refuse to write).
+   */
   getSession(sessionId: string): Promise<RuntimeSession | undefined>;
 
   /**
@@ -77,10 +82,11 @@ export interface RuntimeStore {
    * ordered by `createdAt` ascending — by the instant each timestamp denotes,
    * not by string order (ISO-8601 permits numeric zone offsets). The
    * `(stageId, learnerKey)` pair is the partition key of the runtime layer —
-   * there is deliberately no global listing. Listings tolerate corrupt rows
-   * by omission (one poison row must not make the whole partition
-   * unenumerable — the `listDocuments` precedent); a direct {@link getSession}
-   * on such an id stays fail-loud, and the delete paths are the cleanup tool.
+   * there is deliberately no global listing. Listings tolerate corrupt rows —
+   * version or envelope corruption alike — by omission (one poison row must
+   * not make the whole partition unenumerable — the `listDocuments`
+   * precedent); a direct {@link getSession} on such an id stays fail-loud, and
+   * the delete paths are the cleanup tool.
    */
   listSessions(stageId: string, learnerKey: string): Promise<RuntimeSession[]>;
 

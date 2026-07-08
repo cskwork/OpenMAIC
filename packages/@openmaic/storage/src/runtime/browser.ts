@@ -242,7 +242,17 @@ export class BrowserRuntimeStore implements RuntimeStore {
     const row = await this.txRun([SESSIONS], 'readonly', (tx) =>
       reqP<RuntimeSession | undefined>(tx.objectStore(SESSIONS).get(sessionId)),
     );
-    return row === undefined ? undefined : migrateSession(row);
+    if (row === undefined) return undefined;
+    const session = migrateSession(row);
+    // A read gates the stored row through the same envelope validation as the
+    // writes: a row whose stamp resolves but whose other fields are corrupt is
+    // a stored-row integrity failure, and a direct read fails loud rather than
+    // hand the caller a session the store itself would refuse to write.
+    assertValid(
+      validateRuntimeSession(session),
+      `stored runtime session ${JSON.stringify(sessionId)}`,
+    );
+    return session;
   }
 
   async listSessions(stageId: string, learnerKey: string): Promise<RuntimeSession[]> {
@@ -251,16 +261,21 @@ export class BrowserRuntimeStore implements RuntimeStore {
         tx.objectStore(SESSIONS).index(SESSIONS_BY_STAGE_LEARNER).getAll([stageId, learnerKey]),
       ),
     );
-    // Listings tolerate corrupt rows by omission (the `listDocuments`
-    // precedent): one poison row must not make the whole partition
-    // unenumerable. A direct `getSession` on such an id stays fail-loud, and
-    // the delete paths remain the cleanup tool.
+    // Listings tolerate corrupt rows — version OR envelope corruption — by
+    // omission (the `listDocuments` precedent): one poison row must not make
+    // the whole partition unenumerable. A direct `getSession` on such an id
+    // stays fail-loud, and the delete paths remain the cleanup tool.
     const sessions: RuntimeSession[] = [];
     for (const row of rows) {
       try {
-        sessions.push(migrateSession(row));
+        const session = migrateSession(row);
+        assertValid(
+          validateRuntimeSession(session),
+          `stored runtime session ${JSON.stringify(session.id)}`,
+        );
+        sessions.push(session);
       } catch {
-        // omitted: this row's version resolution failed
+        // omitted: this row's version resolution or envelope validation failed
       }
     }
     // Order by the instant each timestamp denotes, not by the string: ISO-8601
