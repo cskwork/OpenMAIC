@@ -410,7 +410,10 @@ export class BrowserRuntimeStore implements RuntimeStore {
         // malformed / sibling-stamped) throws the runtime line's own error
         // from inside the guard and aborts the merge the same way.
         if (isFutureRuntimeVersioned(row)) throw futureSessionError(row.id, row);
-        const updated: RuntimeSession = { ...row, learnerKey: toLearnerKey };
+        // Migrate a stale row in place before mutating it — the same
+        // migrate-in-place semantics as setSessionStatus/appendRecord — so a
+        // merge never writes an old stamp into the target partition.
+        const updated: RuntimeSession = { ...migrateSession(row), learnerKey: toLearnerKey };
         assertValid(validateRuntimeSession(updated), `runtime session ${JSON.stringify(row.id)}`);
         sessions.put(updated);
       }

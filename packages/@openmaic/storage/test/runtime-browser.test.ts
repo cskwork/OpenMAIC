@@ -214,6 +214,28 @@ describe('BrowserRuntimeStore mergeLearner guards', () => {
     ]);
   });
 
+  test('a below-epoch stale row aborts the merge with nothing moved', async () => {
+    const idb = new IDBFactory();
+    const dbName = 'maic-runtime-merge-stale';
+    const store = new BrowserRuntimeStore({ indexedDB: idb, dbName });
+    await store.createSession(makeSession({ id: 'a-healthy' }));
+    await store.createSession(makeSession({ id: 'z-stale' }));
+    await store.createSession(makeSession({ id: 'existing', learnerKey: 'user:42' }));
+    await reStampSession(idb, dbName, 'z-stale', '0.0.9');
+
+    // The merge migrates each stale row in place before re-keying it (the same
+    // migrate-in-place semantics as setSessionStatus/appendRecord), so a
+    // below-epoch stamp hits the ladder's fail-loud — the same error every
+    // path gives it until a real runtime migration lands.
+    await expect(store.mergeLearner('anon:device-1', 'user:42')).rejects.toThrow(
+      /no migration path/,
+    );
+    expect((await store.listSessions('stage-1', 'user:42')).map((s) => s.id)).toEqual(['existing']);
+    expect((await store.listSessions('stage-1', 'anon:device-1')).map((s) => s.id)).toEqual([
+      'a-healthy',
+    ]);
+  });
+
   test('a future-stamped row aborts the merge with nothing moved', async () => {
     const idb = new IDBFactory();
     const dbName = 'maic-runtime-merge-future';
