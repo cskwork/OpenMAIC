@@ -156,6 +156,19 @@ Which aggregate carries the `dslVersion` field — a whole `Stage`, a single Sce
 row, or a bundle — is left to the store that first consumes this pipeline; the
 runner only needs the envelope field.
 
+## Runtime envelope (#869)
+
+Learner-produced runtime data (chat, quiz attempts, playback facts) is persisted
+outside the document, per learner, through a `RuntimeStore` (`@openmaic/storage`).
+This package owns the envelope: `RuntimeSession` (identity + lifecycle, keyed by
+stage/learner/kind) and `RuntimeRecord<TPayload>` (ordered facts; the
+store-assigned `seq` is the replay ordering key). Core-kind payload skeletons
+(`chat`, `quizAttempt`) live here; payload internals are app-owned, validated at
+the store boundary via injected validators (`runtime.ts` guards + `validate.ts`).
+A `RuntimeSession` carries the same `dslVersion` stamp as a document and rides the
+same `migrate`-on-read ladder above, so runtime state migrates forward alongside
+the slide contract.
+
 ## Status
 
 Both consumers are now wired to `@openmaic/dsl` and no longer vendor their own copy

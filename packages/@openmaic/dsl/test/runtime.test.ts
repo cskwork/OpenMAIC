@@ -2,17 +2,19 @@ import { describe, expect, it } from 'vitest';
 import {
   CHAT_RUNTIME_ROLES,
   CORE_RUNTIME_KINDS,
+  DSL_VERSION,
   QUIZ_ATTEMPT_PHASES,
   RUNTIME_SESSION_STATUSES,
   isChatRuntimeRole,
   isCoreRuntimeKind,
   isQuizAttemptPhase,
   isRuntimeSessionStatus,
+  migrate,
   type ChatMessageSkeleton,
   type QuizAttemptSkeleton,
   type RuntimeRecord,
   type RuntimeSession,
-} from '../src/index.js';
+} from '@openmaic/dsl';
 
 describe('runtime envelope guards', () => {
   it('accepts every declared session status and rejects others', () => {
@@ -69,5 +71,41 @@ describe('runtime envelope shapes (compile-time contract)', () => {
       payload: { phase: 'submitted', answers: { q1: 'A' } },
     };
     expect(quiz.payload.phase).toBe('submitted');
+  });
+});
+
+describe('runtime envelope rides the DSL version ladder', () => {
+  it('lifts an unversioned session to the current DSL_VERSION', () => {
+    // A RuntimeSession persisted before the `dslVersion` stamp existed: no
+    // envelope field, so `migrate` treats it as legacy/unversioned and walks it
+    // up the ladder, stamping the result — the session rides the same
+    // migrate-on-read path as a document.
+    const legacy: Omit<RuntimeSession, 'dslVersion'> = {
+      id: 's1',
+      kind: 'chat',
+      stageId: 'stage1',
+      learnerKey: 'anon:device-1',
+      status: 'active',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const lifted = migrate(legacy) as RuntimeSession;
+    expect(lifted.dslVersion).toBe(DSL_VERSION);
+    // Migration is pure: the payload is carried through untouched, only stamped.
+    expect(lifted).toEqual({ ...legacy, dslVersion: DSL_VERSION });
+  });
+
+  it('leaves a current-version session untouched', () => {
+    const current: RuntimeSession = {
+      id: 's1',
+      kind: 'chat',
+      stageId: 'stage1',
+      learnerKey: 'anon:device-1',
+      status: 'active',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      dslVersion: DSL_VERSION,
+    };
+    expect(migrate(current)).toEqual(current);
   });
 });
