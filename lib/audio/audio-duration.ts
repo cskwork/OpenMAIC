@@ -169,16 +169,43 @@ export function measureMp3Duration(input: Uint8Array | ArrayBuffer): number | nu
     }
   }
 
-  // CBR estimate from the audio payload size: bytes × 8 bits / bitrate.
-  const audioBytes = bytes.length - frame;
+  // VBRI (Fraunhofer) header sits at a fixed 32-byte offset after the frame
+  // header, independent of channel mode, with the frame count at byte 14.
+  const vbriOffset = frame + 4 + 32;
+  if (vbriOffset + 18 <= bytes.length && readAscii(bytes, vbriOffset, 4) === 'VBRI') {
+    const frameCount = readUint32BE(bytes, vbriOffset + 14);
+    if (frameCount > 0) return (frameCount * samplesPerFrame) / sampleRate;
+  }
+
+  // CBR estimate from the audio payload size: bytes × 8 bits / bitrate. Exclude
+  // a trailing ID3v1 tag (last 128 bytes, 'TAG' magic) so it doesn't inflate
+  // the byte count.
+  let end = bytes.length;
+  if (end - frame >= 128 && readAscii(bytes, end - 128, 3) === 'TAG') end -= 128;
+  const audioBytes = end - frame;
   return (audioBytes * 8) / (bitrateKbps * 1000);
 }
 
+/** Recognize the container from magic bytes, ignoring any reported format. */
+function sniffFormat(bytes: Uint8Array): 'wav' | 'mp3' | null {
+  if (readAscii(bytes, 0, 4) === 'RIFF' && readAscii(bytes, 8, 4) === 'WAVE') return 'wav';
+  if (readAscii(bytes, 0, 3) === 'ID3' || (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0)) {
+    return 'mp3';
+  }
+  return null;
+}
+
 /**
- * Measure audio duration (seconds) from raw bytes, dispatching on `format`
- * (falls back to content sniffing). Returns `null` when the format is
- * unsupported or the bytes cannot be parsed — callers should treat `null` as
- * "unknown duration" and still persist the audio.
+ * Measure audio duration (seconds) from raw bytes. Returns `null` when the
+ * format is unsupported or the bytes cannot be parsed — callers should treat
+ * `null` as "unknown duration" and still persist the audio.
+ *
+ * The `format` hint is derived upstream from a `Content-Type` header and can be
+ * wrong (e.g. `getAudioResponseFormat` falls back to `mp3` when the type is
+ * missing, while the provider actually returned WAV). So we sniff the magic
+ * bytes first and only trust the hint when the content is unrecognizable — a
+ * mismatched hint never sends WAV bytes through the MP3 parser (which could
+ * false-sync into a wrong duration) or vice versa.
  */
 export function measureAudioDuration(
   input: Uint8Array | ArrayBuffer,
@@ -187,14 +214,14 @@ export function measureAudioDuration(
   const bytes = toBytes(input);
   if (bytes.length === 0) return null;
 
+  // Content wins over the reported format when the magic bytes are recognized.
+  const sniffed = sniffFormat(bytes);
+  if (sniffed === 'wav') return measureWavDuration(bytes);
+  if (sniffed === 'mp3') return measureMp3Duration(bytes);
+
+  // Unrecognizable content: fall back to the reported format hint.
   const fmt = format?.toLowerCase();
   if (fmt === 'wav' || fmt === 'x-wav' || fmt === 'wave') return measureWavDuration(bytes);
   if (fmt === 'mp3' || fmt === 'mpeg' || fmt === 'mpga') return measureMp3Duration(bytes);
-
-  // No usable format hint: sniff by magic bytes.
-  if (readAscii(bytes, 0, 4) === 'RIFF') return measureWavDuration(bytes);
-  if (readAscii(bytes, 0, 3) === 'ID3' || (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0)) {
-    return measureMp3Duration(bytes);
-  }
   return null;
 }
