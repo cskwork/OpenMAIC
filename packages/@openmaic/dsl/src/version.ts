@@ -50,6 +50,17 @@ export const INITIAL_DSL_VERSION = '0.1.0' as const;
 export const DSL_VERSION_KEY = 'dslVersion' as const;
 
 /**
+ * Envelope property that carries the serialized-contract version on a runtime
+ * session. Mechanically **disjoint** from {@link DSL_VERSION_KEY}: the two
+ * version lines stamp different fields, so a document migration walked over a
+ * session finds no {@link DSL_VERSION_KEY} stamp to read (and, at worst, adds a
+ * foreign field it owns) and the runtime ladder finds no {@link DSL_VERSION_KEY}
+ * either — neither line can read, consume, or corrupt the other's stamp, and
+ * misrouted data is inert rather than silently reinterpreted.
+ */
+export const RUNTIME_DSL_VERSION_KEY = 'runtimeDslVersion' as const;
+
+/**
  * A document that may carry a DSL contract-version stamp. `@openmaic/dsl` does
  * not bind this to a specific aggregate (see the module note) — it is the
  * minimal envelope the {@link migrate} runner reads and writes.
@@ -57,6 +68,17 @@ export const DSL_VERSION_KEY = 'dslVersion' as const;
 export interface DslVersioned {
   /** Serialized-contract version this document was written at. Absent on legacy data. */
   dslVersion?: string;
+}
+
+/**
+ * A runtime session that may carry a runtime-contract version stamp. The
+ * runtime counterpart of {@link DslVersioned}, stamped by {@link migrateRuntime}
+ * on a **different** envelope field ({@link RUNTIME_DSL_VERSION_KEY}) so the two
+ * version lines are byte-distinguishable, not convention-separated.
+ */
+export interface RuntimeVersioned {
+  /** Runtime-contract version this session was written at. Absent on legacy data. */
+  runtimeDslVersion?: string;
 }
 
 /**
@@ -96,16 +118,21 @@ export const DSL_MIGRATIONS: readonly DslMigration[] = [
 
 /**
  * Current version of the serialized *runtime* contract (#869) — the on-disk
- * shape of a {@link RuntimeSession} / runtime record, NOT the slide document.
+ * shape of a {@link RuntimeSession}, NOT the slide document.
  *
- * This is a **deliberately separate version line** from {@link DSL_VERSION}.
- * A {@link RuntimeSession} shares the `dslVersion` envelope *field* (it extends
- * `DslVersioned`), but the two ladders version independent serialized shapes:
- * a change to the document (Stage/Scene) shape must never force — or, worse,
- * accidentally *consume* — a runtime step, and vice versa. A `DslMigration`
- * body is an arbitrary whole-document transform; if runtime sessions rode
- * `DSL_MIGRATIONS`, a future real Stage/Scene migration authored against the
- * document shape would run over a `RuntimeSession` and could corrupt or throw.
+ * This is a **deliberately separate version line** from {@link DSL_VERSION},
+ * and the separation is mechanical, not by convention: a {@link RuntimeSession}
+ * stamps its version on {@link RUNTIME_DSL_VERSION_KEY}, a distinct envelope
+ * field from the document's {@link DSL_VERSION_KEY}. The two ladders version
+ * independent serialized shapes, so a change to the document (Stage/Scene) shape
+ * must never force — or, worse, accidentally *consume* — a runtime step, and
+ * vice versa. A `DslMigration` body is an arbitrary whole-document transform;
+ * if runtime sessions rode `DSL_MIGRATIONS`, a future real Stage/Scene migration
+ * authored against the document shape would run over a `RuntimeSession` and
+ * could corrupt or throw. Because the stamps live on different fields, even a
+ * misrouted document migration cannot find or overwrite the runtime stamp: it
+ * would at worst add its own foreign `dslVersion` field, never mutate
+ * `runtimeDslVersion`.
  */
 export const RUNTIME_DSL_VERSION = '0.1.0' as const;
 
@@ -123,14 +150,16 @@ export const INITIAL_RUNTIME_DSL_VERSION = '0.1.0' as const;
  * Ordered migration ladder for the runtime contract, wholly independent of
  * {@link DSL_MIGRATIONS}. Same invariants (contiguous chain, last `to` ===
  * {@link RUNTIME_DSL_VERSION}, every endpoint a **pinned literal**), same
- * legacy-lift shape: the first entry stamps pre-`dslVersion` runtime data up to
- * {@link INITIAL_RUNTIME_DSL_VERSION} as a no-op transform (the runtime shape is
- * brand new, so nothing predates 0.1.0 to reshape — the entry just wires the
- * pipeline and gives real runtime data a version to migrate forward from).
+ * legacy-lift shape: the first entry stamps pre-`runtimeDslVersion` runtime data
+ * up to {@link INITIAL_RUNTIME_DSL_VERSION} as a no-op transform (the runtime
+ * shape is brand new, so nothing predates 0.1.0 to reshape — the entry just
+ * wires the pipeline and gives real runtime data a version to migrate forward
+ * from).
  *
  * It shares {@link UNVERSIONED_DSL_VERSION} as its legacy origin because that
- * constant names "wrote no `dslVersion` stamp", a property of the shared
- * envelope field, not of either aggregate's shape.
+ * constant names "wrote no version stamp" — the absence of a stamp, not a shape.
+ * Each ladder reads its own envelope field, so the shared origin value never
+ * conflates the two lines.
  */
 export const RUNTIME_DSL_MIGRATIONS: readonly DslMigration[] = [
   { from: UNVERSIONED_DSL_VERSION, to: INITIAL_RUNTIME_DSL_VERSION, migrate: (doc) => doc },
@@ -143,10 +172,12 @@ function isObject(v: unknown): v is Record<string, unknown> {
 /**
  * A well-formed `x.y.z` version: exactly three non-negative integer parts.
  *
- * Exported so the runtime-envelope validators can reject a present-but-malformed
- * `dslVersion` stamp at their boundary — the same well-formedness rule that
- * {@link dslVersionOf} / {@link migrate} enforce by throwing — rather than
- * letting a bad stamp pass a mere `typeof` check and blow up downstream.
+ * Exported so the envelope validators can reject a present-but-malformed version
+ * stamp (either line's — `dslVersion` or `runtimeDslVersion`) at their boundary
+ * — the same well-formedness rule that {@link dslVersionOf} /
+ * {@link runtimeDslVersionOf} / {@link migrate} / {@link migrateRuntime} enforce
+ * by throwing — rather than letting a bad stamp pass a mere `typeof` check and
+ * blow up downstream.
  */
 export function isWellFormedDslVersion(v: string): boolean {
   return /^\d+\.\d+\.\d+$/.test(v);
@@ -169,42 +200,95 @@ function compareVersions(a: string, b: string): number {
 }
 
 /**
- * Read the serialized-contract version a document was written at.
+ * Read the version an aggregate was written at from an arbitrary envelope
+ * `key`. The shared engine behind {@link dslVersionOf} (document line) and
+ * {@link runtimeDslVersionOf} (runtime line) — each passes its own key, so the
+ * two lines read disjoint fields and never conflate.
  *
- * - A non-object, or an object with no {@link DSL_VERSION_KEY} field, is treated
- *   as {@link UNVERSIONED_DSL_VERSION} (legacy / pre-versioning data).
+ * - A non-object, or an object with no `key` field, is treated as
+ *   {@link UNVERSIONED_DSL_VERSION} (legacy / pre-versioning data).
  * - A **present but malformed** stamp (not a well-formed `x.y.z` string) is
  *   corrupt data making a false version claim, so this **throws** rather than
  *   letting a bad stamp silently compare as some arbitrary version and bypass
  *   migration.
  */
-export function dslVersionOf(doc: unknown): string {
+function versionOf(doc: unknown, key: string): string {
   if (!isObject(doc)) return UNVERSIONED_DSL_VERSION;
-  const raw = doc[DSL_VERSION_KEY];
+  const raw = doc[key];
   if (raw === undefined) return UNVERSIONED_DSL_VERSION;
   if (typeof raw !== 'string' || !isWellFormedDslVersion(raw)) {
     throw new Error(
-      `@openmaic/dsl: invalid ${DSL_VERSION_KEY} stamp ${JSON.stringify(raw)} (expected "x.y.z")`,
+      `@openmaic/dsl: invalid ${key} stamp ${JSON.stringify(raw)} (expected "x.y.z")`,
     );
   }
   return raw;
 }
 
 /**
- * True when `doc` is a migratable document written at an older version than
- * {@link DSL_VERSION}. A non-object is not a migratable document, so this is
- * `false` for it — mirroring {@link migrate}'s no-op, so the two never disagree
- * (a caller looping `while (needsMigration(x)) x = migrate(x)` always terminates).
- * Throws on an object carrying a malformed stamp (see {@link dslVersionOf}).
+ * Read the serialized *document* contract version a document was written at,
+ * from its {@link DSL_VERSION_KEY} envelope field. See {@link versionOf} for the
+ * unstamped / malformed-stamp rules.
  */
-export function needsMigration(doc: unknown): boolean {
-  if (!isObject(doc)) return false;
-  return compareVersions(dslVersionOf(doc), DSL_VERSION) < 0;
+export function dslVersionOf(doc: unknown): string {
+  return versionOf(doc, DSL_VERSION_KEY);
 }
 
-/** Purely stamp a document's version, returning a new object (never mutating). */
-function stampVersion(doc: unknown, version: string): unknown {
-  return isObject(doc) ? { ...doc, [DSL_VERSION_KEY]: version } : doc;
+/**
+ * Read the serialized *runtime* contract version a session was written at, from
+ * its {@link RUNTIME_DSL_VERSION_KEY} envelope field — the runtime-line
+ * counterpart of {@link dslVersionOf}, reading a disjoint field. Same
+ * unstamped / malformed-stamp rules (see {@link versionOf}).
+ */
+export function runtimeDslVersionOf(doc: unknown): string {
+  return versionOf(doc, RUNTIME_DSL_VERSION_KEY);
+}
+
+/**
+ * Shared predicate behind {@link needsMigration} and
+ * {@link needsRuntimeMigration}: true when `doc` is an object stamped (on
+ * envelope `key`) older than `targetVersion`. A non-object is not a migratable
+ * aggregate, so this is `false` for it — mirroring the runners' no-op, so the
+ * predicate and its runner never disagree (a `while (needs…(x)) x = migrate…(x)`
+ * loop always terminates). Throws on a malformed stamp (see {@link versionOf}).
+ */
+function needsLadder(doc: unknown, key: string, targetVersion: string): boolean {
+  if (!isObject(doc)) return false;
+  return compareVersions(versionOf(doc, key), targetVersion) < 0;
+}
+
+/**
+ * True when `doc` is a migratable document written at an older version than
+ * {@link DSL_VERSION}. The document-line predicate (counterpart:
+ * {@link needsRuntimeMigration}, which reads the runtime envelope field). A
+ * non-object is not a migratable document, so this is `false` for it — mirroring
+ * {@link migrate}'s no-op, so the two never disagree (a caller looping
+ * `while (needsMigration(x)) x = migrate(x)` always terminates). Throws on an
+ * object carrying a malformed stamp (see {@link dslVersionOf}).
+ */
+export function needsMigration(doc: unknown): boolean {
+  return needsLadder(doc, DSL_VERSION_KEY, DSL_VERSION);
+}
+
+/**
+ * True when `doc` is a runtime session written at an older version than
+ * {@link RUNTIME_DSL_VERSION}. The runtime-line counterpart of
+ * {@link needsMigration}: it reads {@link RUNTIME_DSL_VERSION_KEY} and pairs with
+ * {@link migrateRuntime}, so a `while (needsRuntimeMigration(x)) x = migrateRuntime(x)`
+ * loop always terminates. Pairing {@link needsMigration} with
+ * {@link migrateRuntime} (or vice versa) once the lines diverge would spin or
+ * silently skip — always pair a predicate with its own line's runner. Throws on
+ * a malformed stamp (see {@link runtimeDslVersionOf}).
+ */
+export function needsRuntimeMigration(doc: unknown): boolean {
+  return needsLadder(doc, RUNTIME_DSL_VERSION_KEY, RUNTIME_DSL_VERSION);
+}
+
+/**
+ * Purely stamp an aggregate's version onto envelope `key`, returning a new
+ * object (never mutating). Keyed so each ladder writes its own line's field.
+ */
+function stampVersion(doc: unknown, version: string, key: string): unknown {
+  return isObject(doc) ? { ...doc, [key]: version } : doc;
 }
 
 /**
@@ -228,16 +312,22 @@ function stampVersion(doc: unknown, version: string): unknown {
 /**
  * Shared ladder runner behind {@link migrate} and {@link migrateRuntime}. The
  * walk / stamp / fail-loud mechanism is identical for both version lines; only
- * the `ladder` and its `targetVersion` differ, so they are parameters rather
- * than duplicated. This is what keeps the two ladders *independent* — each
- * caller passes its own steps and endpoint, so a document migration can never
- * be walked over runtime data (or vice versa). Behavior is byte-identical to
- * the previous inline `migrate` body.
+ * the `ladder`, its `targetVersion`, and the envelope `key` differ, so they are
+ * parameters rather than duplicated. This is what keeps the two ladders
+ * *independent* — each caller passes its own steps, endpoint, and stamp field,
+ * so a document migration reads and writes only `dslVersion` while the runtime
+ * ladder reads and writes only `runtimeDslVersion`; neither can be walked over
+ * the other's stamp.
  */
-function runLadder(doc: unknown, ladder: readonly DslMigration[], targetVersion: string): unknown {
+function runLadder(
+  doc: unknown,
+  ladder: readonly DslMigration[],
+  targetVersion: string,
+  key: string,
+): unknown {
   if (!isObject(doc)) return doc;
 
-  let version = dslVersionOf(doc);
+  let version = versionOf(doc, key);
 
   // Already current, or written ahead of us — leave the document as-is.
   if (compareVersions(version, targetVersion) >= 0) return doc;
@@ -251,7 +341,7 @@ function runLadder(doc: unknown, ladder: readonly DslMigration[], targetVersion:
     if (!next) {
       throw new Error(`@openmaic/dsl: no migration path from "${version}" to "${targetVersion}"`);
     }
-    current = stampVersion(next.migrate(current), next.to);
+    current = stampVersion(next.migrate(current), next.to, key);
     version = next.to;
   }
 
@@ -264,20 +354,21 @@ function runLadder(doc: unknown, ladder: readonly DslMigration[], targetVersion:
 }
 
 export function migrate(doc: unknown): unknown {
-  return runLadder(doc, DSL_MIGRATIONS, DSL_VERSION);
+  return runLadder(doc, DSL_MIGRATIONS, DSL_VERSION, DSL_VERSION_KEY);
 }
 
 /**
- * Migrate a runtime document ({@link RuntimeSession} / runtime record) forward
- * to {@link RUNTIME_DSL_VERSION}, walking {@link RUNTIME_DSL_MIGRATIONS}.
+ * Migrate a {@link RuntimeSession} forward to {@link RUNTIME_DSL_VERSION},
+ * walking {@link RUNTIME_DSL_MIGRATIONS} and stamping
+ * {@link RUNTIME_DSL_VERSION_KEY}.
  *
  * The exact counterpart of {@link migrate} on the runtime version line —
  * idempotent, forward-compatible, fail-loud, pure, non-objects returned as-is —
- * but pinned to the runtime ladder + target version. Runtime state is stamped
- * and migrated on read through *this* function, never {@link migrate}, so the
- * document and runtime shapes evolve without either ladder consuming the other's
- * data.
+ * but pinned to the runtime ladder, target version, and envelope field. Runtime
+ * state is stamped and migrated on read through *this* function, never
+ * {@link migrate}, so the document and runtime shapes evolve without either
+ * ladder consuming the other's data.
  */
 export function migrateRuntime(doc: unknown): unknown {
-  return runLadder(doc, RUNTIME_DSL_MIGRATIONS, RUNTIME_DSL_VERSION);
+  return runLadder(doc, RUNTIME_DSL_MIGRATIONS, RUNTIME_DSL_VERSION, RUNTIME_DSL_VERSION_KEY);
 }

@@ -6,9 +6,12 @@ import {
   DSL_VERSION_KEY,
   DSL_MIGRATIONS,
   RUNTIME_DSL_VERSION,
+  RUNTIME_DSL_VERSION_KEY,
   RUNTIME_DSL_MIGRATIONS,
   dslVersionOf,
+  runtimeDslVersionOf,
   needsMigration,
+  needsRuntimeMigration,
   migrate,
   migrateRuntime,
 } from '@openmaic/dsl';
@@ -51,9 +54,11 @@ describe('RUNTIME_DSL_MIGRATIONS ladder invariants', () => {
 });
 
 describe('migrateRuntime', () => {
-  it('stamps legacy runtime data up to RUNTIME_DSL_VERSION, independent of DSL_VERSION', () => {
+  it('stamps legacy runtime data onto runtimeDslVersion, not the document key', () => {
     const out = migrateRuntime({ id: 'sess' }) as Record<string, unknown>;
-    expect(out[DSL_VERSION_KEY]).toBe(RUNTIME_DSL_VERSION);
+    expect(out[RUNTIME_DSL_VERSION_KEY]).toBe(RUNTIME_DSL_VERSION);
+    // The runtime line never touches the document envelope field.
+    expect(out[DSL_VERSION_KEY]).toBeUndefined();
   });
 
   it('is idempotent and returns non-objects unchanged', () => {
@@ -64,14 +69,73 @@ describe('migrateRuntime', () => {
   });
 
   it('leaves a forward-versioned runtime document untouched', () => {
-    const future = { id: 's', [DSL_VERSION_KEY]: '99.0.0' };
+    const future = { id: 's', [RUNTIME_DSL_VERSION_KEY]: '99.0.0' };
     expect(migrateRuntime(future)).toBe(future);
   });
 
-  it('fails loud on a malformed stamp', () => {
-    expect(() => migrateRuntime({ id: 's', [DSL_VERSION_KEY]: '0.1' })).toThrow(
-      /invalid dslVersion/,
+  it('fails loud when the ladder has no path from the runtime version', () => {
+    // A runtime version older than RUNTIME_DSL_VERSION with no matching `from`
+    // entry — mirrors the document ladder's unbridgeable-stamp case.
+    expect(() => migrateRuntime({ id: 's', [RUNTIME_DSL_VERSION_KEY]: '0.0.5' })).toThrow(
+      /no migration path/,
     );
+  });
+
+  it('fails loud on a malformed stamp', () => {
+    expect(() => migrateRuntime({ id: 's', [RUNTIME_DSL_VERSION_KEY]: '0.1' })).toThrow(
+      /invalid runtimeDslVersion/,
+    );
+  });
+});
+
+describe('ladder independence (mechanical, disjoint envelope fields)', () => {
+  it('document migrate() leaves a runtimeDslVersion stamp untouched', () => {
+    // A session stamped on the runtime line, walked by the document runner:
+    // migrate reads `dslVersion` (absent), so it lifts the object on the
+    // document line and never consumes or mutates `runtimeDslVersion`.
+    const session = { id: 's', [RUNTIME_DSL_VERSION_KEY]: RUNTIME_DSL_VERSION };
+    const out = migrate(session) as Record<string, unknown>;
+    expect(out[RUNTIME_DSL_VERSION_KEY]).toBe(RUNTIME_DSL_VERSION);
+    expect(out[DSL_VERSION_KEY]).toBe(DSL_VERSION);
+  });
+
+  it('migrateRuntime() leaves a dslVersion stamp untouched', () => {
+    // A document stamped on the document line, walked by the runtime runner:
+    // migrateRuntime reads `runtimeDslVersion` (absent) and never mutates
+    // `dslVersion`.
+    const doc = { id: 'd', [DSL_VERSION_KEY]: DSL_VERSION };
+    const out = migrateRuntime(doc) as Record<string, unknown>;
+    expect(out[DSL_VERSION_KEY]).toBe(DSL_VERSION);
+    expect(out[RUNTIME_DSL_VERSION_KEY]).toBe(RUNTIME_DSL_VERSION);
+  });
+});
+
+describe('runtimeDslVersionOf', () => {
+  it('reads a stamped runtime version and ignores the document key', () => {
+    expect(runtimeDslVersionOf({ [RUNTIME_DSL_VERSION_KEY]: '9.9.9' })).toBe('9.9.9');
+    // A document-line stamp is invisible to the runtime reader.
+    expect(runtimeDslVersionOf({ [DSL_VERSION_KEY]: '9.9.9' })).toBe(UNVERSIONED_DSL_VERSION);
+  });
+  it('throws on a present-but-malformed runtime stamp', () => {
+    expect(() => runtimeDslVersionOf({ [RUNTIME_DSL_VERSION_KEY]: '0.1' })).toThrow(
+      /invalid runtimeDslVersion/,
+    );
+  });
+});
+
+describe('needsRuntimeMigration', () => {
+  it('is true for unstamped sessions and false at/ahead of the current version', () => {
+    expect(needsRuntimeMigration({ id: 'legacy' })).toBe(true);
+    expect(needsRuntimeMigration({ [RUNTIME_DSL_VERSION_KEY]: RUNTIME_DSL_VERSION })).toBe(false);
+    expect(needsRuntimeMigration({ [RUNTIME_DSL_VERSION_KEY]: '99.0.0' })).toBe(false);
+    // A document-line stamp does not satisfy the runtime predicate.
+    expect(needsRuntimeMigration({ [DSL_VERSION_KEY]: RUNTIME_DSL_VERSION })).toBe(true);
+  });
+  it('agrees with migrateRuntime on non-objects (loop terminates)', () => {
+    for (const v of [42, null, undefined, 'x', []]) {
+      expect(needsRuntimeMigration(v)).toBe(false);
+      expect(needsRuntimeMigration(migrateRuntime(v))).toBe(false);
+    }
   });
 });
 

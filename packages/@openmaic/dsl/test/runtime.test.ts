@@ -8,6 +8,7 @@ import {
   isChatMessageSkeleton,
   isChatRuntimeRole,
   isCoreRuntimeKind,
+  isIsoTimestamp,
   isQuizAttemptPhase,
   isQuizAttemptSkeleton,
   isRuntimeSessionStatus,
@@ -51,7 +52,7 @@ describe('runtime envelope shapes (compile-time contract)', () => {
       status: 'active',
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:00:00.000Z',
-      dslVersion: '0.1.0',
+      runtimeDslVersion: '0.1.0',
     };
     const record: RuntimeRecord<ChatMessageSkeleton> = {
       id: 'r1',
@@ -146,13 +147,44 @@ describe('runtime payload skeleton guards', () => {
   });
 });
 
+describe('isIsoTimestamp', () => {
+  it('accepts well-formed zoned timestamps', () => {
+    expect(isIsoTimestamp('2026-01-01T00:00:00Z')).toBe(true);
+    expect(isIsoTimestamp('2026-01-01T00:00:00.000Z')).toBe(true); // fractional seconds
+    expect(isIsoTimestamp('2026-01-01T08:00:00+08:00')).toBe(true); // offset form
+    expect(isIsoTimestamp('2024-02-29T00:00:00Z')).toBe(true); // real leap day
+  });
+
+  it('rejects day-of-month overflow that Date.parse normalizes instead of failing', () => {
+    // V8 rolls these into the next month rather than returning NaN; the explicit
+    // day round-trip is what rejects them, engine-independently.
+    expect(isIsoTimestamp('2026-02-30T00:00:00.000Z')).toBe(false);
+    expect(isIsoTimestamp('2026-02-29T00:00:00Z')).toBe(false); // 2026 is not a leap year
+    expect(isIsoTimestamp('2026-04-31T00:00:00Z')).toBe(false); // April has 30 days
+  });
+
+  it('rejects field-range violations (Date.parse yields NaN)', () => {
+    expect(isIsoTimestamp('2026-13-01T00:00:00Z')).toBe(false); // month 13
+    expect(isIsoTimestamp('2026-01-01T25:00:00Z')).toBe(false); // hour 25
+    expect(isIsoTimestamp('2026-01-01T00:60:00Z')).toBe(false); // minute 60
+    expect(isIsoTimestamp('2026-01-01T00:00:60Z')).toBe(false); // second 60
+  });
+
+  it('rejects zoneless and date-only forms (the regex requires a zone + time)', () => {
+    expect(isIsoTimestamp('2026-01-01T00:00:00')).toBe(false); // no zone designator
+    expect(isIsoTimestamp('2026-01-01')).toBe(false); // date only
+    expect(isIsoTimestamp('2026/01/01T00:00:00Z')).toBe(false); // wrong separators
+    expect(isIsoTimestamp('not-a-date')).toBe(false);
+  });
+});
+
 describe('runtime envelope rides the dedicated runtime version ladder', () => {
   it('lifts an unversioned session to the current RUNTIME_DSL_VERSION', () => {
-    // A RuntimeSession persisted before the `dslVersion` stamp existed: no
-    // envelope field, so `migrateRuntime` treats it as legacy/unversioned and
+    // A RuntimeSession persisted before the `runtimeDslVersion` stamp existed:
+    // no envelope field, so `migrateRuntime` treats it as legacy/unversioned and
     // walks it up the *runtime* ladder, stamping the result. Runtime state
     // migrates on its own version line, not the document ladder.
-    const legacy: Omit<RuntimeSession, 'dslVersion'> = {
+    const legacy: Omit<RuntimeSession, 'runtimeDslVersion'> = {
       id: 's1',
       kind: 'chat',
       stageId: 'stage1',
@@ -162,9 +194,9 @@ describe('runtime envelope rides the dedicated runtime version ladder', () => {
       updatedAt: '2026-01-01T00:00:00.000Z',
     };
     const lifted = migrateRuntime(legacy) as RuntimeSession;
-    expect(lifted.dslVersion).toBe(RUNTIME_DSL_VERSION);
+    expect(lifted.runtimeDslVersion).toBe(RUNTIME_DSL_VERSION);
     // Migration is pure: the payload is carried through untouched, only stamped.
-    expect(lifted).toEqual({ ...legacy, dslVersion: RUNTIME_DSL_VERSION });
+    expect(lifted).toEqual({ ...legacy, runtimeDslVersion: RUNTIME_DSL_VERSION });
   });
 
   it('leaves a current-version session untouched', () => {
@@ -176,7 +208,7 @@ describe('runtime envelope rides the dedicated runtime version ladder', () => {
       status: 'active',
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:00:00.000Z',
-      dslVersion: RUNTIME_DSL_VERSION,
+      runtimeDslVersion: RUNTIME_DSL_VERSION,
     };
     expect(migrateRuntime(current)).toEqual(current);
   });

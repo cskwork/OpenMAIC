@@ -165,14 +165,19 @@ stage/learner/kind) and `RuntimeRecord<TPayload>` (ordered facts; the
 store-assigned `seq` is the replay ordering key). Core-kind payload skeletons
 (`chat`, `quizAttempt`) live here; payload internals are app-owned, validated at
 the store boundary via injected validators (`runtime.ts` guards + `validate.ts`).
-A `RuntimeSession` carries the same `dslVersion` envelope *field* as a document,
-but rides its **own** version line: `RUNTIME_DSL_VERSION` and a dedicated
-`RUNTIME_DSL_MIGRATIONS` ladder, walked by `migrateRuntime` (not `migrate`). The
-document and runtime serialized shapes evolve independently, so a future
-`Stage`/`Scene` document migration never runs over — or accidentally consumes — a
-runtime envelope, and vice versa. The runner mechanism (contiguous ladder,
-idempotent, forward-compatible, fail-loud) is shared; only the ladder and target
-version differ.
+A `RuntimeSession` carries its **own** version envelope field,
+`runtimeDslVersion` — mechanically disjoint from a document's `dslVersion` — and
+rides its **own** version line: `RUNTIME_DSL_VERSION` and a dedicated
+`RUNTIME_DSL_MIGRATIONS` ladder, walked by `migrateRuntime` (not `migrate`), with
+`runtimeDslVersionOf` / `needsRuntimeMigration` as the runtime-line counterparts
+of `dslVersionOf` / `needsMigration`. Because the two lines stamp **different
+fields**, their separation is mechanical rather than a call-site convention: a
+future `Stage`/`Scene` document migration walked over a session finds no
+`dslVersion` stamp and, at worst, adds a foreign field it owns, never consuming
+or corrupting the runtime line's `runtimeDslVersion` — and vice versa. Misrouted
+data is inert, not silently reinterpreted. The runner mechanism (contiguous
+ladder, idempotent, forward-compatible, fail-loud) is shared; only the ladder,
+target version, and stamped field differ.
 
 ## Status
 

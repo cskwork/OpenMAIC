@@ -27,15 +27,18 @@
  * runtime feed with document data: convert at the boundary, never compare a
  * runtime `createdAt` string against a document's numeric timestamp directly.
  *
- * Versioning: a session carries the shared `dslVersion` envelope field but rides
- * its OWN version line — `RUNTIME_DSL_VERSION` + `migrateRuntime`, not the
- * document's `DSL_VERSION` + `migrate`. The two serialized shapes evolve
- * independently, so a document migration can never run over runtime data (see
- * `version.ts`).
+ * Versioning: a session carries its OWN version field, `runtimeDslVersion`
+ * (distinct from a document's `dslVersion`), and rides its OWN version line —
+ * `RUNTIME_DSL_VERSION` + `migrateRuntime`, not the document's `DSL_VERSION` +
+ * `migrate`. Because the two lines stamp different envelope fields, the
+ * separation is mechanical, not merely a call-site convention: a document
+ * migration walked over a session finds no `dslVersion` stamp and, at worst,
+ * adds a foreign field it owns, never consuming or corrupting the runtime line's
+ * `runtimeDslVersion` stamp — and vice versa (see `version.ts`).
  *
  * No runtime dependencies. Pure types + plain data constants only.
  */
-import type { DslVersioned } from './version.js';
+import type { RuntimeVersioned } from './version.js';
 
 /**
  * Lifecycle of a session. Records carry no lifecycle of their own — a chat
@@ -85,18 +88,31 @@ const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{
  * (unlike stage/scene/action), so this pure check is where the documented
  * "ISO 8601" promise on `createdAt` / `updatedAt` is actually enforced.
  *
- * Both halves are required and neither alone suffices:
+ * Three layers, none of which alone suffices:
  * - the regex pins the *format* (`Date.parse` alone accepts many non-ISO forms
  *   — bare dates, `'2026/01/01'`, even some free text — so it cannot stand in
- *   for a format check), while
- * - `!Number.isNaN(Date.parse(value))` pins *calendar validity* (the regex
- *   happily matches an impossible `2026-13-01` or `2026-02-30`, which only a
- *   real date parse rejects).
+ *   for a format check), and pins the mandatory zone designator;
+ * - `!Number.isNaN(Date.parse(value))` rejects field-range violations the regex
+ *   lets through (month `13`, hour `25`, minute / second `60`), which only a
+ *   real date parse catches; but
+ * - `Date.parse` does NOT reliably reject day-of-month overflow: on V8 (the CI
+ *   Node 22 engine) `'2026-02-30'`, `'2026-02-29'` (2026 is not a leap year),
+ *   and `'2026-04-31'` all *normalize* (roll into the next month) instead of
+ *   yielding `NaN`, and the verdict is engine-dependent. So the final layer
+ *   re-parses the calendar date and requires it to round-trip unchanged, which
+ *   rejects the overflow AND makes the verdict engine-independent.
  *
  * Pure, no runtime dependencies.
  */
 export function isIsoTimestamp(value: string): boolean {
-  return ISO_TIMESTAMP_RE.test(value) && !Number.isNaN(Date.parse(value));
+  if (!ISO_TIMESTAMP_RE.test(value) || Number.isNaN(Date.parse(value))) return false;
+  // Day-of-month round-trip: reject a day that `Date.UTC` normalized into the
+  // next month (e.g. Feb 30 -> Mar 2) rather than accepting it as valid.
+  const y = Number(value.slice(0, 4));
+  const m = Number(value.slice(5, 7));
+  const day = Number(value.slice(8, 10));
+  const d = new Date(Date.UTC(y, m - 1, day));
+  return d.getUTCFullYear() === y && d.getUTCMonth() === m - 1 && d.getUTCDate() === day;
 }
 
 /**
@@ -134,14 +150,16 @@ export function isCoreRuntimeKind(value: unknown): value is CoreRuntimeKind {
  * `(stageId, learnerKey)` plus a `kind`; a learner may hold several sessions
  * of the same kind on one stage (e.g. repeated quiz attempts).
  *
- * Extends {@link DslVersioned}, so a session carries the same optional
- * `dslVersion` serialized-contract stamp (absent on legacy data) — sharing one
- * envelope *field* definition instead of re-declaring it here. The stamping +
- * migrate-on-read *ladder* is NOT shared: a session is stamped with
- * `RUNTIME_DSL_VERSION` and migrated by `migrateRuntime`, on a version line
- * independent of the document's `DSL_VERSION` / `migrate` (see `version.ts`).
+ * Extends {@link RuntimeVersioned}, so a session carries an optional
+ * `runtimeDslVersion` serialized-contract stamp (absent on legacy data) — a
+ * DIFFERENT envelope field from a document's `dslVersion`. Stamping +
+ * migrate-on-read run on the runtime line only: a session is stamped with
+ * `RUNTIME_DSL_VERSION` and migrated by `migrateRuntime`, independent of the
+ * document's `DSL_VERSION` / `migrate`. Because the two stamps live on distinct
+ * fields, misrouting a migration is inert rather than corrupting (see
+ * `version.ts`).
  */
-export interface RuntimeSession extends DslVersioned {
+export interface RuntimeSession extends RuntimeVersioned {
   id: string;
   /** {@link CoreRuntimeKind} or an app-defined kind. */
   kind: string;

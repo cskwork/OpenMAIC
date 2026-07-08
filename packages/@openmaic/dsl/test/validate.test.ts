@@ -115,8 +115,10 @@ describe('validateRuntimeSession', () => {
     expect(validateRuntimeSession(good)).toEqual({ valid: true });
   });
 
-  it('accepts an app-defined kind and an optional dslVersion', () => {
-    expect(validateRuntimeSession({ ...good, kind: 'myWidget', dslVersion: '0.1.0' })).toEqual({
+  it('accepts an app-defined kind and an optional runtimeDslVersion', () => {
+    expect(
+      validateRuntimeSession({ ...good, kind: 'myWidget', runtimeDslVersion: '0.1.0' }),
+    ).toEqual({
       valid: true,
     });
   });
@@ -151,22 +153,42 @@ describe('validateRuntimeSession', () => {
     expect(result.errors[0].path).toBe('/status');
   });
 
-  it('rejects a non-string dslVersion', () => {
-    const result = validateRuntimeSession({ ...good, dslVersion: 1 });
+  it('rejects a non-string runtimeDslVersion', () => {
+    const result = validateRuntimeSession({ ...good, runtimeDslVersion: 1 });
     expect(result.valid).toBe(false);
   });
 
-  it('rejects a present-but-malformed dslVersion stamp', () => {
+  it('rejects a present-but-malformed runtimeDslVersion stamp', () => {
     // A well-formed string that is not `x.y.z` would pass the typeof check yet
-    // make `migrate`/`dslVersionOf` throw downstream — reject it at the door.
-    const result = validateRuntimeSession({ ...good, dslVersion: 'legacy' });
+    // make `migrateRuntime`/`runtimeDslVersionOf` throw downstream — reject it
+    // at the door.
+    const result = validateRuntimeSession({ ...good, runtimeDslVersion: 'legacy' });
     expect(result.valid).toBe(false);
     if (result.valid) throw new Error('unreachable');
-    expect(result.errors.map((e) => e.path)).toContain('/dslVersion');
+    expect(result.errors.map((e) => e.path)).toContain('/runtimeDslVersion');
   });
 
-  it('accepts a well-formed dslVersion stamp', () => {
-    expect(validateRuntimeSession({ ...good, dslVersion: '0.1.0' })).toEqual({ valid: true });
+  it('accepts a well-formed runtimeDslVersion stamp', () => {
+    expect(validateRuntimeSession({ ...good, runtimeDslVersion: '0.1.0' })).toEqual({
+      valid: true,
+    });
+  });
+
+  it('ignores a stray document-line dslVersion on a session (unknown field)', () => {
+    // A session versions on `runtimeDslVersion`; `dslVersion` is not part of its
+    // contract, so this structural-subset validator neither reads nor rejects
+    // it — even a value that would be malformed as a version stamp is ignored.
+    expect(validateRuntimeSession({ ...good, dslVersion: 'legacy' })).toEqual({ valid: true });
+  });
+
+  it('reports an empty-string createdAt exactly once, at /createdAt', () => {
+    // The required-field table already flags an empty string as non-empty; the
+    // ISO refinement must not fire a second error at the same path.
+    const result = validateRuntimeSession({ ...good, createdAt: '' });
+    expect(result.valid).toBe(false);
+    if (result.valid) throw new Error('unreachable');
+    const createdAtErrors = result.errors.filter((e) => e.path === '/createdAt');
+    expect(createdAtErrors).toHaveLength(1);
   });
 
   it('rejects an empty required string (learnerKey)', () => {

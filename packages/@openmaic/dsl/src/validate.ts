@@ -280,23 +280,30 @@ export function validateRuntimeSession(doc: unknown): ValidationResult {
     });
   }
   // `createdAt` / `updatedAt` are documented ISO-8601 strings. The table check
-  // above only proves they are strings; refine the present ones to the ISO
-  // format (same "only refine an already-string field" guard as `seq` below, so
-  // a wrong-typed value is reported once, by the table, not twice).
-  if (typeof doc.createdAt === 'string' && !isIsoTimestamp(doc.createdAt)) {
+  // above only proves they are strings and, being required, already reports an
+  // empty string as non-empty. Refine only a present NON-EMPTY string to the ISO
+  // format, so an empty (or wrong-typed) value is reported once — by the table —
+  // not twice at the same path.
+  if (typeof doc.createdAt === 'string' && doc.createdAt !== '' && !isIsoTimestamp(doc.createdAt)) {
     errors.push({ path: '/createdAt', message: 'expected ISO 8601 `createdAt`' });
   }
-  if (typeof doc.updatedAt === 'string' && !isIsoTimestamp(doc.updatedAt)) {
+  if (typeof doc.updatedAt === 'string' && doc.updatedAt !== '' && !isIsoTimestamp(doc.updatedAt)) {
     errors.push({ path: '/updatedAt', message: 'expected ISO 8601 `updatedAt`' });
   }
-  // `dslVersion` is optional, but a present stamp must be a well-formed `x.y.z`
-  // string: `migrate`/`dslVersionOf` throw on a malformed stamp, so accepting a
-  // string like `'legacy'` here would only defer the failure to read time.
-  if (doc.dslVersion !== undefined) {
-    if (typeof doc.dslVersion !== 'string') {
-      errors.push({ path: '/dslVersion', message: 'expected string `dslVersion`' });
-    } else if (!isWellFormedDslVersion(doc.dslVersion)) {
-      errors.push({ path: '/dslVersion', message: 'malformed `dslVersion`: expected x.y.z' });
+  // `runtimeDslVersion` is optional, but a present stamp must be a well-formed
+  // `x.y.z` string: `migrateRuntime`/`runtimeDslVersionOf` throw on a malformed
+  // stamp, so accepting a string like `'legacy'` here would only defer the
+  // failure to read time. A session versions on `runtimeDslVersion`, NOT the
+  // document line's `dslVersion`; a stray `dslVersion` on a session is an
+  // unknown field this structural-subset validator ignores.
+  if (doc.runtimeDslVersion !== undefined) {
+    if (typeof doc.runtimeDslVersion !== 'string') {
+      errors.push({ path: '/runtimeDslVersion', message: 'expected string `runtimeDslVersion`' });
+    } else if (!isWellFormedDslVersion(doc.runtimeDslVersion)) {
+      errors.push({
+        path: '/runtimeDslVersion',
+        message: 'malformed `runtimeDslVersion`: expected x.y.z',
+      });
     }
   }
   return done(errors);
@@ -348,8 +355,9 @@ export function validateRuntimeRecord(doc: unknown): ValidationResult {
   }
 
   // `createdAt` is a documented ISO-8601 string (display metadata; ordering is
-  // `seq`). Refine the present string to the ISO format, same guard as above.
-  if (typeof doc.createdAt === 'string' && !isIsoTimestamp(doc.createdAt)) {
+  // `seq`). Refine only a present non-empty string to the ISO format; an empty
+  // string is already reported once by the required-field table above.
+  if (typeof doc.createdAt === 'string' && doc.createdAt !== '' && !isIsoTimestamp(doc.createdAt)) {
     errors.push({ path: '/createdAt', message: 'expected ISO 8601 `createdAt`' });
   }
 
