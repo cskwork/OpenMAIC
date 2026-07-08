@@ -214,10 +214,7 @@ export const INITIAL_RUNTIME_DSL_VERSION = '0.1.0' as const;
  * as current, and a session stamped at some unknown older version hits the
  * "no migration path" fail-loud.
  */
-// FAULT INJECTION (local only, never committed): mistaken legacy origin 0.0.0
-export const RUNTIME_DSL_MIGRATIONS: readonly DslMigration[] = [
-  { from: '0.0.0', to: '0.1.0', migrate: (doc) => doc },
-];
+export const RUNTIME_DSL_MIGRATIONS: readonly DslMigration[] = [];
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
