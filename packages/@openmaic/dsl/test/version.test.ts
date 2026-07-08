@@ -145,10 +145,15 @@ describe('cross-line guard (ambiguous envelopes fail loud, not reinterpreted)', 
 });
 
 describe('runtimeDslVersionOf', () => {
-  it('reads a stamped runtime version and ignores the document key', () => {
+  it('reads a stamped runtime version', () => {
     expect(runtimeDslVersionOf({ [RUNTIME_DSL_VERSION_KEY]: '9.9.9' })).toBe('9.9.9');
-    // A document-line stamp is invisible to the runtime reader.
-    expect(runtimeDslVersionOf({ [DSL_VERSION_KEY]: '9.9.9' })).toBe(UNVERSIONED_DSL_VERSION);
+  });
+  it('throws on an ambiguous document-stamped envelope (authoritative read)', () => {
+    // Reading this as unversioned would report `0.0.0` for data migrateRuntime
+    // refuses to touch — the reader applies the same cross-line rule.
+    expect(() => runtimeDslVersionOf({ [DSL_VERSION_KEY]: '9.9.9' })).toThrow(
+      /carries "dslVersion" but no "runtimeDslVersion"/,
+    );
   });
   it('throws on a present-but-malformed runtime stamp', () => {
     expect(() => runtimeDslVersionOf({ [RUNTIME_DSL_VERSION_KEY]: '0.1' })).toThrow(
@@ -194,6 +199,14 @@ describe('dslVersionOf', () => {
     expect(dslVersionOf({ id: 'x' })).toBe(UNVERSIONED_DSL_VERSION);
     expect(dslVersionOf(null)).toBe(UNVERSIONED_DSL_VERSION);
     expect(dslVersionOf('nope')).toBe(UNVERSIONED_DSL_VERSION);
+  });
+  it('throws on an ambiguous runtime-stamped envelope (authoritative read)', () => {
+    // The reader, the predicate, and the runner give one answer per envelope:
+    // this state throws everywhere instead of reading as `0.0.0` here while
+    // `migrate` refuses to touch it.
+    expect(() => dslVersionOf({ [RUNTIME_DSL_VERSION_KEY]: '9.9.9' })).toThrow(
+      /carries "runtimeDslVersion" but no "dslVersion"/,
+    );
   });
   it('throws on a present-but-malformed stamp (no silent bypass)', () => {
     // "1", "0.1", "0.1.0-beta" would otherwise parse into a comparable version

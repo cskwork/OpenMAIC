@@ -173,9 +173,10 @@ rides its **own** version line: `RUNTIME_DSL_VERSION` and a dedicated
 of `dslVersionOf` / `needsMigration`. The two lines stamp **different fields**,
 so neither ladder reads the other's version — but disjoint fields alone are not
 enough: a session lacking `dslVersion` would still read as *unversioned* to the
-document runner and be lifted onto the wrong line. The **cross-line guard** in
-the shared `runLadder` (mirrored by the `needs*Migration` predicates) closes
-this with three-case semantics: (1) own line's stamp present → migrate normally
+document runner and be lifted onto the wrong line. The **cross-line guard** —
+enforced in the shared envelope reader, so the plain `dslVersionOf` /
+`runtimeDslVersionOf` reads, the `needs*Migration` predicates, and the runners
+all give one answer per envelope — closes this with three-case semantics: (1) own line's stamp present → migrate normally
 on the own line, regardless of the other key; (2) both stamps absent → genuine
 legacy data, walk the own ladder; (3) own stamp absent but the sibling line's
 stamp present → **throw**. Case (3) is undecidable from the envelope — the

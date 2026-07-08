@@ -214,19 +214,28 @@ function compareVersions(a: string, b: string): number {
  * Read the version an aggregate was written at from an arbitrary envelope
  * `key`. The shared engine behind {@link dslVersionOf} (document line) and
  * {@link runtimeDslVersionOf} (runtime line) — each passes its own key, so the
- * two lines read disjoint fields and never conflate.
+ * two lines read disjoint fields and never conflate. This is where every
+ * envelope rule is enforced, so the plain readers, the `needs*Migration`
+ * predicates, and the migration runners all give one answer for one envelope:
  *
- * - A non-object, or an object with no `key` field, is treated as
+ * - A non-object, or an object with neither line's stamp, is treated as
  *   {@link UNVERSIONED_DSL_VERSION} (legacy / pre-versioning data).
  * - A **present but malformed** stamp (not a well-formed `x.y.z` string) is
  *   corrupt data making a false version claim, so this **throws** rather than
  *   letting a bad stamp silently compare as some arbitrary version and bypass
  *   migration.
+ * - An **ambiguous cross-line envelope** — own `key` absent, sibling `otherKey`
+ *   present — also **throws** (see {@link crossLineError}). Reading it as
+ *   unversioned would let a version report claim `0.0.0` for data the runner
+ *   refuses to migrate.
  */
-function versionOf(doc: unknown, key: string): string {
+function versionOf(doc: unknown, key: string, otherKey: string): string {
   if (!isObject(doc)) return UNVERSIONED_DSL_VERSION;
   const raw = doc[key];
-  if (raw === undefined) return UNVERSIONED_DSL_VERSION;
+  if (raw === undefined) {
+    if (doc[otherKey] !== undefined) throw crossLineError(key, otherKey);
+    return UNVERSIONED_DSL_VERSION;
+  }
   if (typeof raw !== 'string' || !isWellFormedDslVersion(raw)) {
     throw new Error(
       `@openmaic/dsl: invalid ${key} stamp ${JSON.stringify(raw)} (expected "x.y.z")`,
@@ -237,21 +246,24 @@ function versionOf(doc: unknown, key: string): string {
 
 /**
  * Read the serialized *document* contract version a document was written at,
- * from its {@link DSL_VERSION_KEY} envelope field. See {@link versionOf} for the
- * unstamped / malformed-stamp rules.
+ * from its {@link DSL_VERSION_KEY} envelope field. An authoritative read: it
+ * applies every envelope rule — unstamped, malformed-stamp, and the cross-line
+ * throw on an ambiguous envelope — so callers reporting a version never claim
+ * one for data {@link migrate} refuses to touch (see {@link versionOf}).
  */
 export function dslVersionOf(doc: unknown): string {
-  return versionOf(doc, DSL_VERSION_KEY);
+  return versionOf(doc, DSL_VERSION_KEY, RUNTIME_DSL_VERSION_KEY);
 }
 
 /**
  * Read the serialized *runtime* contract version a session was written at, from
  * its {@link RUNTIME_DSL_VERSION_KEY} envelope field — the runtime-line
- * counterpart of {@link dslVersionOf}, reading a disjoint field. Same
- * unstamped / malformed-stamp rules (see {@link versionOf}).
+ * counterpart of {@link dslVersionOf}, reading a disjoint field. Same rules,
+ * including the cross-line throw on an ambiguous envelope (see
+ * {@link versionOf}).
  */
 export function runtimeDslVersionOf(doc: unknown): string {
-  return versionOf(doc, RUNTIME_DSL_VERSION_KEY);
+  return versionOf(doc, RUNTIME_DSL_VERSION_KEY, DSL_VERSION_KEY);
 }
 
 /**
@@ -267,14 +279,21 @@ export function runtimeDslVersionOf(doc: unknown): string {
  */
 function needsLadder(doc: unknown, key: string, targetVersion: string, otherKey: string): boolean {
   if (!isObject(doc)) return false;
-  if (doc[key] === undefined && doc[otherKey] !== undefined) throw crossLineError(key, otherKey);
-  return compareVersions(versionOf(doc, key), targetVersion) < 0;
+  // The cross-line throw on an ambiguous envelope comes from `versionOf`
+  // itself, so the predicate, its runner, and the plain readers cannot drift.
+  return compareVersions(versionOf(doc, key, otherKey), targetVersion) < 0;
 }
 
 /**
- * The error thrown by the cross-line guard in {@link runLadder} and
- * {@link needsLadder} — one constructor so the runner and its predicate can
- * never drift apart on what the ambiguous state means.
+ * The error thrown on an ambiguous cross-line envelope — own `key` absent,
+ * sibling `otherKey` present. That state is undecidable: the other line's
+ * aggregate misrouted here is byte-identical to this line's data carrying a
+ * stray foreign stamp, and each silent answer locks in one failure mode
+ * (walking the ladder mangles the former; treating it as current/unversioned
+ * orphans the latter from its own line). Thrown from {@link versionOf}, the
+ * single reader behind the runners, the `needs*Migration` predicates, and the
+ * plain `*VersionOf` readers, so none of them can drift apart on what the
+ * ambiguous state means.
  */
 function crossLineError(key: string, otherKey: string): Error {
   return new Error(
@@ -378,18 +397,12 @@ function runLadder(
 ): unknown {
   if (!isObject(doc)) return doc;
 
-  // Cross-line guard, case (3): this line's stamp absent but the other line's
-  // stamp present. The envelope cannot distinguish "the other line's aggregate,
-  // misrouted here" from "this line's data carrying a stray foreign stamp" —
-  // the two are byte-identical. Silently walking the ladder would mangle the
-  // former; silently returning unchanged would orphan the latter (valid data
-  // that never becomes eligible for its own line). Neither guess is safe, so
-  // fail loud, like a malformed stamp. (Cases (1) own stamp present and (2)
-  // both absent fall through to the normal walk below, where a
-  // present-but-malformed own stamp still throws via `versionOf`.)
-  if (doc[key] === undefined && doc[otherKey] !== undefined) throw crossLineError(key, otherKey);
-
-  let version = versionOf(doc, key);
+  // Case (3) of the cross-line guard — own stamp absent, sibling stamp present
+  // — throws inside `versionOf` (see `crossLineError` for why neither silent
+  // answer is safe), as does a present-but-malformed own stamp. Enforcing both
+  // in the shared reader keeps the runner, its predicate, and the plain
+  // `*VersionOf` readers in agreement on every envelope.
+  let version = versionOf(doc, key, otherKey);
 
   // Already current, or written ahead of us — leave the document as-is.
   if (compareVersions(version, targetVersion) >= 0) return doc;
