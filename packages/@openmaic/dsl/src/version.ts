@@ -52,11 +52,17 @@ export const DSL_VERSION_KEY = 'dslVersion' as const;
 /**
  * Envelope property that carries the serialized-contract version on a runtime
  * session. Mechanically **disjoint** from {@link DSL_VERSION_KEY}: the two
- * version lines stamp different fields, so a document migration walked over a
- * session finds no {@link DSL_VERSION_KEY} stamp to read (and, at worst, adds a
- * foreign field it owns) and the runtime ladder finds no {@link DSL_VERSION_KEY}
- * either — neither line can read, consume, or corrupt the other's stamp, and
- * misrouted data is inert rather than silently reinterpreted.
+ * version lines stamp different fields, so neither ladder can read, consume, or
+ * corrupt the other's stamp.
+ *
+ * Disjoint keys are necessary but **not sufficient** for inertness: an object
+ * carrying only this key still *lacks* {@link DSL_VERSION_KEY}, so the document
+ * runner would read it as {@link UNVERSIONED_DSL_VERSION} and walk its legacy
+ * ladder over the session — stamping a foreign field and, once a real transform
+ * lands, mangling the payload. What actually makes misrouted data inert is the
+ * cross-line guard in {@link runLadder}: a runner whose own stamp is absent but
+ * whose sibling's stamp is present returns the object untouched. See that
+ * function for the three-case semantics.
  */
 export const RUNTIME_DSL_VERSION_KEY = 'runtimeDslVersion' as const;
 
@@ -129,10 +135,15 @@ export const DSL_MIGRATIONS: readonly DslMigration[] = [
  * vice versa. A `DslMigration` body is an arbitrary whole-document transform;
  * if runtime sessions rode `DSL_MIGRATIONS`, a future real Stage/Scene migration
  * authored against the document shape would run over a `RuntimeSession` and
- * could corrupt or throw. Because the stamps live on different fields, even a
- * misrouted document migration cannot find or overwrite the runtime stamp: it
- * would at worst add its own foreign `dslVersion` field, never mutate
- * `runtimeDslVersion`.
+ * could corrupt or throw.
+ *
+ * The disjoint stamp fields keep each ladder from reading the other's version,
+ * but they do not by themselves stop a misrouted aggregate from being lifted on
+ * the wrong line (it simply reads as unversioned there). The cross-line guard in
+ * {@link runLadder} is what delivers inertness: a runner returns any aggregate
+ * that carries the *sibling* line's stamp but not its own untouched, so a
+ * misrouted document migration never even stamps its foreign `dslVersion` onto a
+ * runtime session.
  */
 export const RUNTIME_DSL_VERSION = '0.1.0' as const;
 
@@ -312,20 +323,43 @@ function stampVersion(doc: unknown, version: string, key: string): unknown {
 /**
  * Shared ladder runner behind {@link migrate} and {@link migrateRuntime}. The
  * walk / stamp / fail-loud mechanism is identical for both version lines; only
- * the `ladder`, its `targetVersion`, and the envelope `key` differ, so they are
- * parameters rather than duplicated. This is what keeps the two ladders
- * *independent* — each caller passes its own steps, endpoint, and stamp field,
- * so a document migration reads and writes only `dslVersion` while the runtime
- * ladder reads and writes only `runtimeDslVersion`; neither can be walked over
- * the other's stamp.
+ * the `ladder`, its `targetVersion`, the own envelope `key`, and the *other*
+ * line's `otherKey` differ, so they are parameters rather than duplicated. This
+ * is what keeps the two ladders *independent* — each caller passes its own
+ * steps, endpoint, and stamp field, so a document migration reads and writes
+ * only `dslVersion` while the runtime ladder reads and writes only
+ * `runtimeDslVersion`; neither can be walked over the other's stamp.
+ *
+ * **Cross-line guard.** Disjoint stamp keys alone do NOT make misrouted data
+ * inert: an aggregate carrying the *other* line's stamp still lacks this line's
+ * key, so `versionOf` reads it as {@link UNVERSIONED_DSL_VERSION} and the runner
+ * would walk its own legacy ladder over it — stamping a foreign key and, once a
+ * real transform lands on either ladder, mangling or throwing on the other
+ * line's payload. The inertness comes from this guard, keyed on the presence of
+ * the two stamps:
+ *
+ * 1. Own line's stamp present → migrate normally on this line, regardless of the
+ *    other key (a doubly-stamped envelope is each runner's own line's data).
+ * 2. Both stamps absent → genuine legacy data → walk this line's ladder as before.
+ * 3. Own stamp ABSENT + other line's stamp PRESENT → this is the *other* line's
+ *    aggregate, misrouted here. Return it unchanged: never lift it, never stamp
+ *    this line's key onto it.
  */
 function runLadder(
   doc: unknown,
   ladder: readonly DslMigration[],
   targetVersion: string,
   key: string,
+  otherKey: string,
 ): unknown {
   if (!isObject(doc)) return doc;
+
+  // Cross-line guard, case (3): this line's stamp absent but the other line's
+  // stamp present → the object belongs to the other version line. It is inert
+  // here — returned byte-identical, never lifted or stamped. (Cases (1) own
+  // stamp present and (2) both absent fall through to the normal walk below,
+  // where a present-but-malformed own stamp still throws via `versionOf`.)
+  if (doc[key] === undefined && doc[otherKey] !== undefined) return doc;
 
   let version = versionOf(doc, key);
 
@@ -354,7 +388,7 @@ function runLadder(
 }
 
 export function migrate(doc: unknown): unknown {
-  return runLadder(doc, DSL_MIGRATIONS, DSL_VERSION, DSL_VERSION_KEY);
+  return runLadder(doc, DSL_MIGRATIONS, DSL_VERSION, DSL_VERSION_KEY, RUNTIME_DSL_VERSION_KEY);
 }
 
 /**
@@ -370,5 +404,11 @@ export function migrate(doc: unknown): unknown {
  * ladder consuming the other's data.
  */
 export function migrateRuntime(doc: unknown): unknown {
-  return runLadder(doc, RUNTIME_DSL_MIGRATIONS, RUNTIME_DSL_VERSION, RUNTIME_DSL_VERSION_KEY);
+  return runLadder(
+    doc,
+    RUNTIME_DSL_MIGRATIONS,
+    RUNTIME_DSL_VERSION,
+    RUNTIME_DSL_VERSION_KEY,
+    DSL_VERSION_KEY,
+  );
 }

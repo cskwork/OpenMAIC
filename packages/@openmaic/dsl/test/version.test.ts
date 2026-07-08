@@ -88,25 +88,66 @@ describe('migrateRuntime', () => {
   });
 });
 
-describe('ladder independence (mechanical, disjoint envelope fields)', () => {
-  it('document migrate() leaves a runtimeDslVersion stamp untouched', () => {
-    // A session stamped on the runtime line, walked by the document runner:
-    // migrate reads `dslVersion` (absent), so it lifts the object on the
-    // document line and never consumes or mutates `runtimeDslVersion`.
+describe('cross-line guard (misrouted data is inert, not reinterpreted)', () => {
+  it('migrate() returns a runtime session UNCHANGED — no document lift, no dslVersion added', () => {
+    // Case (3): own stamp (dslVersion) ABSENT + other line's stamp
+    // (runtimeDslVersion) PRESENT. This object is the runtime line's data,
+    // misrouted into the document runner. The guard — not the disjoint keys —
+    // is what makes it inert: migrate must return it byte-identical, NOT walk
+    // the document ladder over it and stamp a foreign `dslVersion`.
     const session = { id: 's', [RUNTIME_DSL_VERSION_KEY]: RUNTIME_DSL_VERSION };
-    const out = migrate(session) as Record<string, unknown>;
-    expect(out[RUNTIME_DSL_VERSION_KEY]).toBe(RUNTIME_DSL_VERSION);
-    expect(out[DSL_VERSION_KEY]).toBe(DSL_VERSION);
+    const out = migrate(session);
+    expect(out).toEqual(session);
+    expect(out).not.toHaveProperty(DSL_VERSION_KEY);
+    // Same object back (guard short-circuits before any copy).
+    expect(out).toBe(session);
   });
 
-  it('migrateRuntime() leaves a dslVersion stamp untouched', () => {
-    // A document stamped on the document line, walked by the runtime runner:
-    // migrateRuntime reads `runtimeDslVersion` (absent) and never mutates
-    // `dslVersion`.
+  it('migrateRuntime() returns a document UNCHANGED — no runtime lift, no runtimeDslVersion added', () => {
+    // Symmetric case (3): own stamp (runtimeDslVersion) ABSENT + document
+    // line's stamp (dslVersion) PRESENT. The document is inert to the runtime
+    // runner: returned untouched, never stamped with `runtimeDslVersion`.
     const doc = { id: 'd', [DSL_VERSION_KEY]: DSL_VERSION };
-    const out = migrateRuntime(doc) as Record<string, unknown>;
-    expect(out[DSL_VERSION_KEY]).toBe(DSL_VERSION);
-    expect(out[RUNTIME_DSL_VERSION_KEY]).toBe(RUNTIME_DSL_VERSION);
+    const out = migrateRuntime(doc);
+    expect(out).toEqual(doc);
+    expect(out).not.toHaveProperty(RUNTIME_DSL_VERSION_KEY);
+    expect(out).toBe(doc);
+  });
+
+  it('an object carrying BOTH stamps migrates normally on each runner’s own line', () => {
+    // Case (1): own line's stamp present → migrate normally on own line,
+    // regardless of the other key. The guard only fires when the OWN stamp is
+    // absent, so a doubly-stamped envelope is handled by each runner exactly as
+    // if the other stamp were not there.
+    const both = {
+      id: 'x',
+      [DSL_VERSION_KEY]: DSL_VERSION,
+      [RUNTIME_DSL_VERSION_KEY]: RUNTIME_DSL_VERSION,
+    };
+    // Each runner sees its own line already current → idempotent no-op, and
+    // leaves the other line's stamp intact.
+    const migrated = migrate(both) as Record<string, unknown>;
+    expect(migrated[DSL_VERSION_KEY]).toBe(DSL_VERSION);
+    expect(migrated[RUNTIME_DSL_VERSION_KEY]).toBe(RUNTIME_DSL_VERSION);
+    const migratedRuntime = migrateRuntime(both) as Record<string, unknown>;
+    expect(migratedRuntime[RUNTIME_DSL_VERSION_KEY]).toBe(RUNTIME_DSL_VERSION);
+    expect(migratedRuntime[DSL_VERSION_KEY]).toBe(DSL_VERSION);
+  });
+
+  it('an object with NEITHER stamp still gets the legacy lift on both runners', () => {
+    // Case (2): both stamps absent → genuine legacy data, walk the own ladder
+    // as before. The guard must NOT intercept this: each runner lifts it onto
+    // its own line.
+    const legacy = { id: 'z', name: 'course' };
+    const lifted = migrate(legacy) as Record<string, unknown>;
+    expect(lifted[DSL_VERSION_KEY]).toBe(DSL_VERSION);
+    expect(lifted[RUNTIME_DSL_VERSION_KEY]).toBeUndefined();
+    expect(lifted.name).toBe('course');
+
+    const liftedRuntime = migrateRuntime(legacy) as Record<string, unknown>;
+    expect(liftedRuntime[RUNTIME_DSL_VERSION_KEY]).toBe(RUNTIME_DSL_VERSION);
+    expect(liftedRuntime[DSL_VERSION_KEY]).toBeUndefined();
+    expect(liftedRuntime.name).toBe('course');
   });
 });
 

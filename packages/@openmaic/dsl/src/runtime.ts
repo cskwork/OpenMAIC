@@ -30,11 +30,12 @@
  * Versioning: a session carries its OWN version field, `runtimeDslVersion`
  * (distinct from a document's `dslVersion`), and rides its OWN version line —
  * `RUNTIME_DSL_VERSION` + `migrateRuntime`, not the document's `DSL_VERSION` +
- * `migrate`. Because the two lines stamp different envelope fields, the
- * separation is mechanical, not merely a call-site convention: a document
- * migration walked over a session finds no `dslVersion` stamp and, at worst,
- * adds a foreign field it owns, never consuming or corrupting the runtime line's
- * `runtimeDslVersion` stamp — and vice versa (see `version.ts`).
+ * `migrate`. The two lines stamp different envelope fields, so neither ladder
+ * reads the other's version — but disjoint fields alone would still let a
+ * misrouted session be lifted (as unversioned) on the document line. Inertness
+ * is delivered by the cross-line guard in `runLadder`: a runner returns any
+ * aggregate that carries the sibling line's stamp but not its own untouched,
+ * never stamping a foreign field — and vice versa (see `version.ts`).
  *
  * No runtime dependencies. Pure types + plain data constants only.
  */
@@ -181,9 +182,11 @@ export function isCoreRuntimeKind(value: unknown): value is CoreRuntimeKind {
  * DIFFERENT envelope field from a document's `dslVersion`. Stamping +
  * migrate-on-read run on the runtime line only: a session is stamped with
  * `RUNTIME_DSL_VERSION` and migrated by `migrateRuntime`, independent of the
- * document's `DSL_VERSION` / `migrate`. Because the two stamps live on distinct
- * fields, misrouting a migration is inert rather than corrupting (see
- * `version.ts`).
+ * document's `DSL_VERSION` / `migrate`. The two stamps live on distinct fields
+ * so neither ladder reads the other's; the cross-line guard in `runLadder` is
+ * what makes misrouting a migration inert rather than corrupting — a runner
+ * leaves any aggregate stamped on the sibling line but not its own untouched
+ * (see `version.ts`).
  */
 export interface RuntimeSession extends RuntimeVersioned {
   id: string;
