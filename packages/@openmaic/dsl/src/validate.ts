@@ -17,7 +17,7 @@
  */
 import { isActionType } from './action.js';
 import type { ActionType } from './action.js';
-import { isRuntimeSessionStatus } from './runtime.js';
+import { isIsoTimestamp, isRuntimeSessionStatus } from './runtime.js';
 import { isWellFormedDslVersion } from './version.js';
 
 export interface ValidationIssue {
@@ -279,6 +279,16 @@ export function validateRuntimeSession(doc: unknown): ValidationResult {
       message: `unknown session status: ${JSON.stringify(doc.status)}`,
     });
   }
+  // `createdAt` / `updatedAt` are documented ISO-8601 strings. The table check
+  // above only proves they are strings; refine the present ones to the ISO
+  // format (same "only refine an already-string field" guard as `seq` below, so
+  // a wrong-typed value is reported once, by the table, not twice).
+  if (typeof doc.createdAt === 'string' && !isIsoTimestamp(doc.createdAt)) {
+    errors.push({ path: '/createdAt', message: 'expected ISO 8601 `createdAt`' });
+  }
+  if (typeof doc.updatedAt === 'string' && !isIsoTimestamp(doc.updatedAt)) {
+    errors.push({ path: '/updatedAt', message: 'expected ISO 8601 `updatedAt`' });
+  }
   // `dslVersion` is optional, but a present stamp must be a well-formed `x.y.z`
   // string: `migrate`/`dslVersionOf` throw on a malformed stamp, so accepting a
   // string like `'legacy'` here would only defer the failure to read time.
@@ -335,6 +345,12 @@ export function validateRuntimeRecord(doc: unknown): ValidationResult {
     !(Number.isInteger(doc.actionIndex) && doc.actionIndex >= 0)
   ) {
     errors.push({ path: '/actionIndex', message: 'expected non-negative integer `actionIndex`' });
+  }
+
+  // `createdAt` is a documented ISO-8601 string (display metadata; ordering is
+  // `seq`). Refine the present string to the ISO format, same guard as above.
+  if (typeof doc.createdAt === 'string' && !isIsoTimestamp(doc.createdAt)) {
+    errors.push({ path: '/createdAt', message: 'expected ISO 8601 `createdAt`' });
   }
 
   // Require a real payload value, not merely the key. `'payload' in doc` would

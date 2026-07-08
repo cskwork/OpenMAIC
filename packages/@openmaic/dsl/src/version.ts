@@ -94,6 +94,48 @@ export const DSL_MIGRATIONS: readonly DslMigration[] = [
   { from: UNVERSIONED_DSL_VERSION, to: INITIAL_DSL_VERSION, migrate: (doc) => doc },
 ];
 
+/**
+ * Current version of the serialized *runtime* contract (#869) — the on-disk
+ * shape of a {@link RuntimeSession} / runtime record, NOT the slide document.
+ *
+ * This is a **deliberately separate version line** from {@link DSL_VERSION}.
+ * A {@link RuntimeSession} shares the `dslVersion` envelope *field* (it extends
+ * `DslVersioned`), but the two ladders version independent serialized shapes:
+ * a change to the document (Stage/Scene) shape must never force — or, worse,
+ * accidentally *consume* — a runtime step, and vice versa. A `DslMigration`
+ * body is an arbitrary whole-document transform; if runtime sessions rode
+ * `DSL_MIGRATIONS`, a future real Stage/Scene migration authored against the
+ * document shape would run over a `RuntimeSession` and could corrupt or throw.
+ */
+export const RUNTIME_DSL_VERSION = '0.1.0' as const;
+
+export type RuntimeDslVersion = typeof RUNTIME_DSL_VERSION;
+
+/**
+ * The first shipped runtime-contract version — a **pinned literal**, not the
+ * moving {@link RUNTIME_DSL_VERSION} (see {@link INITIAL_DSL_VERSION} for why
+ * migration endpoints must be immutable). Equal to `RUNTIME_DSL_VERSION` today;
+ * the two diverge the moment the runtime shape first changes.
+ */
+export const INITIAL_RUNTIME_DSL_VERSION = '0.1.0' as const;
+
+/**
+ * Ordered migration ladder for the runtime contract, wholly independent of
+ * {@link DSL_MIGRATIONS}. Same invariants (contiguous chain, last `to` ===
+ * {@link RUNTIME_DSL_VERSION}, every endpoint a **pinned literal**), same
+ * legacy-lift shape: the first entry stamps pre-`dslVersion` runtime data up to
+ * {@link INITIAL_RUNTIME_DSL_VERSION} as a no-op transform (the runtime shape is
+ * brand new, so nothing predates 0.1.0 to reshape — the entry just wires the
+ * pipeline and gives real runtime data a version to migrate forward from).
+ *
+ * It shares {@link UNVERSIONED_DSL_VERSION} as its legacy origin because that
+ * constant names "wrote no `dslVersion` stamp", a property of the shared
+ * envelope field, not of either aggregate's shape.
+ */
+export const RUNTIME_DSL_MIGRATIONS: readonly DslMigration[] = [
+  { from: UNVERSIONED_DSL_VERSION, to: INITIAL_RUNTIME_DSL_VERSION, migrate: (doc) => doc },
+];
+
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -183,31 +225,59 @@ function stampVersion(doc: unknown, version: string): unknown {
  * Pure: never mutates the input; each step returns a fresh object stamped with
  * its target version.
  */
-export function migrate(doc: unknown): unknown {
+/**
+ * Shared ladder runner behind {@link migrate} and {@link migrateRuntime}. The
+ * walk / stamp / fail-loud mechanism is identical for both version lines; only
+ * the `ladder` and its `targetVersion` differ, so they are parameters rather
+ * than duplicated. This is what keeps the two ladders *independent* — each
+ * caller passes its own steps and endpoint, so a document migration can never
+ * be walked over runtime data (or vice versa). Behavior is byte-identical to
+ * the previous inline `migrate` body.
+ */
+function runLadder(doc: unknown, ladder: readonly DslMigration[], targetVersion: string): unknown {
   if (!isObject(doc)) return doc;
 
   let version = dslVersionOf(doc);
 
   // Already current, or written ahead of us — leave the document as-is.
-  if (compareVersions(version, DSL_VERSION) >= 0) return doc;
+  if (compareVersions(version, targetVersion) >= 0) return doc;
 
   let current: unknown = doc;
   // Walk the ladder one step at a time. Guard against a malformed (cyclic /
   // non-advancing) registry so a bad entry can't spin forever.
-  for (let step = 0; step < DSL_MIGRATIONS.length + 1; step++) {
-    if (version === DSL_VERSION) return current;
-    const next = DSL_MIGRATIONS.find((m) => m.from === version);
+  for (let step = 0; step < ladder.length + 1; step++) {
+    if (version === targetVersion) return current;
+    const next = ladder.find((m) => m.from === version);
     if (!next) {
-      throw new Error(`@openmaic/dsl: no migration path from "${version}" to "${DSL_VERSION}"`);
+      throw new Error(`@openmaic/dsl: no migration path from "${version}" to "${targetVersion}"`);
     }
     current = stampVersion(next.migrate(current), next.to);
     version = next.to;
   }
 
-  if (version !== DSL_VERSION) {
+  if (version !== targetVersion) {
     throw new Error(
-      `@openmaic/dsl: migration ladder did not reach "${DSL_VERSION}" (stuck at "${version}")`,
+      `@openmaic/dsl: migration ladder did not reach "${targetVersion}" (stuck at "${version}")`,
     );
   }
   return current;
+}
+
+export function migrate(doc: unknown): unknown {
+  return runLadder(doc, DSL_MIGRATIONS, DSL_VERSION);
+}
+
+/**
+ * Migrate a runtime document ({@link RuntimeSession} / runtime record) forward
+ * to {@link RUNTIME_DSL_VERSION}, walking {@link RUNTIME_DSL_MIGRATIONS}.
+ *
+ * The exact counterpart of {@link migrate} on the runtime version line —
+ * idempotent, forward-compatible, fail-loud, pure, non-objects returned as-is —
+ * but pinned to the runtime ladder + target version. Runtime state is stamped
+ * and migrated on read through *this* function, never {@link migrate}, so the
+ * document and runtime shapes evolve without either ladder consuming the other's
+ * data.
+ */
+export function migrateRuntime(doc: unknown): unknown {
+  return runLadder(doc, RUNTIME_DSL_MIGRATIONS, RUNTIME_DSL_VERSION);
 }

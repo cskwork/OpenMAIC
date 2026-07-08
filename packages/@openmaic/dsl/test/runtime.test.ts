@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   CHAT_RUNTIME_ROLES,
   CORE_RUNTIME_KINDS,
-  DSL_VERSION,
   QUIZ_ATTEMPT_PHASES,
+  RUNTIME_DSL_VERSION,
   RUNTIME_SESSION_STATUSES,
   isChatMessageSkeleton,
   isChatRuntimeRole,
@@ -11,7 +11,7 @@ import {
   isQuizAttemptPhase,
   isQuizAttemptSkeleton,
   isRuntimeSessionStatus,
-  migrate,
+  migrateRuntime,
   type ChatMessageSkeleton,
   type QuizAttemptSkeleton,
   type RuntimeRecord,
@@ -76,6 +76,38 @@ describe('runtime envelope shapes (compile-time contract)', () => {
     expect(quiz.payload.phase).toBe('submitted');
   });
 
+  it('excludes undefined from payload at the type level (aligns with the validator)', () => {
+    // The validator rejects `payload: undefined`; the static type must agree, so
+    // `undefined` is not assignable to the payload — this is a type error.
+    const bad: RuntimeRecord = {
+      id: 'r1',
+      sessionId: 's1',
+      seq: 0,
+      createdAt: '2026-01-01T00:00:01.000Z',
+      // @ts-expect-error payload cannot be undefined (RuntimePayload excludes it)
+      payload: undefined,
+    };
+    void bad;
+    // `null` stays a legal stored payload (the validator accepts it too).
+    const withNull: RuntimeRecord = {
+      id: 'r2',
+      sessionId: 's1',
+      seq: 0,
+      createdAt: '2026-01-01T00:00:01.000Z',
+      payload: null,
+    };
+    expect(withNull.payload).toBe(null);
+    // The init shape inherits the same constraint via Omit.
+    const initBad: RuntimeRecordInit = {
+      id: 'r3',
+      sessionId: 's1',
+      createdAt: '2026-01-01T00:00:01.000Z',
+      // @ts-expect-error payload cannot be undefined on the init shape either
+      payload: undefined,
+    };
+    void initBad;
+  });
+
   it('lets a producer construct a RuntimeRecordInit without a store-assigned seq', () => {
     // Compile-time contract: `seq` is store-owned, so the creation shape omits
     // it. Supplying `seq` here would be a type error; leaving it out type-checks.
@@ -114,12 +146,12 @@ describe('runtime payload skeleton guards', () => {
   });
 });
 
-describe('runtime envelope rides the DSL version ladder', () => {
-  it('lifts an unversioned session to the current DSL_VERSION', () => {
+describe('runtime envelope rides the dedicated runtime version ladder', () => {
+  it('lifts an unversioned session to the current RUNTIME_DSL_VERSION', () => {
     // A RuntimeSession persisted before the `dslVersion` stamp existed: no
-    // envelope field, so `migrate` treats it as legacy/unversioned and walks it
-    // up the ladder, stamping the result — the session rides the same
-    // migrate-on-read path as a document.
+    // envelope field, so `migrateRuntime` treats it as legacy/unversioned and
+    // walks it up the *runtime* ladder, stamping the result. Runtime state
+    // migrates on its own version line, not the document ladder.
     const legacy: Omit<RuntimeSession, 'dslVersion'> = {
       id: 's1',
       kind: 'chat',
@@ -129,10 +161,10 @@ describe('runtime envelope rides the DSL version ladder', () => {
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:00:00.000Z',
     };
-    const lifted = migrate(legacy) as RuntimeSession;
-    expect(lifted.dslVersion).toBe(DSL_VERSION);
+    const lifted = migrateRuntime(legacy) as RuntimeSession;
+    expect(lifted.dslVersion).toBe(RUNTIME_DSL_VERSION);
     // Migration is pure: the payload is carried through untouched, only stamped.
-    expect(lifted).toEqual({ ...legacy, dslVersion: DSL_VERSION });
+    expect(lifted).toEqual({ ...legacy, dslVersion: RUNTIME_DSL_VERSION });
   });
 
   it('leaves a current-version session untouched', () => {
@@ -144,8 +176,8 @@ describe('runtime envelope rides the DSL version ladder', () => {
       status: 'active',
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:00:00.000Z',
-      dslVersion: DSL_VERSION,
+      dslVersion: RUNTIME_DSL_VERSION,
     };
-    expect(migrate(current)).toEqual(current);
+    expect(migrateRuntime(current)).toEqual(current);
   });
 });

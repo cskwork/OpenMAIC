@@ -5,9 +5,12 @@ import {
   INITIAL_DSL_VERSION,
   DSL_VERSION_KEY,
   DSL_MIGRATIONS,
+  RUNTIME_DSL_VERSION,
+  RUNTIME_DSL_MIGRATIONS,
   dslVersionOf,
   needsMigration,
   migrate,
+  migrateRuntime,
 } from '@openmaic/dsl';
 
 describe('DSL_MIGRATIONS ladder invariants', () => {
@@ -27,6 +30,48 @@ describe('DSL_MIGRATIONS ladder invariants', () => {
     // DSL_VERSION moves past it. (They're equal today; the assertion guards the
     // intent, not the current value.)
     expect(DSL_MIGRATIONS[0].to).toBe(INITIAL_DSL_VERSION);
+  });
+});
+
+describe('RUNTIME_DSL_MIGRATIONS ladder invariants', () => {
+  it('is a contiguous chain ending at RUNTIME_DSL_VERSION', () => {
+    // The runtime ladder is a *separate* version line from the document ladder
+    // (they version independent serialized shapes), but obeys the same
+    // contiguity + terminal-endpoint invariants.
+    expect(RUNTIME_DSL_MIGRATIONS.length).toBeGreaterThan(0);
+    for (let i = 1; i < RUNTIME_DSL_MIGRATIONS.length; i++) {
+      expect(RUNTIME_DSL_MIGRATIONS[i].from).toBe(RUNTIME_DSL_MIGRATIONS[i - 1].to);
+    }
+    expect(RUNTIME_DSL_MIGRATIONS[RUNTIME_DSL_MIGRATIONS.length - 1].to).toBe(RUNTIME_DSL_VERSION);
+  });
+
+  it('begins by lifting legacy (unversioned) runtime data', () => {
+    expect(RUNTIME_DSL_MIGRATIONS[0].from).toBe(UNVERSIONED_DSL_VERSION);
+  });
+});
+
+describe('migrateRuntime', () => {
+  it('stamps legacy runtime data up to RUNTIME_DSL_VERSION, independent of DSL_VERSION', () => {
+    const out = migrateRuntime({ id: 'sess' }) as Record<string, unknown>;
+    expect(out[DSL_VERSION_KEY]).toBe(RUNTIME_DSL_VERSION);
+  });
+
+  it('is idempotent and returns non-objects unchanged', () => {
+    const once = migrateRuntime({ id: 's' });
+    expect(migrateRuntime(once)).toBe(once);
+    expect(migrateRuntime(42)).toBe(42);
+    expect(migrateRuntime(null)).toBe(null);
+  });
+
+  it('leaves a forward-versioned runtime document untouched', () => {
+    const future = { id: 's', [DSL_VERSION_KEY]: '99.0.0' };
+    expect(migrateRuntime(future)).toBe(future);
+  });
+
+  it('fails loud on a malformed stamp', () => {
+    expect(() => migrateRuntime({ id: 's', [DSL_VERSION_KEY]: '0.1' })).toThrow(
+      /invalid dslVersion/,
+    );
   });
 });
 

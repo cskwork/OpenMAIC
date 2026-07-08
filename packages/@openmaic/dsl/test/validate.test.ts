@@ -83,7 +83,7 @@ describe('validateAction', () => {
     expect(errors(r)).toContain('/type');
   });
   it('flags a known action type missing a variant-required field', () => {
-    // cosarah's example: a spotlight with no elementId is unusable at runtime.
+    // A spotlight with no elementId is unusable at runtime.
     const r = validateAction({ id: 'a', type: 'spotlight' });
     expect(errors(r)).toContain('/elementId');
     const d = validateAction({ id: 'a', type: 'discussion' });
@@ -176,6 +176,36 @@ describe('validateRuntimeSession', () => {
     if (result.valid) throw new Error('unreachable');
     expect(result.errors.map((e) => e.path)).toContain('/learnerKey');
   });
+
+  it('rejects a non-ISO-8601 createdAt / updatedAt (contract says ISO 8601)', () => {
+    // These pass the `typeof === 'string'` table check but are not timestamps;
+    // the contract docs call them ISO 8601, so a bare string is not enough.
+    const bad = validateRuntimeSession({
+      ...good,
+      createdAt: 'not-a-date',
+      updatedAt: 'still-bad',
+    });
+    expect(bad.valid).toBe(false);
+    if (bad.valid) throw new Error('unreachable');
+    const paths = bad.errors.map((e) => e.path);
+    expect(paths).toContain('/createdAt');
+    expect(paths).toContain('/updatedAt');
+  });
+
+  it('rejects a calendar-impossible ISO date (month 13)', () => {
+    // Well-formed shape but not a real date: the regex alone would accept it,
+    // so `Date.parse` calendar validity is what rejects it.
+    const r = validateRuntimeSession({ ...good, createdAt: '2026-13-01T00:00:00.000Z' });
+    expect(r.valid).toBe(false);
+    if (r.valid) throw new Error('unreachable');
+    expect(r.errors.map((e) => e.path)).toContain('/createdAt');
+  });
+
+  it('accepts an ISO-8601 offset timestamp form', () => {
+    expect(validateRuntimeSession({ ...good, createdAt: '2026-01-01T08:00:00+08:00' })).toEqual({
+      valid: true,
+    });
+  });
 });
 
 describe('validateRuntimeRecord', () => {
@@ -255,5 +285,20 @@ describe('validateRuntimeRecord', () => {
     for (const p of ['/id', '/sessionId', '/seq', '/createdAt', '/payload']) {
       expect(paths).toContain(p);
     }
+  });
+
+  it('rejects a non-ISO-8601 createdAt (contract says ISO 8601)', () => {
+    const r = validateRuntimeRecord({ ...good, createdAt: 'not-a-date' });
+    expect(r.valid).toBe(false);
+    if (r.valid) throw new Error('unreachable');
+    expect(r.errors.map((e) => e.path)).toContain('/createdAt');
+    // A calendar-impossible but well-formed date is rejected too (Date.parse).
+    expect(validateRuntimeRecord({ ...good, createdAt: '2026-13-01T00:00:00.000Z' }).valid).toBe(
+      false,
+    );
+    // An offset form is accepted.
+    expect(validateRuntimeRecord({ ...good, createdAt: '2026-01-01T08:00:00+08:00' })).toEqual({
+      valid: true,
+    });
   });
 });

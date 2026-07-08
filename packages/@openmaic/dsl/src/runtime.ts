@@ -27,6 +27,12 @@
  * runtime feed with document data: convert at the boundary, never compare a
  * runtime `createdAt` string against a document's numeric timestamp directly.
  *
+ * Versioning: a session carries the shared `dslVersion` envelope field but rides
+ * its OWN version line — `RUNTIME_DSL_VERSION` + `migrateRuntime`, not the
+ * document's `DSL_VERSION` + `migrate`. The two serialized shapes evolve
+ * independently, so a document migration can never run over runtime data (see
+ * `version.ts`).
+ *
  * No runtime dependencies. Pure types + plain data constants only.
  */
 import type { DslVersioned } from './version.js';
@@ -65,6 +71,35 @@ export function isRuntimeSessionStatus(value: unknown): value is RuntimeSessionS
 }
 
 /**
+ * ISO-8601 shape a runtime timestamp string is required to match:
+ * `YYYY-MM-DDTHH:mm:ss`, an optional fractional-second part, and a mandatory
+ * zone designator (`Z` or `±hh:mm`). Runtime timestamps are display metadata
+ * whose only cross-tab guarantee is a comparable, unambiguous instant, so the
+ * zone is not optional here — a zoneless string names no instant.
+ */
+const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * True when `value` is a well-formed ISO-8601 timestamp per the runtime
+ * contract. The runtime envelope has no generated schema artifact backing it
+ * (unlike stage/scene/action), so this pure check is where the documented
+ * "ISO 8601" promise on `createdAt` / `updatedAt` is actually enforced.
+ *
+ * Both halves are required and neither alone suffices:
+ * - the regex pins the *format* (`Date.parse` alone accepts many non-ISO forms
+ *   — bare dates, `'2026/01/01'`, even some free text — so it cannot stand in
+ *   for a format check), while
+ * - `!Number.isNaN(Date.parse(value))` pins *calendar validity* (the regex
+ *   happily matches an impossible `2026-13-01` or `2026-02-30`, which only a
+ *   real date parse rejects).
+ *
+ * Pure, no runtime dependencies.
+ */
+export function isIsoTimestamp(value: string): boolean {
+  return ISO_TIMESTAMP_RE.test(value) && !Number.isNaN(Date.parse(value));
+}
+
+/**
  * The core runtime kind *names* the contract recognizes — the ones Part B
  * migrates first. `RuntimeSession.kind` is an open `string`, so apps define
  * their own kinds without touching the contract; these are just the recognized
@@ -100,9 +135,11 @@ export function isCoreRuntimeKind(value: unknown): value is CoreRuntimeKind {
  * of the same kind on one stage (e.g. repeated quiz attempts).
  *
  * Extends {@link DslVersioned}, so a session carries the same optional
- * `dslVersion` serialized-contract stamp (absent on legacy data) and rides the
- * same stamping + migrate-on-read ladder as the document aggregate — sharing
- * one envelope definition instead of re-declaring the field here.
+ * `dslVersion` serialized-contract stamp (absent on legacy data) — sharing one
+ * envelope *field* definition instead of re-declaring it here. The stamping +
+ * migrate-on-read *ladder* is NOT shared: a session is stamped with
+ * `RUNTIME_DSL_VERSION` and migrated by `migrateRuntime`, on a version line
+ * independent of the document's `DSL_VERSION` / `migrate` (see `version.ts`).
  */
 export interface RuntimeSession extends DslVersioned {
   id: string;
@@ -123,11 +160,24 @@ export interface RuntimeSession extends DslVersioned {
 }
 
 /**
+ * The set of values a {@link RuntimeRecord.payload} may hold: any value EXCEPT
+ * `undefined`. `null` is deliberately included — it is a legal stored payload an
+ * app may deliberately persist, and {@link validateRuntimeRecord} accepts it.
+ *
+ * `NonNullable<unknown>` is `{}` (every non-nullish value) without the banned
+ * bare-`{}` literal; unioning `null` back in yields "anything but `undefined`".
+ * This aligns the static type with the runtime validator, which rejects
+ * `payload: undefined` but accepts `null` — a plain `unknown` payload would let
+ * `payload: undefined` type-check yet fail at append time.
+ */
+export type RuntimePayload = NonNullable<unknown> | null;
+
+/**
  * One ordered fact inside a session. Identity, learner and lifecycle live on
  * the parent {@link RuntimeSession}; the record carries only ordering,
  * anchoring, and the app-owned payload.
  */
-export interface RuntimeRecord<TPayload = unknown> {
+export interface RuntimeRecord<TPayload extends RuntimePayload = RuntimePayload> {
   id: string;
   /** Parent {@link RuntimeSession.id}. */
   sessionId: string;
@@ -158,7 +208,10 @@ export interface RuntimeRecord<TPayload = unknown> {
  * creation type omits it structurally rather than trusting producers to leave
  * it out (and to leave it consistent across concurrent appenders).
  */
-export type RuntimeRecordInit<TPayload = unknown> = Omit<RuntimeRecord<TPayload>, 'seq'>;
+export type RuntimeRecordInit<TPayload extends RuntimePayload = RuntimePayload> = Omit<
+  RuntimeRecord<TPayload>,
+  'seq'
+>;
 
 /** Speaker roles the replay renderer can rely on for `chat` records. */
 export type ChatRuntimeRole = 'user' | 'assistant' | 'system';

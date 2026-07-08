@@ -165,9 +165,14 @@ stage/learner/kind) and `RuntimeRecord<TPayload>` (ordered facts; the
 store-assigned `seq` is the replay ordering key). Core-kind payload skeletons
 (`chat`, `quizAttempt`) live here; payload internals are app-owned, validated at
 the store boundary via injected validators (`runtime.ts` guards + `validate.ts`).
-A `RuntimeSession` carries the same `dslVersion` stamp as a document and rides the
-same `migrate`-on-read ladder above, so runtime state migrates forward alongside
-the slide contract.
+A `RuntimeSession` carries the same `dslVersion` envelope *field* as a document,
+but rides its **own** version line: `RUNTIME_DSL_VERSION` and a dedicated
+`RUNTIME_DSL_MIGRATIONS` ladder, walked by `migrateRuntime` (not `migrate`). The
+document and runtime serialized shapes evolve independently, so a future
+`Stage`/`Scene` document migration never runs over — or accidentally consumes — a
+runtime envelope, and vice versa. The runner mechanism (contiguous ladder,
+idempotent, forward-compatible, fail-loud) is shared; only the ladder and target
+version differ.
 
 ## Status
 
