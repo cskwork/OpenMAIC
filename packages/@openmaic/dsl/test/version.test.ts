@@ -3,6 +3,7 @@ import {
   DSL_VERSION,
   UNVERSIONED_DSL_VERSION,
   INITIAL_DSL_VERSION,
+  INITIAL_RUNTIME_DSL_VERSION,
   DSL_VERSION_KEY,
   DSL_MIGRATIONS,
   RUNTIME_DSL_VERSION,
@@ -46,17 +47,21 @@ describe('RUNTIME_DSL_MIGRATIONS ladder invariants', () => {
     expect(RUNTIME_DSL_MIGRATIONS.length).toBe(0);
   });
 
-  it('IF non-empty (future), is a contiguous chain ending at RUNTIME_DSL_VERSION', () => {
-    // Guards the invariant the *first real* runtime shape change must satisfy:
-    // a contiguous chain whose last `to` reaches RUNTIME_DSL_VERSION. Vacuously
-    // true while empty; becomes a real check the moment a step is appended.
-    for (let i = 1; i < RUNTIME_DSL_MIGRATIONS.length; i++) {
-      expect(RUNTIME_DSL_MIGRATIONS[i].from).toBe(RUNTIME_DSL_MIGRATIONS[i - 1].to);
-    }
+  it('IF non-empty (future), starts at the pinned initial version and chains to RUNTIME_DSL_VERSION', () => {
+    // Guards the invariants the *first real* runtime shape change must satisfy.
+    // Vacuously true while empty; becomes a real check the moment a step is
+    // appended. The first `from` is pinned to INITIAL_RUNTIME_DSL_VERSION — the
+    // runtime line has no unversioned epoch, so a ladder starting anywhere
+    // earlier (e.g. a copy-pasted 0.0.0 legacy lift) would reintroduce the
+    // lift-arbitrary-unstamped-data hole this model removed.
     if (RUNTIME_DSL_MIGRATIONS.length > 0) {
+      expect(RUNTIME_DSL_MIGRATIONS[0].from).toBe(INITIAL_RUNTIME_DSL_VERSION);
       expect(RUNTIME_DSL_MIGRATIONS[RUNTIME_DSL_MIGRATIONS.length - 1].to).toBe(
         RUNTIME_DSL_VERSION,
       );
+    }
+    for (let i = 1; i < RUNTIME_DSL_MIGRATIONS.length; i++) {
+      expect(RUNTIME_DSL_MIGRATIONS[i].from).toBe(RUNTIME_DSL_MIGRATIONS[i - 1].to);
     }
   });
 });
