@@ -28,6 +28,14 @@ function capRuntimeEvents(project: PBLProjectV2): void {
   }
 }
 
+// The epoch is derived from the same visible runtime ledger that
+// appendRuntimeEvent deduplicates against. If the ring buffer evicts enough
+// history to lower this count, it has also evicted the older pre-reset status
+// event that could otherwise collide in that visible dedup window.
+export function runtimeEventEpoch(project: PBLProjectV2): number {
+  return (project.runtimeEvents ?? []).filter((event) => event.kind === 'project_reset').length;
+}
+
 export function milestoneIdForMicrotask(
   project: PBLProjectV2,
   microtaskId: string | undefined,
@@ -38,13 +46,24 @@ export function milestoneIdForMicrotask(
   )?.id;
 }
 
+export function normalizationRepairEventId(
+  project: PBLProjectV2,
+  entityType: 'project' | 'milestone' | 'microtask' | 'ui_phase',
+  entityId: string,
+  from: string,
+  to: string,
+): string {
+  return `norm:${runtimeEventEpoch(project)}:${entityType}:${entityId}:${from}:${to}`;
+}
+
 export function patchStatusChangedRuntimeEventId(
+  project: PBLProjectV2,
   entityType: Extract<PBLRuntimeEvent, { kind: 'status_changed' }>['entityType'],
   entityId: string,
   from: string,
   to: string,
 ): string {
-  return `patch:${entityType}:${entityId}:${from}:${to}`;
+  return `patch:${runtimeEventEpoch(project)}:${entityType}:${entityId}:${from}:${to}`;
 }
 
 export function appendStatusChangedRuntimeEvent(

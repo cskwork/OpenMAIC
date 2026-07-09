@@ -202,7 +202,13 @@ function appendPatchStatusChangedRuntimeEvent(
 ): PBLRuntimeEvent | undefined {
   return appendStatusChangedRuntimeEvent(project, {
     ...args,
-    id: patchStatusChangedRuntimeEventId(args.entityType, args.entityId, args.from, args.to),
+    id: patchStatusChangedRuntimeEventId(
+      project,
+      args.entityType,
+      args.entityId,
+      args.from,
+      args.to,
+    ),
   });
 }
 

@@ -223,8 +223,8 @@ describe('PBL v2 progress — runtime normalization', () => {
       .map((event) => event.id);
 
     expect(firstIds).toEqual([
-      'norm:milestone:ms-1:locked:active',
-      'norm:microtask:mt-1:todo:in_progress',
+      'norm:0:milestone:ms-1:locked:active',
+      'norm:0:microtask:mt-1:todo:in_progress',
     ]);
     expect(secondIds).toEqual(firstIds);
   });
@@ -763,6 +763,43 @@ describe('PBL v2 progress — resetProjectProgress', () => {
       actorType: 'user',
     });
     expect(firstStatusIndex).toBeGreaterThan(0);
+  });
+
+  it('keeps repeated deterministic status transitions after reset while deduplicating normalization echoes in one epoch', () => {
+    const project = makeProject();
+    startMicrotask(project, 'mt-1');
+    const firstAdvance = advanceMicrotask(project, 'mt-1', 'first pass', {});
+    expect(firstAdvance.ok).toBe(true);
+
+    const reset = resetProjectProgress(project);
+    startMicrotask(reset, 'mt-1');
+    const secondAdvance = advanceMicrotask(reset, 'mt-1', 'second pass', {});
+    expect(secondAdvance.ok).toBe(true);
+
+    const completionEvents = (reset.runtimeEvents ?? []).filter(
+      (event) =>
+        event.kind === 'status_changed' &&
+        event.entityType === 'microtask' &&
+        event.entityId === 'mt-1' &&
+        event.from === 'in_progress' &&
+        event.to === 'completed',
+    );
+    expect(completionEvents).toHaveLength(2);
+    expect(new Set(completionEvents.map((event) => event.id)).size).toBe(2);
+
+    const normalized = makeProject();
+    normalized.milestones[0].status = 'locked';
+    expect(normalizeProjectRuntime(normalized)).toBe(true);
+    normalized.milestones[0].status = 'locked';
+    normalized.milestones[0].microtasks[0].status = 'todo';
+    expect(normalizeProjectRuntime(normalized)).toBe(true);
+
+    const normalizationEvents = (normalized.runtimeEvents ?? []).filter(
+      (event) =>
+        event.kind === 'status_changed' &&
+        (event.id.startsWith('norm:0:milestone:') || event.id.startsWith('norm:0:microtask:')),
+    );
+    expect(normalizationEvents).toHaveLength(2);
   });
 
   it('clears every microtask back to todo and re-locks all but the first milestone', () => {

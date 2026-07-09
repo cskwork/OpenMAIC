@@ -31,6 +31,7 @@ import {
   appendStatusChangedRuntimeEvent,
   milestoneIdForMicrotask,
   mintRuntimeEventId,
+  normalizationRepairEventId,
   patchStatusChangedRuntimeEventId,
 } from './runtime-events';
 
@@ -61,19 +62,6 @@ export function currentMicrotask(
   const mt = ms.microtasks.find((t) => t.status === 'todo' || t.status === 'in_progress');
   if (!mt) return undefined;
   return { milestone: ms, microtask: mt };
-}
-
-// Normalization repairs are deterministic and can run on cloned project copies
-// in parallel. Content-derived ids let appendRuntimeEvent collapse echoes. A
-// genuinely recurring identical repair after reset is suppressed as a duplicate;
-// the project_reset epoch marker delimits that acceptable tradeoff.
-function normalizationRepairEventId(
-  entityType: 'project' | 'milestone' | 'microtask' | 'ui_phase',
-  entityId: string,
-  from: string,
-  to: string,
-): string {
-  return `norm:${entityType}:${entityId}:${from}:${to}`;
 }
 
 /**
@@ -126,7 +114,7 @@ export function normalizeProjectRuntime(project: PBLProjectV2): boolean {
         const from = active.status;
         active.status = 'active';
         appendStatusChangedRuntimeEvent(project, {
-          id: normalizationRepairEventId('milestone', active.id, from, active.status),
+          id: normalizationRepairEventId(project, 'milestone', active.id, from, active.status),
           entityType: 'milestone',
           entityId: active.id,
           from,
@@ -146,7 +134,13 @@ export function normalizeProjectRuntime(project: PBLProjectV2): boolean {
       const from = taskToOpen.status;
       taskToOpen.status = 'in_progress';
       appendStatusChangedRuntimeEvent(project, {
-        id: normalizationRepairEventId('microtask', taskToOpen.id, from, taskToOpen.status),
+        id: normalizationRepairEventId(
+          project,
+          'microtask',
+          taskToOpen.id,
+          from,
+          taskToOpen.status,
+        ),
         entityType: 'microtask',
         entityId: taskToOpen.id,
         from,
@@ -495,6 +489,7 @@ export function advanceMicrotask(
   microtask.status = 'completed';
   appendStatusChangedRuntimeEvent(project, {
     id: patchStatusChangedRuntimeEventId(
+      project,
       'microtask',
       microtask.id,
       microtaskStatusFrom,
@@ -535,7 +530,13 @@ export function advanceMicrotask(
     const nextStatusFrom = next.status;
     next.status = 'in_progress';
     appendStatusChangedRuntimeEvent(project, {
-      id: patchStatusChangedRuntimeEventId('microtask', next.id, nextStatusFrom, next.status),
+      id: patchStatusChangedRuntimeEventId(
+        project,
+        'microtask',
+        next.id,
+        nextStatusFrom,
+        next.status,
+      ),
       entityType: 'microtask',
       entityId: next.id,
       from: nextStatusFrom,
@@ -561,6 +562,7 @@ export function advanceMicrotask(
   milestone.status = 'completed';
   appendStatusChangedRuntimeEvent(project, {
     id: patchStatusChangedRuntimeEventId(
+      project,
       'milestone',
       milestone.id,
       milestoneStatusFrom,
@@ -614,7 +616,13 @@ export function advanceMicrotask(
   const projectStatusFrom = project.status;
   project.status = 'completed';
   appendStatusChangedRuntimeEvent(project, {
-    id: patchStatusChangedRuntimeEventId('project', 'project', projectStatusFrom, project.status),
+    id: patchStatusChangedRuntimeEventId(
+      project,
+      'project',
+      'project',
+      projectStatusFrom,
+      project.status,
+    ),
     entityType: 'project',
     entityId: 'project',
     from: projectStatusFrom,
