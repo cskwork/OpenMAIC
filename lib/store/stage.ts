@@ -15,6 +15,7 @@ import type { SceneOutline } from '@/lib/types/generation';
 import { createLogger } from '@/lib/logger';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { migrateScene } from '@/lib/edit/slide-schema';
+import { emitStageSaved } from '@/lib/store/stage-save-signal';
 
 const log = createLogger('StageStore');
 
@@ -404,6 +405,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
         currentSceneId,
         chats,
       });
+      emitStageSaved(stage.id);
 
       return true;
     } catch (error) {

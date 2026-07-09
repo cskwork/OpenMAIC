@@ -15,6 +15,7 @@ import {
 import { normalizeProjectRuntime } from '@/lib/pbl/v2/operations/progress';
 import { transitionProjectUiPhase } from '@/lib/pbl/v2/operations/runtime-events';
 import { drainProjectRuntime } from '@/lib/pbl/v2/runtime/drain';
+import { onStageSaved } from '@/lib/store/stage-save-signal';
 import { useStageStore } from '@/lib/store/stage';
 import { cn } from '@/lib/utils/cn';
 import { PBLRoleSelection } from './pbl/role-selection';
@@ -53,6 +54,22 @@ export function PBLRenderer({ content, mode: _mode, sceneId }: PBLRendererProps)
     if (!projectConfig || isEmptyLegacyPBLConfig(projectConfig)) return null;
     return upgradeLegacyPBLConfigToProjectV2(projectConfig);
   }, [content.projectV2, projectConfig]);
+  const latestProjectV2Ref = useRef<PBLProjectV2 | null>(null);
+
+  useEffect(() => {
+    latestProjectV2Ref.current = resolvedProjectV2;
+  }, [resolvedProjectV2]);
+
+  useEffect(() => {
+    return onStageSaved((savedStageId) => {
+      const currentStageId = useStageStore.getState().stage?.id;
+      const project = latestProjectV2Ref.current;
+      if (!project || currentStageId !== savedStageId) return;
+      void drainProjectRuntime({ stageId: savedStageId, sceneId, project }).catch((error) => {
+        console.warn(`Failed to drain PBL runtime events for stage ${savedStageId}:`, error);
+      });
+    });
+  }, [sceneId]);
 
   const updateConfig = useCallback(
     (updatedConfig: PBLProjectConfig) => {
@@ -117,7 +134,7 @@ export function PBLRenderer({ content, mode: _mode, sceneId }: PBLRendererProps)
         sceneId={sceneId}
         projectV2={resolvedProjectV2}
         onProjectV2Change={(next) => {
-          const stageId = useStageStore.getState().stage?.id;
+          latestProjectV2Ref.current = next;
           useStageStore.getState().updateScene(sceneId, {
             content: {
               ...content,
@@ -125,11 +142,6 @@ export function PBLRenderer({ content, mode: _mode, sceneId }: PBLRendererProps)
               projectV2: next,
             },
           });
-          if (stageId) {
-            void drainProjectRuntime({ stageId, sceneId, project: next }).catch((error) => {
-              console.warn(`Failed to drain PBL runtime events for stage ${stageId}:`, error);
-            });
-          }
         }}
       />
     );

@@ -29,6 +29,7 @@ import {
   taskEvaluationCanComplete,
 } from '@/lib/pbl/v2/operations/task-completion';
 import { recordEvent } from '@/lib/pbl/v2/operations/engagement';
+import { runtimeEventEpoch } from '@/lib/pbl/v2/operations/runtime-events';
 import type { PBLProjectV2 } from '@/lib/pbl/v2/types';
 
 function makeProject(): PBLProjectV2 {
@@ -763,6 +764,20 @@ describe('PBL v2 progress — resetProjectProgress', () => {
       actorType: 'user',
     });
     expect(firstStatusIndex).toBeGreaterThan(0);
+  });
+
+  it('keeps the reset epoch after the visible project_reset marker is evicted', () => {
+    const firstReset = resetProjectProgress(makeStartedProject());
+    expect(runtimeEventEpoch(firstReset)).toBe(1);
+
+    firstReset.runtimeEvents = firstReset.runtimeEvents?.filter(
+      (event) => event.kind !== 'project_reset',
+    );
+    expect(firstReset.runtimeEvents?.some((event) => event.kind === 'project_reset')).toBe(false);
+    expect(runtimeEventEpoch(firstReset)).toBe(1);
+
+    const secondReset = resetProjectProgress(firstReset);
+    expect(runtimeEventEpoch(secondReset)).toBe(2);
   });
 
   it('keeps repeated deterministic status transitions after reset while deduplicating normalization echoes in one epoch', () => {

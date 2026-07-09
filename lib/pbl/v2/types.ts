@@ -859,6 +859,10 @@ export interface PBLProjectV2 {
    *  for old v2 projects; future runtime-split work can make it required. */
   runtimeEvents?: PBLRuntimeEvent[];
 
+  /** Monotonically incremented by resetProjectProgress, never derived from
+   *  the bounded runtime event ring buffer. */
+  runtimeResetEpoch?: number;
+
   /** Cross-milestone hand-off state. Present after Instructor
    *  completes a milestone's last microtask, until the learner clicks
    *  Continue. */

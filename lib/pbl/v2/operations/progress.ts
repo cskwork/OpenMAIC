@@ -204,6 +204,7 @@ export function resetProjectProgress(project: PBLProjectV2): PBLProjectV2 {
   const reset: PBLProjectV2 = {
     ...project,
     runtimeEvents: project.runtimeEvents ? [...project.runtimeEvents] : undefined,
+    runtimeResetEpoch: (project.runtimeResetEpoch ?? 0) + 1,
     uiPhase: 'hero',
     status: 'active',
     submissions: [],

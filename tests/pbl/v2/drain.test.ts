@@ -591,6 +591,35 @@ describe('drainProjectRuntime', () => {
     warn.mockRestore();
   });
 
+  it('drains runtime and engagement records in global chronological order', async () => {
+    const store = new MemoryRuntimeStore();
+    const kv = new MemoryKVStore();
+    const project = makeProject([
+      runtimeEvent('rt-late', { ts: '2026-05-29T00:00:04.000Z' }),
+      runtimeEvent('rt-early', { ts: '2026-05-29T00:00:01.000Z' }),
+      runtimeEvent('rt-tie', { ts: '2026-05-29T00:00:03.000Z' }),
+    ]);
+    project.engagementEvents.push(
+      engagementEvent('eng-middle', { ts: '2026-05-29T00:00:02.000Z' }),
+      engagementEvent('eng-tie', { ts: '2026-05-29T00:00:03.000Z' }),
+    );
+
+    await drain(project, store, kv);
+
+    expect(store.records.map((record) => record.seq)).toEqual([0, 1, 2, 3, 4]);
+    expect(store.records.map((record) => record.id)).toEqual([
+      'rt-early',
+      'eng-middle',
+      'rt-tie',
+      'eng-tie',
+      'rt-late',
+    ]);
+    await expect(readWatermark(kv)).resolves.toEqual({
+      lastRuntimeEventId: 'rt-late',
+      lastEngagementEventId: 'eng-tie',
+    });
+  });
+
   it('drains runtime and engagement ledgers from a realistic reducer sequence into one browser session', async () => {
     const store = new BrowserRuntimeStore({ indexedDB: new IDBFactory() });
     const kv = new MemoryKVStore();
@@ -643,9 +672,21 @@ describe('drainProjectRuntime', () => {
 
     const runtimeEvents = project.runtimeEvents ?? [];
     const engagementEvents = project.engagementEvents;
-    const expectedEvents = [...runtimeEvents, ...engagementEvents] as Array<
-      PBLRuntimeEvent | PBLEngagementEvent
-    >;
+    const expectedEvents = [
+      ...runtimeEvents.map((event, index) => ({ event, ledger: 'runtime' as const, index })),
+      ...engagementEvents.map((event, index) => ({
+        event,
+        ledger: 'engagement' as const,
+        index,
+      })),
+    ]
+      .sort((a, b) => {
+        const byTimestamp = a.event.ts.localeCompare(b.event.ts);
+        if (byTimestamp !== 0) return byTimestamp;
+        if (a.ledger !== b.ledger) return a.ledger === 'runtime' ? -1 : 1;
+        return a.index - b.index;
+      })
+      .map(({ event }) => event) as Array<PBLRuntimeEvent | PBLEngagementEvent>;
 
     await drain(project, store, kv);
 
@@ -669,10 +710,11 @@ describe('drainProjectRuntime', () => {
       })),
     ).toEqual(expectedEvents.map((event) => ({ kind: event.kind, id: event.id })));
     expect(records.map((record) => record.sceneId)).toEqual(expectedEvents.map(() => SCENE_ID));
-    expect(records.map((record) => record.subAnchor)).toEqual([
-      ...runtimeEvents.map((event) => event.microtaskId ?? event.milestoneId),
-      ...engagementEvents.map((event) => event.microtaskId),
-    ]);
+    expect(records.map((record) => record.subAnchor)).toEqual(
+      expectedEvents.map((event) =>
+        'actorType' in event ? (event.microtaskId ?? event.milestoneId) : event.microtaskId,
+      ),
+    );
     expect(records.map((record) => record.createdAt)).toEqual(
       expectedEvents.map((event) => event.ts),
     );

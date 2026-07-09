@@ -28,12 +28,8 @@ function capRuntimeEvents(project: PBLProjectV2): void {
   }
 }
 
-// The epoch is derived from the same visible runtime ledger that
-// appendRuntimeEvent deduplicates against. If the ring buffer evicts enough
-// history to lower this count, it has also evicted the older pre-reset status
-// event that could otherwise collide in that visible dedup window.
 export function runtimeEventEpoch(project: PBLProjectV2): number {
-  return (project.runtimeEvents ?? []).filter((event) => event.kind === 'project_reset').length;
+  return project.runtimeResetEpoch ?? 0;
 }
 
 export function milestoneIdForMicrotask(

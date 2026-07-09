@@ -25,7 +25,7 @@ export function buildAdvanceProjectPatch(
     readonly projectCompleted: boolean;
     readonly nextMicrotaskId?: string;
     readonly shouldEvaluateTask: boolean;
-    readonly runtimeEventStartIndex?: number;
+    readonly runtimeEventIdsBefore?: ReadonlySet<string>;
   },
 ): PBLAdvanceProjectPatch {
   const milestone = project.milestones.find((m) =>
@@ -45,10 +45,9 @@ export function buildAdvanceProjectPatch(
       event.microtaskId === args.nextMicrotaskId
     );
   });
-  const runtimeEvents =
-    typeof args.runtimeEventStartIndex === 'number'
-      ? project.runtimeEvents?.slice(args.runtimeEventStartIndex)
-      : undefined;
+  const runtimeEvents = args.runtimeEventIdsBefore
+    ? project.runtimeEvents?.filter((event) => !args.runtimeEventIdsBefore?.has(event.id))
+    : undefined;
 
   return {
     kind: 'advance',

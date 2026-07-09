@@ -177,6 +177,35 @@ function subAnchorForEngagement(event: PBLEngagementEvent): string | undefined {
   return event.microtaskId;
 }
 
+type DrainablePBLEvent =
+  | {
+      ledger: 'runtime';
+      event: PBLRuntimeEvent;
+      index: number;
+    }
+  | {
+      ledger: 'engagement';
+      event: PBLEngagementEvent;
+      index: number;
+    };
+
+function orderedDrainEvents(
+  runtimeEvents: readonly PBLRuntimeEvent[],
+  engagementEvents: readonly PBLEngagementEvent[],
+): DrainablePBLEvent[] {
+  return [
+    ...runtimeEvents.map((event, index) => ({ ledger: 'runtime' as const, event, index })),
+    ...engagementEvents.map((event, index) => ({ ledger: 'engagement' as const, event, index })),
+  ].sort((a, b) => {
+    const byTimestamp = a.event.ts.localeCompare(b.event.ts);
+    if (byTimestamp !== 0) return byTimestamp;
+    // Preserve original order inside each ledger; for simultaneous events
+    // across ledgers, runtime facts precede engagement analytics.
+    if (a.ledger !== b.ledger) return a.ledger === 'runtime' ? -1 : 1;
+    return a.index - b.index;
+  });
+}
+
 async function persistWatermark(
   kv: KVStore,
   key: string,
@@ -221,27 +250,28 @@ async function drainProjectRuntimeWork({
   const sessionId = await ensurePBLSession(store, stageId, learnerKey);
 
   try {
-    for (const event of runtimeEvents) {
-      await store.appendRecord({
-        id: event.id,
-        sessionId,
-        sceneId,
-        subAnchor: subAnchorFor(event),
-        createdAt: event.ts,
-        payload: event,
-      });
-      nextWatermark = { ...nextWatermark, lastRuntimeEventId: event.id };
-    }
-    for (const event of engagementEvents) {
-      await store.appendRecord({
-        id: event.id,
-        sessionId,
-        sceneId,
-        subAnchor: subAnchorForEngagement(event),
-        createdAt: event.ts,
-        payload: event,
-      });
-      nextWatermark = { ...nextWatermark, lastEngagementEventId: event.id };
+    for (const item of orderedDrainEvents(runtimeEvents, engagementEvents)) {
+      if (item.ledger === 'runtime') {
+        await store.appendRecord({
+          id: item.event.id,
+          sessionId,
+          sceneId,
+          subAnchor: subAnchorFor(item.event),
+          createdAt: item.event.ts,
+          payload: item.event,
+        });
+        nextWatermark = { ...nextWatermark, lastRuntimeEventId: item.event.id };
+      } else {
+        await store.appendRecord({
+          id: item.event.id,
+          sessionId,
+          sceneId,
+          subAnchor: subAnchorForEngagement(item.event),
+          createdAt: item.event.ts,
+          payload: item.event,
+        });
+        nextWatermark = { ...nextWatermark, lastEngagementEventId: item.event.id };
+      }
     }
   } catch (error) {
     await persistWatermark(kv, key, nextWatermark);
