@@ -14,8 +14,7 @@ import {
 } from '@/lib/pbl/v2/compat';
 import { normalizeProjectRuntime } from '@/lib/pbl/v2/operations/progress';
 import { transitionProjectUiPhase } from '@/lib/pbl/v2/operations/runtime-events';
-import { drainProjectRuntime } from '@/lib/pbl/v2/runtime/drain';
-import { onStageSaved } from '@/lib/store/stage-save-signal';
+import { installPblDrainOnSave } from '@/lib/pbl/v2/runtime/drain-wiring';
 import { useStageStore } from '@/lib/store/stage';
 import { cn } from '@/lib/utils/cn';
 import { PBLRoleSelection } from './pbl/role-selection';
@@ -38,6 +37,10 @@ const IMMERSIVE_EXIT_DURATION_SECONDS = 0.4;
 const IMMERSIVE_LAUNCH_EASE = [0.16, 1, 0.3, 1] as const;
 const IMMERSIVE_EXIT_EASE = [0.4, 0, 0.2, 1] as const;
 
+// The save-drain subscription intentionally outlives any one PBL scene mount:
+// saves carry the persisted project payload, so navigation must not drop drains.
+installPblDrainOnSave();
+
 interface PBLRendererProps {
   readonly content: PBLContent;
   readonly mode: StageMode;
@@ -54,22 +57,6 @@ export function PBLRenderer({ content, mode: _mode, sceneId }: PBLRendererProps)
     if (!projectConfig || isEmptyLegacyPBLConfig(projectConfig)) return null;
     return upgradeLegacyPBLConfigToProjectV2(projectConfig);
   }, [content.projectV2, projectConfig]);
-  const latestProjectV2Ref = useRef<PBLProjectV2 | null>(null);
-
-  useEffect(() => {
-    latestProjectV2Ref.current = resolvedProjectV2;
-  }, [resolvedProjectV2]);
-
-  useEffect(() => {
-    return onStageSaved((savedStageId) => {
-      const currentStageId = useStageStore.getState().stage?.id;
-      const project = latestProjectV2Ref.current;
-      if (!project || currentStageId !== savedStageId) return;
-      void drainProjectRuntime({ stageId: savedStageId, sceneId, project }).catch((error) => {
-        console.warn(`Failed to drain PBL runtime events for stage ${savedStageId}:`, error);
-      });
-    });
-  }, [sceneId]);
 
   const updateConfig = useCallback(
     (updatedConfig: PBLProjectConfig) => {
@@ -134,7 +121,6 @@ export function PBLRenderer({ content, mode: _mode, sceneId }: PBLRendererProps)
         sceneId={sceneId}
         projectV2={resolvedProjectV2}
         onProjectV2Change={(next) => {
-          latestProjectV2Ref.current = next;
           useStageStore.getState().updateScene(sceneId, {
             content: {
               ...content,

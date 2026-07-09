@@ -405,7 +405,12 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
         currentSceneId,
         chats,
       });
-      emitStageSaved(stage.id);
+      const pblScenes = scenes.flatMap((scene) => {
+        const content = scene.content;
+        if (content.type !== 'pbl' || !content.projectV2) return [];
+        return [{ sceneId: scene.id, project: content.projectV2 }];
+      });
+      emitStageSaved({ stageId: stage.id, pblScenes });
 
       return true;
     } catch (error) {
