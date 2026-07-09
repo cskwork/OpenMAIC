@@ -38,6 +38,15 @@ export function milestoneIdForMicrotask(
   )?.id;
 }
 
+export function patchStatusChangedRuntimeEventId(
+  entityType: Extract<PBLRuntimeEvent, { kind: 'status_changed' }>['entityType'],
+  entityId: string,
+  from: string,
+  to: string,
+): string {
+  return `patch:${entityType}:${entityId}:${from}:${to}`;
+}
+
 export function appendStatusChangedRuntimeEvent(
   project: PBLProjectV2,
   args: {

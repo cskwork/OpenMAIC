@@ -10,8 +10,12 @@
 
 import type { PBLAdvanceProjectPatch } from '../api/sse';
 import { capEngagementEvents } from './engagement';
-import type { PBLProjectV2 } from '../types';
-import { appendStatusChangedRuntimeEvent } from './runtime-events';
+import type { PBLProjectV2, PBLRuntimeEvent } from '../types';
+import {
+  appendRuntimeEvent,
+  appendStatusChangedRuntimeEvent,
+  patchStatusChangedRuntimeEventId,
+} from './runtime-events';
 
 export function buildAdvanceProjectPatch(
   project: PBLProjectV2,
@@ -21,6 +25,7 @@ export function buildAdvanceProjectPatch(
     readonly projectCompleted: boolean;
     readonly nextMicrotaskId?: string;
     readonly shouldEvaluateTask: boolean;
+    readonly runtimeEventStartIndex?: number;
   },
 ): PBLAdvanceProjectPatch {
   const milestone = project.milestones.find((m) =>
@@ -40,6 +45,10 @@ export function buildAdvanceProjectPatch(
       event.microtaskId === args.nextMicrotaskId
     );
   });
+  const runtimeEvents =
+    typeof args.runtimeEventStartIndex === 'number'
+      ? project.runtimeEvents?.slice(args.runtimeEventStartIndex)
+      : undefined;
 
   return {
     kind: 'advance',
@@ -51,6 +60,7 @@ export function buildAdvanceProjectPatch(
     nextMicrotask,
     milestone,
     engagementEvents,
+    runtimeEvents: runtimeEvents?.length ? runtimeEvents : undefined,
     shouldEvaluateTask: args.shouldEvaluateTask,
     // SCENARIO ONLY: role-play projects show NO per-stage milestone reflection
     // card (roleplay beats already skip it; the wrapup auto-complete must not
@@ -64,23 +74,38 @@ export function applyAdvanceProjectPatch(
   project: PBLProjectV2,
   patch: PBLAdvanceProjectPatch,
 ): void {
+  // Server-carried runtime events are authoritative: the server observed the
+  // advance operation and preserves ordering with sibling facts such as
+  // handover_staged. Local emissions below are the compatibility fallback for
+  // older patches and use matching deterministic ids so carried echoes collapse.
+  if (patch.runtimeEvents?.length) {
+    for (const event of patch.runtimeEvents) {
+      appendRuntimeEvent(project, event);
+    }
+  }
+
   for (const milestone of project.milestones) {
+    const appliesMilestoneSnapshot = patch.milestone?.id === milestone.id;
+    const milestoneStatusFrom = appliesMilestoneSnapshot ? milestone.status : undefined;
+    const microtaskStatusFrom = appliesMilestoneSnapshot
+      ? new Map(milestone.microtasks.map((task) => [task.id, task.status] as const))
+      : undefined;
+
     if (patch.milestone?.id === milestone.id) {
-      const from = milestone.status;
       Object.assign(milestone, patch.milestone);
-      appendStatusChangedRuntimeEvent(project, {
+      appendPatchStatusChangedRuntimeEvent(project, {
         entityType: 'milestone',
         entityId: milestone.id,
-        from,
+        from: milestoneStatusFrom ?? milestone.status,
         to: milestone.status,
         milestoneId: milestone.id,
       });
     }
     for (const task of milestone.microtasks) {
       if (patch.completedMicrotask?.id === task.id) {
-        const from = task.status;
+        const from = microtaskStatusFrom?.get(task.id) ?? task.status;
         Object.assign(task, patch.completedMicrotask);
-        appendStatusChangedRuntimeEvent(project, {
+        appendPatchStatusChangedRuntimeEvent(project, {
           entityType: 'microtask',
           entityId: task.id,
           from,
@@ -89,9 +114,9 @@ export function applyAdvanceProjectPatch(
           milestoneId: milestone.id,
         });
       } else if (task.id === patch.microtaskId) {
-        const from = task.status;
+        const from = microtaskStatusFrom?.get(task.id) ?? task.status;
         task.status = 'completed';
-        appendStatusChangedRuntimeEvent(project, {
+        appendPatchStatusChangedRuntimeEvent(project, {
           entityType: 'microtask',
           entityId: task.id,
           from,
@@ -102,9 +127,9 @@ export function applyAdvanceProjectPatch(
       }
 
       if (patch.nextMicrotask?.id === task.id) {
-        const from = task.status;
+        const from = microtaskStatusFrom?.get(task.id) ?? task.status;
         Object.assign(task, patch.nextMicrotask);
-        appendStatusChangedRuntimeEvent(project, {
+        appendPatchStatusChangedRuntimeEvent(project, {
           entityType: 'microtask',
           entityId: task.id,
           from,
@@ -113,9 +138,9 @@ export function applyAdvanceProjectPatch(
           milestoneId: milestone.id,
         });
       } else if (task.id === patch.nextMicrotaskId) {
-        const from = task.status;
+        const from = microtaskStatusFrom?.get(task.id) ?? task.status;
         task.status = 'in_progress';
-        appendStatusChangedRuntimeEvent(project, {
+        appendPatchStatusChangedRuntimeEvent(project, {
           entityType: 'microtask',
           entityId: task.id,
           from,
@@ -132,9 +157,9 @@ export function applyAdvanceProjectPatch(
       milestone.microtasks.some((task) => task.status === 'completed') &&
       milestone.microtasks.every((task) => task.status === 'completed' || task.status === 'skipped')
     ) {
-      const from = milestone.status;
+      const from = milestoneStatusFrom ?? milestone.status;
       milestone.status = 'completed';
-      appendStatusChangedRuntimeEvent(project, {
+      appendPatchStatusChangedRuntimeEvent(project, {
         entityType: 'milestone',
         entityId: milestone.id,
         from,
@@ -152,7 +177,7 @@ export function applyAdvanceProjectPatch(
   if (patch.projectCompleted) {
     const from = project.status;
     project.status = 'completed';
-    appendStatusChangedRuntimeEvent(project, {
+    appendPatchStatusChangedRuntimeEvent(project, {
       entityType: 'project',
       entityId: 'project',
       from,
@@ -160,6 +185,25 @@ export function applyAdvanceProjectPatch(
       microtaskId: patch.microtaskId,
     });
   }
+}
+
+function appendPatchStatusChangedRuntimeEvent(
+  project: PBLProjectV2,
+  args: {
+    entityType: Extract<PBLRuntimeEvent, { kind: 'status_changed' }>['entityType'];
+    entityId: string;
+    from: string;
+    to: string;
+    actorType?: PBLRuntimeEvent['actorType'];
+    actorRoleId?: string;
+    microtaskId?: string;
+    milestoneId?: string;
+  },
+): PBLRuntimeEvent | undefined {
+  return appendStatusChangedRuntimeEvent(project, {
+    ...args,
+    id: patchStatusChangedRuntimeEventId(args.entityType, args.entityId, args.from, args.to),
+  });
 }
 
 function appendUniqueEngagementEvents(

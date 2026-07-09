@@ -31,6 +31,7 @@ import {
   appendStatusChangedRuntimeEvent,
   milestoneIdForMicrotask,
   mintRuntimeEventId,
+  patchStatusChangedRuntimeEventId,
 } from './runtime-events';
 
 export const MILESTONE_DIVIDER_PREFIX = '[MILESTONE_DIVIDER]';
@@ -493,6 +494,12 @@ export function advanceMicrotask(
   const microtaskStatusFrom = microtask.status;
   microtask.status = 'completed';
   appendStatusChangedRuntimeEvent(project, {
+    id: patchStatusChangedRuntimeEventId(
+      'microtask',
+      microtask.id,
+      microtaskStatusFrom,
+      microtask.status,
+    ),
     entityType: 'microtask',
     entityId: microtask.id,
     from: microtaskStatusFrom,
@@ -528,6 +535,7 @@ export function advanceMicrotask(
     const nextStatusFrom = next.status;
     next.status = 'in_progress';
     appendStatusChangedRuntimeEvent(project, {
+      id: patchStatusChangedRuntimeEventId('microtask', next.id, nextStatusFrom, next.status),
       entityType: 'microtask',
       entityId: next.id,
       from: nextStatusFrom,
@@ -552,6 +560,12 @@ export function advanceMicrotask(
   const milestoneStatusFrom = milestone.status;
   milestone.status = 'completed';
   appendStatusChangedRuntimeEvent(project, {
+    id: patchStatusChangedRuntimeEventId(
+      'milestone',
+      milestone.id,
+      milestoneStatusFrom,
+      milestone.status,
+    ),
     entityType: 'milestone',
     entityId: milestone.id,
     from: milestoneStatusFrom,
@@ -600,6 +614,7 @@ export function advanceMicrotask(
   const projectStatusFrom = project.status;
   project.status = 'completed';
   appendStatusChangedRuntimeEvent(project, {
+    id: patchStatusChangedRuntimeEventId('project', 'project', projectStatusFrom, project.status),
     entityType: 'project',
     entityId: 'project',
     from: projectStatusFrom,
