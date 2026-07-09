@@ -1,5 +1,13 @@
 /**
- * Client-only PBL runtime-event drainer (#869).
+ * Client-only PBL event drainer (#869).
+ *
+ * Drains both bounded project outboxes, `runtimeEvents` and
+ * `engagementEvents`, into the active PBL runtime session. Each ledger has an
+ * independent device-scoped watermark. If a saved watermark points to an event
+ * that has already fallen out of the in-project ring buffer, the visible
+ * ledger is drained again. This is intentionally at-least-once: downstream
+ * folds must deduplicate by event id instead of assuming RuntimeStore record
+ * ids are unique.
  *
  * Server code must not import this module without injecting its own
  * `RuntimeStore` and `KVStore`: the defaults lazily touch IndexedDB and
@@ -9,7 +17,7 @@ import { BrowserKVStore, type KVStore, type RuntimeStore } from '@openmaic/stora
 
 import { getLearnerKey } from '@/lib/runtime/learner-key';
 import { getRuntimeStore } from '@/lib/runtime/store';
-import type { PBLProjectV2, PBLRuntimeEvent } from '@/lib/pbl/v2/types';
+import type { PBLEngagementEvent, PBLProjectV2, PBLRuntimeEvent } from '@/lib/pbl/v2/types';
 
 const PBL_DRAIN_TIMEOUT_MS = 10_000;
 const WATERMARK_SCOPE = 'device';
@@ -18,6 +26,7 @@ let defaultKv: KVStore | undefined;
 
 interface PBLRuntimeDrainWatermark {
   lastRuntimeEventId?: string;
+  lastEngagementEventId?: string;
 }
 
 export interface DrainProjectRuntimeArgs {
@@ -61,18 +70,26 @@ async function withTimeout(work: Promise<void>, ms: number): Promise<void> {
 
 function normalizeWatermark(value: unknown): PBLRuntimeDrainWatermark {
   if (!value || typeof value !== 'object') return {};
-  const maybe = value as { lastRuntimeEventId?: unknown };
-  return typeof maybe.lastRuntimeEventId === 'string'
-    ? { lastRuntimeEventId: maybe.lastRuntimeEventId }
-    : {};
+  const maybe = value as {
+    lastRuntimeEventId?: unknown;
+    lastEngagementEventId?: unknown;
+  };
+  const watermark: PBLRuntimeDrainWatermark = {};
+  if (typeof maybe.lastRuntimeEventId === 'string') {
+    watermark.lastRuntimeEventId = maybe.lastRuntimeEventId;
+  }
+  if (typeof maybe.lastEngagementEventId === 'string') {
+    watermark.lastEngagementEventId = maybe.lastEngagementEventId;
+  }
+  return watermark;
 }
 
-function undrainedEvents(
-  events: readonly PBLRuntimeEvent[],
-  watermark: PBLRuntimeDrainWatermark,
-): PBLRuntimeEvent[] {
-  if (!watermark.lastRuntimeEventId) return [...events];
-  const drainedIndex = events.findIndex((event) => event.id === watermark.lastRuntimeEventId);
+function undrainedEvents<TEvent extends { id: string }>(
+  events: readonly TEvent[],
+  lastEventId: string | undefined,
+): TEvent[] {
+  if (!lastEventId) return [...events];
+  const drainedIndex = events.findIndex((event) => event.id === lastEventId);
   if (drainedIndex < 0) {
     // The in-project ledger is a bounded outbox, not the archive. If the
     // saved watermark points to an event that has fallen out of the ring buffer
@@ -110,6 +127,10 @@ function subAnchorFor(event: PBLRuntimeEvent): string | undefined {
   return event.microtaskId ?? event.milestoneId;
 }
 
+function subAnchorForEngagement(event: PBLEngagementEvent): string | undefined {
+  return event.microtaskId;
+}
+
 async function persistWatermark(
   kv: KVStore,
   key: string,
@@ -133,10 +154,14 @@ async function drainProjectRuntimeWork({
   const watermark = normalizeWatermark(
     await kv.get<PBLRuntimeDrainWatermark>(key, WATERMARK_SCOPE),
   );
-  const events = undrainedEvents(project.runtimeEvents ?? [], watermark);
+  const runtimeEvents = undrainedEvents(project.runtimeEvents ?? [], watermark.lastRuntimeEventId);
+  const engagementEvents = undrainedEvents(
+    project.engagementEvents ?? [],
+    watermark.lastEngagementEventId,
+  );
   let nextWatermark: PBLRuntimeDrainWatermark = { ...watermark };
 
-  if (events.length === 0) {
+  if (runtimeEvents.length === 0 && engagementEvents.length === 0) {
     await persistWatermark(kv, key, nextWatermark);
     return;
   }
@@ -144,7 +169,7 @@ async function drainProjectRuntimeWork({
   const sessionId = await ensurePBLSession(store, stageId, learnerKey);
 
   try {
-    for (const event of events) {
+    for (const event of runtimeEvents) {
       await store.appendRecord({
         id: event.id,
         sessionId,
@@ -154,6 +179,17 @@ async function drainProjectRuntimeWork({
         payload: event,
       });
       nextWatermark = { ...nextWatermark, lastRuntimeEventId: event.id };
+    }
+    for (const event of engagementEvents) {
+      await store.appendRecord({
+        id: event.id,
+        sessionId,
+        sceneId,
+        subAnchor: subAnchorForEngagement(event),
+        createdAt: event.ts,
+        payload: event,
+      });
+      nextWatermark = { ...nextWatermark, lastEngagementEventId: event.id };
     }
   } catch (error) {
     await persistWatermark(kv, key, nextWatermark);
@@ -172,6 +208,6 @@ export async function drainProjectRuntime(args: DrainProjectRuntimeArgs): Promis
     work.catch(() => {});
     await withTimeout(work, PBL_DRAIN_TIMEOUT_MS);
   } catch (error) {
-    console.warn(`Failed to drain PBL runtime events for stage ${args.stageId}:`, error);
+    console.warn(`Failed to drain PBL events for stage ${args.stageId}:`, error);
   }
 }

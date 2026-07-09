@@ -1,14 +1,32 @@
 import { describe, expect, it, vi } from 'vitest';
+import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import type {
   RuntimePayload,
   RuntimeRecord,
   RuntimeRecordInit,
   RuntimeSession,
 } from '@openmaic/dsl';
-import type { KVScope, KVStore, RuntimeSessionInit, RuntimeStore } from '@openmaic/storage';
+import {
+  BrowserRuntimeStore,
+  type KVScope,
+  type KVStore,
+  type RuntimeSessionInit,
+  type RuntimeStore,
+} from '@openmaic/storage';
 
+import { applyInstructorEvent } from '@/components/scene-renderers/pbl/v2/apply-instructor-event';
+import {
+  applyAdvanceProjectPatch,
+  buildAdvanceProjectPatch,
+} from '@/lib/pbl/v2/operations/advance-patch';
+import { advanceMicrotask, startMicrotask } from '@/lib/pbl/v2/operations/progress';
+import { addSubmission } from '@/lib/pbl/v2/operations/submission';
 import { drainProjectRuntime } from '@/lib/pbl/v2/runtime/drain';
-import type { PBLProjectV2, PBLRuntimeEvent } from '@/lib/pbl/v2/types';
+import type { PBLEngagementEvent, PBLProjectV2, PBLRuntimeEvent } from '@/lib/pbl/v2/types';
+
+if (!('IDBKeyRange' in globalThis)) {
+  Object.defineProperty(globalThis, 'IDBKeyRange', { value: IDBKeyRange, configurable: true });
+}
 
 const STAGE_ID = 'stage-1';
 const SCENE_ID = 'scene-1';
@@ -16,6 +34,7 @@ const LEARNER_KEY = 'anon:test-device';
 
 interface PBLDrainWatermark {
   lastRuntimeEventId?: string;
+  lastEngagementEventId?: string;
 }
 
 function watermarkKey(stageId = STAGE_ID): string {
@@ -117,6 +136,21 @@ function runtimeEvent(id: string, overrides: Partial<PBLRuntimeEvent> = {}): PBL
   } as PBLRuntimeEvent;
 }
 
+function engagementEvent(
+  id: string,
+  overrides: Partial<PBLEngagementEvent> = {},
+): PBLEngagementEvent {
+  return {
+    id,
+    kind: 'learner_turn',
+    microtaskId: 'mt-1',
+    milestoneId: 'ms-1',
+    ts: `2026-05-29T00:01:0${id.slice(-1)}.000Z`,
+    payload: { chars: 12 },
+    ...overrides,
+  };
+}
+
 function makeProject(runtimeEvents: PBLRuntimeEvent[]): PBLProjectV2 {
   return {
     uiPhase: 'workspace',
@@ -142,6 +176,14 @@ function makeProject(runtimeEvents: PBLRuntimeEvent[]): PBLProjectV2 {
             assignee: 'user',
             hints: [],
             order: 0,
+          },
+          {
+            id: 'mt-2',
+            title: 'Task 2',
+            status: 'todo',
+            assignee: 'user',
+            hints: [],
+            order: 1,
           },
         ],
       },
@@ -267,6 +309,7 @@ describe('drainProjectRuntime', () => {
     await expect(drain(project, store, kv)).resolves.toBeUndefined();
     expect(store.records.map((record) => record.id)).toEqual(['evt-1', 'evt-2', 'evt-3']);
     await expect(readWatermark(kv)).resolves.toEqual({ lastRuntimeEventId: 'evt-3' });
+    warn.mockRestore();
   });
 
   it('redrains the whole visible ledger when the watermark event id is no longer present', async () => {
@@ -280,5 +323,145 @@ describe('drainProjectRuntime', () => {
 
     expect(store.records.map((record) => record.id)).toEqual(['evt-1', 'evt-2', 'evt-1', 'evt-2']);
     await expect(readWatermark(kv)).resolves.toEqual({ lastRuntimeEventId: 'evt-2' });
+  });
+
+  it('redrains the whole visible engagement ledger when its watermark event id is no longer present', async () => {
+    const store = new MemoryRuntimeStore();
+    const kv = new MemoryKVStore();
+    const project = makeProject([runtimeEvent('evt-1')]);
+    project.engagementEvents.push(engagementEvent('eng-1'), engagementEvent('eng-2'));
+    await drain(project, store, kv);
+    await kv.set<PBLDrainWatermark>(
+      watermarkKey(),
+      { lastRuntimeEventId: 'evt-1', lastEngagementEventId: 'evicted' },
+      'device',
+    );
+
+    await drain(project, store, kv);
+
+    expect(store.records.map((record) => record.id)).toEqual([
+      'evt-1',
+      'eng-1',
+      'eng-2',
+      'eng-1',
+      'eng-2',
+    ]);
+    await expect(readWatermark(kv)).resolves.toEqual({
+      lastRuntimeEventId: 'evt-1',
+      lastEngagementEventId: 'eng-2',
+    });
+  });
+
+  it('persists runtime progress when engagement draining fails and resumes engagement later', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const store = new MemoryRuntimeStore();
+    store.failOnceOnRecord('eng-1');
+    const kv = new MemoryKVStore();
+    const project = makeProject([runtimeEvent('evt-1')]);
+    project.engagementEvents.push(engagementEvent('eng-1'), engagementEvent('eng-2'));
+
+    await expect(drain(project, store, kv)).resolves.toBeUndefined();
+    expect(store.records.map((record) => record.id)).toEqual(['evt-1']);
+    await expect(readWatermark(kv)).resolves.toEqual({ lastRuntimeEventId: 'evt-1' });
+    expect(warn).toHaveBeenCalledOnce();
+
+    await expect(drain(project, store, kv)).resolves.toBeUndefined();
+    expect(store.records.map((record) => record.id)).toEqual(['evt-1', 'eng-1', 'eng-2']);
+    await expect(readWatermark(kv)).resolves.toEqual({
+      lastRuntimeEventId: 'evt-1',
+      lastEngagementEventId: 'eng-2',
+    });
+    warn.mockRestore();
+  });
+
+  it('drains runtime and engagement ledgers from a realistic reducer sequence into one browser session', async () => {
+    const store = new BrowserRuntimeStore({ indexedDB: new IDBFactory() });
+    const kv = new MemoryKVStore();
+    let project = makeProject([]);
+    let draft = '';
+
+    startMicrotask(project, 'mt-1');
+    project = applyInstructorEvent(
+      {
+        type: 'project_patch',
+        patch: {
+          kind: 'message',
+          message: {
+            id: 'msg-instructor-1',
+            agentId: 'role-i',
+            roleType: 'instructor',
+            content: 'Start by sketching the loop invariant.',
+            ts: '2026-05-29T00:00:01.000Z',
+            microtaskId: 'mt-1',
+          },
+        },
+      },
+      project,
+      (fn) => {
+        draft = fn(draft);
+      },
+    );
+    addSubmission(project, {
+      microtaskId: 'mt-1',
+      milestoneId: 'ms-1',
+      kind: 'text',
+      content: 'The invariant is preserved after each iteration.',
+    });
+
+    const serverProject = structuredClone(project) as PBLProjectV2;
+    const advance = advanceMicrotask(serverProject, 'mt-1', 'learner completed the draft', {
+      problems: '',
+      resolution: 'Clear explanation',
+      performance: 'ready for the next task',
+    });
+    expect(advance.ok).toBe(true);
+    const patch = buildAdvanceProjectPatch(serverProject, {
+      microtaskId: 'mt-1',
+      milestoneCompleted: advance.ok ? advance.milestoneCompleted : false,
+      projectCompleted: advance.ok ? advance.projectCompleted : false,
+      nextMicrotaskId: advance.ok ? advance.nextMicrotaskId : undefined,
+      shouldEvaluateTask: false,
+    });
+    applyAdvanceProjectPatch(project, patch);
+
+    const runtimeEvents = project.runtimeEvents ?? [];
+    const engagementEvents = project.engagementEvents;
+    const expectedEvents = [...runtimeEvents, ...engagementEvents] as Array<
+      PBLRuntimeEvent | PBLEngagementEvent
+    >;
+
+    await drain(project, store, kv);
+
+    const sessions = await store.listSessions(STAGE_ID, LEARNER_KEY);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({
+      kind: 'pbl',
+      stageId: STAGE_ID,
+      learnerKey: LEARNER_KEY,
+      status: 'active',
+    });
+
+    const records = await store.listRecords(sessions[0]!.id);
+    expect(records.map((record) => record.seq)).toEqual(expectedEvents.map((_, index) => index));
+    expect(records.map((record) => record.id)).toEqual(expectedEvents.map((event) => event.id));
+    expect(records.map((record) => record.payload)).toEqual(expectedEvents);
+    expect(
+      records.map((record) => ({
+        kind: (record.payload as PBLRuntimeEvent | PBLEngagementEvent).kind,
+        id: (record.payload as PBLRuntimeEvent | PBLEngagementEvent).id,
+      })),
+    ).toEqual(expectedEvents.map((event) => ({ kind: event.kind, id: event.id })));
+    expect(records.map((record) => record.sceneId)).toEqual(expectedEvents.map(() => SCENE_ID));
+    expect(records.map((record) => record.subAnchor)).toEqual([
+      ...runtimeEvents.map((event) => event.microtaskId ?? event.milestoneId),
+      ...engagementEvents.map((event) => event.microtaskId),
+    ]);
+    expect(records.map((record) => record.createdAt)).toEqual(
+      expectedEvents.map((event) => event.ts),
+    );
+    await expect(readWatermark(kv)).resolves.toEqual({
+      lastRuntimeEventId: runtimeEvents.at(-1)?.id,
+      lastEngagementEventId: engagementEvents.at(-1)?.id,
+    });
   });
 });
