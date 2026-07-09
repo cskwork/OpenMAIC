@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrowserKVStore } from '@openmaic/storage';
 
 import { getLearnerKey, LEARNER_KEY_KV_KEY } from '@/lib/runtime/learner-key';
@@ -70,5 +70,42 @@ describe('getLearnerKey', () => {
     } as Storage;
 
     await expect(getLearnerKey(new BrowserKVStore({ storage }))).resolves.toBe(winner);
+  });
+});
+
+describe('getLearnerKey cross-tab locking', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('mints inside a Web Lock when navigator.locks is available', async () => {
+    // A serializing fake: grants run strictly one at a time, like the real
+    // Web Locks API does for a single lock name.
+    const requestedNames: string[] = [];
+    let chain: Promise<unknown> = Promise.resolve();
+    const locks = {
+      request: (name: string, cb: () => Promise<unknown>) => {
+        requestedNames.push(name);
+        const granted = chain.then(() => cb());
+        chain = granted.catch(() => undefined);
+        return granted;
+      },
+    };
+    vi.stubGlobal('navigator', { locks });
+
+    const kv = new BrowserKVStore({ storage: memoryStorage() });
+    const keys = await Promise.all([getLearnerKey(kv), getLearnerKey(kv), getLearnerKey(kv)]);
+    expect(new Set(keys).size).toBe(1);
+    // every miss went through the lock, under one shared name
+    expect(requestedNames.length).toBe(3);
+    expect(new Set(requestedNames).size).toBe(1);
+  });
+
+  it('falls back to read-after-write when navigator.locks is unavailable', async () => {
+    vi.stubGlobal('navigator', {}); // e.g. an old browser: no Web Locks
+    const kv = new BrowserKVStore({ storage: memoryStorage() });
+    const key = await getLearnerKey(kv);
+    expect(key).toMatch(/^anon:[0-9a-f-]{36}$/);
+    await expect(getLearnerKey(kv)).resolves.toBe(key);
   });
 });
