@@ -62,6 +62,19 @@ export function currentMicrotask(
   return { milestone: ms, microtask: mt };
 }
 
+// Normalization repairs are deterministic and can run on cloned project copies
+// in parallel. Content-derived ids let appendRuntimeEvent collapse echoes. A
+// genuinely recurring identical repair after reset is suppressed as a duplicate;
+// the project_reset epoch marker delimits that acceptable tradeoff.
+function normalizationRepairEventId(
+  entityType: 'project' | 'milestone' | 'microtask' | 'ui_phase',
+  entityId: string,
+  from: string,
+  to: string,
+): string {
+  return `norm:${entityType}:${entityId}:${from}:${to}`;
+}
+
 /**
  * Normalize runtime-only state that the UI and Instructor API both
  * require after a project is generated or reloaded. Planner tools
@@ -112,6 +125,7 @@ export function normalizeProjectRuntime(project: PBLProjectV2): boolean {
         const from = active.status;
         active.status = 'active';
         appendStatusChangedRuntimeEvent(project, {
+          id: normalizationRepairEventId('milestone', active.id, from, active.status),
           entityType: 'milestone',
           entityId: active.id,
           from,
@@ -131,6 +145,7 @@ export function normalizeProjectRuntime(project: PBLProjectV2): boolean {
       const from = taskToOpen.status;
       taskToOpen.status = 'in_progress';
       appendStatusChangedRuntimeEvent(project, {
+        id: normalizationRepairEventId('microtask', taskToOpen.id, from, taskToOpen.status),
         entityType: 'microtask',
         entityId: taskToOpen.id,
         from,
@@ -216,6 +231,12 @@ export function resetProjectProgress(project: PBLProjectV2): PBLProjectV2 {
     })),
     updatedAt: new Date().toISOString(),
   };
+  appendRuntimeEvent(reset, {
+    id: mintRuntimeEventId(),
+    kind: 'project_reset',
+    actorType: 'user',
+    ts: reset.updatedAt,
+  });
   appendStatusChangedRuntimeEvent(reset, {
     actorType: 'user',
     entityType: 'ui_phase',

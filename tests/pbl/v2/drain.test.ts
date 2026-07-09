@@ -7,6 +7,7 @@ import type {
   RuntimeSession,
 } from '@openmaic/dsl';
 import {
+  BrowserKVStore,
   BrowserRuntimeStore,
   type KVScope,
   type KVStore,
@@ -21,7 +22,7 @@ import {
 } from '@/lib/pbl/v2/operations/advance-patch';
 import { advanceMicrotask, startMicrotask } from '@/lib/pbl/v2/operations/progress';
 import { addSubmission } from '@/lib/pbl/v2/operations/submission';
-import { drainProjectRuntime } from '@/lib/pbl/v2/runtime/drain';
+import { clearStageDrainWatermarks, drainProjectRuntime } from '@/lib/pbl/v2/runtime/drain';
 import type { PBLEngagementEvent, PBLProjectV2, PBLRuntimeEvent } from '@/lib/pbl/v2/types';
 
 if (!('IDBKeyRange' in globalThis)) {
@@ -37,8 +38,26 @@ interface PBLDrainWatermark {
   lastEngagementEventId?: string;
 }
 
-function watermarkKey(stageId = STAGE_ID): string {
-  return `runtime.pblDrain.${stageId}`;
+function watermarkKey(stageId = STAGE_ID, sceneId = SCENE_ID, learnerKey = LEARNER_KEY): string {
+  return `runtime.pblDrain.${stageId}.${sceneId}.${learnerKey}`;
+}
+
+function deterministicPBLSessionId(stageId = STAGE_ID, learnerKey = LEARNER_KEY): string {
+  return `pbl-${stageId}-${learnerKey}`;
+}
+
+function memoryStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    getItem: (key: string) => values.get(key) ?? null,
+    key: (index: number) => [...values.keys()][index] ?? null,
+    removeItem: (key: string) => void values.delete(key),
+    setItem: (key: string, value: string) => void values.set(key, String(value)),
+  } as Storage;
 }
 
 class MemoryKVStore implements KVStore {
@@ -122,6 +141,27 @@ class MemoryRuntimeStore implements RuntimeStore {
   async deleteLearnerRuntime(): Promise<void> {}
 
   async deleteStageRuntime(): Promise<void> {}
+}
+
+class AlreadyExistsRaceStore extends MemoryRuntimeStore {
+  private listAttempts = 0;
+
+  constructor(private readonly existing: RuntimeSession) {
+    super();
+    this.sessions.push(existing);
+  }
+
+  async listSessions(stageId: string, learnerKey: string): Promise<RuntimeSession[]> {
+    this.listAttempts += 1;
+    if (this.listAttempts === 1) return [];
+    return super.listSessions(stageId, learnerKey);
+  }
+
+  async createSession(): Promise<RuntimeSession> {
+    throw new Error(
+      `@openmaic/storage: session ${JSON.stringify(this.existing.id)} already exists`,
+    );
+  }
 }
 
 function runtimeEvent(id: string, overrides: Partial<PBLRuntimeEvent> = {}): PBLRuntimeEvent {
@@ -242,6 +282,7 @@ describe('drainProjectRuntime', () => {
 
     expect(store.sessions).toHaveLength(1);
     expect(store.sessions[0]).toMatchObject({
+      id: deterministicPBLSessionId(),
       kind: 'pbl',
       stageId: STAGE_ID,
       learnerKey: LEARNER_KEY,
@@ -262,6 +303,182 @@ describe('drainProjectRuntime', () => {
     );
     expect(store.records.map((record) => record.payload)).toEqual(events);
     await expect(readWatermark(kv)).resolves.toEqual({ lastRuntimeEventId: 'evt-3' });
+  });
+
+  it('keeps independent watermarks for two PBL scenes on the same stage', async () => {
+    const store = new MemoryRuntimeStore();
+    const kv = new MemoryKVStore();
+    const sceneA = makeProject([runtimeEvent('scene-a-1')]);
+    const sceneB = makeProject([runtimeEvent('scene-b-1')]);
+
+    await drainProjectRuntime({
+      stageId: STAGE_ID,
+      sceneId: 'scene-a',
+      project: sceneA,
+      store,
+      kv,
+      learnerKey: LEARNER_KEY,
+    });
+    await drainProjectRuntime({
+      stageId: STAGE_ID,
+      sceneId: 'scene-b',
+      project: sceneB,
+      store,
+      kv,
+      learnerKey: LEARNER_KEY,
+    });
+    await drainProjectRuntime({
+      stageId: STAGE_ID,
+      sceneId: 'scene-a',
+      project: sceneA,
+      store,
+      kv,
+      learnerKey: LEARNER_KEY,
+    });
+
+    expect(store.records.map((record) => record.id)).toEqual(['scene-a-1', 'scene-b-1']);
+    await expect(
+      kv.get<PBLDrainWatermark>(watermarkKey(STAGE_ID, 'scene-a', LEARNER_KEY), 'device'),
+    ).resolves.toEqual({ lastRuntimeEventId: 'scene-a-1' });
+    await expect(
+      kv.get<PBLDrainWatermark>(watermarkKey(STAGE_ID, 'scene-b', LEARNER_KEY), 'device'),
+    ).resolves.toEqual({ lastRuntimeEventId: 'scene-b-1' });
+  });
+
+  it('keeps independent watermarks for two learners on the same stage and scene', async () => {
+    const store = new MemoryRuntimeStore();
+    const kv = new MemoryKVStore();
+    const learnerA = 'anon:learner-a';
+    const learnerB = 'anon:learner-b';
+    const projectA = makeProject([runtimeEvent('learner-a-1')]);
+    const projectB = makeProject([runtimeEvent('learner-b-1')]);
+
+    await drainProjectRuntime({
+      stageId: STAGE_ID,
+      sceneId: SCENE_ID,
+      project: projectA,
+      store,
+      kv,
+      learnerKey: learnerA,
+    });
+    await drainProjectRuntime({
+      stageId: STAGE_ID,
+      sceneId: SCENE_ID,
+      project: projectB,
+      store,
+      kv,
+      learnerKey: learnerB,
+    });
+    await drainProjectRuntime({
+      stageId: STAGE_ID,
+      sceneId: SCENE_ID,
+      project: projectA,
+      store,
+      kv,
+      learnerKey: learnerA,
+    });
+
+    expect(store.records.map((record) => record.id)).toEqual(['learner-a-1', 'learner-b-1']);
+    await expect(
+      kv.get<PBLDrainWatermark>(watermarkKey(STAGE_ID, SCENE_ID, learnerA), 'device'),
+    ).resolves.toEqual({ lastRuntimeEventId: 'learner-a-1' });
+    await expect(
+      kv.get<PBLDrainWatermark>(watermarkKey(STAGE_ID, SCENE_ID, learnerB), 'device'),
+    ).resolves.toEqual({ lastRuntimeEventId: 'learner-b-1' });
+  });
+
+  it('shares one deterministic pbl session across concurrent first drains', async () => {
+    const store = new MemoryRuntimeStore();
+    const kv = new MemoryKVStore();
+    const project = makeProject([runtimeEvent('evt-1')]);
+
+    await Promise.all([drain(project, store, kv), drain(project, store, kv)]);
+
+    expect(store.sessions).toHaveLength(1);
+    expect(store.sessions[0]?.id).toBe(deterministicPBLSessionId());
+    expect(new Set(store.records.map((record) => record.sessionId))).toEqual(
+      new Set([deterministicPBLSessionId()]),
+    );
+  });
+
+  it('uses the listed pbl session when deterministic create loses an already-exists race', async () => {
+    const existing: RuntimeSession = {
+      id: deterministicPBLSessionId(),
+      kind: 'pbl',
+      stageId: STAGE_ID,
+      learnerKey: LEARNER_KEY,
+      status: 'active',
+      createdAt: '2026-05-29T00:00:00.000Z',
+      updatedAt: '2026-05-29T00:00:00.000Z',
+      runtimeDslVersion: 'test',
+    };
+    const store = new AlreadyExistsRaceStore(existing);
+    const kv = new MemoryKVStore();
+    const project = makeProject([runtimeEvent('evt-1')]);
+
+    await drain(project, store, kv);
+
+    expect(store.sessions).toHaveLength(1);
+    expect(store.records.map((record) => record.sessionId)).toEqual([existing.id]);
+    expect(store.records.map((record) => record.id)).toEqual(['evt-1']);
+  });
+
+  it('redrains and repairs the watermark when BrowserKVStore cannot parse the raw value', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const store = new MemoryRuntimeStore();
+    const storage = memoryStorage();
+    const kv = new BrowserKVStore({ storage });
+    const project = makeProject([runtimeEvent('evt-1')]);
+    const key = watermarkKey();
+    storage.setItem(`maic:device:${key}`, '{invalid json');
+
+    await drain(project, store, kv);
+
+    expect(store.records.map((record) => record.id)).toEqual(['evt-1']);
+    const raw = storage.getItem(`maic:device:${key}`);
+    expect(raw).not.toBeNull();
+    expect(JSON.parse(raw!)).toEqual({ lastRuntimeEventId: 'evt-1' });
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('clears only device watermarks for the requested stage', async () => {
+    const kv = new MemoryKVStore();
+    await kv.set<PBLDrainWatermark>(
+      watermarkKey('stage-a', 'scene-1', 'learner-1'),
+      { lastRuntimeEventId: 'a1' },
+      'device',
+    );
+    await kv.set<PBLDrainWatermark>(
+      watermarkKey('stage-a', 'scene-2', 'learner-2'),
+      { lastRuntimeEventId: 'a2' },
+      'device',
+    );
+    await kv.set<PBLDrainWatermark>(
+      watermarkKey('stage-b', 'scene-1', 'learner-1'),
+      { lastRuntimeEventId: 'b1' },
+      'device',
+    );
+    await kv.set<PBLDrainWatermark>(
+      watermarkKey('stage-a', 'scene-1', 'learner-1'),
+      { lastRuntimeEventId: 'account-a1' },
+      'account',
+    );
+
+    await clearStageDrainWatermarks('stage-a', kv);
+
+    await expect(
+      kv.get<PBLDrainWatermark>(watermarkKey('stage-a', 'scene-1', 'learner-1'), 'device'),
+    ).resolves.toBeNull();
+    await expect(
+      kv.get<PBLDrainWatermark>(watermarkKey('stage-a', 'scene-2', 'learner-2'), 'device'),
+    ).resolves.toBeNull();
+    await expect(
+      kv.get<PBLDrainWatermark>(watermarkKey('stage-b', 'scene-1', 'learner-1'), 'device'),
+    ).resolves.toEqual({ lastRuntimeEventId: 'b1' });
+    await expect(
+      kv.get<PBLDrainWatermark>(watermarkKey('stage-a', 'scene-1', 'learner-1'), 'account'),
+    ).resolves.toEqual({ lastRuntimeEventId: 'account-a1' });
   });
 
   it('does not append anything on a second drain when no runtime events were added', async () => {

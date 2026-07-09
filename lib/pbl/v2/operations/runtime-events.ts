@@ -49,11 +49,12 @@ export function appendStatusChangedRuntimeEvent(
     actorRoleId?: string;
     microtaskId?: string;
     milestoneId?: string;
+    id?: string;
   },
 ): PBLRuntimeEvent | undefined {
   if (args.from === args.to) return undefined;
   return appendRuntimeEvent(project, {
-    id: mintRuntimeEventId(),
+    id: args.id ?? mintRuntimeEventId(),
     kind: 'status_changed',
     actorType: args.actorType ?? 'system',
     actorRoleId: args.actorRoleId,

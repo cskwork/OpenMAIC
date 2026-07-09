@@ -207,6 +207,28 @@ describe('PBL v2 progress — runtime normalization', () => {
     expect(p.milestones[0].microtasks[0].status).toBe('in_progress');
   });
 
+  it('emits deterministic repair ids for the same normalization transition on clones', () => {
+    const first = makeProject();
+    first.milestones[0].status = 'locked';
+    const second = structuredClone(first) as PBLProjectV2;
+
+    expect(normalizeProjectRuntime(first)).toBe(true);
+    expect(normalizeProjectRuntime(second)).toBe(true);
+
+    const firstIds = (first.runtimeEvents ?? [])
+      .filter((event) => event.kind === 'status_changed')
+      .map((event) => event.id);
+    const secondIds = (second.runtimeEvents ?? [])
+      .filter((event) => event.kind === 'status_changed')
+      .map((event) => event.id);
+
+    expect(firstIds).toEqual([
+      'norm:milestone:ms-1:locked:active',
+      'norm:microtask:mt-1:todo:in_progress',
+    ]);
+    expect(secondIds).toEqual(firstIds);
+  });
+
   it('does not open the next milestone while a handover is waiting for Continue', () => {
     const p = makeProject();
     p.milestones[0].status = 'completed';
@@ -729,6 +751,18 @@ describe('PBL v2 progress — resetProjectProgress', () => {
     expect(reset.engagementEvents).toEqual([]);
     expect(reset.pendingHandover).toBeUndefined();
     expect(hasStartedProject(reset)).toBe(false);
+  });
+
+  it('emits project_reset before the reset status events', () => {
+    const reset = resetProjectProgress(makeStartedProject());
+    const events = reset.runtimeEvents ?? [];
+    const firstStatusIndex = events.findIndex((event) => event.kind === 'status_changed');
+
+    expect(events[0]).toMatchObject({
+      kind: 'project_reset',
+      actorType: 'user',
+    });
+    expect(firstStatusIndex).toBeGreaterThan(0);
   });
 
   it('clears every microtask back to todo and re-locks all but the first milestone', () => {

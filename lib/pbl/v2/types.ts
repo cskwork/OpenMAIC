@@ -462,6 +462,9 @@ export interface PBLRuntimeEventBase {
  *  product does not execute arbitrary agent tools yet; these event variants
  *  reserve a stable JSON shape so future tool execution does not get encoded
  *  as chat text or ad-hoc message fields. */
+/** Fold baseline contract: folds initialize project status `active` and
+ *  uiPhase `hero` from design-time defaults. Generation-time packaging
+ *  deliberately emits no runtime events. */
 export type PBLRuntimeEvent =
   | (PBLRuntimeEventBase & {
       kind: 'message_created';
@@ -498,6 +501,12 @@ export type PBLRuntimeEvent =
       entityId: string;
       from: string;
       to: string;
+    })
+  /** Epoch marker emitted before reset status events. Folds MUST treat it as
+   *  an epoch boundary: accumulated learner state from events before it is
+   *  cleared. */
+  | (PBLRuntimeEventBase & {
+      kind: 'project_reset';
     })
   | (PBLRuntimeEventBase & {
       kind: 'handover_staged';

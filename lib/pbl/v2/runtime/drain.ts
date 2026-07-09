@@ -3,11 +3,17 @@
  *
  * Drains both bounded project outboxes, `runtimeEvents` and
  * `engagementEvents`, into the active PBL runtime session. Each ledger has an
- * independent device-scoped watermark. If a saved watermark points to an event
- * that has already fallen out of the in-project ring buffer, the visible
- * ledger is drained again. This is intentionally at-least-once: downstream
- * folds must deduplicate by event id instead of assuming RuntimeStore record
- * ids are unique.
+ * independent device-scoped watermark per `(stageId, sceneId, learnerKey)`.
+ * If a saved watermark points to an event that has already fallen out of the
+ * in-project ring buffer, the visible ledger is drained again. This is
+ * intentionally at-least-once: downstream folds must deduplicate by event id
+ * instead of assuming RuntimeStore record ids are unique.
+ *
+ * The project outboxes are bounded rings (500 events). If more than 500
+ * runtime or engagement events are appended between drains, the evicted gap is
+ * unrecoverable from this outbox. That latent-loss window is acceptable during
+ * dual-write because `projectV2` remains the source of truth; the read flip
+ * will backfill runtime state from a `projectV2` snapshot.
  *
  * Server code must not import this module without injecting its own
  * `RuntimeStore` and `KVStore`: the defaults lazily touch IndexedDB and
@@ -23,6 +29,7 @@ const PBL_DRAIN_TIMEOUT_MS = 10_000;
 const WATERMARK_SCOPE = 'device';
 
 let defaultKv: KVStore | undefined;
+const inFlightPblSessions = new Map<string, Promise<string>>();
 
 interface PBLRuntimeDrainWatermark {
   lastRuntimeEventId?: string;
@@ -42,15 +49,12 @@ function getDefaultKv(): KVStore {
   return (defaultKv ??= new BrowserKVStore());
 }
 
-function watermarkKey(stageId: string): string {
-  return `runtime.pblDrain.${stageId}`;
+function watermarkKey(stageId: string, sceneId: string, learnerKey: string): string {
+  return `runtime.pblDrain.${stageId}.${sceneId}.${learnerKey}`;
 }
 
-function mintSessionId(): string {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    return crypto.randomUUID();
-  }
-  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+function deterministicPBLSessionId(stageId: string, learnerKey: string): string {
+  return `pbl-${stageId}-${learnerKey}`;
 }
 
 /** Reject after `ms`, clearing the timer once the raced promise settles. */
@@ -84,6 +88,18 @@ function normalizeWatermark(value: unknown): PBLRuntimeDrainWatermark {
   return watermark;
 }
 
+async function readWatermark(kv: KVStore, key: string): Promise<PBLRuntimeDrainWatermark> {
+  try {
+    return normalizeWatermark(await kv.get<PBLRuntimeDrainWatermark>(key, WATERMARK_SCOPE));
+  } catch (error) {
+    console.warn(
+      `Ignoring unreadable PBL drain watermark ${key}; redraining visible events:`,
+      error,
+    );
+    return {};
+  }
+}
+
 function undrainedEvents<TEvent extends { id: string }>(
   events: readonly TEvent[],
   lastEventId: string | undefined,
@@ -106,21 +122,51 @@ async function ensurePBLSession(
   stageId: string,
   learnerKey: string,
 ): Promise<string> {
+  const inFlightKey = `${stageId}:${learnerKey}`;
+  const inFlight = inFlightPblSessions.get(inFlightKey);
+  if (inFlight) return inFlight;
+
+  const sessionPromise = ensurePBLSessionUnmemoized(store, stageId, learnerKey);
+  inFlightPblSessions.set(inFlightKey, sessionPromise);
+  try {
+    return await sessionPromise;
+  } finally {
+    inFlightPblSessions.delete(inFlightKey);
+  }
+}
+
+async function ensurePBLSessionUnmemoized(
+  store: RuntimeStore,
+  stageId: string,
+  learnerKey: string,
+): Promise<string> {
   const sessions = await store.listSessions(stageId, learnerKey);
   const active = sessions.find((session) => session.kind === 'pbl' && session.status === 'active');
   if (active) return active.id;
 
   const now = new Date().toISOString();
-  const created = await store.createSession({
-    id: mintSessionId(),
-    kind: 'pbl',
-    stageId,
-    learnerKey,
-    status: 'active',
-    createdAt: now,
-    updatedAt: now,
-  });
-  return created.id;
+  try {
+    const created = await store.createSession({
+      id: deterministicPBLSessionId(stageId, learnerKey),
+      kind: 'pbl',
+      stageId,
+      learnerKey,
+      status: 'active',
+      createdAt: now,
+      updatedAt: now,
+    });
+    return created.id;
+  } catch (error) {
+    if (!/already exists/i.test(String(error instanceof Error ? error.message : error))) {
+      throw error;
+    }
+    const relisted = await store.listSessions(stageId, learnerKey);
+    const racedActive = relisted.find(
+      (session) => session.kind === 'pbl' && session.status === 'active',
+    );
+    if (racedActive) return racedActive.id;
+    throw error;
+  }
 }
 
 function subAnchorFor(event: PBLRuntimeEvent): string | undefined {
@@ -139,6 +185,14 @@ async function persistWatermark(
   await kv.set(key, watermark, WATERMARK_SCOPE);
 }
 
+export async function clearStageDrainWatermarks(
+  stageId: string,
+  kv: KVStore = getDefaultKv(),
+): Promise<void> {
+  const keys = await kv.keys(`runtime.pblDrain.${stageId}.`, WATERMARK_SCOPE);
+  await Promise.all(keys.map((key) => kv.remove(key, WATERMARK_SCOPE)));
+}
+
 async function drainProjectRuntimeWork({
   stageId,
   sceneId,
@@ -150,10 +204,8 @@ async function drainProjectRuntimeWork({
   const kv = injectedKv ?? getDefaultKv();
   const learnerKey = injectedLearnerKey ?? (await getLearnerKey(kv));
   const store = injectedStore ?? getRuntimeStore();
-  const key = watermarkKey(stageId);
-  const watermark = normalizeWatermark(
-    await kv.get<PBLRuntimeDrainWatermark>(key, WATERMARK_SCOPE),
-  );
+  const key = watermarkKey(stageId, sceneId, learnerKey);
+  const watermark = await readWatermark(kv, key);
   const runtimeEvents = undrainedEvents(project.runtimeEvents ?? [], watermark.lastRuntimeEventId);
   const engagementEvents = undrainedEvents(
     project.engagementEvents ?? [],
