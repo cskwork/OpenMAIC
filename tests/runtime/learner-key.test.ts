@@ -43,4 +43,32 @@ describe('getLearnerKey', () => {
     const b = await getLearnerKey(new BrowserKVStore({ storage: memoryStorage() }));
     expect(a).not.toBe(b);
   });
+
+  it('concurrent calls on one device converge on a single key', async () => {
+    const kv = new BrowserKVStore({ storage: memoryStorage() });
+    const keys = await Promise.all([getLearnerKey(kv), getLearnerKey(kv), getLearnerKey(kv)]);
+    expect(new Set(keys).size).toBe(1);
+    // and later calls agree with what actually persisted
+    await expect(getLearnerKey(kv)).resolves.toBe(keys[0]);
+  });
+
+  it('returns the persisted winner when another tab wins the write race', async () => {
+    const winner = 'anon:11111111-1111-4111-8111-111111111111';
+    const m = new Map<string, string>();
+    // Simulate a cross-tab race: whatever this caller persists, the storage
+    // ends up holding another tab's later write (last write wins). The caller
+    // must converge on the stored value, never keep an orphaned local mint.
+    const storage = {
+      get length() {
+        return m.size;
+      },
+      clear: () => m.clear(),
+      getItem: (k: string) => m.get(k) ?? null,
+      key: (i: number) => [...m.keys()][i] ?? null,
+      removeItem: (k: string) => void m.delete(k),
+      setItem: (k: string) => void m.set(k, JSON.stringify(winner)),
+    } as Storage;
+
+    await expect(getLearnerKey(new BrowserKVStore({ storage }))).resolves.toBe(winner);
+  });
 });
