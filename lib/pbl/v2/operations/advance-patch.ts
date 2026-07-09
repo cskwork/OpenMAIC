@@ -11,6 +11,7 @@
 import type { PBLAdvanceProjectPatch } from '../api/sse';
 import { capEngagementEvents } from './engagement';
 import type { PBLProjectV2 } from '../types';
+import { appendStatusChangedRuntimeEvent } from './runtime-events';
 
 export function buildAdvanceProjectPatch(
   project: PBLProjectV2,
@@ -65,19 +66,63 @@ export function applyAdvanceProjectPatch(
 ): void {
   for (const milestone of project.milestones) {
     if (patch.milestone?.id === milestone.id) {
+      const from = milestone.status;
       Object.assign(milestone, patch.milestone);
+      appendStatusChangedRuntimeEvent(project, {
+        entityType: 'milestone',
+        entityId: milestone.id,
+        from,
+        to: milestone.status,
+        milestoneId: milestone.id,
+      });
     }
     for (const task of milestone.microtasks) {
       if (patch.completedMicrotask?.id === task.id) {
+        const from = task.status;
         Object.assign(task, patch.completedMicrotask);
+        appendStatusChangedRuntimeEvent(project, {
+          entityType: 'microtask',
+          entityId: task.id,
+          from,
+          to: task.status,
+          microtaskId: task.id,
+          milestoneId: milestone.id,
+        });
       } else if (task.id === patch.microtaskId) {
+        const from = task.status;
         task.status = 'completed';
+        appendStatusChangedRuntimeEvent(project, {
+          entityType: 'microtask',
+          entityId: task.id,
+          from,
+          to: task.status,
+          microtaskId: task.id,
+          milestoneId: milestone.id,
+        });
       }
 
       if (patch.nextMicrotask?.id === task.id) {
+        const from = task.status;
         Object.assign(task, patch.nextMicrotask);
+        appendStatusChangedRuntimeEvent(project, {
+          entityType: 'microtask',
+          entityId: task.id,
+          from,
+          to: task.status,
+          microtaskId: task.id,
+          milestoneId: milestone.id,
+        });
       } else if (task.id === patch.nextMicrotaskId) {
+        const from = task.status;
         task.status = 'in_progress';
+        appendStatusChangedRuntimeEvent(project, {
+          entityType: 'microtask',
+          entityId: task.id,
+          from,
+          to: task.status,
+          microtaskId: task.id,
+          milestoneId: milestone.id,
+        });
       }
     }
 
@@ -87,7 +132,16 @@ export function applyAdvanceProjectPatch(
       milestone.microtasks.some((task) => task.status === 'completed') &&
       milestone.microtasks.every((task) => task.status === 'completed' || task.status === 'skipped')
     ) {
+      const from = milestone.status;
       milestone.status = 'completed';
+      appendStatusChangedRuntimeEvent(project, {
+        entityType: 'milestone',
+        entityId: milestone.id,
+        from,
+        to: milestone.status,
+        milestoneId: milestone.id,
+        microtaskId: patch.microtaskId,
+      });
     }
   }
 
@@ -96,7 +150,15 @@ export function applyAdvanceProjectPatch(
   }
 
   if (patch.projectCompleted) {
+    const from = project.status;
     project.status = 'completed';
+    appendStatusChangedRuntimeEvent(project, {
+      entityType: 'project',
+      entityId: 'project',
+      from,
+      to: project.status,
+      microtaskId: patch.microtaskId,
+    });
   }
 }
 
