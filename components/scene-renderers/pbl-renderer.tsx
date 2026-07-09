@@ -14,6 +14,7 @@ import {
 } from '@/lib/pbl/v2/compat';
 import { normalizeProjectRuntime } from '@/lib/pbl/v2/operations/progress';
 import { transitionProjectUiPhase } from '@/lib/pbl/v2/operations/runtime-events';
+import { drainProjectRuntime } from '@/lib/pbl/v2/runtime/drain';
 import { useStageStore } from '@/lib/store/stage';
 import { cn } from '@/lib/utils/cn';
 import { PBLRoleSelection } from './pbl/role-selection';
@@ -116,6 +117,7 @@ export function PBLRenderer({ content, mode: _mode, sceneId }: PBLRendererProps)
         sceneId={sceneId}
         projectV2={resolvedProjectV2}
         onProjectV2Change={(next) => {
+          const stageId = useStageStore.getState().stage?.id;
           useStageStore.getState().updateScene(sceneId, {
             content: {
               ...content,
@@ -123,6 +125,11 @@ export function PBLRenderer({ content, mode: _mode, sceneId }: PBLRendererProps)
               projectV2: next,
             },
           });
+          if (stageId) {
+            void drainProjectRuntime({ stageId, sceneId, project: next }).catch((error) => {
+              console.warn(`Failed to drain PBL runtime events for stage ${stageId}:`, error);
+            });
+          }
         }}
       />
     );

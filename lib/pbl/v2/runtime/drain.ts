@@ -1,0 +1,177 @@
+/**
+ * Client-only PBL runtime-event drainer (#869).
+ *
+ * Server code must not import this module without injecting its own
+ * `RuntimeStore` and `KVStore`: the defaults lazily touch IndexedDB and
+ * localStorage through the browser storage backends.
+ */
+import { BrowserKVStore, type KVStore, type RuntimeStore } from '@openmaic/storage';
+
+import { getLearnerKey } from '@/lib/runtime/learner-key';
+import { getRuntimeStore } from '@/lib/runtime/store';
+import type { PBLProjectV2, PBLRuntimeEvent } from '@/lib/pbl/v2/types';
+
+const PBL_DRAIN_TIMEOUT_MS = 10_000;
+const WATERMARK_SCOPE = 'device';
+
+let defaultKv: KVStore | undefined;
+
+interface PBLRuntimeDrainWatermark {
+  lastRuntimeEventId?: string;
+}
+
+export interface DrainProjectRuntimeArgs {
+  stageId: string;
+  sceneId: string;
+  project: PBLProjectV2;
+  store?: RuntimeStore;
+  kv?: KVStore;
+  learnerKey?: string;
+}
+
+function getDefaultKv(): KVStore {
+  return (defaultKv ??= new BrowserKVStore());
+}
+
+function watermarkKey(stageId: string): string {
+  return `runtime.pblDrain.${stageId}`;
+}
+
+function mintSessionId(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+/** Reject after `ms`, clearing the timer once the raced promise settles. */
+async function withTimeout(work: Promise<void>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function normalizeWatermark(value: unknown): PBLRuntimeDrainWatermark {
+  if (!value || typeof value !== 'object') return {};
+  const maybe = value as { lastRuntimeEventId?: unknown };
+  return typeof maybe.lastRuntimeEventId === 'string'
+    ? { lastRuntimeEventId: maybe.lastRuntimeEventId }
+    : {};
+}
+
+function undrainedEvents(
+  events: readonly PBLRuntimeEvent[],
+  watermark: PBLRuntimeDrainWatermark,
+): PBLRuntimeEvent[] {
+  if (!watermark.lastRuntimeEventId) return [...events];
+  const drainedIndex = events.findIndex((event) => event.id === watermark.lastRuntimeEventId);
+  if (drainedIndex < 0) {
+    // The in-project ledger is a bounded outbox, not the archive. If the
+    // saved watermark points to an event that has fallen out of the ring buffer
+    // (or the watermark is otherwise stale), we redrain the visible ledger.
+    // This is intentionally at-least-once: downstream folds must deduplicate by
+    // event id instead of treating the RuntimeStore as a unique-id index.
+    return [...events];
+  }
+  return events.slice(drainedIndex + 1);
+}
+
+async function ensurePBLSession(
+  store: RuntimeStore,
+  stageId: string,
+  learnerKey: string,
+): Promise<string> {
+  const sessions = await store.listSessions(stageId, learnerKey);
+  const active = sessions.find((session) => session.kind === 'pbl' && session.status === 'active');
+  if (active) return active.id;
+
+  const now = new Date().toISOString();
+  const created = await store.createSession({
+    id: mintSessionId(),
+    kind: 'pbl',
+    stageId,
+    learnerKey,
+    status: 'active',
+    createdAt: now,
+    updatedAt: now,
+  });
+  return created.id;
+}
+
+function subAnchorFor(event: PBLRuntimeEvent): string | undefined {
+  return event.microtaskId ?? event.milestoneId;
+}
+
+async function persistWatermark(
+  kv: KVStore,
+  key: string,
+  watermark: PBLRuntimeDrainWatermark,
+): Promise<void> {
+  await kv.set(key, watermark, WATERMARK_SCOPE);
+}
+
+async function drainProjectRuntimeWork({
+  stageId,
+  sceneId,
+  project,
+  store: injectedStore,
+  kv: injectedKv,
+  learnerKey: injectedLearnerKey,
+}: DrainProjectRuntimeArgs): Promise<void> {
+  const kv = injectedKv ?? getDefaultKv();
+  const learnerKey = injectedLearnerKey ?? (await getLearnerKey(kv));
+  const store = injectedStore ?? getRuntimeStore();
+  const key = watermarkKey(stageId);
+  const watermark = normalizeWatermark(
+    await kv.get<PBLRuntimeDrainWatermark>(key, WATERMARK_SCOPE),
+  );
+  const events = undrainedEvents(project.runtimeEvents ?? [], watermark);
+  let nextWatermark: PBLRuntimeDrainWatermark = { ...watermark };
+
+  if (events.length === 0) {
+    await persistWatermark(kv, key, nextWatermark);
+    return;
+  }
+
+  const sessionId = await ensurePBLSession(store, stageId, learnerKey);
+
+  try {
+    for (const event of events) {
+      await store.appendRecord({
+        id: event.id,
+        sessionId,
+        sceneId,
+        subAnchor: subAnchorFor(event),
+        createdAt: event.ts,
+        payload: event,
+      });
+      nextWatermark = { ...nextWatermark, lastRuntimeEventId: event.id };
+    }
+  } catch (error) {
+    await persistWatermark(kv, key, nextWatermark);
+    throw error;
+  }
+
+  await persistWatermark(kv, key, nextWatermark);
+}
+
+export async function drainProjectRuntime(args: DrainProjectRuntimeArgs): Promise<void> {
+  try {
+    const work = drainProjectRuntimeWork(args);
+    // A rejection landing after the timeout already won the race would have no
+    // listener left. Swallow that branch; the await below still reports it if it
+    // lands before the timeout.
+    work.catch(() => {});
+    await withTimeout(work, PBL_DRAIN_TIMEOUT_MS);
+  } catch (error) {
+    console.warn(`Failed to drain PBL runtime events for stage ${args.stageId}:`, error);
+  }
+}
