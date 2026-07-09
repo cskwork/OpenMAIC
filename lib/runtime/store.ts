@@ -9,14 +9,33 @@
  */
 import { BrowserRuntimeStore, type RuntimeStore } from '@openmaic/storage';
 
+// BrowserRuntimeStore's default dbName; passed explicitly below so the probe
+// in deleteStageRuntimeSafely and the store itself can never drift apart.
+const RUNTIME_DB_NAME = 'maic-runtime';
+
 let store: RuntimeStore | undefined;
 
 export function getRuntimeStore(): RuntimeStore {
-  return (store ??= new BrowserRuntimeStore());
+  return (store ??= new BrowserRuntimeStore({ dbName: RUNTIME_DB_NAME }));
 }
 
 /** How long the deletion cascade may run before the caller moves on. */
 const STAGE_RUNTIME_DELETE_TIMEOUT_MS = 5000;
+
+/**
+ * True unless the probe API positively says the runtime DB was never created.
+ * Opening the store would CREATE the database, so a deletion on a device that
+ * never wrote runtime data must not touch it. Where `indexedDB.databases` is
+ * unavailable (older Firefox), assume it exists — the timeout already bounds
+ * the degraded case, and skipping would strand real cleanup.
+ */
+async function runtimeDbExists(): Promise<boolean> {
+  if (typeof indexedDB === 'undefined' || typeof indexedDB.databases !== 'function') {
+    return true;
+  }
+  const databases = await indexedDB.databases();
+  return databases.some((db) => db.name === RUNTIME_DB_NAME);
+}
 
 /** Reject after `ms`, clearing the timer once the raced promise settles. */
 async function withTimeout(work: Promise<void>, ms: number): Promise<void> {
@@ -48,13 +67,19 @@ export async function deleteStageRuntimeSafely(
   runtimeStore?: RuntimeStore,
 ): Promise<void> {
   try {
-    const cascade = (runtimeStore ?? getRuntimeStore()).deleteStageRuntime(stageId);
-    // A rejection landing after the timeout already won the race would have
-    // no listener left — swallow that branch so it cannot surface as an
-    // unhandled rejection (the raced branch below still reports it if it
-    // loses in time).
-    cascade.catch(() => {});
-    await withTimeout(cascade, STAGE_RUNTIME_DELETE_TIMEOUT_MS);
+    // Probe + cascade share the try/catch and the timeout envelope: a hanging
+    // `databases()` must not brick deletion any more than a hanging store.
+    const work = (async () => {
+      if (!(await runtimeDbExists())) return; // nothing to clean
+      const cascade = (runtimeStore ?? getRuntimeStore()).deleteStageRuntime(stageId);
+      // A rejection landing after the timeout already won the race would have
+      // no listener left — swallow that branch so it cannot surface as an
+      // unhandled rejection (the await below still reports it if it lands in
+      // time).
+      cascade.catch(() => {});
+      await cascade;
+    })();
+    await withTimeout(work, STAGE_RUNTIME_DELETE_TIMEOUT_MS);
   } catch (error) {
     console.warn(`Failed to delete runtime data for stage ${stageId}:`, error);
   }
