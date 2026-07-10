@@ -73,6 +73,7 @@ describe('edit_elements tool', () => {
     expect((res as { isError?: boolean }).isError).toBeFalsy();
     expect(res.details.sceneId).toBe('s1');
     expect(res.details.updateCount).toBe(1);
+    expect(res.details.targetElementTypes).toEqual({ 'title-1': 'text' });
     expect(res.details.intents).toEqual([
       {
         type: 'element.update',
@@ -81,6 +82,32 @@ describe('edit_elements tool', () => {
       },
     ]);
     expect(aiCall).toHaveBeenCalledOnce();
+    const [, system] = aiCall.mock.calls[0] as unknown as [unknown, string, string];
+    expect(system).toContain('Use defaultColor for text color');
+    expect(system).toContain('Use fill for shape body color');
+    expect(system).toContain('Use defaultColor for shape labels');
+  });
+
+  it('filters selection ids to the target slide inventory before prompting', async () => {
+    const aiCall = vi.fn(async () =>
+      JSON.stringify({
+        updates: [{ id: 'title-1', props: { top: 40 } }],
+      }),
+    );
+    const tool = makeEditElementsTool({
+      aiCall,
+      getSceneContext: (id) => (id === 's1' ? slideCtx('s1', [title]) : undefined),
+      getSelection: () => ['title-1', 'other-scene-id'],
+    });
+    await tool.execute('call-1', {
+      sceneId: 's1',
+      instruction: 'move this up',
+    });
+
+    const [, , user] = aiCall.mock.calls[0] as unknown as [unknown, string, string];
+    expect(user).toContain('Current selection');
+    expect(user).toContain('title-1');
+    expect(user).not.toContain('other-scene-id');
   });
 
   it('refuses unknown ids from the model (no intents)', async () => {

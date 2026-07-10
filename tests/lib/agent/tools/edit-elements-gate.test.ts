@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ALLOWED_EDIT_PROPS,
   buildElementInventory,
   clampUpdateProps,
+  getEditablePropSchema,
   mapProposalsToEditIntents,
   normalizeRotate,
   type ElementInventoryItem,
@@ -53,6 +55,13 @@ const inventory: ElementInventoryItem[] = [
 ];
 
 describe('edit-elements-gate', () => {
+  it('refuses an empty update batch', () => {
+    expect(mapProposalsToEditIntents([], inventory)).toEqual({
+      ok: false,
+      reason: 'no element updates proposed',
+    });
+  });
+
   it('maps a single color+position update to element.update', () => {
     const result = mapProposalsToEditIntents(
       [{ id: 'title-1', props: { defaultColor: '#0000ff', top: 40 } }],
@@ -115,6 +124,13 @@ describe('edit-elements-gate', () => {
     expect(result.reason).toMatch(/out of contract/);
   });
 
+  it('refuses empty props', () => {
+    const result = mapProposalsToEditIntents([{ id: 'title-1', props: {} }], inventory);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/empty props/i);
+  });
+
   it('refuses the whole batch when one update is bad', () => {
     const result = mapProposalsToEditIntents(
       [
@@ -136,6 +152,22 @@ describe('edit-elements-gate', () => {
     expect(normalizeRotate(270)).toBe(-90);
     expect(normalizeRotate(-270)).toBe(90);
     expect(normalizeRotate(180)).toBe(180);
+  });
+
+  it('refuses coordinates outside the canvas sanity bounds', () => {
+    const result = mapProposalsToEditIntents([{ id: 'title-1', props: { left: 1e15 } }], inventory);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/left out of bounds/i);
+  });
+
+  it('refuses non-finite rotate values', () => {
+    for (const rotate of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      const result = mapProposalsToEditIntents([{ id: 'title-1', props: { rotate } }], inventory);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toMatch(/rotate must be a finite number/i);
+    }
   });
 
   it('builds inventory labels from text content', () => {
@@ -201,9 +233,9 @@ describe('edit-elements-gate', () => {
               type: 'linear',
               colors: [
                 { pos: 0, color: '#f00' },
-                { pos: 1, color: '#00f' },
+                { pos: 100, color: '#00f' },
               ],
-              rotate: 90,
+              rotate: 0,
             },
           },
         },
@@ -211,6 +243,173 @@ describe('edit-elements-gate', () => {
       inventory,
     );
     expect(result.ok).toBe(true);
+  });
+
+  it('refuses color on text and shape elements because the DSL has no top-level color there', () => {
+    const textResult = mapProposalsToEditIntents(
+      [{ id: 'title-1', props: { color: '#f00' } }],
+      inventory,
+    );
+    expect(textResult.ok).toBe(false);
+    if (textResult.ok) return;
+    expect(textResult.reason).toMatch(/color is not valid on text elements/i);
+
+    const shapeResult = mapProposalsToEditIntents(
+      [{ id: 'fig-1', props: { color: '#f00' } }],
+      inventory,
+    );
+    expect(shapeResult.ok).toBe(false);
+    if (shapeResult.ok) return;
+    expect(shapeResult.reason).toMatch(/color is not valid on shape elements/i);
+  });
+
+  it('allows fill on chart elements because the DSL chart schema owns it', () => {
+    const chartInventory: ElementInventoryItem[] = [
+      {
+        id: 'chart-1',
+        type: 'chart',
+        left: 0,
+        top: 0,
+        width: 320,
+        height: 180,
+        rotate: 0,
+        lock: false,
+        label: 'chart',
+        style: { themeColors: ['#f00'] },
+      },
+    ];
+    const result = mapProposalsToEditIntents(
+      [{ id: 'chart-1', props: { fill: '#ffffff' } }],
+      chartInventory,
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('refuses vertical on shapes because ShapeText has no vertical prop', () => {
+    const result = mapProposalsToEditIntents(
+      [{ id: 'fig-1', props: { vertical: true } }],
+      inventory,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/vertical is not valid on shape elements/i);
+  });
+
+  it('accepts the full DSL textType enum and refuses old non-DSL values', () => {
+    const allowed = [
+      'title',
+      'subtitle',
+      'content',
+      'item',
+      'itemTitle',
+      'notes',
+      'header',
+      'footer',
+      'partNumber',
+      'itemNumber',
+    ];
+    for (const textType of allowed) {
+      expect(
+        mapProposalsToEditIntents([{ id: 'title-1', props: { textType } }], inventory).ok,
+      ).toBe(true);
+    }
+
+    for (const textType of ['caption', '']) {
+      const result = mapProposalsToEditIntents([{ id: 'title-1', props: { textType } }], inventory);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toMatch(/textType/i);
+    }
+  });
+
+  it('derives editable prop schemas from the DSL schema', () => {
+    for (const key of ALLOWED_EDIT_PROPS) {
+      const owningTypes = [
+        'text',
+        'image',
+        'shape',
+        'line',
+        'chart',
+        'table',
+        'latex',
+        'video',
+        'audio',
+        'code',
+      ].filter((type) => getEditablePropSchema(type, key));
+      expect(owningTypes, `${key} should resolve for at least one element type`).not.toHaveLength(
+        0,
+      );
+    }
+
+    expect(getEditablePropSchema('text', 'notARealProp')).toBeNull();
+    expect(getEditablePropSchema('shape', 'notARealProp')).toBeNull();
+  });
+
+  it('keeps layered policy on top of schema-derived object validation', () => {
+    const tooManyStops = Array.from({ length: 11 }, (_, i) => ({
+      pos: i * 10,
+      color: '#f00',
+    }));
+    const gradientResult = mapProposalsToEditIntents(
+      [
+        {
+          id: 'fig-1',
+          props: {
+            gradient: { type: 'linear', colors: tooManyStops, rotate: 0 },
+          },
+        },
+      ],
+      inventory,
+    );
+    expect(gradientResult.ok).toBe(false);
+    if (gradientResult.ok) return;
+    expect(gradientResult.reason).toMatch(/gradient.colors/i);
+
+    const imageInventory: ElementInventoryItem[] = [
+      {
+        id: 'img-1',
+        type: 'image',
+        left: 0,
+        top: 0,
+        width: 100,
+        height: 100,
+        rotate: 0,
+        lock: false,
+        label: 'pic',
+        style: {},
+      },
+    ];
+    const filterResult = mapProposalsToEditIntents(
+      [{ id: 'img-1', props: { filters: { blur: 'x'.repeat(41) } } }],
+      imageInventory,
+    );
+    expect(filterResult.ok).toBe(false);
+    if (filterResult.ok) return;
+    expect(filterResult.reason).toMatch(/filters.blur/i);
+  });
+
+  it('keeps themeColors non-empty', () => {
+    const chartInventory: ElementInventoryItem[] = [
+      {
+        id: 'chart-1',
+        type: 'chart',
+        left: 0,
+        top: 0,
+        width: 320,
+        height: 180,
+        rotate: 0,
+        lock: false,
+        label: 'chart',
+        style: { themeColors: ['#f00'] },
+      },
+    ];
+    const result = mapProposalsToEditIntents(
+      [{ id: 'chart-1', props: { themeColors: [] } }],
+      chartInventory,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/themeColors/i);
   });
 
   it('refuses defaultColor on image elements', () => {

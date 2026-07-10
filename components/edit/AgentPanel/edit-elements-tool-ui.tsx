@@ -2,7 +2,8 @@
 
 /**
  * Tool-call UI for `edit_elements` (natural-language per-element edits).
- * Minimal non-expandable ToolCard — title + @scene pill + status badge.
+ * Minimal non-expandable ToolCard — title + @scene pill + status badge, with a
+ * muted visible refusal reason when an edit was not applied.
  */
 import { Move } from 'lucide-react';
 import { makeAssistantToolUI } from '@assistant-ui/react';
@@ -77,8 +78,8 @@ function EditElementsCard({
       : failed
         ? t('edit.editElements.notApplied')
         : t('edit.editElements.applied');
-  // ToolCard status is icon-only; put the refusal reason in the hover tooltip
-  // so #895's "user-visible refusal" is reachable without expanding the card.
+  // ToolCard status is icon-only; keep the refusal reason in the hover tooltip
+  // and render it as visible muted body text.
   const statusLabel = failed && refuseReason ? `${baseLabel}: ${refuseReason}` : baseLabel;
 
   return (
@@ -88,7 +89,9 @@ function EditElementsCard({
       sceneId={sceneId}
       status={toolStatus}
       statusLabel={statusLabel}
-    />
+    >
+      {failed && refuseReason ? <span>{refuseReason}</span> : null}
+    </ToolCard>
   );
 }
 

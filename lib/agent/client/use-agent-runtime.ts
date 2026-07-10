@@ -416,7 +416,11 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
         if (e.toolName === 'edit_elements' && !e.isError) {
           const editDetails = (e.result?.details ?? {}) as EditElementsApplyDetails;
           if (hasEditElementsIntents(editDetails)) {
-            const applied = applyEditElementsIntents(editDetails.sceneId, editDetails.intents);
+            const applied = applyEditElementsIntents(
+              editDetails.sceneId,
+              editDetails.intents,
+              editDetails.targetElementTypes,
+            );
             if (!applied.ok) {
               toolResultsRef.current.set(e.toolCallId, {
                 result: {

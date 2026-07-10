@@ -9,6 +9,7 @@
  */
 
 import type { PPTElement } from '@openmaic/dsl';
+import sceneSchemaJson from '@openmaic/dsl/schema/scene.schema.json';
 import type { EditIntent } from '@openmaic/renderer/editing';
 import { MIN_SIZE } from '@/configs/element';
 
@@ -103,6 +104,91 @@ export const SHAPE_TEXT_CHROME_PROPS = new Set([
   'textType',
 ]);
 
+type JsonSchema = {
+  $ref?: string;
+  anyOf?: JsonSchema[];
+  type?: string | string[];
+  const?: unknown;
+  enum?: unknown[];
+  properties?: Record<string, JsonSchema>;
+  required?: string[];
+  additionalProperties?: boolean | JsonSchema;
+  items?: JsonSchema | JsonSchema[];
+  minimum?: number;
+  maximum?: number;
+};
+
+type SchemaDocument = {
+  definitions?: Record<string, JsonSchema>;
+};
+
+const sceneSchema = sceneSchemaJson as SchemaDocument;
+const schemaDefinitions = sceneSchema.definitions ?? {};
+
+const SHAPE_TEXT_SCHEMA_ALIASES = new Map<string, string>([
+  ['defaultColor', 'defaultColor'],
+  ['defaultFontName', 'defaultFontName'],
+  ['lineHeight', 'lineHeight'],
+  ['wordSpace', 'wordSpace'],
+  ['paragraphSpace', 'paragraphSpace'],
+  ['textType', 'type'],
+  ['vAlign', 'align'],
+]);
+
+function decodeRefName(ref: string): string | null {
+  const m = ref.match(/^#\/definitions\/(.+)$/);
+  return m ? m[1].replace(/~1/g, '/').replace(/~0/g, '~') : null;
+}
+
+function resolveSchema(schema: JsonSchema, seen = new Set<string>()): JsonSchema {
+  if (!schema.$ref) return schema;
+  const name = decodeRefName(schema.$ref);
+  if (!name || seen.has(name)) return schema;
+  const target = schemaDefinitions[name];
+  if (!target) return schema;
+  seen.add(name);
+  return resolveSchema(target, seen);
+}
+
+function elementTypeFromSchema(schema: JsonSchema): string | null {
+  const typeSchema = resolveSchema(schema.properties?.type ?? {});
+  return typeof typeSchema.const === 'string' ? typeSchema.const : null;
+}
+
+/**
+ * Lockstep with packages/@openmaic/dsl/scripts/gen-schema.mjs: the package
+ * export @openmaic/dsl/schema/scene.schema.json is generated from slides.ts.
+ */
+function buildEditablePropSchemas(): Map<string, Map<string, JsonSchema>> {
+  const out = new Map<string, Map<string, JsonSchema>>();
+  const elementUnion = resolveSchema(schemaDefinitions.PPTElement ?? {});
+  for (const option of elementUnion.anyOf ?? []) {
+    const elementSchema = resolveSchema(option);
+    const elementType = elementTypeFromSchema(elementSchema);
+    if (!elementType || !elementSchema.properties) continue;
+    out.set(elementType, new Map(Object.entries(elementSchema.properties)));
+  }
+
+  const shapeProps = out.get('shape');
+  const shapeTextSchema = shapeProps?.get('text');
+  const shapeTextProps = shapeTextSchema ? resolveSchema(shapeTextSchema).properties : undefined;
+  if (shapeProps && shapeTextProps) {
+    for (const [flatProp, schemaProp] of SHAPE_TEXT_SCHEMA_ALIASES) {
+      const subschema = shapeTextProps[schemaProp];
+      if (subschema) shapeProps.set(flatProp, subschema);
+    }
+  }
+
+  return out;
+}
+
+const EDITABLE_PROP_SCHEMAS_BY_TYPE = buildEditablePropSchemas();
+
+export function getEditablePropSchema(type: string, key: string): JsonSchema | null {
+  if (!ALLOWED_EDIT_PROPS.has(key) || FORBIDDEN_EDIT_PROPS.has(key)) return null;
+  return EDITABLE_PROP_SCHEMAS_BY_TYPE.get(type)?.get(key) ?? null;
+}
+
 export interface ElementInventoryItem {
   id: string;
   type: string;
@@ -140,6 +226,103 @@ function isNonEmptyString(v: unknown, max = 200): v is string {
   return typeof v === 'string' && v.length > 0 && v.length <= max;
 }
 
+function schemaTypeMatches(value: unknown, type: string): boolean {
+  switch (type) {
+    case 'string':
+      return typeof value === 'string';
+    case 'number':
+      return isFiniteNumber(value);
+    case 'boolean':
+      return typeof value === 'boolean';
+    case 'object':
+      return value !== null && typeof value === 'object' && !Array.isArray(value);
+    case 'array':
+      return Array.isArray(value);
+    default:
+      return true;
+  }
+}
+
+function describeSchemaTypes(type: string | string[]): string {
+  return Array.isArray(type) ? type.join('|') : type;
+}
+
+function validateJsonSchemaSubset(value: unknown, schema: JsonSchema, path: string): string | null {
+  const s = resolveSchema(schema);
+  if (s.anyOf?.length) {
+    const errors = s.anyOf
+      .map((option) => validateJsonSchemaSubset(value, option, path))
+      .filter(Boolean);
+    return errors.length === s.anyOf.length ? `${path} does not match any allowed schema` : null;
+  }
+
+  if ('const' in s && !Object.is(value, s.const)) {
+    return `${path} must be ${JSON.stringify(s.const)}`;
+  }
+  if (s.enum && !s.enum.some((item) => Object.is(item, value))) {
+    return `${path} must be one of ${s.enum.map((item) => JSON.stringify(item)).join('|')}`;
+  }
+
+  if (s.type) {
+    const types = Array.isArray(s.type) ? s.type : [s.type];
+    if (!types.some((type) => schemaTypeMatches(value, type))) {
+      return types.includes('number')
+        ? `${path} must be a finite number`
+        : `${path} must be ${describeSchemaTypes(s.type)}`;
+    }
+  }
+
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return `${path} must be a finite number`;
+    if (typeof s.minimum === 'number' && value < s.minimum) {
+      return `${path} out of bounds (${s.minimum}..${s.maximum ?? '∞'})`;
+    }
+    if (typeof s.maximum === 'number' && value > s.maximum) {
+      return `${path} out of bounds (${s.minimum ?? '-∞'}..${s.maximum})`;
+    }
+  }
+
+  if (s.properties) {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      return `${path} must be object`;
+    }
+    const obj = value as Record<string, unknown>;
+    for (const required of s.required ?? []) {
+      if (!(required in obj)) return `${path}.${required} is required`;
+    }
+    if (s.additionalProperties === false) {
+      for (const key of Object.keys(obj)) {
+        if (!s.properties[key]) return `${path}.${key} is out of contract`;
+      }
+    }
+    for (const [key, nested] of Object.entries(s.properties)) {
+      if (key in obj) {
+        const err = validateJsonSchemaSubset(obj[key], nested, `${path}.${key}`);
+        if (err) return err;
+      }
+    }
+  }
+
+  if (s.items) {
+    if (!Array.isArray(value)) return `${path} must be array`;
+    if (Array.isArray(s.items)) {
+      for (let i = 0; i < value.length; i++) {
+        const itemSchema = s.items[Math.min(i, s.items.length - 1)];
+        if (!itemSchema) continue;
+        const err = validateJsonSchemaSubset(value[i], itemSchema, `${path}[${i}]`);
+        if (err) return err;
+      }
+    } else {
+      for (let i = 0; i < value.length; i++) {
+        const err = validateJsonSchemaSubset(value[i], s.items, `${path}[${i}]`);
+        if (err) return err;
+      }
+    }
+  }
+
+  return null;
+}
+
 /** Signed angle in (-180, 180], matching the rotate gesture core. */
 export function normalizeRotate(degrees: number): number {
   let r = degrees % 360;
@@ -159,154 +342,27 @@ function clampCoord(n: number, label: string): number {
   return n;
 }
 
-function validateOutline(v: unknown): string | null {
-  if (v === null || typeof v !== 'object' || Array.isArray(v)) {
-    return 'outline must be an object';
-  }
-  const o = v as Record<string, unknown>;
-  for (const k of Object.keys(o)) {
-    if (k !== 'style' && k !== 'width' && k !== 'color') {
-      return `outline.${k} is out of contract`;
-    }
-  }
-  if ('style' in o && o.style !== 'solid' && o.style !== 'dashed' && o.style !== 'dotted') {
-    return 'outline.style must be solid|dashed|dotted';
-  }
-  if ('width' in o && (!isFiniteNumber(o.width) || o.width < 0 || o.width > LINE_STROKE_MAX)) {
-    return 'outline.width must be a finite number in range';
-  }
-  if ('color' in o && !isColorString(o.color)) return 'outline.color must be a color string';
-  return null;
-}
-
-function validateShadow(v: unknown): string | null {
-  if (v === null || typeof v !== 'object' || Array.isArray(v)) {
-    return 'shadow must be an object';
-  }
-  const o = v as Record<string, unknown>;
-  for (const k of ['h', 'v', 'blur'] as const) {
-    if (!(k in o) || !isFiniteNumber(o[k])) return `shadow.${k} must be a finite number`;
-  }
-  if (!isColorString(o.color)) return 'shadow.color must be a color string';
-  for (const k of Object.keys(o)) {
-    if (k !== 'h' && k !== 'v' && k !== 'blur' && k !== 'color') {
-      return `shadow.${k} is out of contract`;
-    }
-  }
-  return null;
-}
-
-function validateGradient(v: unknown): string | null {
-  if (v === null || typeof v !== 'object' || Array.isArray(v)) {
-    return 'gradient must be an object';
-  }
-  const o = v as Record<string, unknown>;
-  for (const k of Object.keys(o)) {
-    if (k !== 'type' && k !== 'colors' && k !== 'rotate') {
-      return `gradient.${k} is out of contract`;
-    }
-  }
-  if (o.type !== 'linear' && o.type !== 'radial') {
-    return 'gradient.type must be linear|radial';
-  }
-  if (!Array.isArray(o.colors) || o.colors.length === 0) {
-    return 'gradient.colors must be a non-empty array';
-  }
-  for (let i = 0; i < o.colors.length; i++) {
-    const c = o.colors[i];
-    if (c === null || typeof c !== 'object' || Array.isArray(c)) {
-      return `gradient.colors[${i}] must be {pos,color}`;
-    }
-    const stop = c as Record<string, unknown>;
-    for (const k of Object.keys(stop)) {
-      if (k !== 'pos' && k !== 'color') {
-        return `gradient.colors[${i}].${k} is out of contract`;
-      }
-    }
-    if (!isFiniteNumber(stop.pos) || stop.pos < 0 || stop.pos > 1) {
-      return `gradient.colors[${i}].pos must be a number in [0,1]`;
-    }
-    if (!isColorString(stop.color)) {
-      return `gradient.colors[${i}].color must be a color string`;
-    }
-  }
-  if (!isFiniteNumber(o.rotate)) return 'gradient.rotate must be a finite number';
-  return null;
-}
-
-const FILTER_KEYS = new Set([
-  'blur',
-  'brightness',
-  'contrast',
-  'grayscale',
-  'saturate',
-  'hue-rotate',
-  'sepia',
-  'invert',
-  'opacity',
+const COLOR_STRING_PROPS = new Set([
+  'fill',
+  'defaultColor',
+  'color',
+  'textColor',
+  'lineColor',
+  'colorMask',
 ]);
 
-function validateFilters(v: unknown): string | null {
-  if (v === null || typeof v !== 'object' || Array.isArray(v)) {
-    return 'filters must be an object';
-  }
-  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-    if (!FILTER_KEYS.has(k)) return `filters.${k} is out of contract`;
-    if (typeof val !== 'string') return `filters.${k} must be a string`;
-  }
-  return null;
-}
-
-const VALIGN_VALUES = new Set(['top', 'middle', 'bottom']);
-const TEXT_TYPE_VALUES = new Set(['title', 'content', 'caption', 'item', '']);
-
-/**
- * Validate non-geometry prop values. Returns an error string or null.
- * Geometry is handled by clampUpdateProps.
- */
-export function validatePropValue(key: string, value: unknown, type: string): string | null {
-  switch (key) {
-    case 'fill':
-      if (type !== 'shape' && type !== 'text') {
-        return `fill is not valid on ${type} elements`;
-      }
-      return isColorString(value) ? null : `${key} must be a color string`;
-    case 'defaultColor':
-    case 'defaultFontName':
-    case 'lineHeight':
-    case 'wordSpace':
-    case 'paragraphSpace':
-    case 'textType':
-    case 'vAlign':
-    case 'vertical':
-      if (type !== 'text' && type !== 'shape') {
-        return `${key} is not valid on ${type} elements`;
-      }
-      break;
-    default:
-      break;
+function validatePolicyOverlay(key: string, value: unknown): string | null {
+  if (COLOR_STRING_PROPS.has(key)) {
+    return isColorString(value) ? null : `${key} must be a color string`;
   }
 
   switch (key) {
-    case 'fill':
-    case 'defaultColor':
-    case 'color':
-    case 'textColor':
-    case 'lineColor':
-    case 'colorMask':
-      return isColorString(value) ? null : `${key} must be a color string`;
     case 'defaultFontName':
       return isNonEmptyString(value, 80) ? null : `${key} must be a non-empty string`;
-    case 'textType':
-      return typeof value === 'string' && TEXT_TYPE_VALUES.has(value)
-        ? null
-        : 'textType must be title|content|caption|item|""';
-    case 'vAlign':
-      return typeof value === 'string' && VALIGN_VALUES.has(value)
-        ? null
-        : 'vAlign must be top|middle|bottom';
     case 'opacity':
-      return isFiniteNumber(value) ? null : 'opacity must be a finite number';
+      if (!isFiniteNumber(value)) return 'opacity must be a finite number';
+      if (value < 0 || value > 1) return 'opacity out of bounds (0..1)';
+      return null;
     case 'lineHeight':
     case 'wordSpace':
     case 'paragraphSpace':
@@ -321,31 +377,63 @@ export function validatePropValue(key: string, value: unknown, type: string): st
       if (!isFiniteNumber(value)) return `${key} must be a finite number`;
       if (value < 8 || value > 200) return `${key} out of bounds (8..200)`;
       return null;
-    case 'vertical':
-    case 'flipH':
-    case 'flipV':
-    case 'fixedRatio':
-    case 'showLineNumbers':
-      return typeof value === 'boolean' ? null : `${key} must be a boolean`;
-    case 'outline':
-      return validateOutline(value);
-    case 'shadow':
-      return validateShadow(value);
-    case 'gradient':
-      if (type !== 'shape') return 'gradient is only valid on shape elements';
-      return validateGradient(value);
-    case 'filters':
-      if (type !== 'image') return 'filters is only valid on image elements';
-      return validateFilters(value);
+    case 'outline': {
+      const o = value as Record<string, unknown>;
+      if ('width' in o && (!isFiniteNumber(o.width) || o.width < 0 || o.width > LINE_STROKE_MAX)) {
+        return 'outline.width must be a finite number in range';
+      }
+      if ('color' in o && !isColorString(o.color)) return 'outline.color must be a color string';
+      return null;
+    }
+    case 'shadow': {
+      const o = value as Record<string, unknown>;
+      return isColorString(o.color) ? null : 'shadow.color must be a color string';
+    }
+    case 'gradient': {
+      const o = value as { colors?: unknown[] };
+      if (!Array.isArray(o.colors) || o.colors.length === 0 || o.colors.length > 10) {
+        return 'gradient.colors must contain 1..10 stops';
+      }
+      for (let i = 0; i < o.colors.length; i++) {
+        const stop = o.colors[i] as Record<string, unknown>;
+        if (!isFiniteNumber(stop.pos) || stop.pos < 0 || stop.pos > 100) {
+          return `gradient.colors[${i}].pos must be a number in [0,100]`;
+        }
+        if (!isColorString(stop.color)) {
+          return `gradient.colors[${i}].color must be a color string`;
+        }
+      }
+      return null;
+    }
+    case 'filters': {
+      for (const [filterKey, filterValue] of Object.entries(value as Record<string, unknown>)) {
+        if (typeof filterValue !== 'string') return `filters.${filterKey} must be a string`;
+        if (filterValue.length > 40) return `filters.${filterKey} must be at most 40 chars`;
+      }
+      return null;
+    }
     case 'themeColors':
       if (!Array.isArray(value) || value.length === 0 || !value.every(isColorString)) {
         return 'themeColors must be a non-empty array of color strings';
       }
       return null;
     default:
-      // left/top/width/height/rotate handled in clampUpdateProps
       return null;
   }
+}
+
+/**
+ * Validate non-geometry prop values. Returns an error string or null.
+ * Geometry is handled by clampUpdateProps.
+ */
+export function validatePropValue(key: string, value: unknown, type: string): string | null {
+  const schema = getEditablePropSchema(type, key);
+  if (!schema) return `${key} is not valid on ${type} elements`;
+
+  const schemaErr = validateJsonSchemaSubset(value, schema, key);
+  if (schemaErr) return schemaErr;
+
+  return validatePolicyOverlay(key, value);
 }
 
 /**
@@ -361,18 +449,20 @@ export function clampUpdateProps(
 
   if ('width' in out) {
     if (!isFiniteNumber(out.width)) throw new Error(`width must be a finite number`);
+    const width = out.width;
     if (type === 'line') {
-      out.width = Math.min(LINE_STROKE_MAX, Math.max(LINE_STROKE_MIN, out.width));
+      out.width = Math.min(LINE_STROKE_MAX, Math.max(LINE_STROKE_MIN, width));
     } else {
-      out.width = Math.max(minSizeFor(type), out.width);
-      out.width = clampCoord(out.width, 'width');
+      const clampedWidth = Math.max(minSizeFor(type), width);
+      out.width = clampCoord(clampedWidth, 'width');
     }
   }
   if ('height' in out) {
     if (!isFiniteNumber(out.height)) throw new Error(`height must be a finite number`);
     if (type === 'line') throw new Error(`line elements have no height`);
-    out.height = Math.max(minSizeFor(type), out.height);
-    out.height = clampCoord(out.height, 'height');
+    const height = out.height;
+    const clampedHeight = Math.max(minSizeFor(type), height);
+    out.height = clampCoord(clampedHeight, 'height');
   }
   if ('left' in out) {
     if (!isFiniteNumber(out.left)) throw new Error(`left must be a finite number`);
@@ -472,15 +562,6 @@ export function mapProposalsToEditIntents(
     if (keyErr) return { ok: false, reason: keyErr };
 
     for (const [key, value] of Object.entries(props)) {
-      if (
-        key === 'left' ||
-        key === 'top' ||
-        key === 'width' ||
-        key === 'height' ||
-        key === 'rotate'
-      ) {
-        continue;
-      }
       const valueErr = validatePropValue(key, value, el.type);
       if (valueErr) return { ok: false, reason: valueErr };
     }
@@ -605,6 +686,7 @@ export function collectIntentTargetIds(intents: EditIntent[]): string[] {
 export function revalidateIntentsAgainstElements(
   elements: PPTElement[],
   intents: EditIntent[],
+  targetElementTypes?: Record<string, string>,
 ): EditElementsGateResult {
   const inventory = buildElementInventory(elements);
   const ids = collectIntentTargetIds(intents);
@@ -615,6 +697,13 @@ export function revalidateIntentsAgainstElements(
     const el = byId.get(id);
     if (!el) return { ok: false, reason: `unknown element id ${JSON.stringify(id)}` };
     if (el.lock) return { ok: false, reason: `element ${JSON.stringify(id)} is locked` };
+    const expectedType = targetElementTypes?.[id];
+    if (expectedType && el.type !== expectedType) {
+      return {
+        ok: false,
+        reason: `element ${JSON.stringify(id)} changed type from ${expectedType} to ${el.type}`,
+      };
+    }
   }
   const groupErr = enforceGroupCohesion(
     ids.map((id) => ({ id })),

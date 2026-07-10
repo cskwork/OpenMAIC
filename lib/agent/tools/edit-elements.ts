@@ -20,6 +20,7 @@ import type { PPTElement } from '@openmaic/dsl';
 import type { RegenerateActionsDeps, SceneContext } from './regenerate-scene-actions';
 import {
   buildElementInventory,
+  collectIntentTargetIds,
   mapProposalsToEditIntents,
   type ElementInventoryItem,
   type ProposedElementUpdate,
@@ -49,8 +50,10 @@ export interface EditElementsDetails {
   intents: EditIntent[] | null;
   /** Number of elements touched (0 on refusal). */
   updateCount: number;
-  /** Gate/host refusal reason (user-visible via tool card tooltip). */
+  /** Gate/host refusal reason (user-visible via tool card body + tooltip). */
   refuseReason?: string;
+  /** Element types captured when the gate accepted the batch, keyed by id. */
+  targetElementTypes?: Record<string, string>;
 }
 
 export type EditElementsDeps = RegenerateActionsDeps & {
@@ -117,6 +120,8 @@ function buildProposalPrompt(args: {
     'defaultColor, defaultFontName, lineHeight, wordSpace, paragraphSpace, vertical, vAlign, textType,',
     'color, gradient, filters, radius, flipH, flipV, colorMask, fixedRatio,',
     'themeColors, textColor, lineColor, fontSize, showLineNumbers.',
+    'Use defaultColor for text color. Use fill for shape body color. Use defaultColor for shape labels/text chrome.',
+    'Use color only for line, latex, or audio icon color.',
     'Do NOT change: id, type, lock, groupId, content, text, src, lines, latex, html, data, path, keypoints, line endpoints, fileName.',
     'Use absolute canvas values for geometry (not deltas). Prefer editing selected elements when the user says "this" / "these".',
     'For line elements, width is stroke thickness (typically 1–8), not box size.',
@@ -137,6 +142,19 @@ function buildProposalPrompt(args: {
   ].join('\n');
 
   return { system, user };
+}
+
+function targetTypesForIntents(
+  intents: EditIntent[],
+  inventory: ElementInventoryItem[],
+): Record<string, string> {
+  const byId = new Map(inventory.map((el) => [el.id, el.type] as const));
+  const out: Record<string, string> = {};
+  for (const id of collectIntentTargetIds(intents)) {
+    const type = byId.get(id);
+    if (type) out[id] = type;
+  }
+  return out;
 }
 
 // ── Factory ──────────────────────────────────────────────────────────────────
@@ -306,7 +324,12 @@ export function makeEditElementsTool(
               `further edits in the same turn still see pre-edit geometry until the client refreshes scene context.`,
           },
         ],
-        details: { sceneId, intents: gated.intents, updateCount },
+        details: {
+          sceneId,
+          intents: gated.intents,
+          updateCount,
+          targetElementTypes: targetTypesForIntents(gated.intents, inventory),
+        },
       };
     },
   };

@@ -6,9 +6,9 @@
  * optional `@scene` pill, an optional inline bar-action (always visible on the
  * row — e.g. a Restore button), an icon-only status mark (running = violet
  * spinner, done = emerald check ✓, failed = amber cross ✗; the text label is a
- * hover tooltip). Tool cards are intentionally NOT expandable — they show a
- * single status row with no detail disclosure. Every tool card (regenerate /
- * read / future) renders through this shell so they stay visually uniform.
+ * hover tooltip), and optional muted body text. Tool cards are intentionally NOT
+ * expandable. Every tool card (regenerate / read / future) renders through this
+ * shell so they stay visually uniform.
  */
 import type { ReactNode } from 'react';
 import { AtSign, Check, CircleStop, Loader2, X, type LucideIcon } from 'lucide-react';
@@ -72,6 +72,7 @@ export function ToolCard({
   status,
   statusLabel,
   barAction,
+  children,
 }: {
   title: string;
   icon: LucideIcon;
@@ -81,14 +82,14 @@ export function ToolCard({
   statusLabel: string;
   /** Inline action rendered on the always-visible row (e.g. Restore). */
   barAction?: ReactNode;
-  /** Accepted for source compatibility but IGNORED — cards are non-expandable. */
+  /** Optional always-visible muted detail text below the status row. */
   children?: ReactNode;
 }) {
   const running = status === 'running';
   const StatusIcon = STATUS_ICON[status];
 
-  // Non-expandable by design: a single status row, no detail disclosure. Failure
-  // surfaces only through the status mark (icon + tooltip) — never an inline body.
+  // Non-expandable by design: the optional body is plain visible text, not a
+  // disclosure surface.
   return (
     <div
       className={cn(
@@ -113,6 +114,11 @@ export function ToolCard({
           </span>
         </span>
       </div>
+      {children ? (
+        <div className="border-t border-border/60 bg-background py-1.5 pl-8 pr-2.5 text-[11px] leading-snug text-muted-foreground">
+          {children}
+        </div>
+      ) : null}
     </div>
   );
 }

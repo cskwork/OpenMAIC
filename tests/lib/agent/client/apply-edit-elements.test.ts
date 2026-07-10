@@ -116,6 +116,53 @@ describe('applyEditElementsIntents', () => {
     expect(commitContent).not.toHaveBeenCalled();
   });
 
+  it('refuses when a target element changed type after the gate ran', async () => {
+    const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
+    const shape = {
+      id: 'a',
+      type: 'shape',
+      left: 100,
+      top: 80,
+      width: 400,
+      height: 60,
+      rotate: 0,
+      viewBox: [0, 0],
+      path: 'M0,0',
+      fixedRatio: false,
+      fill: '#eee',
+    } as PPTElement;
+    const present = slideWith([shape]);
+    mockSession.sceneId = 's1';
+    mockSession.history = { present };
+
+    const result = applyEditElementsIntents(
+      's1',
+      [{ type: 'element.update', id: 'a', props: { top: 10 } }],
+      { a: 'text' },
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/changed type/i);
+    expect(commitContent).not.toHaveBeenCalled();
+  });
+
+  it('allows apply when the gate-time element type still matches', async () => {
+    const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
+    const present = slideWith([textEl('a')]);
+    mockSession.sceneId = 's1';
+    mockSession.history = { present };
+
+    const result = applyEditElementsIntents(
+      's1',
+      [{ type: 'element.update', id: 'a', props: { top: 10 } }],
+      { a: 'text' },
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(commitContent).toHaveBeenCalledTimes(1);
+  });
+
   it('commits one undo entry when session is open and targets are valid', async () => {
     const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
     const present = slideWith([textEl('a')]);

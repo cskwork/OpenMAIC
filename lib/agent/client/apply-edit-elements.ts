@@ -27,7 +27,9 @@ export interface EditElementsApplyDetails {
   sceneId?: string;
   intents?: EditIntent[] | null;
   updateCount?: number;
-  /** Present when the tool or host refused; surfaced on the tool card tooltip. */
+  /** Element types captured when the server-side gate accepted the batch. */
+  targetElementTypes?: Record<string, string>;
+  /** Present when the tool or host refused; surfaced on the tool card body + tooltip. */
   refuseReason?: string;
 }
 
@@ -93,6 +95,7 @@ function applyIntentsToContent(content: SlideContent, intents: EditIntent[]): Sl
 export function applyEditElementsIntents(
   sceneId: string,
   intents: EditIntent[],
+  targetElementTypes?: Record<string, string>,
 ): ApplyEditElementsResult {
   if (!intents.length) return { ok: false, reason: 'no element updates proposed' };
 
@@ -112,6 +115,7 @@ export function applyEditElementsIntents(
   const recheck = revalidateIntentsAgainstElements(
     present.canvas.elements as PPTElement[],
     intents,
+    targetElementTypes,
   );
   if (!recheck.ok) return { ok: false, reason: recheck.reason };
 
