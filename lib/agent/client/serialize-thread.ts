@@ -25,6 +25,13 @@ export interface SlimToolResult {
      */
     html?: string | null;
     editCount?: number;
+    /**
+     * edit_elements success marker: a non-empty placeholder array when intents
+     * applied; `null` on refusal. Drop the heavy props payload — the card only
+     * needs applied vs refused.
+     */
+    intents?: unknown[] | null;
+    updateCount?: number;
   };
 }
 
@@ -79,6 +86,12 @@ function slimResult(result: unknown): SlimToolResult | undefined {
     else if (typeof dh === 'string') details.html = dh.length > 0 ? '…' : '';
     const ec = (d as { editCount?: unknown }).editCount;
     if (typeof ec === 'number') details.editCount = ec;
+    // edit_elements: keep applied/refused signal, drop intent prop payloads.
+    const di = (d as { intents?: unknown }).intents;
+    if (di === null) details.intents = null;
+    else if (Array.isArray(di)) details.intents = di.map(() => ({}));
+    const uc = (d as { updateCount?: unknown }).updateCount;
+    if (typeof uc === 'number') details.updateCount = uc;
     if (Array.isArray(d.actions)) {
       details.actions = d.actions.map((a) => ({
         type: (a as AnyPart)?.type as string | undefined,

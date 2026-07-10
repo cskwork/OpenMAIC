@@ -326,6 +326,10 @@
         "fixHtml": {
           "examples": "«زر البدء لا يفعل شيئًا»، «تتداخل اللوحات على الجوال»",
           "label": "إصلاح خطأ في الصفحة"
+        },
+        "elements": {
+          "label": "تعديل العناصر",
+          "examples": "«اجعل العنوان أزرق وحرّكه للأعلى»، «صغّر هذا الشكل»"
         }
       },
       "newConversation": "New conversation",
@@ -426,6 +430,12 @@
       "fixing": "جارٍ الإصلاح",
       "notFixed": "لم يُصلَح",
       "title": "إصلاح الصفحة التفاعلية"
+    },
+    "editElements": {
+      "title": "تحرير العناصر",
+      "editing": "جارٍ التحرير",
+      "applied": "تم التطبيق",
+      "notApplied": "لم يُطبَّق"
     }
   },
   "classroomComplete": {

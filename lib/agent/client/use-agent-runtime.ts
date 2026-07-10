@@ -23,12 +23,18 @@ import {
 } from '@assistant-ui/react';
 import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import { useStageStore } from '@/lib/store/stage';
+import { useCanvasStore } from '@/lib/store/canvas';
 import { getCurrentModelConfig } from '@/lib/utils/model-config';
 import type { SceneContextMap } from '@/app/api/agent/edit/route';
 import { mergeAssistantParts, type PiPart } from './merge-assistant-parts';
 import { resolveSceneOutline } from './resolve-scene-outline';
 import { planRegenerateApply, type RegenerateDetails } from './apply-regenerate';
 import { applyScenePatchInSync } from './apply-slide-content';
+import {
+  applyEditElementsIntents,
+  hasEditElementsIntents,
+  type EditElementsApplyDetails,
+} from './apply-edit-elements';
 import { useRegenSnapshots } from './regen-snapshots';
 import {
   createSession,
@@ -416,6 +422,18 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
           isError?: boolean;
         };
         toolResultsRef.current.set(e.toolCallId, { result: e.result, isError: !!e.isError });
+
+        // Per-element edits: apply validated EditIntents through the slide
+        // session (one undo). Separate from wholesale regenerate / html patch.
+        if (e.toolName === 'edit_elements' && !e.isError) {
+          const editDetails = (e.result?.details ?? {}) as EditElementsApplyDetails;
+          if (hasEditElementsIntents(editDetails)) {
+            applyEditElementsIntents(editDetails.sceneId, editDetails.intents);
+          }
+          refresh();
+          break;
+        }
+
         const details = (e.result?.details ?? {}) as RegenerateDetails;
         // Decide what to apply: regenerate_scene applies content (+actions) and
         // snapshots the pre-state for restore; regenerate_scene_actions applies
@@ -530,6 +548,9 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
             scene: opts.scene,
             history,
             sceneContextMap,
+            // Selection-aware edit_elements: prefer "this title" against the
+            // current canvas selection (trusted client state, not model-authored).
+            selection: useCanvasStore.getState().activeElementIdList,
             // The route reads per-request thinking config from the body (not
             // headers), same as generation — forward it so the agent honors the
             // user's active thinking budget/level too.

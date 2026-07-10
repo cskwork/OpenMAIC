@@ -311,6 +311,10 @@
         "fixHtml": {
           "examples": "\"O botão de iniciar não faz nada\", \"Os painéis se sobrepõem no celular\"",
           "label": "Corrigir um bug na página"
+        },
+        "elements": {
+          "label": "Ajustar elementos",
+          "examples": "“Deixe o título azul e suba”, “Diminua esta figura”"
         }
       },
       "newConversation": "New conversation",
@@ -411,6 +415,12 @@
       "fixing": "Corrigindo",
       "notFixed": "Não corrigido",
       "title": "Corrigir página interativa"
+    },
+    "editElements": {
+      "title": "Editar elementos",
+      "editing": "Editando",
+      "applied": "Aplicado",
+      "notApplied": "Não aplicado"
     }
   },
   "stage": {

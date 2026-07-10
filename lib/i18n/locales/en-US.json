@@ -332,6 +332,10 @@
         "fixHtml": {
           "label": "Fix a bug on the page",
           "examples": "“The start button does nothing”, “Panels overlap on mobile”"
+        },
+        "elements": {
+          "label": "Tweak selected elements",
+          "examples": "“Make the title blue and move it up”, “Make this figure smaller”"
         }
       },
       "newConversation": "New conversation",
@@ -426,6 +430,12 @@
       "reading": "Reading",
       "done": "Read",
       "failed": "Not read"
+    },
+    "editElements": {
+      "title": "Edit elements",
+      "editing": "Editing",
+      "applied": "Applied",
+      "notApplied": "Not applied"
     }
   },
   "classroomComplete": {
