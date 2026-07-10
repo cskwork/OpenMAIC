@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import * as editElementsGate from '@/lib/agent/tools/edit-elements-gate';
 import {
   ALLOWED_EDIT_PROPS,
   buildElementInventory,
@@ -9,6 +10,12 @@ import {
   type ElementInventoryItem,
 } from '@/lib/agent/tools/edit-elements-gate';
 import type { PPTElement } from '@openmaic/dsl';
+
+type SubsetValidator = (
+  value: unknown,
+  schema: Record<string, unknown>,
+  path: string,
+) => string | null;
 
 function textEl(overrides: Partial<PPTElement> & { id: string }): ElementInventoryItem {
   return {
@@ -435,6 +442,45 @@ describe('edit-elements-gate', () => {
   it('clamps line stroke width with min 1, not box MIN_SIZE', () => {
     expect(clampUpdateProps('line', { width: 0.5 }, { width: 2 })).toEqual({ width: 1 });
     expect(clampUpdateProps('line', { width: 4 }, { width: 2 })).toEqual({ width: 4 });
+  });
+
+  it('clamps opacity overshoot on valid opacity props', () => {
+    const result = mapProposalsToEditIntents(
+      [{ id: 'title-1', props: { opacity: 1.5 } }],
+      inventory,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.intents).toEqual([
+      {
+        type: 'element.update',
+        id: 'title-1',
+        props: { opacity: 1 },
+      },
+    ]);
+    expect(clampUpdateProps('text', { opacity: -0.25 }, { width: 400, height: 60 })).toEqual({
+      opacity: 0,
+    });
+  });
+
+  it('fails closed for schema refs and constructs the subset checker cannot validate', () => {
+    const validateJsonSchemaSubset = (
+      editElementsGate as typeof editElementsGate & {
+        validateJsonSchemaSubset?: SubsetValidator;
+      }
+    ).validateJsonSchemaSubset;
+
+    expect(
+      validateJsonSchemaSubset?.(
+        'anything',
+        { $ref: '#/definitions/DefinitelyMissing' },
+        'prop fill',
+      ),
+    ).toBe('prop fill uses a schema construct the gate cannot validate');
+    expect(
+      validateJsonSchemaSubset?.('anything', { oneOf: [{ type: 'string' }] }, 'prop fill'),
+    ).toBe('prop fill uses a schema construct the gate cannot validate');
+    expect(validateJsonSchemaSubset?.('anything', {}, 'prop fill')).toBeNull();
   });
 
   it('refuses partial group updates', () => {

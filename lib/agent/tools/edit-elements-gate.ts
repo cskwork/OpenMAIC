@@ -104,7 +104,7 @@ export const SHAPE_TEXT_CHROME_PROPS = new Set([
   'textType',
 ]);
 
-type JsonSchema = {
+export type JsonSchema = {
   $ref?: string;
   anyOf?: JsonSchema[];
   type?: string | string[];
@@ -125,6 +125,30 @@ type SchemaDocument = {
 const sceneSchema = sceneSchemaJson as SchemaDocument;
 const schemaDefinitions = sceneSchema.definitions ?? {};
 
+const ELEMENT_SCHEMA_DEFINITION_BY_TYPE = new Map<string, string>([
+  ['text', 'PPTTextElement'],
+  ['image', 'PPTImageElement'],
+  ['shape', 'PPTShapeElement'],
+  ['line', 'PPTLineElement'],
+  ['chart', 'PPTChartElement'],
+  ['table', 'PPTTableElement'],
+  ['latex', 'PPTLatexElement'],
+  ['video', 'PPTVideoElement'],
+  ['audio', 'PPTAudioElement'],
+  ['code', 'PPTCodeElement'],
+]);
+
+const REQUIRED_SCHEMA_DEFINITIONS = [
+  'Gradient',
+  'GradientColor',
+  'PPTElement',
+  'PPTElementOutline',
+  'PPTElementShadow',
+  'ShapeText',
+  'TextType',
+  ...ELEMENT_SCHEMA_DEFINITION_BY_TYPE.values(),
+];
+
 const SHAPE_TEXT_SCHEMA_ALIASES = new Map<string, string>([
   ['defaultColor', 'defaultColor'],
   ['defaultFontName', 'defaultFontName'],
@@ -135,10 +159,45 @@ const SHAPE_TEXT_SCHEMA_ALIASES = new Map<string, string>([
   ['vAlign', 'align'],
 ]);
 
+function schemaSourceError(detail: string): Error {
+  return new Error(
+    `edit_elements gate schema sanity check failed: ${detail}. Rebuild @openmaic/dsl to regenerate dist/schema/scene.schema.json.`,
+  );
+}
+
+function assertGateSchemaSource(definitions: Record<string, JsonSchema>): void {
+  for (const name of REQUIRED_SCHEMA_DEFINITIONS) {
+    if (!definitions[name]) {
+      throw schemaSourceError(`missing schema definition ${JSON.stringify(name)}`);
+    }
+  }
+
+  const textTypeEnum = definitions.TextType?.enum;
+  if (
+    !Array.isArray(textTypeEnum) ||
+    textTypeEnum.length === 0 ||
+    !textTypeEnum.every((item) => typeof item === 'string' && item.length > 0)
+  ) {
+    throw schemaSourceError('TextType enum must be a non-empty string array');
+  }
+
+  const pptElementOptions = definitions.PPTElement?.anyOf ?? [];
+  const pptElementRefs = new Set(
+    pptElementOptions.map((option) => (option.$ref ? decodeRefName(option.$ref) : null)),
+  );
+  for (const definitionName of ELEMENT_SCHEMA_DEFINITION_BY_TYPE.values()) {
+    if (!pptElementRefs.has(definitionName)) {
+      throw schemaSourceError(`PPTElement union missing ${JSON.stringify(definitionName)}`);
+    }
+  }
+}
+
 function decodeRefName(ref: string): string | null {
   const m = ref.match(/^#\/definitions\/(.+)$/);
   return m ? m[1].replace(/~1/g, '/').replace(/~0/g, '~') : null;
 }
+
+assertGateSchemaSource(schemaDefinitions);
 
 function resolveSchema(schema: JsonSchema, seen = new Set<string>()): JsonSchema {
   if (!schema.$ref) return schema;
@@ -183,6 +242,12 @@ function buildEditablePropSchemas(): Map<string, Map<string, JsonSchema>> {
 }
 
 const EDITABLE_PROP_SCHEMAS_BY_TYPE = buildEditablePropSchemas();
+
+for (const type of ELEMENT_SCHEMA_DEFINITION_BY_TYPE.keys()) {
+  if (!EDITABLE_PROP_SCHEMAS_BY_TYPE.has(type)) {
+    throw schemaSourceError(`unable to map editable schemas for ${JSON.stringify(type)} elements`);
+  }
+}
 
 export function getEditablePropSchema(type: string, key: string): JsonSchema | null {
   if (!ALLOWED_EDIT_PROPS.has(key) || FORBIDDEN_EDIT_PROPS.has(key)) return null;
@@ -247,13 +312,54 @@ function describeSchemaTypes(type: string | string[]): string {
   return Array.isArray(type) ? type.join('|') : type;
 }
 
-function validateJsonSchemaSubset(value: unknown, schema: JsonSchema, path: string): string | null {
+const SUPPORTED_SCHEMA_KEYWORDS = new Set([
+  '$ref',
+  'anyOf',
+  'type',
+  'const',
+  'enum',
+  'properties',
+  'required',
+  'additionalProperties',
+  'items',
+  'minimum',
+  'maximum',
+]);
+
+function propPath(path: string): string {
+  return path.startsWith('prop ') ? path : `prop ${path}`;
+}
+
+function unsupportedSchemaConstruct(path: string): string {
+  return `${propPath(path)} uses a schema construct the gate cannot validate`;
+}
+
+function isUnsupportedSchemaConstruct(err: string | null): boolean {
+  return err?.includes('uses a schema construct the gate cannot validate') ?? false;
+}
+
+function lacksSupportedSchemaKeywords(schema: JsonSchema): boolean {
+  const keys = Object.keys(schema);
+  return keys.length > 0 && !keys.some((key) => SUPPORTED_SCHEMA_KEYWORDS.has(key));
+}
+
+export function validateJsonSchemaSubset(
+  value: unknown,
+  schema: JsonSchema,
+  path: string,
+): string | null {
   const s = resolveSchema(schema);
-  if (s.anyOf?.length) {
+  if (s.$ref || lacksSupportedSchemaKeywords(s)) return unsupportedSchemaConstruct(path);
+
+  if ('anyOf' in s) {
+    if (!Array.isArray(s.anyOf) || s.anyOf.length === 0) {
+      return unsupportedSchemaConstruct(path);
+    }
     const errors = s.anyOf
       .map((option) => validateJsonSchemaSubset(value, option, path))
       .filter(Boolean);
-    return errors.length === s.anyOf.length ? `${path} does not match any allowed schema` : null;
+    if (errors.length !== s.anyOf.length) return null;
+    return errors.find(isUnsupportedSchemaConstruct) ?? `${path} does not match any allowed schema`;
   }
 
   if ('const' in s && !Object.is(value, s.const)) {
@@ -351,6 +457,10 @@ const COLOR_STRING_PROPS = new Set([
   'colorMask',
 ]);
 
+/**
+ * Structural, enum, and ownership mismatches refuse so the model learns the
+ * contract; numeric overshoot on a valid prop clamps later, matching gestures.
+ */
 function validatePolicyOverlay(key: string, value: unknown): string | null {
   if (COLOR_STRING_PROPS.has(key)) {
     return isColorString(value) ? null : `${key} must be a color string`;
@@ -360,9 +470,7 @@ function validatePolicyOverlay(key: string, value: unknown): string | null {
     case 'defaultFontName':
       return isNonEmptyString(value, 80) ? null : `${key} must be a non-empty string`;
     case 'opacity':
-      if (!isFiniteNumber(value)) return 'opacity must be a finite number';
-      if (value < 0 || value > 1) return 'opacity out of bounds (0..1)';
-      return null;
+      return isFiniteNumber(value) ? null : 'opacity must be a finite number';
     case 'lineHeight':
     case 'wordSpace':
     case 'paragraphSpace':
