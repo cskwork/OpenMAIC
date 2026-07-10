@@ -201,29 +201,92 @@ function validateGradient(v: unknown): string | null {
     return 'gradient must be an object';
   }
   const o = v as Record<string, unknown>;
-  if (typeof o.type !== 'string') return 'gradient.type must be a string';
+  for (const k of Object.keys(o)) {
+    if (k !== 'type' && k !== 'colors' && k !== 'rotate') {
+      return `gradient.${k} is out of contract`;
+    }
+  }
+  if (o.type !== 'linear' && o.type !== 'radial') {
+    return 'gradient.type must be linear|radial';
+  }
   if (!Array.isArray(o.colors) || o.colors.length === 0) {
     return 'gradient.colors must be a non-empty array';
+  }
+  for (let i = 0; i < o.colors.length; i++) {
+    const c = o.colors[i];
+    if (c === null || typeof c !== 'object' || Array.isArray(c)) {
+      return `gradient.colors[${i}] must be {pos,color}`;
+    }
+    const stop = c as Record<string, unknown>;
+    for (const k of Object.keys(stop)) {
+      if (k !== 'pos' && k !== 'color') {
+        return `gradient.colors[${i}].${k} is out of contract`;
+      }
+    }
+    if (!isFiniteNumber(stop.pos) || stop.pos < 0 || stop.pos > 1) {
+      return `gradient.colors[${i}].pos must be a number in [0,1]`;
+    }
+    if (!isColorString(stop.color)) {
+      return `gradient.colors[${i}].color must be a color string`;
+    }
   }
   if (!isFiniteNumber(o.rotate)) return 'gradient.rotate must be a finite number';
   return null;
 }
+
+const FILTER_KEYS = new Set([
+  'blur',
+  'brightness',
+  'contrast',
+  'grayscale',
+  'saturate',
+  'hue-rotate',
+  'sepia',
+  'invert',
+  'opacity',
+]);
 
 function validateFilters(v: unknown): string | null {
   if (v === null || typeof v !== 'object' || Array.isArray(v)) {
     return 'filters must be an object';
   }
   for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (!FILTER_KEYS.has(k)) return `filters.${k} is out of contract`;
     if (typeof val !== 'string') return `filters.${k} must be a string`;
   }
   return null;
 }
+
+const VALIGN_VALUES = new Set(['top', 'middle', 'bottom']);
+const TEXT_TYPE_VALUES = new Set(['title', 'content', 'caption', 'item', '']);
 
 /**
  * Validate non-geometry prop values. Returns an error string or null.
  * Geometry is handled by clampUpdateProps.
  */
 export function validatePropValue(key: string, value: unknown, type: string): string | null {
+  switch (key) {
+    case 'fill':
+      if (type !== 'shape' && type !== 'text') {
+        return `fill is not valid on ${type} elements`;
+      }
+      return isColorString(value) ? null : `${key} must be a color string`;
+    case 'defaultColor':
+    case 'defaultFontName':
+    case 'lineHeight':
+    case 'wordSpace':
+    case 'paragraphSpace':
+    case 'textType':
+    case 'vAlign':
+    case 'vertical':
+      if (type !== 'text' && type !== 'shape') {
+        return `${key} is not valid on ${type} elements`;
+      }
+      break;
+    default:
+      break;
+  }
+
   switch (key) {
     case 'fill':
     case 'defaultColor':
@@ -233,18 +296,31 @@ export function validatePropValue(key: string, value: unknown, type: string): st
     case 'colorMask':
       return isColorString(value) ? null : `${key} must be a color string`;
     case 'defaultFontName':
-    case 'textType':
-    case 'vAlign':
       return isNonEmptyString(value, 80) ? null : `${key} must be a non-empty string`;
+    case 'textType':
+      return typeof value === 'string' && TEXT_TYPE_VALUES.has(value)
+        ? null
+        : 'textType must be title|content|caption|item|""';
+    case 'vAlign':
+      return typeof value === 'string' && VALIGN_VALUES.has(value)
+        ? null
+        : 'vAlign must be top|middle|bottom';
     case 'opacity':
-      // clamped later
       return isFiniteNumber(value) ? null : 'opacity must be a finite number';
     case 'lineHeight':
     case 'wordSpace':
     case 'paragraphSpace':
+      if (!isFiniteNumber(value)) return `${key} must be a finite number`;
+      if (value < 0 || value > 100) return `${key} out of bounds (0..100)`;
+      return null;
     case 'radius':
+      if (!isFiniteNumber(value)) return `${key} must be a finite number`;
+      if (value < 0 || value > 500) return `${key} out of bounds (0..500)`;
+      return null;
     case 'fontSize':
-      return isFiniteNumber(value) ? null : `${key} must be a finite number`;
+      if (!isFiniteNumber(value)) return `${key} must be a finite number`;
+      if (value < 8 || value > 200) return `${key} out of bounds (8..200)`;
+      return null;
     case 'vertical':
     case 'flipH':
     case 'flipV':
@@ -262,8 +338,8 @@ export function validatePropValue(key: string, value: unknown, type: string): st
       if (type !== 'image') return 'filters is only valid on image elements';
       return validateFilters(value);
     case 'themeColors':
-      if (!Array.isArray(value) || !value.every(isColorString)) {
-        return 'themeColors must be an array of color strings';
+      if (!Array.isArray(value) || value.length === 0 || !value.every(isColorString)) {
+        return 'themeColors must be a non-empty array of color strings';
       }
       return null;
     default:

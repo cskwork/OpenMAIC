@@ -161,7 +161,12 @@ export function makeEditElementsTool(
       if (!trimmed) {
         return {
           content: [{ type: 'text', text: 'Error: instruction is empty.' }],
-          details: { sceneId, intents: null, updateCount: 0 },
+          details: {
+            sceneId,
+            intents: null,
+            updateCount: 0,
+            refuseReason: 'instruction is empty',
+          },
           isError: true,
         };
       }
@@ -175,7 +180,12 @@ export function makeEditElementsTool(
               text: `Error: scene context not found for sceneId ${JSON.stringify(String(sceneId).slice(0, 200))}.`,
             },
           ],
-          details: { sceneId, intents: null, updateCount: 0 },
+          details: {
+            sceneId,
+            intents: null,
+            updateCount: 0,
+            refuseReason: 'scene context not found',
+          },
           isError: true,
         };
       }
@@ -191,7 +201,12 @@ export function makeEditElementsTool(
                 'For interactive pages use edit_interactive_html; otherwise suggest the canvas.',
             },
           ],
-          details: { sceneId, intents: null, updateCount: 0 },
+          details: {
+            sceneId,
+            intents: null,
+            updateCount: 0,
+            refuseReason: 'not a slide scene',
+          },
           isError: true,
         };
       }
@@ -200,7 +215,12 @@ export function makeEditElementsTool(
       if (elements.length === 0) {
         return {
           content: [{ type: 'text', text: 'This slide has no elements to edit.' }],
-          details: { sceneId, intents: null, updateCount: 0 },
+          details: {
+            sceneId,
+            intents: null,
+            updateCount: 0,
+            refuseReason: 'slide has no elements',
+          },
           isError: true,
         };
       }
@@ -220,14 +240,15 @@ export function makeEditElementsTool(
       try {
         raw = await deps.aiCall('scene-content:slide', system, user, signal);
       } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
         return {
           content: [
             {
               type: 'text',
-              text: `Error proposing element edits: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Error proposing element edits: ${reason}`,
             },
           ],
-          details: { sceneId, intents: null, updateCount: 0 },
+          details: { sceneId, intents: null, updateCount: 0, refuseReason: reason },
           isError: true,
         };
       }
@@ -236,14 +257,15 @@ export function makeEditElementsTool(
       try {
         proposals = parseProposedUpdates(raw);
       } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
         return {
           content: [
             {
               type: 'text',
-              text: `Could not apply the edit: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Could not apply the edit: ${reason}`,
             },
           ],
-          details: { sceneId, intents: null, updateCount: 0 },
+          details: { sceneId, intents: null, updateCount: 0, refuseReason: reason },
           isError: true,
         };
       }
@@ -277,7 +299,9 @@ export function makeEditElementsTool(
           {
             type: 'text',
             text:
-              `Updated ${updateCount} element(s) on the slide. ` +
+              `Proposed ${updateCount} element update(s) for the editor to apply. ` +
+              `Do not claim the canvas already changed — the client may still refuse ` +
+              `(locked/missing elements, no Pro edit session, or a stale slide). ` +
               `Note: the element inventory was snapshotted when this tool started; ` +
               `further edits in the same turn still see pre-edit geometry until the client refreshes scene context.`,
           },

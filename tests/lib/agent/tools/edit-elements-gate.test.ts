@@ -176,6 +176,63 @@ describe('edit-elements-gate', () => {
     ).toBe(false);
   });
 
+  it('refuses junk nested inside gradient', () => {
+    const result = mapProposalsToEditIntents(
+      [
+        {
+          id: 'fig-1',
+          props: {
+            gradient: { type: 'linear', colors: ['#f00', '#00f'], rotate: 0 },
+          },
+        },
+      ],
+      inventory,
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it('accepts a well-formed gradient on shapes', () => {
+    const result = mapProposalsToEditIntents(
+      [
+        {
+          id: 'fig-1',
+          props: {
+            gradient: {
+              type: 'linear',
+              colors: [
+                { pos: 0, color: '#f00' },
+                { pos: 1, color: '#00f' },
+              ],
+              rotate: 90,
+            },
+          },
+        },
+      ],
+      inventory,
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('refuses defaultColor on image elements', () => {
+    const inv: ElementInventoryItem[] = [
+      {
+        id: 'img-1',
+        type: 'image',
+        left: 0,
+        top: 0,
+        width: 100,
+        height: 100,
+        rotate: 0,
+        lock: false,
+        label: 'pic',
+        style: {},
+      },
+    ];
+    expect(
+      mapProposalsToEditIntents([{ id: 'img-1', props: { defaultColor: '#f00' } }], inv).ok,
+    ).toBe(false);
+  });
+
   it('clamps line stroke width with min 1, not box MIN_SIZE', () => {
     expect(clampUpdateProps('line', { width: 0.5 }, { width: 2 })).toEqual({ width: 1 });
     expect(clampUpdateProps('line', { width: 4 }, { width: 2 })).toEqual({ width: 4 });

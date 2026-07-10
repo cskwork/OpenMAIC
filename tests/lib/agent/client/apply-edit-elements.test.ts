@@ -186,4 +186,31 @@ describe('applyEditElementsIntents', () => {
     expect(el.defaultColor).toBeUndefined();
     expect(el.text?.defaultColor).toBe('#00f');
   });
+
+  it('refuses styling text chrome on a shape with no label', async () => {
+    const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
+    const shape = {
+      id: 'sh1',
+      type: 'shape',
+      left: 10,
+      top: 10,
+      width: 100,
+      height: 80,
+      rotate: 0,
+      viewBox: [0, 0],
+      path: 'M0,0',
+      fixedRatio: false,
+      fill: '#eee',
+    } as PPTElement;
+    mockSession.sceneId = 's1';
+    mockSession.history = { present: slideWith([shape]) };
+
+    const result = applyEditElementsIntents('s1', [
+      { type: 'element.update', id: 'sh1', props: { defaultColor: '#00f' } },
+    ]);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/no text label/i);
+    expect(commitContent).not.toHaveBeenCalled();
+  });
 });

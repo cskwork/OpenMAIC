@@ -115,6 +115,33 @@ export function applyEditElementsIntents(
   );
   if (!recheck.ok) return { ok: false, reason: recheck.reason };
 
+  // Refuse fabricating shape.text when the shape has no label (no content authoring).
+  const byId = new Map((present.canvas.elements as PPTElement[]).map((el) => [el.id, el] as const));
+  for (const intent of intents) {
+    const updates =
+      intent.type === 'element.update'
+        ? [{ id: intent.id, props: intent.props as Record<string, unknown> }]
+        : intent.type === 'element.updateMany'
+          ? intent.updates.map((u) => ({
+              id: u.id,
+              props: u.props as Record<string, unknown>,
+            }))
+          : [];
+    for (const u of updates) {
+      const el = byId.get(u.id);
+      if (!el || el.type !== 'shape') continue;
+      const touchesText = Object.keys(u.props).some(
+        (k) => SHAPE_TEXT_CHROME_PROPS.has(k) || k === 'vAlign',
+      );
+      if (touchesText && !(el as { text?: unknown }).text) {
+        return {
+          ok: false,
+          reason: `shape ${JSON.stringify(u.id)} has no text label to style`,
+        };
+      }
+    }
+  }
+
   const next = applyIntentsToContent(present, intents);
   if (next === present) {
     return { ok: false, reason: 'nothing changed (targets missing after revalidation)' };

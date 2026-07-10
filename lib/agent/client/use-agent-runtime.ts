@@ -35,6 +35,7 @@ import {
   hasEditElementsIntents,
   type EditElementsApplyDetails,
 } from './apply-edit-elements';
+import { toAgentHistory } from './agent-history';
 import { useRegenSnapshots } from './regen-snapshots';
 import {
   createSession,
@@ -72,26 +73,9 @@ function extractText(message: AppendMessage): string {
     .join('\n');
 }
 
-/** Plain text of a thread message's content (tool-call parts have no text). */
-function messageText(content: ThreadMessageLike['content']): string {
-  if (typeof content === 'string') return content.trim();
-  if (!Array.isArray(content)) return '';
-  return content
-    .map((p) => (p && p.type === 'text' && typeof p.text === 'string' ? p.text : ''))
-    .filter(Boolean)
-    .join('\n')
-    .trim();
-}
-
 /** Project the rendered thread into text-only turns for server-side memory. */
 function toHistory(messages: ThreadMessageLike[]): HistoryTurn[] {
-  const out: HistoryTurn[] = [];
-  for (const m of messages) {
-    const text = messageText(m.content);
-    if (!text) continue;
-    out.push({ role: m.role === 'user' ? 'user' : 'assistant', text });
-  }
-  return out;
+  return toAgentHistory(messages);
 }
 
 /**
@@ -267,6 +251,8 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
   // Per-run accumulated state: chronological turns + tool results.
   const turnsRef = useRef<PiPart[][]>([]);
   const toolResultsRef = useRef<Map<string, { result: unknown; isError: boolean }>>(new Map());
+  /** Apply-time refusals for edit_elements within the current run (client-side). */
+  const editApplyFailuresRef = useRef<string[]>([]);
   const errorRef = useRef<string>('');
   const phaseRef = useRef<'running' | 'complete' | 'error' | 'cancelled'>('complete');
   // Aborts the in-flight run; closing the fetch body cancels the server stream
@@ -449,6 +435,9 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
                 },
                 isError: true,
               });
+              // Visible correction after wrap-up may still claim success (server
+              // only saw "proposed"); also feeds next-turn history via toHistory.
+              editApplyFailuresRef.current.push(applied.reason);
             }
           }
           refresh();
@@ -496,6 +485,7 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
       const assistantId = `a-${turnId}`;
       turnsRef.current = [];
       toolResultsRef.current = new Map();
+      editApplyFailuresRef.current = [];
       errorRef.current = '';
       phaseRef.current = 'running';
       const abort = new AbortController();
@@ -636,6 +626,21 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
         if (!superseded) {
           abortRef.current = null;
           if (phaseRef.current === 'running') phaseRef.current = 'complete';
+          // If the client refused an edit_elements apply, append a correction so
+          // the user (and next-turn history) see it even when wrap-up claimed success.
+          if (editApplyFailuresRef.current.length > 0) {
+            const reasons = [...new Set(editApplyFailuresRef.current)];
+            turnsRef.current.push([
+              {
+                type: 'text',
+                text:
+                  reasons.length === 1
+                    ? `Editor could not apply the element edit: ${reasons[0]}. Nothing was changed.`
+                    : `Editor could not apply element edits:\n${reasons.map((r) => `- ${r}`).join('\n')}\nNothing was changed.`,
+              },
+            ]);
+            editApplyFailuresRef.current = [];
+          }
           // Close any reasoning block still open (e.g. the run ended with the
           // last block as its final phase) so its duration is final.
           useThinkingTimers.getState().endAll(`${assistantId}:`, Date.now());
