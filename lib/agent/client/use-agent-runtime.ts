@@ -425,10 +425,31 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
 
         // Per-element edits: apply validated EditIntents through the slide
         // session (one undo). Separate from wholesale regenerate / html patch.
+        // Apply-time revalidation may still refuse (stale ids / lock / no session);
+        // rewrite the stored tool result so the card shows Not applied, not Applied.
         if (e.toolName === 'edit_elements' && !e.isError) {
           const editDetails = (e.result?.details ?? {}) as EditElementsApplyDetails;
           if (hasEditElementsIntents(editDetails)) {
-            applyEditElementsIntents(editDetails.sceneId, editDetails.intents);
+            const applied = applyEditElementsIntents(editDetails.sceneId, editDetails.intents);
+            if (!applied.ok) {
+              toolResultsRef.current.set(e.toolCallId, {
+                result: {
+                  content: [
+                    {
+                      type: 'text',
+                      text: `Could not apply the edit: ${applied.reason}. Nothing was changed.`,
+                    },
+                  ],
+                  details: {
+                    sceneId: editDetails.sceneId,
+                    intents: null,
+                    updateCount: 0,
+                    refuseReason: applied.reason,
+                  },
+                },
+                isError: true,
+              });
+            }
           }
           refresh();
           break;

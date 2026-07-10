@@ -49,6 +49,8 @@ export interface EditElementsDetails {
   intents: EditIntent[] | null;
   /** Number of elements touched (0 on refusal). */
   updateCount: number;
+  /** Gate/host refusal reason (user-visible via tool card tooltip). */
+  refuseReason?: string;
 }
 
 export type EditElementsDeps = RegenerateActionsDeps & {
@@ -88,7 +90,7 @@ function inventoryForPrompt(items: ElementInventoryItem[]): string {
     .map((el) => {
       const box =
         el.type === 'line'
-          ? `left=${el.left} top=${el.top} width=${el.width}`
+          ? `left=${el.left} top=${el.top} strokeWidth=${el.width}`
           : `left=${el.left} top=${el.top} width=${el.width} height=${el.height} rotate=${el.rotate ?? 0}`;
       const styleKeys = Object.keys(el.style);
       const style =
@@ -96,7 +98,8 @@ function inventoryForPrompt(items: ElementInventoryItem[]): string {
           ? ` style={${styleKeys.map((k) => `${k}:${JSON.stringify(el.style[k])}`).join(',')}}`
           : '';
       const lock = el.lock ? ' LOCKED' : '';
-      return `- id=${el.id} type=${el.type} label=${JSON.stringify(el.label)} ${box}${style}${lock}`;
+      const group = el.groupId ? ` groupId=${el.groupId}` : '';
+      return `- id=${el.id} type=${el.type} label=${JSON.stringify(el.label)} ${box}${style}${lock}${group}`;
     })
     .join('\n');
 }
@@ -113,9 +116,11 @@ function buildProposalPrompt(args: {
     'Allowed props: left, top, width, height, rotate, fill, opacity, outline, shadow,',
     'defaultColor, defaultFontName, lineHeight, wordSpace, paragraphSpace, vertical, vAlign, textType,',
     'color, gradient, filters, radius, flipH, flipV, colorMask, fixedRatio,',
-    'themeColors, textColor, lineColor, fontSize, showLineNumbers, fileName.',
-    'Do NOT change: id, type, lock, groupId, content, text, src, lines, latex, html, data, path, keypoints, line endpoints.',
+    'themeColors, textColor, lineColor, fontSize, showLineNumbers.',
+    'Do NOT change: id, type, lock, groupId, content, text, src, lines, latex, html, data, path, keypoints, line endpoints, fileName.',
     'Use absolute canvas values for geometry (not deltas). Prefer editing selected elements when the user says "this" / "these".',
+    'For line elements, width is stroke thickness (typically 1–8), not box size.',
+    'Grouped elements (same groupId) must be updated together — never move only one member.',
     'Only include props that actually change. Never invent element ids.',
   ].join(' ');
 
@@ -201,7 +206,10 @@ export function makeEditElementsTool(
       }
 
       const inventory = buildElementInventory(elements);
-      const selectionIds = deps.getSelection?.() ?? [];
+      // Selection is global canvas state — only keep ids that exist on this slide
+      // so a cross-scene selection cannot poison the prompt / batch.
+      const inventoryIds = new Set(inventory.map((el) => el.id));
+      const selectionIds = (deps.getSelection?.() ?? []).filter((id) => inventoryIds.has(id));
       const { system, user } = buildProposalPrompt({
         instruction: trimmed,
         inventory,
@@ -249,7 +257,12 @@ export function makeEditElementsTool(
               text: `Could not apply the edit: ${gated.reason}. Nothing was changed.`,
             },
           ],
-          details: { sceneId, intents: null, updateCount: 0 },
+          details: {
+            sceneId,
+            intents: null,
+            updateCount: 0,
+            refuseReason: gated.reason,
+          },
           isError: true,
         };
       }
@@ -263,7 +276,10 @@ export function makeEditElementsTool(
         content: [
           {
             type: 'text',
-            text: `Updated ${updateCount} element(s) on the slide.`,
+            text:
+              `Updated ${updateCount} element(s) on the slide. ` +
+              `Note: the element inventory was snapshotted when this tool started; ` +
+              `further edits in the same turn still see pre-edit geometry until the client refreshes scene context.`,
           },
         ],
         details: { sceneId, intents: gated.intents, updateCount },

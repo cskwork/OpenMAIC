@@ -7,19 +7,63 @@
  * later without changing the tool contract. Mixed per-id props cannot use
  * slide-ops `element.updateMany` (shared patch), so we fold updates into one
  * `commitContent(..., true)`.
+ *
+ * Apply-time revalidation: the gate ran against a turn-start inventory; before
+ * writing we re-check ids/locks/groups against live content and refuse the
+ * whole batch if anything drifted (never partial apply).
  */
 
 import type { EditIntent } from '@openmaic/renderer/editing';
 import type { PPTElement } from '@openmaic/dsl';
 import { produce } from 'immer';
 import { useSlideEditSession } from '@/components/edit/surfaces/slide/slide-edit-session';
-import { useStageStore } from '@/lib/store/stage';
 import type { SlideContent } from '@/lib/types/stage';
+import {
+  revalidateIntentsAgainstElements,
+  SHAPE_TEXT_CHROME_PROPS,
+} from '@/lib/agent/tools/edit-elements-gate';
 
 export interface EditElementsApplyDetails {
   sceneId?: string;
   intents?: EditIntent[] | null;
   updateCount?: number;
+  /** Present when the tool or host refused; surfaced on the tool card tooltip. */
+  refuseReason?: string;
+}
+
+export type ApplyEditElementsResult = { ok: true } | { ok: false; reason: string };
+
+/** Shape text-chrome keys are nested under `shape.text` (not top-level). */
+function applyPropsToElement(el: PPTElement, props: Partial<PPTElement>): void {
+  if (el.type === 'shape') {
+    const rest: Record<string, unknown> = {};
+    const textPatch: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(props as Record<string, unknown>)) {
+      if (SHAPE_TEXT_CHROME_PROPS.has(key)) {
+        textPatch[key === 'textType' ? 'type' : key] = value;
+      } else if (key === 'vAlign') {
+        textPatch.align = value;
+      } else {
+        rest[key] = value;
+      }
+    }
+    Object.assign(el, rest);
+    if (Object.keys(textPatch).length > 0) {
+      const shape = el as PPTElement & {
+        text?: Record<string, unknown>;
+      };
+      shape.text = {
+        content: '',
+        defaultFontName: 'Microsoft YaHei',
+        defaultColor: '#333333',
+        align: 'middle',
+        ...(shape.text ?? {}),
+        ...textPatch,
+      };
+    }
+    return;
+  }
+  Object.assign(el, props);
 }
 
 function applyIntentsToContent(content: SlideContent, intents: EditIntent[]): SlideContent {
@@ -28,12 +72,12 @@ function applyIntentsToContent(content: SlideContent, intents: EditIntent[]): Sl
       if (intent.type === 'element.update') {
         const el = draft.canvas.elements.find((e) => e.id === intent.id);
         if (!el) continue;
-        Object.assign(el, intent.props);
+        applyPropsToElement(el, intent.props);
       } else if (intent.type === 'element.updateMany') {
         for (const u of intent.updates) {
           const el = draft.canvas.elements.find((e) => e.id === u.id);
           if (!el) continue;
-          Object.assign(el, u.props as Partial<PPTElement>);
+          applyPropsToElement(el, u.props as Partial<PPTElement>);
         }
       }
       // Other EditIntent kinds are out of scope for this vertical.
@@ -42,26 +86,41 @@ function applyIntentsToContent(content: SlideContent, intents: EditIntent[]): Sl
 }
 
 /**
- * Apply validated intents for a scene. Returns true when something was written.
- * Prefers the open slide edit session (one undo via commitContent); falls back
- * to a stage-store write when no session is open for that scene.
+ * Apply validated intents for a scene. Returns ok/reason.
+ * Requires an open slide edit session for that scene (one undo via commitContent).
+ * No silent stage-store fallback — that path had no undo and violated the contract.
  */
-export function applyEditElementsIntents(sceneId: string, intents: EditIntent[]): boolean {
-  if (!intents.length) return false;
+export function applyEditElementsIntents(
+  sceneId: string,
+  intents: EditIntent[],
+): ApplyEditElementsResult {
+  if (!intents.length) return { ok: false, reason: 'no element updates proposed' };
 
   const session = useSlideEditSession.getState();
-  if (session.sceneId === sceneId && session.history) {
-    const next = applyIntentsToContent(session.history.present, intents);
-    if (next === session.history.present) return false;
-    session.commitContent(next, true);
-    return true;
+  if (session.sceneId !== sceneId || !session.history) {
+    return {
+      ok: false,
+      reason: 'no open edit session for this scene; open Pro mode on the target slide first',
+    };
   }
 
-  const scene = useStageStore.getState().getSceneById(sceneId);
-  if (!scene || scene.content.type !== 'slide') return false;
-  const next = applyIntentsToContent(scene.content as SlideContent, intents);
-  useStageStore.getState().updateScene(sceneId, { content: next });
-  return true;
+  const present = session.history.present;
+  if (present.type !== 'slide') {
+    return { ok: false, reason: 'edit session content is not a slide' };
+  }
+
+  const recheck = revalidateIntentsAgainstElements(
+    present.canvas.elements as PPTElement[],
+    intents,
+  );
+  if (!recheck.ok) return { ok: false, reason: recheck.reason };
+
+  const next = applyIntentsToContent(present, intents);
+  if (next === present) {
+    return { ok: false, reason: 'nothing changed (targets missing after revalidation)' };
+  }
+  session.commitContent(next, true);
+  return { ok: true };
 }
 
 /** True when tool details carry applyable edit_elements intents. */

@@ -157,4 +157,96 @@ describe('edit-elements-gate', () => {
     expect(inv[0].label).toBe('Hello World');
     expect(inv[0].style.defaultColor).toBe('#111');
   });
+
+  it('refuses malformed prop values (outline/shadow/color)', () => {
+    expect(
+      mapProposalsToEditIntents([{ id: 'title-1', props: { outline: 17 } }], inventory).ok,
+    ).toBe(false);
+    expect(
+      mapProposalsToEditIntents([{ id: 'title-1', props: { shadow: 'big' } }], inventory).ok,
+    ).toBe(false);
+    expect(
+      mapProposalsToEditIntents([{ id: 'title-1', props: { defaultColor: 12 } }], inventory).ok,
+    ).toBe(false);
+    expect(
+      mapProposalsToEditIntents(
+        [{ id: 'title-1', props: { rotate: '45' as unknown as number } }],
+        inventory,
+      ).ok,
+    ).toBe(false);
+  });
+
+  it('clamps line stroke width with min 1, not box MIN_SIZE', () => {
+    expect(clampUpdateProps('line', { width: 0.5 }, { width: 2 })).toEqual({ width: 1 });
+    expect(clampUpdateProps('line', { width: 4 }, { width: 2 })).toEqual({ width: 4 });
+  });
+
+  it('refuses partial group updates', () => {
+    const grouped: ElementInventoryItem[] = [
+      { ...textEl({ id: 'g1' }), groupId: 'grp' },
+      {
+        id: 'g2',
+        type: 'shape',
+        left: 0,
+        top: 0,
+        width: 50,
+        height: 50,
+        rotate: 0,
+        lock: false,
+        label: 'icon',
+        style: {},
+        groupId: 'grp',
+      },
+    ];
+    const result = mapProposalsToEditIntents([{ id: 'g1', props: { left: 10 } }], grouped);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/group/i);
+  });
+
+  it('allows updating every member of a group together', () => {
+    const grouped: ElementInventoryItem[] = [
+      { ...textEl({ id: 'g1' }), groupId: 'grp' },
+      {
+        id: 'g2',
+        type: 'shape',
+        left: 0,
+        top: 0,
+        width: 50,
+        height: 50,
+        rotate: 0,
+        lock: false,
+        label: 'icon',
+        style: {},
+        groupId: 'grp',
+      },
+    ];
+    const result = mapProposalsToEditIntents(
+      [
+        { id: 'g1', props: { left: 10 } },
+        { id: 'g2', props: { left: 20 } },
+      ],
+      grouped,
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('surfaces groupId on inventory items', () => {
+    const els = [
+      {
+        id: 't1',
+        type: 'text',
+        left: 0,
+        top: 0,
+        width: 100,
+        height: 40,
+        rotate: 0,
+        groupId: 'g',
+        content: 'x',
+        defaultFontName: 'Arial',
+        defaultColor: '#111',
+      },
+    ] as unknown as PPTElement[];
+    expect(buildElementInventory(els)[0].groupId).toBe('g');
+  });
 });

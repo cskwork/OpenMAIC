@@ -32,6 +32,8 @@ export interface SlimToolResult {
      */
     intents?: unknown[] | null;
     updateCount?: number;
+    /** Gate/host refusal reason for the tool-card tooltip. */
+    refuseReason?: string;
   };
 }
 
@@ -92,6 +94,8 @@ function slimResult(result: unknown): SlimToolResult | undefined {
     else if (Array.isArray(di)) details.intents = di.map(() => ({}));
     const uc = (d as { updateCount?: unknown }).updateCount;
     if (typeof uc === 'number') details.updateCount = uc;
+    const rr = (d as { refuseReason?: unknown }).refuseReason;
+    if (typeof rr === 'string' && rr.trim()) details.refuseReason = rr.trim();
     if (Array.isArray(d.actions)) {
       details.actions = d.actions.map((a) => ({
         type: (a as AnyPart)?.type as string | undefined,
