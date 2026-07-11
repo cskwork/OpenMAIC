@@ -825,6 +825,63 @@ describe('drainProjectRuntime', () => {
     warn.mockRestore();
   });
 
+  it('releases same-key drains after a hung append and keeps late duplicate state consistent', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const store = new SlowFirstAppendStore('evt-1');
+    const kv = new MemoryKVStore();
+    const stageId = 'stage-hard-cap';
+    const sceneId = 'scene-hard-cap';
+
+    const first = drainProjectRuntime({
+      stageId,
+      sceneId,
+      project: makeProject([runtimeEvent('evt-1')]),
+      store,
+      kv,
+      learnerKey: LEARNER_KEY,
+    });
+    await vi.waitFor(() => expect(store.appendLog).toEqual(['start:evt-1']));
+    await vi.advanceTimersByTimeAsync(10_001);
+    await expect(first).resolves.toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    const second = drainProjectRuntime({
+      stageId,
+      sceneId,
+      project: makeProject([runtimeEvent('evt-1'), runtimeEvent('evt-2')]),
+      store,
+      kv,
+      learnerKey: LEARNER_KEY,
+    });
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(store.appendLog).toEqual(['start:evt-1']);
+
+    await vi.advanceTimersByTimeAsync(2_001);
+    await vi.waitFor(() =>
+      expect(store.appendLog.filter((entry) => entry === 'start:evt-1')).toHaveLength(2),
+    );
+    await expect(second).resolves.toBeUndefined();
+
+    expect(store.records.map((record) => record.id)).toEqual(['evt-1', 'evt-2']);
+    await expect(
+      kv.get<PBLDrainWatermark>(watermarkKey(stageId, sceneId, LEARNER_KEY), 'device'),
+    ).resolves.toEqual({ lastRuntimeEventId: 'evt-2' });
+
+    store.resolveSlowAppend();
+    await vi.waitFor(() =>
+      expect(store.appendLog.filter((entry) => entry === 'finish:evt-1')).toHaveLength(2),
+    );
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(store.records.map((record) => record.id)).toEqual(['evt-1', 'evt-2', 'evt-1']);
+    await expect(
+      kv.get<PBLDrainWatermark>(watermarkKey(stageId, sceneId, LEARNER_KEY), 'device'),
+    ).resolves.toEqual({ lastRuntimeEventId: 'evt-2' });
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it('redrains the whole visible ledger when the watermark event id is no longer present', async () => {
     const store = new MemoryRuntimeStore();
     const kv = new MemoryKVStore();

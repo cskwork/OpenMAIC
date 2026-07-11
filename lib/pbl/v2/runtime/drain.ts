@@ -27,6 +27,7 @@ import type { PBLEngagementEvent, PBLProjectV2, PBLRuntimeEvent } from '@/lib/pb
 import { enrichPBLRuntimeEvent, pblEngagementRecordPayload } from './record-payloads';
 
 const PBL_DRAIN_TIMEOUT_MS = 10_000;
+const PBL_DRAIN_CHAIN_HARD_CAP_MS = PBL_DRAIN_TIMEOUT_MS * 2;
 const WATERMARK_SCOPE = 'device';
 
 let defaultKv: KVStore | undefined;
@@ -309,14 +310,14 @@ async function drainProjectRuntimeSerialized(args: DrainProjectRuntimeArgs): Pro
   const store = args.store ?? getRuntimeStore();
   const inFlightKey = `${args.stageId}:${args.sceneId}:${learnerKey}`;
   const previous = inFlightPblDrains.get(inFlightKey) ?? Promise.resolve();
-  const deadline = createDrainDeadline(PBL_DRAIN_TIMEOUT_MS);
   const work = previous
     .catch(() => {
       // The previous caller already reported its failure; the next drain still
       // needs to re-read the watermark and make progress from the durable point.
     })
-    .then(() =>
-      drainProjectRuntimeWork(
+    .then(() => {
+      const deadline = createDrainDeadline(PBL_DRAIN_TIMEOUT_MS);
+      const drainWork = drainProjectRuntimeWork(
         {
           ...args,
           store,
@@ -324,8 +325,15 @@ async function drainProjectRuntimeSerialized(args: DrainProjectRuntimeArgs): Pro
           learnerKey,
         },
         deadline,
-      ),
-    );
+      );
+      // Safety invariant for releasing a stuck chain link: drain work checks
+      // the cooperative deadline before each append and before watermark
+      // writes. After that deadline, an overdue append may still complete, but
+      // the work returns before another append or watermark write. Any late
+      // record carries the deterministic event id and is deduped by fold.
+      drainWork.catch(() => {});
+      return withTimeout(drainWork, PBL_DRAIN_CHAIN_HARD_CAP_MS);
+    });
   inFlightPblDrains.set(inFlightKey, work);
   try {
     await work;
