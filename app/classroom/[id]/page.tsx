@@ -50,7 +50,6 @@ export default function ClassroomDetailPage() {
               const applied = await applyHydratedClassroomFallbackScenes({
                 stage,
                 scenes: scenes as Scene[],
-                getLatestStageId: () => useStageStore.getState().stage?.id,
                 applyStageAndScenes: (nextStage, hydrated) => {
                   useStageStore.getState().setStage(nextStage);
                   useStageStore.setState({

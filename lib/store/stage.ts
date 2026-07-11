@@ -23,6 +23,19 @@ const log = createLogger('StageStore');
 /** Virtual scene ID used when the user navigates to a page still being generated */
 export const PENDING_SCENE_ID = '__pending__';
 
+export type StageSceneLoadToken = number;
+
+let latestStageSceneLoadToken = 0;
+
+export function claimStageSceneLoadToken(): StageSceneLoadToken {
+  latestStageSceneLoadToken += 1;
+  return latestStageSceneLoadToken;
+}
+
+export function isCurrentStageSceneLoadToken(token: StageSceneLoadToken): boolean {
+  return token === latestStageSceneLoadToken;
+}
+
 // ==================== Debounce Helper ====================
 
 /**
@@ -150,6 +163,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
 
   // Actions
   setStage: (stage) => {
+    claimStageSceneLoadToken();
     set((s) => ({
       stage,
       scenes: [],
@@ -422,10 +436,10 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
 
   loadFromStorage: async (stageId: string) => {
     try {
+      const token = claimStageSceneLoadToken();
       // Skip IndexedDB load if the store already has this stage with scenes
       // (e.g. navigated from generation-preview with fresh in-memory data)
       const currentState = get();
-      const entryStageId = currentState.stage?.id;
       if (currentState.stage?.id === stageId && currentState.scenes.length > 0) {
         log.info('Stage already loaded in memory, skipping IndexedDB load:', stageId);
         return;
@@ -445,12 +459,11 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
         // boundary, same as setScenes/addScene — IndexedDB snapshots predate
         // the schema field, so they must be migrated on the way in.
         const migrated = await hydratePBLScenesFromRuntime(stageId, data.scenes.map(migrateScene));
-        const latestState = get();
-        const latestStageId = latestState.stage?.id;
-        if (entryStageId !== latestStageId && latestStageId !== stageId) {
-          log.info('Stage changed during IndexedDB hydration, skipping load:', stageId);
+        if (!isCurrentStageSceneLoadToken(token)) {
+          log.info('Newer stage load started during IndexedDB hydration, skipping load:', stageId);
           return;
         }
+        const latestState = get();
         if (latestState.stage?.id === stageId && latestState.scenes.length > 0) {
           log.info('Stage appeared in memory during IndexedDB hydration, skipping load:', stageId);
           return;
@@ -513,6 +526,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
   },
 
   clearStore: () => {
+    claimStageSceneLoadToken();
     set((s) => ({
       stage: null,
       scenes: [],

@@ -26,7 +26,6 @@ import type { PBLProjectV2 } from '@/lib/pbl/v2/types';
 import {
   applyHydratedClassroomFallbackScenes,
   hydrateClassroomFallbackScenes,
-  shouldApplyClassroomFallbackScenes,
 } from '@/lib/classroom/pbl-fallback-hydration';
 import { useStageStore } from '@/lib/store/stage';
 import { makeScene, type Scene, type Stage } from '@/lib/types/stage';
@@ -192,11 +191,39 @@ afterEach(async () => {
 });
 
 describe('classroom server fallback PBL hydration', () => {
-  it('does not apply fallback scenes after navigation changes the current stage', () => {
-    expect(shouldApplyClassroomFallbackScenes('stage-a', null)).toBe(true);
-    expect(shouldApplyClassroomFallbackScenes('stage-a', undefined)).toBe(true);
-    expect(shouldApplyClassroomFallbackScenes('stage-a', 'stage-a')).toBe(true);
-    expect(shouldApplyClassroomFallbackScenes('stage-a', 'stage-b')).toBe(false);
+  it('does not apply fallback scenes after a newer stage request starts', async () => {
+    const stageA = makeStage('stage-a');
+    const stageB = makeStage('stage-b');
+    const fallbackScene = makePBLScene(makeProject());
+    let resolveHydration!: (scenes: Scene[]) => void;
+    const hydrateScenes = vi.fn(
+      () =>
+        new Promise<Scene[]>((resolve) => {
+          resolveHydration = resolve;
+        }),
+    );
+
+    const applying = applyHydratedClassroomFallbackScenes({
+      stage: stageA,
+      scenes: [fallbackScene],
+      hydrateScenes,
+      applyStageAndScenes: (stage, scenes) => {
+        useStageStore.getState().setStage(stage);
+        useStageStore.setState({
+          scenes,
+          currentSceneId: scenes[0]?.id ?? null,
+          mode: 'playback',
+        });
+      },
+    });
+    await vi.waitFor(() => expect(hydrateScenes).toHaveBeenCalled());
+
+    useStageStore.getState().setStage(stageB);
+    resolveHydration([fallbackScene]);
+
+    await expect(applying).resolves.toBe(false);
+    expect(useStageStore.getState().stage?.id).toBe('stage-b');
+    expect(useStageStore.getState().scenes).toEqual([]);
   });
 
   it('hydrates server-fallback scenes from existing runtime records', async () => {
@@ -241,7 +268,6 @@ describe('classroom server fallback PBL hydration', () => {
       stage,
       scenes: [serverScene],
       hydrateScenes,
-      getLatestStageId: () => useStageStore.getState().stage?.id,
       applyStageAndScenes: (nextStage, hydrated) => {
         useStageStore.getState().setStage(nextStage);
         useStageStore.setState({
