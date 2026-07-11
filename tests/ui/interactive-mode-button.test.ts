@@ -34,7 +34,8 @@ describe('InteractiveModeButton markup contract', () => {
     expect(html).toContain('border-cyan-600 bg-transparent text-cyan-700');
     expect(html).toContain('dark:border-cyan-700 dark:text-cyan-300');
     expect(html).toContain('lucide-atom');
-    expect(html).not.toContain('bg-cyan-500');
+    expect(html).not.toContain('bg-cyan-100');
+    expect(html).not.toContain('dark:bg-cyan-400');
   });
 
   it('forwards wrapper-injected attributes and classes to the DOM button', () => {
