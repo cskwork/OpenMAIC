@@ -6,25 +6,27 @@ import type {
   PBLProjectV2,
   PBLRuntimeEvent,
 } from '@/lib/pbl/v2/types';
+import { MAX_ENGAGEMENT_EVENTS } from '@/lib/pbl/v2/operations/engagement';
 import {
   applyLearnerState,
   extractLearnerState,
   stripToDesignTemplate,
   type PBLLearnerState,
 } from './learner-state';
-import type {
-  PBLEngagementEventRecordPayload,
-  PBLRuntimeEventRecordPayload,
-  PBLRuntimeStorePayload,
-  PBLSnapshotRecordPayload,
+import {
+  PBL_RUNTIME_EVENT_KINDS_REQUIRING_ATTACHMENT,
+  type PBLEngagementEventRecordPayload,
+  type PBLRuntimeEventRecordPayload,
+  type PBLRuntimeStorePayload,
+  type PBLSnapshotRecordPayload,
 } from './record-payloads';
+import { clone } from './clone';
 
 export interface PBLFoldGap {
   recordId: string;
   seq: number;
   eventId?: string;
   kind: string;
-  threadId?: string;
   reason: string;
 }
 
@@ -40,10 +42,6 @@ export interface FoldPBLRuntimeArgs {
 export interface FoldPBLRuntimeResult {
   learnerState: PBLLearnerState;
   diagnostics: PBLFoldDiagnostics;
-}
-
-function clone<T>(value: T): T {
-  return structuredClone(value);
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -86,16 +84,9 @@ function normalizePayload(payload: unknown): PBLRuntimeStorePayload | undefined 
       payloadVersion: 1,
       event: payload,
       attachment: null,
-      attachmentMissingReason:
-        payload.kind === 'message_created' ||
-        payload.kind === 'thread_compacted' ||
-        payload.kind === 'submission_created' ||
-        payload.kind === 'evaluation_created' ||
-        payload.kind === 'proficiency_updated' ||
-        payload.kind === 'handover_staged' ||
-        payload.kind === 'task_completion_staged'
-          ? 'legacy_raw_record_missing_attachment'
-          : undefined,
+      attachmentMissingReason: PBL_RUNTIME_EVENT_KINDS_REQUIRING_ATTACHMENT.has(payload.kind)
+        ? 'legacy_raw_record_missing_attachment'
+        : undefined,
     };
   }
   if (isEngagementEvent(payload)) {
@@ -119,25 +110,13 @@ function addGap(
   reason: string,
 ): void {
   const event = payload?.event;
-  const threadId =
-    event && 'threadId' in event && typeof event.threadId === 'string' ? event.threadId : undefined;
   gaps.push({
     recordId: record.id,
     seq: record.seq,
     eventId: event?.id,
     kind: event?.kind ?? payload?.kind ?? 'unknown',
-    threadId,
     reason,
   });
-}
-
-function clearSupersededThreadGaps(gaps: PBLFoldGap[], threadId: string): void {
-  for (let index = gaps.length - 1; index >= 0; index -= 1) {
-    const gap = gaps[index];
-    if (gap?.threadId === threadId && gap.kind === 'message_created') {
-      gaps.splice(index, 1);
-    }
-  }
 }
 
 function findMilestone(state: PBLLearnerState, milestoneId: string) {
@@ -164,24 +143,6 @@ function upsertThreadMessage(
   }
   if (!thread.messages.some((candidate) => candidate.id === message.id)) {
     thread.messages.push(clone(message));
-  }
-}
-
-function replaceThreadState(
-  state: PBLLearnerState,
-  threadId: string,
-  threadState: { messages: PBLChatMessage[]; earlierSummary?: string },
-): void {
-  let thread = state.threads.find((candidate) => candidate.agentId === threadId);
-  if (!thread) {
-    thread = { agentId: threadId, messages: [] };
-    state.threads.push(thread);
-  }
-  thread.messages = clone(threadState.messages);
-  if (threadState.earlierSummary === undefined) {
-    delete thread.earlierSummary;
-  } else {
-    thread.earlierSummary = threadState.earlierSummary;
   }
 }
 
@@ -242,22 +203,6 @@ function applyRuntimeEvent(
         return undefined;
       }
       upsertThreadMessage(state, event.threadId, payload.attachment.message);
-      return undefined;
-    case 'thread_compacted':
-      if (payload.attachment?.kind !== 'thread_compaction') {
-        addGap(
-          gaps,
-          record,
-          payload,
-          payload.attachmentMissingReason ?? 'thread_compaction_attachment_missing',
-        );
-        return undefined;
-      }
-      replaceThreadState(state, event.threadId, {
-        messages: payload.attachment.messages,
-        earlierSummary: payload.attachment.earlierSummary,
-      });
-      clearSupersededThreadGaps(gaps, event.threadId);
       return undefined;
     case 'submission_created':
       if (payload.attachment?.kind !== 'submission') {
@@ -350,6 +295,12 @@ function applyRuntimeEvent(
     case 'tool_call_succeeded':
     case 'tool_call_failed':
       return undefined;
+    default: {
+      const _exhaustive: never = event;
+      void _exhaustive;
+      addGap(gaps, record, payload, 'unhandled_event_kind');
+      return undefined;
+    }
   }
 }
 
@@ -359,6 +310,9 @@ function applyEngagementEvent(
 ): void {
   if (!state.engagementEvents.some((event) => event.id === payload.event.id)) {
     state.engagementEvents.push(clone(payload.event));
+    if (state.engagementEvents.length > MAX_ENGAGEMENT_EVENTS) {
+      state.engagementEvents.splice(0, state.engagementEvents.length - MAX_ENGAGEMENT_EVENTS);
+    }
   }
 }
 
@@ -415,6 +369,7 @@ export function foldPBLRuntime({
       epoch += 1;
       state = clone(baseline);
       state.runtimeResetEpoch = epoch;
+      gaps.length = 0;
     }
   }
 

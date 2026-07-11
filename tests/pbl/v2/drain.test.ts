@@ -379,6 +379,31 @@ describe('drainProjectRuntime', () => {
       'pbl_runtime_event',
       'pbl_runtime_event',
     ]);
+    expect(store.records[0]!.payload).toEqual({
+      kind: 'pbl_runtime_event',
+      payloadVersion: 1,
+      event: {
+        id: 'evt-msg-1',
+        kind: 'message_created',
+        actorType: 'user',
+        messageId: 'msg-1',
+        threadId: 'role-i',
+        ts: '2026-05-29T00:00:01.000Z',
+        microtaskId: 'mt-1',
+        milestoneId: 'ms-1',
+      },
+      attachment: {
+        kind: 'message',
+        message: {
+          id: 'msg-1',
+          roleType: 'user',
+          content: 'Learner message content',
+          ts: '2026-05-29T00:00:01.000Z',
+          microtaskId: 'mt-1',
+        },
+      },
+      attachmentMissingReason: undefined,
+    });
     expect(store.records[0]!.payload as PBLRuntimeStorePayload).toMatchObject({
       kind: 'pbl_runtime_event',
       event: { id: 'evt-msg-1', messageId: 'msg-1' },
@@ -524,6 +549,7 @@ describe('drainProjectRuntime', () => {
     expect(new Set(store.records.map((record) => record.sessionId))).toEqual(
       new Set([deterministicPBLSessionId()]),
     );
+    expect(store.records.map((record) => record.id)).toEqual(['evt-1']);
   });
 
   it('uses the listed pbl session when deterministic create loses an already-exists race', async () => {

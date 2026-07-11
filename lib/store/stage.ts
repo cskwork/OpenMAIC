@@ -444,6 +444,11 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
         // boundary, same as setScenes/addScene — IndexedDB snapshots predate
         // the schema field, so they must be migrated on the way in.
         const migrated = await hydratePBLScenesFromRuntime(stageId, data.scenes.map(migrateScene));
+        const latestState = get();
+        if (latestState.stage?.id === stageId && latestState.scenes.length > 0) {
+          log.info('Stage appeared in memory during IndexedDB hydration, skipping load:', stageId);
+          return;
+        }
 
         // Self-heal decks generated before generationComplete was tracked: if
         // every outline already has a matching scene, generation must have

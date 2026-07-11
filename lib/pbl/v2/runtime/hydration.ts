@@ -1,5 +1,6 @@
 import { BrowserKVStore, type KVStore, type RuntimeStore } from '@openmaic/storage';
 import type { RuntimeRecord } from '@openmaic/dsl';
+import { isEqual } from 'lodash';
 
 import { getLearnerKey } from '@/lib/runtime/learner-key';
 import { getRuntimeStore } from '@/lib/runtime/store';
@@ -14,6 +15,7 @@ import {
   type PBLLearnerState,
 } from './learner-state';
 import { pblSnapshotRecordPayload, type PBLRuntimeStorePayload } from './record-payloads';
+import { clone } from './clone';
 
 let defaultKv: KVStore | undefined;
 
@@ -38,10 +40,6 @@ function getDefaultKv(): KVStore {
   return (defaultKv ??= new BrowserKVStore());
 }
 
-function deepEqual(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-
 function shortValue(value: unknown): string {
   const text = JSON.stringify(value);
   if (text === undefined) return 'undefined';
@@ -50,7 +48,7 @@ function shortValue(value: unknown): string {
 
 function diffLearnerState(a: unknown, b: unknown, path = '', out: string[] = []): string[] {
   if (out.length >= 8) return out;
-  if (deepEqual(a, b)) return out;
+  if (isEqual(a, b)) return out;
   if (!a || !b || typeof a !== 'object' || typeof b !== 'object') {
     out.push(`${path || '<root>'}: ${shortValue(a)} != ${shortValue(b)}`);
     return out;
@@ -100,7 +98,7 @@ export async function appendPBLRuntimeSnapshotIfChanged(args: {
   if (
     latestPayload?.kind === 'pbl_snapshot' &&
     latestPayload.epoch === epoch &&
-    deepEqual(latestPayload.learnerState, args.learnerState)
+    isEqual(latestPayload.learnerState, args.learnerState)
   ) {
     return false;
   }
@@ -118,7 +116,6 @@ export async function appendPBLRuntimeSnapshotIfChanged(args: {
       anchor: {
         lastRuntimeEventId: args.project.runtimeEvents?.at(-1)?.id,
         lastEngagementEventId: args.project.engagementEvents.at(-1)?.id,
-        recordSeq: args.records.at(-1)?.seq,
       },
       reason: args.reason,
     }),
@@ -126,14 +123,15 @@ export async function appendPBLRuntimeSnapshotIfChanged(args: {
   return true;
 }
 
-function preserveDocumentOutbox(
+function preserveDocumentTransients(
   hydrated: PBLProjectV2,
   documentProject: PBLProjectV2,
 ): PBLProjectV2 {
   return {
     ...hydrated,
-    runtimeEvents: documentProject.runtimeEvents
-      ? structuredClone(documentProject.runtimeEvents)
+    runtimeEvents: documentProject.runtimeEvents ? clone(documentProject.runtimeEvents) : undefined,
+    pendingOpenTaskPriorQuizResults: documentProject.pendingOpenTaskPriorQuizResults
+      ? clone(documentProject.pendingOpenTaskPriorQuizResults)
       : undefined,
   };
 }
@@ -163,12 +161,12 @@ export async function hydratePBLProjectFromRuntime(
   const designTemplate = stripToDesignTemplate(args.project);
   const folded = foldPBLRuntime({ designTemplate, records });
   const documentState = extractLearnerState(args.project);
-  const diff = diffLearnerState(folded.learnerState, documentState);
-  const matchesDocument = diff.length === 0 && folded.diagnostics.gaps.length === 0;
+  const stateMatchesDocument = isEqual(folded.learnerState, documentState);
+  const matchesDocument = stateMatchesDocument && folded.diagnostics.gaps.length === 0;
 
   if (matchesDocument) {
     return {
-      project: preserveDocumentOutbox(
+      project: preserveDocumentTransients(
         applyLearnerState(designTemplate, folded.learnerState),
         args.project,
       ),
@@ -178,6 +176,8 @@ export async function hydratePBLProjectFromRuntime(
       selfHealed: false,
     };
   }
+
+  const diff = diffLearnerState(folded.learnerState, documentState);
 
   if (process.env.NODE_ENV !== 'production') {
     console.warn('[PBL runtime] document state remained authoritative during hydration', {
@@ -213,39 +213,38 @@ export async function hydratePBLScenesFromRuntime(
   scenes: readonly Scene[],
   options: Pick<HydratePBLProjectArgs, 'store' | 'kv' | 'learnerKey'> = {},
 ): Promise<Scene[]> {
-  const hydrated: Scene[] = [];
-  for (const scene of scenes) {
-    const content = scene.content;
-    if (content.type !== 'pbl' || !content.projectV2) {
-      hydrated.push(scene);
-      continue;
-    }
-    try {
-      const result = await hydratePBLProjectFromRuntime({
-        stageId,
-        sceneId: scene.id,
-        project: content.projectV2,
-        store: options.store,
-        kv: options.kv,
-        learnerKey: options.learnerKey,
-      });
-      hydrated.push({
-        ...scene,
-        content: {
-          ...content,
-          projectV2: result.project,
-        },
-      } as Scene);
-    } catch (error) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.warn('[PBL runtime] failed to hydrate scene from runtime; using document state', {
+  return Promise.all(
+    scenes.map(async (scene) => {
+      const content = scene.content;
+      if (content.type !== 'pbl' || !content.projectV2) {
+        return scene;
+      }
+      try {
+        const result = await hydratePBLProjectFromRuntime({
           stageId,
           sceneId: scene.id,
-          error,
+          project: content.projectV2,
+          store: options.store,
+          kv: options.kv,
+          learnerKey: options.learnerKey,
         });
+        return {
+          ...scene,
+          content: {
+            ...content,
+            projectV2: result.project,
+          },
+        } as Scene;
+      } catch (error) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('[PBL runtime] failed to hydrate scene from runtime; using document state', {
+            stageId,
+            sceneId: scene.id,
+            error,
+          });
+        }
+        return scene;
       }
-      hydrated.push(scene);
-    }
-  }
-  return hydrated;
+    }),
+  );
 }

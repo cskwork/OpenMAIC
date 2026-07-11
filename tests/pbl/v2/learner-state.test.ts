@@ -180,4 +180,85 @@ describe('PBL learner state split', () => {
     expect(state.milestones[0]?.microtasks[0]).not.toHaveProperty('title');
     expect(state.milestones[0]?.microtasks[0]).not.toHaveProperty('hints');
   });
+
+  it('classifies every top-level PBLProjectV2 field into the runtime boundary', () => {
+    const project = makeProject({
+      learningObjective: 'Understand the runtime boundary',
+      gains: ['Runtime confidence'],
+      languageDirective: 'English only',
+      scenario: {
+        setting: 'Stakeholder interview',
+        characters: [{ id: 'char-1', name: 'Dana', persona: 'Project stakeholder' }],
+      },
+      schemaVersion: 1,
+      runtimeResetEpoch: 1,
+      pendingOpenTaskPriorQuizResults: [
+        {
+          sceneId: 'quiz-1',
+          sceneTitle: 'Prior quiz',
+          totalQuestions: 1,
+          correctCount: 1,
+          incorrectCount: 0,
+          unscoredCount: 0,
+          accuracy: 1,
+        },
+      ],
+      runtimeEvents: [runtimeEvent()],
+    });
+    project.pendingHandover = {
+      completedMilestoneId: 'ms-1',
+      completedMilestoneTitle: 'Design-only milestone',
+      nextMilestoneId: 'ms-2',
+      nextMilestoneTitle: 'Next milestone',
+      consumed: false,
+    };
+    project.pendingTaskCompletion = {
+      microtaskId: 'mt-1',
+      milestoneId: 'ms-1',
+      reason: 'ready',
+      createdAt: '2026-05-29T00:03:00.000Z',
+    };
+
+    const learnerStateCovered = new Set([
+      'uiPhase',
+      'status',
+      'milestones',
+      'submissions',
+      'evaluations',
+      'threads',
+      'engagementEvents',
+      'proficiencyAssessment',
+      'pendingHandover',
+      'pendingTaskCompletion',
+      'runtimeResetEpoch',
+    ]);
+    const designTemplate = new Set([
+      'title',
+      'description',
+      'learningObjective',
+      'gains',
+      'proficiency',
+      'language',
+      'languageDirective',
+      'tags',
+      'scenario',
+      'schemaVersion',
+      'roles',
+      'createdAt',
+      'updatedAt',
+    ]);
+    const excludedTransient = new Set(['runtimeEvents', 'pendingOpenTaskPriorQuizResults']);
+
+    const classifications = [learnerStateCovered, designTemplate, excludedTransient];
+    const keys = Object.keys(project).sort();
+    const classified = keys.filter(
+      (key) => classifications.filter((classification) => classification.has(key)).length === 1,
+    );
+    const duplicated = keys.filter(
+      (key) => classifications.filter((classification) => classification.has(key)).length > 1,
+    );
+
+    expect(duplicated).toEqual([]);
+    expect(classified).toEqual(keys);
+  });
 });

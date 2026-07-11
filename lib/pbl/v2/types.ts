@@ -472,10 +472,6 @@ export type PBLRuntimeEvent =
       threadId: string;
     })
   | (PBLRuntimeEventBase & {
-      kind: 'thread_compacted';
-      threadId: string;
-    })
-  | (PBLRuntimeEventBase & {
       kind: 'tool_call_started';
       toolCallId: string;
       toolName: string;

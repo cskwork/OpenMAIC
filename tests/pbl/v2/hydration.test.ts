@@ -9,7 +9,6 @@ import type {
 import { BrowserRuntimeStore, type RuntimeSessionInit, type RuntimeStore } from '@openmaic/storage';
 
 import { applyInstructorEvent } from '@/components/scene-renderers/pbl/v2/apply-instructor-event';
-import { COMPRESS_THRESHOLD, compressIfNeeded } from '@/lib/pbl/v2/agents/instructor-memory';
 import type { PBLProjectConfig } from '@/lib/pbl/types';
 import { recordEvent } from '@/lib/pbl/v2/operations/engagement';
 import { addEvaluation } from '@/lib/pbl/v2/operations/evaluation';
@@ -19,10 +18,7 @@ import {
   resetProjectProgress,
   startMicrotask,
 } from '@/lib/pbl/v2/operations/progress';
-import {
-  appendThreadCompactedRuntimeEvent,
-  transitionProjectUiPhase,
-} from '@/lib/pbl/v2/operations/runtime-events';
+import { transitionProjectUiPhase } from '@/lib/pbl/v2/operations/runtime-events';
 import { addSubmission } from '@/lib/pbl/v2/operations/submission';
 import {
   clearPendingTaskCompletion,
@@ -447,7 +443,7 @@ describe('PBL runtime hydration', () => {
       payload: pblSnapshotRecordPayload({
         epoch: 0,
         learnerState: extractLearnerState(project),
-        anchor: { lastRuntimeEventId: rawEvent.id, recordSeq: 0 },
+        anchor: { lastRuntimeEventId: rawEvent.id },
         reason: 'self_heal',
       }),
     });
@@ -486,6 +482,20 @@ describe('PBL runtime hydration', () => {
       records: [],
       reason: 'self_heal',
     });
+    const snapshotRecord = await store.listRecords(session.id, { sceneId: SCENE_ID });
+    const snapshotPayload = snapshotRecord[0]!.payload as Extract<
+      PBLRuntimeStorePayload,
+      { kind: 'pbl_snapshot' }
+    >;
+    snapshotPayload.learnerState = {
+      status: learnerState.status,
+      uiPhase: learnerState.uiPhase,
+      milestones: learnerState.milestones,
+      submissions: learnerState.submissions,
+      evaluations: learnerState.evaluations,
+      threads: learnerState.threads,
+      engagementEvents: learnerState.engagementEvents,
+    };
     const secondAppend = await appendPBLRuntimeSnapshotIfChanged({
       store,
       stageId: STAGE_ID,
@@ -493,7 +503,7 @@ describe('PBL runtime hydration', () => {
       learnerKey: LEARNER_KEY,
       project,
       learnerState,
-      records: await store.listRecords(session.id, { sceneId: SCENE_ID }),
+      records: snapshotRecord,
       reason: 'self_heal',
     });
 
@@ -504,6 +514,38 @@ describe('PBL runtime hydration', () => {
         (record) => (record.payload as PBLRuntimeStorePayload).kind === 'pbl_snapshot',
       ),
     ).toHaveLength(1);
+  });
+
+  it('preserves document-only transient fields on a fold-match hydration', async () => {
+    const store = new MemoryRuntimeStore();
+    const kv = new MemoryKVStore();
+    const project = makeProject({
+      pendingOpenTaskPriorQuizResults: [
+        {
+          sceneId: 'quiz-1',
+          sceneTitle: 'Readiness quiz',
+          totalQuestions: 2,
+          correctCount: 1,
+          incorrectCount: 1,
+          unscoredCount: 0,
+          accuracy: 0.5,
+        },
+      ],
+    });
+
+    const hydrated = await hydratePBLProjectFromRuntime({
+      stageId: STAGE_ID,
+      sceneId: SCENE_ID,
+      project,
+      store,
+      kv,
+      learnerKey: LEARNER_KEY,
+    });
+
+    expect(hydrated.source).toBe('fold');
+    expect(hydrated.project.pendingOpenTaskPriorQuizResults).toEqual(
+      project.pendingOpenTaskPriorQuizResults,
+    );
   });
 
   it('self-heals when a bounded document outbox cannot cover an older runtime gap', async () => {
@@ -732,42 +774,6 @@ describe('PBL runtime hydration', () => {
           project,
           project.uiPhase === 'workspace' ? 'hero' : 'workspace',
         );
-      }
-
-      if (step === 5 && project.status !== 'completed') {
-        const activeForCompaction = project.milestones
-          .find((milestone) => milestone.status === 'active')
-          ?.microtasks.find((task) => task.status === 'todo' || task.status === 'in_progress');
-        for (let i = 0; activeForCompaction && i < COMPRESS_THRESHOLD + 2; i++) {
-          messageIndex += 1;
-          project = applyInstructorEvent(
-            {
-              type: 'project_patch',
-              patch: {
-                kind: 'message',
-                message: {
-                  id: `compaction-msg-${messageIndex}`,
-                  roleType: i % 2 === 0 ? 'user' : 'instructor',
-                  agentId: i % 2 === 0 ? undefined : 'role-i',
-                  content: `Compaction message ${i}`,
-                  ts: `2026-05-29T00:05:${String(i).padStart(2, '0')}.000Z`,
-                  microtaskId: activeForCompaction.id,
-                },
-              },
-            },
-            project,
-            () => {},
-          );
-        }
-        const thread = project.threads.find((candidate) => candidate.agentId === 'role-i');
-        if (thread) {
-          const compressed = compressIfNeeded(thread);
-          if (compressed !== thread) {
-            thread.messages = compressed.messages;
-            thread.earlierSummary = compressed.earlierSummary;
-            appendThreadCompactedRuntimeEvent(project, { threadId: thread.agentId });
-          }
-        }
       }
 
       await drainProjectRuntime({

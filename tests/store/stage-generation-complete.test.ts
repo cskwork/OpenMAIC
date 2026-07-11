@@ -4,14 +4,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // store's save/load actions. Mock them so we can drive load inputs and
 // observe persistence without a real IndexedDB. Spies go through vi.hoisted
 // so they exist before the hoisted vi.mock factories run.
-const { loadStageDataMock, saveStageDataMock, stageOutlinesGet, stageOutlinesPut } = vi.hoisted(
-  () => ({
-    loadStageDataMock: vi.fn(),
-    saveStageDataMock: vi.fn().mockResolvedValue(undefined),
-    stageOutlinesGet: vi.fn(),
-    stageOutlinesPut: vi.fn(),
-  }),
-);
+const {
+  hydratePBLScenesFromRuntimeMock,
+  loadStageDataMock,
+  saveStageDataMock,
+  stageOutlinesGet,
+  stageOutlinesPut,
+} = vi.hoisted(() => ({
+  hydratePBLScenesFromRuntimeMock: vi.fn(),
+  loadStageDataMock: vi.fn(),
+  saveStageDataMock: vi.fn().mockResolvedValue(undefined),
+  stageOutlinesGet: vi.fn(),
+  stageOutlinesPut: vi.fn(),
+}));
+vi.mock('@/lib/pbl/v2/runtime/hydration', () => ({
+  hydratePBLScenesFromRuntime: (...args: unknown[]) => hydratePBLScenesFromRuntimeMock(...args),
+}));
 vi.mock('@/lib/utils/stage-storage', () => ({
   saveStageData: (...args: unknown[]) => saveStageDataMock(...args),
   loadStageData: (...args: unknown[]) => loadStageDataMock(...args),
@@ -66,6 +74,10 @@ function makeOutline(order: number): SceneOutline {
 
 beforeEach(() => {
   useStageStore.getState().clearStore();
+  hydratePBLScenesFromRuntimeMock.mockReset();
+  hydratePBLScenesFromRuntimeMock.mockImplementation(
+    async (_stageId: string, scenes: Scene[]) => scenes,
+  );
   stageOutlinesGet.mockReset();
   stageOutlinesPut.mockReset();
   loadStageDataMock.mockReset();
@@ -296,5 +308,41 @@ describe('generationComplete', () => {
 
     expect(useStageStore.getState().generationComplete).toBe(false);
     expect(useStageStore.getState().generatingOutlines.map((o) => o.order)).toEqual([3]);
+  });
+
+  it('does not overwrite in-memory scenes that appear while runtime hydration is pending', async () => {
+    const diskScene = makeSlideScene('disk', 1);
+    const freshScene = makeSlideScene('fresh', 1);
+    loadStageDataMock.mockResolvedValue({
+      stage: makeStage(),
+      scenes: [diskScene],
+      currentSceneId: 'disk',
+      chats: [],
+    });
+    stageOutlinesGet.mockResolvedValue({
+      stageId: 'stage-1',
+      outlines: [makeOutline(1)],
+      generationComplete: true,
+    });
+    let resolveHydration!: (scenes: Scene[]) => void;
+    hydratePBLScenesFromRuntimeMock.mockImplementation(
+      async () =>
+        new Promise<Scene[]>((resolve) => {
+          resolveHydration = resolve;
+        }),
+    );
+
+    const load = useStageStore.getState().loadFromStorage('stage-1');
+    await vi.waitFor(() => expect(hydratePBLScenesFromRuntimeMock).toHaveBeenCalled());
+    useStageStore.setState({
+      stage: makeStage(),
+      scenes: [freshScene],
+      currentSceneId: 'fresh',
+    });
+    resolveHydration([diskScene]);
+    await load;
+
+    expect(useStageStore.getState().scenes).toEqual([freshScene]);
+    expect(useStageStore.getState().currentSceneId).toBe('fresh');
   });
 });

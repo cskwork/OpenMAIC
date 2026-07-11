@@ -11,17 +11,22 @@ import type {
   PBLSubmission,
 } from '@/lib/pbl/v2/types';
 import type { PBLLearnerState } from './learner-state';
+import { clone } from './clone';
 
 export const PBL_RUNTIME_PAYLOAD_VERSION = 1;
 
+export const PBL_RUNTIME_EVENT_KINDS_REQUIRING_ATTACHMENT = new Set<PBLRuntimeEvent['kind']>([
+  'message_created',
+  'submission_created',
+  'evaluation_created',
+  'proficiency_updated',
+  'handover_staged',
+  'handover_consumed',
+  'task_completion_staged',
+]);
+
 export type PBLRuntimeAttachment =
   | { kind: 'message'; message: PBLChatMessage }
-  | {
-      kind: 'thread_compaction';
-      threadId: string;
-      messages: PBLChatMessage[];
-      earlierSummary?: string;
-    }
   | { kind: 'submission'; submission: PBLSubmission }
   | { kind: 'evaluation'; evaluation: PBLEvaluation }
   | {
@@ -61,19 +66,14 @@ export interface PBLSnapshotRecordPayload {
   anchor: {
     lastRuntimeEventId?: string;
     lastEngagementEventId?: string;
-    recordSeq?: number;
   };
-  reason: 'backfill' | 'self_heal' | 'test';
+  reason: 'backfill' | 'self_heal';
 }
 
 export type PBLRuntimeStorePayload =
   | PBLRuntimeEventRecordPayload
   | PBLEngagementEventRecordPayload
   | PBLSnapshotRecordPayload;
-
-function clone<T>(value: T): T {
-  return structuredClone(value);
-}
 
 function findMessage(
   project: PBLProjectV2,
@@ -106,7 +106,7 @@ function statusAttachment(
         kind: 'status',
         entityType: 'milestone',
         entityId: event.entityId,
-        milestone: { internalAssessment: clone(milestone.internalAssessment) },
+        milestone: { internalAssessment: milestone.internalAssessment },
       },
     };
   }
@@ -118,9 +118,9 @@ function statusAttachment(
       entityType: 'microtask',
       entityId: event.entityId,
       microtask: {
-        internalAssessment: clone(microtask.internalAssessment),
+        internalAssessment: microtask.internalAssessment,
         completionReason: microtask.completionReason,
-        engagement: clone(microtask.engagement),
+        engagement: microtask.engagement,
       },
     },
   };
@@ -147,17 +147,6 @@ export function enrichPBLRuntimeEvent(
       return message
         ? withAttachment({ kind: 'message', message })
         : withAttachment(null, 'message_not_found');
-    }
-    case 'thread_compacted': {
-      const thread = project.threads.find((candidate) => candidate.agentId === event.threadId);
-      return thread
-        ? withAttachment({
-            kind: 'thread_compaction',
-            threadId: thread.agentId,
-            messages: thread.messages,
-            earlierSummary: thread.earlierSummary,
-          })
-        : withAttachment(null, 'thread_not_found');
     }
     case 'submission_created': {
       const submission = project.submissions.find(
@@ -201,6 +190,10 @@ export function enrichPBLRuntimeEvent(
     case 'tool_call_succeeded':
     case 'tool_call_failed':
       return withAttachment(null);
+    default: {
+      const _exhaustive: never = event;
+      return _exhaustive;
+    }
   }
 }
 

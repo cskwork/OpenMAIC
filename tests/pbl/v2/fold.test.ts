@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { RuntimeRecord } from '@openmaic/dsl';
 
 import { foldPBLRuntime } from '@/lib/pbl/v2/runtime/fold';
+import { MAX_ENGAGEMENT_EVENTS } from '@/lib/pbl/v2/operations/engagement';
 import {
   PBL_RUNTIME_PAYLOAD_VERSION,
   type PBLRuntimeStorePayload,
@@ -96,7 +97,7 @@ function snapshotPayload(
     epoch: learnerState.runtimeResetEpoch ?? 0,
     learnerState,
     anchor: {},
-    reason: 'test',
+    reason: 'self_heal',
     ...overrides,
   };
 }
@@ -301,46 +302,93 @@ describe('foldPBLRuntime', () => {
     expect(folded.learnerState).toEqual(snapshottedState);
   });
 
-  it('replaces thread state from a compaction record', () => {
+  it('applies the shared engagement ring cap while folding old records', () => {
     const designTemplate = stripToDesignTemplate(makeProject());
+    const engagementEvents = Array.from({ length: MAX_ENGAGEMENT_EVENTS + 3 }, (_, index) => ({
+      id: `eng-${index}`,
+      kind: 'learner_turn' as const,
+      microtaskId: 'mt-1',
+      milestoneId: 'ms-1',
+      ts: `2026-05-29T00:${String(Math.floor(index / 60)).padStart(2, '0')}:${String(
+        index % 60,
+      ).padStart(2, '0')}.000Z`,
+      payload: { index },
+    }));
+    const cappedProject = makeProject({
+      engagementEvents: engagementEvents.slice(-MAX_ENGAGEMENT_EVENTS),
+    });
+
+    const folded = foldPBLRuntime({
+      designTemplate,
+      records: engagementEvents.map((event, seq) =>
+        record(seq, {
+          kind: 'pbl_engagement_event',
+          payloadVersion: PBL_RUNTIME_PAYLOAD_VERSION,
+          event,
+        }),
+      ),
+    });
+
+    expect(folded.diagnostics.gaps).toEqual([]);
+    expect(folded.learnerState).toEqual(extractLearnerState(cappedProject));
+  });
+
+  it('clears pre-reset gaps when project_reset starts a new epoch', () => {
+    const designTemplate = stripToDesignTemplate(makeProject());
+    const resetEvent: PBLRuntimeEvent = {
+      id: 'reset-after-gap',
+      kind: 'project_reset',
+      actorType: 'user',
+      ts: '2026-05-29T00:00:02.000Z',
+    };
+
     const folded = foldPBLRuntime({
       designTemplate,
       records: [
-        record(
-          0,
-          runtimePayload(
-            {
-              id: 'thread-compact-1',
-              kind: 'thread_compacted',
-              actorType: 'system',
-              threadId: 'role-i',
-              ts: '2026-05-29T00:00:10.000Z',
-            },
-            {
-              kind: 'thread_compaction',
-              threadId: 'role-i',
-              messages: [
-                {
-                  id: 'msg-recent',
-                  roleType: 'user',
-                  content: 'Recent live message',
-                  ts: '2026-05-29T00:00:09.000Z',
-                  microtaskId: 'mt-1',
-                },
-              ],
-              earlierSummary: 'Earlier turns were summarized.',
-            },
-          ),
-        ),
+        rawRecord(0, {
+          id: 'legacy-missing-message',
+          kind: 'message_created',
+          actorType: 'user',
+          messageId: 'missing-message',
+          threadId: 'role-i',
+          ts: '2026-05-29T00:00:01.000Z',
+          microtaskId: 'mt-1',
+          milestoneId: 'ms-1',
+        }),
+        record(1, runtimePayload(resetEvent)),
       ],
     });
 
     expect(folded.diagnostics.gaps).toEqual([]);
-    expect(folded.learnerState.threads[0]).toMatchObject({
-      agentId: 'role-i',
-      earlierSummary: 'Earlier turns were summarized.',
-      messages: [{ id: 'msg-recent', content: 'Recent live message' }],
+    expect(folded.learnerState.runtimeResetEpoch).toBe(1);
+  });
+
+  it('records a gap for forward-version runtime events instead of ignoring them', () => {
+    const designTemplate = stripToDesignTemplate(makeProject());
+    const folded = foldPBLRuntime({
+      designTemplate,
+      records: [
+        record(0, {
+          kind: 'pbl_runtime_event',
+          payloadVersion: PBL_RUNTIME_PAYLOAD_VERSION,
+          event: {
+            id: 'future-event',
+            kind: 'future_kind',
+            actorType: 'system',
+            ts: '2026-05-29T00:00:01.000Z',
+          } as unknown as PBLRuntimeEvent,
+          attachment: null,
+        }),
+      ],
     });
+
+    expect(folded.diagnostics.gaps).toEqual([
+      expect.objectContaining({
+        eventId: 'future-event',
+        kind: 'future_kind',
+        reason: 'unhandled_event_kind',
+      }),
+    ]);
   });
 
   it('reports gaps instead of throwing for malformed history', () => {

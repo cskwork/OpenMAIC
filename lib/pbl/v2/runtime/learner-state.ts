@@ -15,6 +15,7 @@ import type {
   PBLSubmission,
   PBLUiPhase,
 } from '@/lib/pbl/v2/types';
+import { clone } from './clone';
 
 export interface PBLLearnerMicrotaskState {
   id: string;
@@ -34,6 +35,9 @@ export interface PBLLearnerMilestoneState {
 export interface PBLLearnerThreadState {
   agentId: string;
   messages: PBLChatMessage[];
+  // Extracted for forward compatibility. Today instructor memory compression
+  // is request-local on the server and no persisted reducer/patch truncates
+  // client-held threads or sets this field.
   earlierSummary?: string;
 }
 
@@ -49,10 +53,6 @@ export interface PBLLearnerState {
   pendingHandover?: PBLHandover;
   pendingTaskCompletion?: PBLPendingTaskCompletion;
   runtimeResetEpoch?: number;
-}
-
-function clone<T>(value: T): T {
-  return structuredClone(value);
 }
 
 function assignOptional<T extends object, K extends keyof T>(

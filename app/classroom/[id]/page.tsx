@@ -12,7 +12,7 @@ import { useWhiteboardHistoryStore } from '@/lib/store/whiteboard-history';
 import { createLogger } from '@/lib/logger';
 import { MediaStageProvider } from '@/lib/contexts/media-stage-context';
 import { generateMediaForOutlines } from '@/lib/media/media-orchestrator';
-import { migrateScene } from '@/lib/edit/slide-schema';
+import { hydrateClassroomFallbackScenes } from '@/lib/classroom/pbl-fallback-hydration';
 import type { Scene } from '@/lib/types/stage';
 
 const log = createLogger('Classroom');
@@ -51,10 +51,10 @@ export default function ClassroomDetailPage() {
               // Normalize legacy slide content (missing schemaVersion) on the
               // way in, same as the store's setScenes/loadFromStorage paths —
               // server snapshots predate the schema field.
-              const migrated = (scenes as Scene[]).map(migrateScene);
+              const hydrated = await hydrateClassroomFallbackScenes(stage.id, scenes as Scene[]);
               useStageStore.setState({
-                scenes: migrated,
-                currentSceneId: migrated[0]?.id ?? null,
+                scenes: hydrated,
+                currentSceneId: hydrated[0]?.id ?? null,
                 // Match `loadFromStorage` semantics: mode is transient UI
                 // state, not persisted with the stage. Reset on every
                 // classroom load so SPA navigation doesn't carry Pro

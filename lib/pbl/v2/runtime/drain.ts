@@ -31,6 +31,7 @@ const WATERMARK_SCOPE = 'device';
 
 let defaultKv: KVStore | undefined;
 const inFlightPblSessions = new Map<string, Promise<string>>();
+const inFlightPblDrains = new Map<string, Promise<void>>();
 
 interface PBLRuntimeDrainWatermark {
   lastRuntimeEventId?: string;
@@ -282,9 +283,38 @@ async function drainProjectRuntimeWork({
   await persistWatermark(kv, key, nextWatermark);
 }
 
+async function drainProjectRuntimeSerialized(args: DrainProjectRuntimeArgs): Promise<void> {
+  const kv = args.kv ?? getDefaultKv();
+  const learnerKey = args.learnerKey ?? (await getLearnerKey(kv));
+  const store = args.store ?? getRuntimeStore();
+  const inFlightKey = `${args.stageId}:${args.sceneId}:${learnerKey}`;
+  const previous = inFlightPblDrains.get(inFlightKey) ?? Promise.resolve();
+  const work = previous
+    .catch(() => {
+      // The previous caller already reported its failure; the next drain still
+      // needs to re-read the watermark and make progress from the durable point.
+    })
+    .then(() =>
+      drainProjectRuntimeWork({
+        ...args,
+        store,
+        kv,
+        learnerKey,
+      }),
+    );
+  inFlightPblDrains.set(inFlightKey, work);
+  try {
+    await work;
+  } finally {
+    if (inFlightPblDrains.get(inFlightKey) === work) {
+      inFlightPblDrains.delete(inFlightKey);
+    }
+  }
+}
+
 export async function drainProjectRuntime(args: DrainProjectRuntimeArgs): Promise<void> {
   try {
-    const work = drainProjectRuntimeWork(args);
+    const work = drainProjectRuntimeSerialized(args);
     // A rejection landing after the timeout already won the race would have no
     // listener left. Swallow that branch; the await below still reports it if it
     // lands before the timeout.
