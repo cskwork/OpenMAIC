@@ -62,6 +62,45 @@ export function patchStatusChangedRuntimeEventId(
   return `patch:${runtimeEventEpoch(project)}:${entityType}:${entityId}:${from}:${to}`;
 }
 
+function stableHash(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+export function threadCompactedRuntimeEventId(project: PBLProjectV2, threadId: string): string {
+  const thread = project.threads.find((candidate) => candidate.agentId === threadId);
+  const firstMessageId = thread?.messages[0]?.id ?? 'none';
+  const lastMessageId = thread?.messages.at(-1)?.id ?? 'none';
+  const summaryHash = stableHash(thread?.earlierSummary ?? '');
+  return [
+    'thread',
+    runtimeEventEpoch(project),
+    threadId,
+    thread?.messages.length ?? 0,
+    firstMessageId,
+    lastMessageId,
+    summaryHash,
+  ].join(':');
+}
+
+export function appendThreadCompactedRuntimeEvent(
+  project: PBLProjectV2,
+  args: { threadId: string; id?: string },
+): PBLRuntimeEvent | undefined {
+  if (!project.threads.some((thread) => thread.agentId === args.threadId)) return undefined;
+  return appendRuntimeEvent(project, {
+    id: args.id ?? threadCompactedRuntimeEventId(project, args.threadId),
+    kind: 'thread_compacted',
+    actorType: 'system',
+    threadId: args.threadId,
+    ts: new Date().toISOString(),
+  });
+}
+
 export function appendStatusChangedRuntimeEvent(
   project: PBLProjectV2,
   args: {

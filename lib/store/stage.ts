@@ -16,6 +16,7 @@ import { createLogger } from '@/lib/logger';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { migrateScene } from '@/lib/edit/slide-schema';
 import { emitStageSaved } from '@/lib/store/stage-save-signal';
+import { hydratePBLScenesFromRuntime } from '@/lib/pbl/v2/runtime/hydration';
 
 const log = createLogger('StageStore');
 
@@ -442,7 +443,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
         // Normalize legacy slide content (missing schemaVersion) at the load
         // boundary, same as setScenes/addScene — IndexedDB snapshots predate
         // the schema field, so they must be migrated on the way in.
-        const migrated = data.scenes.map(migrateScene);
+        const migrated = await hydratePBLScenesFromRuntime(stageId, data.scenes.map(migrateScene));
 
         // Self-heal decks generated before generationComplete was tracked: if
         // every outline already has a matching scene, generation must have

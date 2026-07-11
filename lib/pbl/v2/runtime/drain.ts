@@ -24,6 +24,7 @@ import { BrowserKVStore, type KVStore, type RuntimeStore } from '@openmaic/stora
 import { getLearnerKey } from '@/lib/runtime/learner-key';
 import { getRuntimeStore } from '@/lib/runtime/store';
 import type { PBLEngagementEvent, PBLProjectV2, PBLRuntimeEvent } from '@/lib/pbl/v2/types';
+import { enrichPBLRuntimeEvent, pblEngagementRecordPayload } from './record-payloads';
 
 const PBL_DRAIN_TIMEOUT_MS = 10_000;
 const WATERMARK_SCOPE = 'device';
@@ -117,7 +118,7 @@ function undrainedEvents<TEvent extends { id: string }>(
   return events.slice(drainedIndex + 1);
 }
 
-async function ensurePBLSession(
+export async function ensurePBLRuntimeSession(
   store: RuntimeStore,
   stageId: string,
   learnerKey: string,
@@ -247,7 +248,7 @@ async function drainProjectRuntimeWork({
     return;
   }
 
-  const sessionId = await ensurePBLSession(store, stageId, learnerKey);
+  const sessionId = await ensurePBLRuntimeSession(store, stageId, learnerKey);
 
   try {
     for (const item of orderedDrainEvents(runtimeEvents, engagementEvents)) {
@@ -258,7 +259,7 @@ async function drainProjectRuntimeWork({
           sceneId,
           subAnchor: subAnchorFor(item.event),
           createdAt: item.event.ts,
-          payload: item.event,
+          payload: enrichPBLRuntimeEvent(project, item.event),
         });
         nextWatermark = { ...nextWatermark, lastRuntimeEventId: item.event.id };
       } else {
@@ -268,7 +269,7 @@ async function drainProjectRuntimeWork({
           sceneId,
           subAnchor: subAnchorForEngagement(item.event),
           createdAt: item.event.ts,
-          payload: item.event,
+          payload: pblEngagementRecordPayload(item.event),
         });
         nextWatermark = { ...nextWatermark, lastEngagementEventId: item.event.id };
       }

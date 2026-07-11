@@ -43,6 +43,7 @@ import {
   advanceMicrotask as advanceMicrotaskOp,
   normalizeProjectRuntime,
 } from '../operations/progress';
+import { appendThreadCompactedRuntimeEvent } from '../operations/runtime-events';
 import { summarizeLatestSubmissionForMicrotask } from '../operations/submission';
 import {
   applyProficiencyDirective,
@@ -1730,6 +1731,7 @@ export async function* runInstructorTurn(
     if (compressed !== instructorThread) {
       instructorThread.messages = compressed.messages;
       instructorThread.earlierSummary = compressed.earlierSummary;
+      appendThreadCompactedRuntimeEvent(project, { threadId: instructorThread.agentId });
     }
   }
 

@@ -23,6 +23,7 @@ import {
 import { advanceMicrotask, startMicrotask } from '@/lib/pbl/v2/operations/progress';
 import { addSubmission } from '@/lib/pbl/v2/operations/submission';
 import { clearStageDrainWatermarks, drainProjectRuntime } from '@/lib/pbl/v2/runtime/drain';
+import type { PBLRuntimeStorePayload } from '@/lib/pbl/v2/runtime/record-payloads';
 import type { PBLEngagementEvent, PBLProjectV2, PBLRuntimeEvent } from '@/lib/pbl/v2/types';
 
 if (!('IDBKeyRange' in globalThis)) {
@@ -191,6 +192,16 @@ function engagementEvent(
   };
 }
 
+function recordPayloadEvent(
+  payload: RuntimeRecord['payload'],
+): PBLRuntimeEvent | PBLEngagementEvent {
+  const pblPayload = payload as PBLRuntimeStorePayload;
+  if (pblPayload.kind === 'pbl_runtime_event' || pblPayload.kind === 'pbl_engagement_event') {
+    return pblPayload.event;
+  }
+  throw new Error(`unexpected PBL runtime payload ${JSON.stringify(payload)}`);
+}
+
 function makeProject(runtimeEvents: PBLRuntimeEvent[]): PBLProjectV2 {
   return {
     uiPhase: 'workspace',
@@ -301,8 +312,122 @@ describe('drainProjectRuntime', () => {
     expect(store.records.map((record) => record.createdAt)).toEqual(
       events.map((event) => event.ts),
     );
-    expect(store.records.map((record) => record.payload)).toEqual(events);
+    expect(store.records.map((record) => recordPayloadEvent(record.payload))).toEqual(events);
     await expect(readWatermark(kv)).resolves.toEqual({ lastRuntimeEventId: 'evt-3' });
+  });
+
+  it('enriches id-only runtime events with document content while leaving the outbox unchanged', async () => {
+    const store = new MemoryRuntimeStore();
+    const kv = new MemoryKVStore();
+    const project = makeProject([
+      runtimeEvent('evt-msg-1', {
+        kind: 'message_created',
+        actorType: 'user',
+        messageId: 'msg-1',
+        threadId: 'role-i',
+        microtaskId: 'mt-1',
+        milestoneId: 'ms-1',
+      }),
+      runtimeEvent('evt-sub-1', {
+        kind: 'submission_created',
+        actorType: 'user',
+        submissionId: 'sub-1',
+        microtaskId: 'mt-1',
+        milestoneId: 'ms-1',
+      }),
+      runtimeEvent('evt-eval-1', {
+        kind: 'evaluation_created',
+        actorType: 'system',
+        evaluationId: 'eval-1',
+        microtaskId: 'mt-1',
+        milestoneId: 'ms-1',
+      }),
+    ]);
+    project.threads[0]!.messages.push({
+      id: 'msg-1',
+      roleType: 'user',
+      content: 'Learner message content',
+      ts: '2026-05-29T00:00:01.000Z',
+      microtaskId: 'mt-1',
+    });
+    project.submissions.push({
+      id: 'sub-1',
+      microtaskId: 'mt-1',
+      milestoneId: 'ms-1',
+      kind: 'text',
+      content: 'Submission body',
+      createdAt: '2026-05-29T00:00:02.000Z',
+    });
+    project.evaluations.push({
+      id: 'eval-1',
+      kind: 'task',
+      microtaskId: 'mt-1',
+      milestoneId: 'ms-1',
+      feedback: 'Evaluation feedback',
+      strengths: ['Specific'],
+      improvements: [],
+      score: 88,
+      createdAt: '2026-05-29T00:00:03.000Z',
+    });
+
+    const outboxBefore = structuredClone(project.runtimeEvents);
+    await drain(project, store, kv);
+
+    expect(project.runtimeEvents).toEqual(outboxBefore);
+    expect(store.records.map((record) => (record.payload as PBLRuntimeStorePayload).kind)).toEqual([
+      'pbl_runtime_event',
+      'pbl_runtime_event',
+      'pbl_runtime_event',
+    ]);
+    expect(store.records[0]!.payload as PBLRuntimeStorePayload).toMatchObject({
+      kind: 'pbl_runtime_event',
+      event: { id: 'evt-msg-1', messageId: 'msg-1' },
+      attachment: {
+        kind: 'message',
+        message: { id: 'msg-1', content: 'Learner message content' },
+      },
+    });
+    expect(store.records[1]!.payload as PBLRuntimeStorePayload).toMatchObject({
+      kind: 'pbl_runtime_event',
+      event: { id: 'evt-sub-1', submissionId: 'sub-1' },
+      attachment: {
+        kind: 'submission',
+        submission: { id: 'sub-1', content: 'Submission body' },
+      },
+    });
+    expect(store.records[2]!.payload as PBLRuntimeStorePayload).toMatchObject({
+      kind: 'pbl_runtime_event',
+      event: { id: 'evt-eval-1', evaluationId: 'eval-1' },
+      attachment: {
+        kind: 'evaluation',
+        evaluation: { id: 'eval-1', feedback: 'Evaluation feedback' },
+      },
+    });
+    expect(JSON.stringify(project.runtimeEvents)).not.toContain('Learner message content');
+    expect(JSON.stringify(project.runtimeEvents)).not.toContain('Submission body');
+    expect(JSON.stringify(project.runtimeEvents)).not.toContain('Evaluation feedback');
+  });
+
+  it('records a null attachment with a reason when referenced content is missing', async () => {
+    const store = new MemoryRuntimeStore();
+    const kv = new MemoryKVStore();
+    const project = makeProject([
+      runtimeEvent('evt-missing-message', {
+        kind: 'message_created',
+        actorType: 'user',
+        messageId: 'missing-message',
+        threadId: 'role-i',
+      }),
+    ]);
+
+    await drain(project, store, kv);
+
+    expect(store.records[0]!.payload).toMatchObject({
+      kind: 'pbl_runtime_event',
+      event: { id: 'evt-missing-message', messageId: 'missing-message' },
+      attachment: null,
+      attachmentMissingReason: 'message_not_found',
+    });
   });
 
   it('keeps independent watermarks for two PBL scenes on the same stage', async () => {
@@ -702,11 +827,11 @@ describe('drainProjectRuntime', () => {
     const records = await store.listRecords(sessions[0]!.id);
     expect(records.map((record) => record.seq)).toEqual(expectedEvents.map((_, index) => index));
     expect(records.map((record) => record.id)).toEqual(expectedEvents.map((event) => event.id));
-    expect(records.map((record) => record.payload)).toEqual(expectedEvents);
+    expect(records.map((record) => recordPayloadEvent(record.payload))).toEqual(expectedEvents);
     expect(
       records.map((record) => ({
-        kind: (record.payload as PBLRuntimeEvent | PBLEngagementEvent).kind,
-        id: (record.payload as PBLRuntimeEvent | PBLEngagementEvent).id,
+        kind: recordPayloadEvent(record.payload).kind,
+        id: recordPayloadEvent(record.payload).id,
       })),
     ).toEqual(expectedEvents.map((event) => ({ kind: event.kind, id: event.id })));
     expect(records.map((record) => record.sceneId)).toEqual(expectedEvents.map(() => SCENE_ID));
