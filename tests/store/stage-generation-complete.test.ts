@@ -382,4 +382,38 @@ describe('generationComplete', () => {
     expect(useStageStore.getState().scenes).toEqual([freshScene]);
     expect(useStageStore.getState().currentSceneId).toBe('fresh-b');
   });
+
+  it('does not let failed outlines from another stage block legacy completion inference', async () => {
+    const diskScene = makeSlideScene('disk-a', 1, 'stage-a');
+    const residentScene = makeSlideScene('resident-b', 1, 'stage-b');
+    useStageStore.setState({
+      stage: makeStage('stage-b'),
+      scenes: [residentScene],
+      failedOutlines: [makeOutline(99)],
+      currentSceneId: 'resident-b',
+    });
+    loadStageDataMock.mockResolvedValue({
+      stage: makeStage('stage-a'),
+      scenes: [diskScene],
+      currentSceneId: 'disk-a',
+      chats: [],
+    });
+    stageOutlinesGet.mockResolvedValue({
+      stageId: 'stage-a',
+      outlines: [makeOutline(1)],
+    });
+
+    await useStageStore.getState().loadFromStorage('stage-a');
+
+    expect(useStageStore.getState().generationComplete).toBe(true);
+    expect(useStageStore.getState().stage?.id).toBe('stage-a');
+    expect(useStageStore.getState().scenes).toHaveLength(1);
+    expect(useStageStore.getState().scenes[0]).toMatchObject({
+      id: 'disk-a',
+      stageId: 'stage-a',
+    });
+    expect(useStageStore.getState().currentSceneId).toBe('disk-a');
+    const healed = stageOutlinesPut.mock.calls.at(-1)![0] as { generationComplete?: boolean };
+    expect(healed.generationComplete).toBe(true);
+  });
 });

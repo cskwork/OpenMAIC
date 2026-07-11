@@ -425,6 +425,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
       // Skip IndexedDB load if the store already has this stage with scenes
       // (e.g. navigated from generation-preview with fresh in-memory data)
       const currentState = get();
+      const entryStageId = currentState.stage?.id;
       if (currentState.stage?.id === stageId && currentState.scenes.length > 0) {
         log.info('Stage already loaded in memory, skipping IndexedDB load:', stageId);
         return;
@@ -445,7 +446,8 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
         // the schema field, so they must be migrated on the way in.
         const migrated = await hydratePBLScenesFromRuntime(stageId, data.scenes.map(migrateScene));
         const latestState = get();
-        if (latestState.stage?.id && latestState.stage.id !== stageId) {
+        const latestStageId = latestState.stage?.id;
+        if (entryStageId !== latestStageId && latestStageId !== stageId) {
           log.info('Stage changed during IndexedDB hydration, skipping load:', stageId);
           return;
         }
