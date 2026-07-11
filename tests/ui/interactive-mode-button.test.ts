@@ -22,7 +22,7 @@ describe('InteractiveModeButton markup contract', () => {
     const html = renderButton(true);
 
     expect(html).toContain('aria-pressed="true"');
-    expect(html).toContain('border-cyan-700 bg-cyan-500 text-slate-950');
+    expect(html).toContain('border-cyan-400 bg-cyan-100 text-cyan-900');
     expect(html).toContain('dark:border-cyan-200 dark:bg-cyan-400');
     expect(html).toContain('lucide-check');
   });
