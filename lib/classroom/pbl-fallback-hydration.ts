@@ -3,7 +3,7 @@ import {
   hydratePBLScenesFromRuntime,
   type HydratePBLProjectArgs,
 } from '@/lib/pbl/v2/runtime/hydration';
-import { claimStageSceneLoadToken, isCurrentStageSceneLoadToken } from '@/lib/store/stage';
+import { isCurrentStageSceneLoadToken, type StageSceneLoadToken } from '@/lib/store/stage';
 import type { Scene, Stage } from '@/lib/types/stage';
 
 export async function hydrateClassroomFallbackScenes(
@@ -15,6 +15,7 @@ export async function hydrateClassroomFallbackScenes(
 }
 
 export interface ApplyHydratedClassroomFallbackScenesArgs {
+  loadToken: StageSceneLoadToken;
   stage: Stage;
   scenes: readonly Scene[];
   hydrateScenes?: (stageId: string, scenes: readonly Scene[]) => Promise<Scene[]>;
@@ -22,14 +23,14 @@ export interface ApplyHydratedClassroomFallbackScenesArgs {
 }
 
 export async function applyHydratedClassroomFallbackScenes({
+  loadToken,
   stage,
   scenes,
   hydrateScenes = hydrateClassroomFallbackScenes,
   applyStageAndScenes,
 }: ApplyHydratedClassroomFallbackScenesArgs): Promise<boolean> {
-  const token = claimStageSceneLoadToken();
   const hydrated = await hydrateScenes(stage.id, scenes);
-  if (!isCurrentStageSceneLoadToken(token)) {
+  if (!isCurrentStageSceneLoadToken(loadToken)) {
     return false;
   }
   applyStageAndScenes(stage, hydrated);

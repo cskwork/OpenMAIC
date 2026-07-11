@@ -141,7 +141,7 @@ interface StageState {
 
   // Storage
   saveToStorage: () => Promise<boolean>;
-  loadFromStorage: (stageId: string) => Promise<void>;
+  loadFromStorage: (stageId: string, loadToken?: StageSceneLoadToken) => Promise<void>;
   clearStore: () => void;
 }
 
@@ -434,9 +434,9 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
     }
   },
 
-  loadFromStorage: async (stageId: string) => {
+  loadFromStorage: async (stageId: string, loadToken?: StageSceneLoadToken) => {
     try {
-      const token = claimStageSceneLoadToken();
+      const token = loadToken ?? claimStageSceneLoadToken();
       // Skip IndexedDB load if the store already has this stage with scenes
       // (e.g. navigated from generation-preview with fresh in-memory data)
       const currentState = get();

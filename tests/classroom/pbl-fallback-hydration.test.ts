@@ -27,7 +27,7 @@ import {
   applyHydratedClassroomFallbackScenes,
   hydrateClassroomFallbackScenes,
 } from '@/lib/classroom/pbl-fallback-hydration';
-import { useStageStore } from '@/lib/store/stage';
+import { claimStageSceneLoadToken, useStageStore } from '@/lib/store/stage';
 import { makeScene, type Scene, type Stage } from '@/lib/types/stage';
 
 const STAGE_ID = 'stage-1';
@@ -191,10 +191,36 @@ afterEach(async () => {
 });
 
 describe('classroom server fallback PBL hydration', () => {
+  it('applies fallback scenes under the navigation token that started the request', async () => {
+    const stage = makeStage('stage-a');
+    const serverScene = makePBLScene(makeProject());
+    const token = claimStageSceneLoadToken();
+
+    const applied = await applyHydratedClassroomFallbackScenes({
+      loadToken: token,
+      stage,
+      scenes: [serverScene],
+      hydrateScenes: async () => [serverScene],
+      applyStageAndScenes: (nextStage, hydrated) => {
+        useStageStore.getState().setStage(nextStage);
+        useStageStore.setState({
+          scenes: hydrated,
+          currentSceneId: hydrated[0]?.id ?? null,
+          mode: 'playback',
+        });
+      },
+    });
+
+    expect(applied).toBe(true);
+    expect(useStageStore.getState().stage?.id).toBe('stage-a');
+    expect(useStageStore.getState().scenes).toEqual([serverScene]);
+  });
+
   it('does not apply fallback scenes after a newer stage request starts', async () => {
     const stageA = makeStage('stage-a');
     const stageB = makeStage('stage-b');
     const fallbackScene = makePBLScene(makeProject());
+    const token = claimStageSceneLoadToken();
     let resolveHydration!: (scenes: Scene[]) => void;
     const hydrateScenes = vi.fn(
       () =>
@@ -204,6 +230,7 @@ describe('classroom server fallback PBL hydration', () => {
     );
 
     const applying = applyHydratedClassroomFallbackScenes({
+      loadToken: token,
       stage: stageA,
       scenes: [fallbackScene],
       hydrateScenes,
@@ -256,6 +283,7 @@ describe('classroom server fallback PBL hydration', () => {
     vi.useFakeTimers();
     const stage = makeStage();
     const serverScene = makePBLScene(makeProject());
+    const token = claimStageSceneLoadToken();
     let resolveHydration!: (scenes: Scene[]) => void;
     const hydrateScenes = vi.fn(
       () =>
@@ -265,6 +293,7 @@ describe('classroom server fallback PBL hydration', () => {
     );
 
     const applying = applyHydratedClassroomFallbackScenes({
+      loadToken: token,
       stage,
       scenes: [serverScene],
       hydrateScenes,

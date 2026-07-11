@@ -3,6 +3,7 @@
 import { Stage } from '@/components/stage';
 import { ThemeProvider } from '@/lib/hooks/use-theme';
 import { useStageStore } from '@/lib/store';
+import { claimStageSceneLoadToken } from '@/lib/store/stage';
 import { loadImageMapping } from '@/lib/utils/image-storage';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
@@ -35,8 +36,9 @@ export default function ClassroomDetailPage() {
   });
 
   const loadClassroom = useCallback(async () => {
+    const loadToken = claimStageSceneLoadToken();
     try {
-      await loadFromStorage(classroomId);
+      await loadFromStorage(classroomId, loadToken);
 
       // If IndexedDB had no data, try server-side storage (API-generated classrooms)
       if (!useStageStore.getState().stage) {
@@ -48,6 +50,7 @@ export default function ClassroomDetailPage() {
             if (json.success && json.classroom) {
               const { stage, scenes } = json.classroom;
               const applied = await applyHydratedClassroomFallbackScenes({
+                loadToken,
                 stage,
                 scenes: scenes as Scene[],
                 applyStageAndScenes: (nextStage, hydrated) => {
