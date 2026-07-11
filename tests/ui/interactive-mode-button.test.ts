@@ -51,12 +51,14 @@ describe('InteractiveModeButton markup contract', () => {
     expect(html).toContain('title="Interactive mode hint"');
   });
 
-  it('retains reduced-motion override utilities for both animations', () => {
+  it('limits the dark breathing animation to motion-safe environments', () => {
     const selectedHtml = renderButton(true);
     const unselectedHtml = renderButton(false);
 
-    expect(selectedHtml).toContain('interactive-mode-breathe');
-    expect(selectedHtml).toContain('motion-reduce:animate-none');
+    expect(selectedHtml).toContain(
+      'motion-safe:dark:animate-[interactive-mode-breathe_2s_ease-in-out_infinite]',
+    );
+    expect(selectedHtml).not.toContain(' dark:animate-[interactive-mode-breathe');
     expect(unselectedHtml).toContain('active:scale-95');
     expect(unselectedHtml).toContain('motion-reduce:active:scale-100');
     expect(unselectedHtml).toContain('motion-reduce:transition-none');

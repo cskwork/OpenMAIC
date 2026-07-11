@@ -44,7 +44,7 @@ export const InteractiveModeButton = forwardRef<HTMLButtonElement, InteractiveMo
         {pressed && (
           <span
             aria-hidden="true"
-            className="pointer-events-none absolute inset-[-4px] rounded-full border border-cyan-300/40 motion-reduce:animate-none dark:border-cyan-300/60 dark:animate-[interactive-mode-breathe_2s_ease-in-out_infinite]"
+            className="pointer-events-none absolute inset-[-4px] rounded-full border border-cyan-300/40 dark:border-cyan-300/60 motion-safe:dark:animate-[interactive-mode-breathe_2s_ease-in-out_infinite]"
           />
         )}
         {pressed ? (
