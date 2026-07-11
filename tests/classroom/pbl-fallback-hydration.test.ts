@@ -11,7 +11,10 @@ import type { PBLProjectConfig } from '@/lib/pbl/types';
 import { transitionProjectUiPhase } from '@/lib/pbl/v2/operations/runtime-events';
 import { drainProjectRuntime } from '@/lib/pbl/v2/runtime/drain';
 import type { PBLProjectV2 } from '@/lib/pbl/v2/types';
-import { hydrateClassroomFallbackScenes } from '@/lib/classroom/pbl-fallback-hydration';
+import {
+  hydrateClassroomFallbackScenes,
+  shouldApplyClassroomFallbackScenes,
+} from '@/lib/classroom/pbl-fallback-hydration';
 import { makeScene, type Scene } from '@/lib/types/stage';
 
 const STAGE_ID = 'stage-1';
@@ -145,6 +148,13 @@ function makePBLScene(project: PBLProjectV2): Scene {
 }
 
 describe('classroom server fallback PBL hydration', () => {
+  it('does not apply fallback scenes after navigation changes the current stage', () => {
+    expect(shouldApplyClassroomFallbackScenes('stage-a', null)).toBe(true);
+    expect(shouldApplyClassroomFallbackScenes('stage-a', undefined)).toBe(true);
+    expect(shouldApplyClassroomFallbackScenes('stage-a', 'stage-a')).toBe(true);
+    expect(shouldApplyClassroomFallbackScenes('stage-a', 'stage-b')).toBe(false);
+  });
+
   it('hydrates server-fallback scenes from existing runtime records', async () => {
     const store = new MemoryRuntimeStore();
     const kv = new MemoryKVStore();

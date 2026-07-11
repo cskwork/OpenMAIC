@@ -32,8 +32,8 @@ import { useStageStore } from '@/lib/store/stage';
 import type { Scene, Stage } from '@/lib/types/stage';
 import type { SceneOutline } from '@/lib/types/generation';
 
-function makeStage(): Stage {
-  return { id: 'stage-1', name: 'Test stage', createdAt: 1, updatedAt: 1 };
+function makeStage(id = 'stage-1'): Stage {
+  return { id, name: 'Test stage', createdAt: 1, updatedAt: 1 };
 }
 
 function makeSlideScene(id: string, order: number, stageId = 'stage-1'): Scene {
@@ -344,5 +344,42 @@ describe('generationComplete', () => {
 
     expect(useStageStore.getState().scenes).toEqual([freshScene]);
     expect(useStageStore.getState().currentSceneId).toBe('fresh');
+  });
+
+  it('does not overwrite a different stage that appears while runtime hydration is pending', async () => {
+    const diskScene = makeSlideScene('disk-a', 1, 'stage-a');
+    const freshScene = makeSlideScene('fresh-b', 1, 'stage-b');
+    loadStageDataMock.mockResolvedValue({
+      stage: makeStage('stage-a'),
+      scenes: [diskScene],
+      currentSceneId: 'disk-a',
+      chats: [],
+    });
+    stageOutlinesGet.mockResolvedValue({
+      stageId: 'stage-a',
+      outlines: [makeOutline(1)],
+      generationComplete: true,
+    });
+    let resolveHydration!: (scenes: Scene[]) => void;
+    hydratePBLScenesFromRuntimeMock.mockImplementation(
+      async () =>
+        new Promise<Scene[]>((resolve) => {
+          resolveHydration = resolve;
+        }),
+    );
+
+    const load = useStageStore.getState().loadFromStorage('stage-a');
+    await vi.waitFor(() => expect(hydratePBLScenesFromRuntimeMock).toHaveBeenCalled());
+    useStageStore.setState({
+      stage: makeStage('stage-b'),
+      scenes: [freshScene],
+      currentSceneId: 'fresh-b',
+    });
+    resolveHydration([diskScene]);
+    await load;
+
+    expect(useStageStore.getState().stage?.id).toBe('stage-b');
+    expect(useStageStore.getState().scenes).toEqual([freshScene]);
+    expect(useStageStore.getState().currentSceneId).toBe('fresh-b');
   });
 });

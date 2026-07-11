@@ -445,6 +445,10 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
         // the schema field, so they must be migrated on the way in.
         const migrated = await hydratePBLScenesFromRuntime(stageId, data.scenes.map(migrateScene));
         const latestState = get();
+        if (latestState.stage?.id && latestState.stage.id !== stageId) {
+          log.info('Stage changed during IndexedDB hydration, skipping load:', stageId);
+          return;
+        }
         if (latestState.stage?.id === stageId && latestState.scenes.length > 0) {
           log.info('Stage appeared in memory during IndexedDB hydration, skipping load:', stageId);
           return;

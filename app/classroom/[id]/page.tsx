@@ -12,7 +12,10 @@ import { useWhiteboardHistoryStore } from '@/lib/store/whiteboard-history';
 import { createLogger } from '@/lib/logger';
 import { MediaStageProvider } from '@/lib/contexts/media-stage-context';
 import { generateMediaForOutlines } from '@/lib/media/media-orchestrator';
-import { hydrateClassroomFallbackScenes } from '@/lib/classroom/pbl-fallback-hydration';
+import {
+  hydrateClassroomFallbackScenes,
+  shouldApplyClassroomFallbackScenes,
+} from '@/lib/classroom/pbl-fallback-hydration';
 import type { Scene } from '@/lib/types/stage';
 
 const log = createLogger('Classroom');
@@ -52,6 +55,14 @@ export default function ClassroomDetailPage() {
               // way in, same as the store's setScenes/loadFromStorage paths —
               // server snapshots predate the schema field.
               const hydrated = await hydrateClassroomFallbackScenes(stage.id, scenes as Scene[]);
+              const latestStageId = useStageStore.getState().stage?.id;
+              if (!shouldApplyClassroomFallbackScenes(stage.id, latestStageId)) {
+                log.info('Stage changed during server-side fallback hydration, skipping load:', {
+                  requestedStageId: stage.id,
+                  latestStageId,
+                });
+                return;
+              }
               useStageStore.setState({
                 scenes: hydrated,
                 currentSceneId: hydrated[0]?.id ?? null,

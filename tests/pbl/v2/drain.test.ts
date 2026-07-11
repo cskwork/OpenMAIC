@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import type {
   RuntimePayload,
@@ -23,7 +23,11 @@ import {
 import { advanceMicrotask, startMicrotask } from '@/lib/pbl/v2/operations/progress';
 import { addSubmission } from '@/lib/pbl/v2/operations/submission';
 import { clearStageDrainWatermarks, drainProjectRuntime } from '@/lib/pbl/v2/runtime/drain';
-import type { PBLRuntimeStorePayload } from '@/lib/pbl/v2/runtime/record-payloads';
+import {
+  enrichPBLRuntimeEvent,
+  PBL_RUNTIME_PAYLOAD_VERSION,
+  type PBLRuntimeStorePayload,
+} from '@/lib/pbl/v2/runtime/record-payloads';
 import type { PBLEngagementEvent, PBLProjectV2, PBLRuntimeEvent } from '@/lib/pbl/v2/types';
 
 if (!('IDBKeyRange' in globalThis)) {
@@ -165,6 +169,21 @@ class AlreadyExistsRaceStore extends MemoryRuntimeStore {
   }
 }
 
+class HangingFirstAppendStore extends MemoryRuntimeStore {
+  private shouldHang = true;
+
+  async appendRecord<TPayload extends RuntimePayload>(
+    init: RuntimeRecordInit<TPayload>,
+  ): Promise<RuntimeRecord<TPayload>> {
+    if (this.shouldHang) {
+      this.shouldHang = false;
+      this.appendAttempts.push(init);
+      return new Promise<RuntimeRecord<TPayload>>(() => {});
+    }
+    return super.appendRecord(init);
+  }
+}
+
 function runtimeEvent(id: string, overrides: Partial<PBLRuntimeEvent> = {}): PBLRuntimeEvent {
   return {
     id,
@@ -264,7 +283,30 @@ async function drain(project: PBLProjectV2, store: RuntimeStore, kv: KVStore): P
   });
 }
 
+afterEach(() => {
+  if (vi.isFakeTimers()) {
+    vi.useRealTimers();
+  }
+});
+
 describe('drainProjectRuntime', () => {
+  it('wraps unknown runtime event kinds in a valid runtime payload', () => {
+    const futureEvent = {
+      id: 'future-1',
+      kind: 'future_event_kind',
+      actorType: 'system',
+      ts: '2026-05-29T00:00:01.000Z',
+    } as unknown as PBLRuntimeEvent;
+
+    expect(enrichPBLRuntimeEvent(makeProject([]), futureEvent)).toEqual({
+      kind: 'pbl_runtime_event',
+      payloadVersion: PBL_RUNTIME_PAYLOAD_VERSION,
+      event: futureEvent,
+      attachment: null,
+      attachmentMissingReason: 'unhandled_event_kind',
+    });
+  });
+
   it('creates a pbl runtime session, appends project runtime events, and advances the watermark', async () => {
     const store = new MemoryRuntimeStore();
     const kv = new MemoryKVStore();
@@ -677,6 +719,46 @@ describe('drainProjectRuntime', () => {
     await expect(drain(project, store, kv)).resolves.toBeUndefined();
     expect(store.records.map((record) => record.id)).toEqual(['evt-1', 'evt-2', 'evt-3']);
     await expect(readWatermark(kv)).resolves.toEqual({ lastRuntimeEventId: 'evt-3' });
+    warn.mockRestore();
+  });
+
+  it('does not permanently block later drains after a queued append times out', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const store = new HangingFirstAppendStore();
+    const kv = new MemoryKVStore();
+    const stageId = 'stage-timeout';
+    const sceneId = 'scene-timeout';
+
+    const first = drainProjectRuntime({
+      stageId,
+      sceneId,
+      project: makeProject([runtimeEvent('evt-hangs')]),
+      store,
+      kv,
+      learnerKey: LEARNER_KEY,
+    });
+    await vi.waitFor(() =>
+      expect(store.appendAttempts.map((attempt) => attempt.id)).toEqual(['evt-hangs']),
+    );
+    await vi.advanceTimersByTimeAsync(10_001);
+    await expect(first).resolves.toBeUndefined();
+
+    const second = drainProjectRuntime({
+      stageId,
+      sceneId,
+      project: makeProject([runtimeEvent('evt-recovers')]),
+      store,
+      kv,
+      learnerKey: LEARNER_KEY,
+    });
+    await vi.waitFor(() =>
+      expect(store.appendAttempts.map((attempt) => attempt.id)).toContain('evt-recovers'),
+    );
+    await expect(second).resolves.toBeUndefined();
+
+    expect(store.records.map((record) => record.id)).toEqual(['evt-recovers']);
+    expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
 

@@ -5,6 +5,13 @@ import {
 } from '@/lib/pbl/v2/runtime/hydration';
 import type { Scene } from '@/lib/types/stage';
 
+export function shouldApplyClassroomFallbackScenes(
+  stageId: string,
+  latestStageId: string | null | undefined,
+): boolean {
+  return !latestStageId || latestStageId === stageId;
+}
+
 export async function hydrateClassroomFallbackScenes(
   stageId: string,
   scenes: readonly Scene[],

@@ -192,7 +192,8 @@ export function enrichPBLRuntimeEvent(
       return withAttachment(null);
     default: {
       const _exhaustive: never = event;
-      return _exhaustive;
+      void _exhaustive;
+      return withAttachment(null, 'unhandled_event_kind');
     }
   }
 }

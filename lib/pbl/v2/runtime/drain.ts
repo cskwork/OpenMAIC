@@ -295,12 +295,15 @@ async function drainProjectRuntimeSerialized(args: DrainProjectRuntimeArgs): Pro
       // needs to re-read the watermark and make progress from the durable point.
     })
     .then(() =>
-      drainProjectRuntimeWork({
-        ...args,
-        store,
-        kv,
-        learnerKey,
-      }),
+      withTimeout(
+        drainProjectRuntimeWork({
+          ...args,
+          store,
+          kv,
+          learnerKey,
+        }),
+        PBL_DRAIN_TIMEOUT_MS,
+      ),
     );
   inFlightPblDrains.set(inFlightKey, work);
   try {
