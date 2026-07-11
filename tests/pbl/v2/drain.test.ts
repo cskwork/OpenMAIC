@@ -169,18 +169,32 @@ class AlreadyExistsRaceStore extends MemoryRuntimeStore {
   }
 }
 
-class HangingFirstAppendStore extends MemoryRuntimeStore {
-  private shouldHang = true;
+class SlowFirstAppendStore extends MemoryRuntimeStore {
+  readonly appendLog: string[] = [];
+  private blocked = false;
+  private resolveBlockedAppend: (() => void) | undefined;
+
+  constructor(private readonly slowId: string) {
+    super();
+  }
+
+  resolveSlowAppend(): void {
+    this.resolveBlockedAppend?.();
+  }
 
   async appendRecord<TPayload extends RuntimePayload>(
     init: RuntimeRecordInit<TPayload>,
   ): Promise<RuntimeRecord<TPayload>> {
-    if (this.shouldHang) {
-      this.shouldHang = false;
-      this.appendAttempts.push(init);
-      return new Promise<RuntimeRecord<TPayload>>(() => {});
+    this.appendLog.push(`start:${init.id}`);
+    if (init.id === this.slowId && !this.blocked) {
+      this.blocked = true;
+      await new Promise<void>((resolve) => {
+        this.resolveBlockedAppend = resolve;
+      });
     }
-    return super.appendRecord(init);
+    const record = await super.appendRecord(init);
+    this.appendLog.push(`finish:${init.id}`);
+    return record;
   }
 }
 
@@ -722,13 +736,63 @@ describe('drainProjectRuntime', () => {
     warn.mockRestore();
   });
 
-  it('does not permanently block later drains after a queued append times out', async () => {
+  it('keeps same-key drain work serialized after the caller timeout wins', async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const store = new HangingFirstAppendStore();
+    const store = new SlowFirstAppendStore('evt-slow-1');
     const kv = new MemoryKVStore();
     const stageId = 'stage-timeout';
     const sceneId = 'scene-timeout';
+
+    const first = drainProjectRuntime({
+      stageId,
+      sceneId,
+      project: makeProject([
+        runtimeEvent('evt-slow-1'),
+        runtimeEvent('evt-slow-2'),
+        runtimeEvent('evt-slow-3'),
+      ]),
+      store,
+      kv,
+      learnerKey: LEARNER_KEY,
+    });
+    await vi.waitFor(() => expect(store.appendLog).toEqual(['start:evt-slow-1']));
+    await vi.advanceTimersByTimeAsync(10_001);
+    await expect(first).resolves.toBeUndefined();
+
+    const second = drainProjectRuntime({
+      stageId,
+      sceneId,
+      project: makeProject([runtimeEvent('evt-recovers')]),
+      store,
+      kv,
+      learnerKey: LEARNER_KEY,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(store.appendLog).toEqual(['start:evt-slow-1']);
+
+    store.resolveSlowAppend();
+    await vi.waitFor(() => expect(store.appendLog).toContain('start:evt-recovers'));
+    await expect(second).resolves.toBeUndefined();
+
+    expect(store.appendLog.filter((entry) => entry.startsWith('start:'))).toEqual([
+      'start:evt-slow-1',
+      'start:evt-recovers',
+    ]);
+    expect(store.records.map((record) => record.id)).toEqual(['evt-slow-1', 'evt-recovers']);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('does not permanently block later drains after a queued append times out', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const store = new SlowFirstAppendStore('evt-hangs');
+    const kv = new MemoryKVStore();
+    const stageId = 'stage-timeout-recovery';
+    const sceneId = 'scene-timeout-recovery';
 
     const first = drainProjectRuntime({
       stageId,
@@ -738,11 +802,10 @@ describe('drainProjectRuntime', () => {
       kv,
       learnerKey: LEARNER_KEY,
     });
-    await vi.waitFor(() =>
-      expect(store.appendAttempts.map((attempt) => attempt.id)).toEqual(['evt-hangs']),
-    );
+    await vi.waitFor(() => expect(store.appendLog).toEqual(['start:evt-hangs']));
     await vi.advanceTimersByTimeAsync(10_001);
     await expect(first).resolves.toBeUndefined();
+    store.resolveSlowAppend();
 
     const second = drainProjectRuntime({
       stageId,
@@ -757,7 +820,7 @@ describe('drainProjectRuntime', () => {
     );
     await expect(second).resolves.toBeUndefined();
 
-    expect(store.records.map((record) => record.id)).toEqual(['evt-recovers']);
+    expect(store.records.map((record) => record.id)).toEqual(['evt-hangs', 'evt-recovers']);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });

@@ -12,10 +12,7 @@ import { useWhiteboardHistoryStore } from '@/lib/store/whiteboard-history';
 import { createLogger } from '@/lib/logger';
 import { MediaStageProvider } from '@/lib/contexts/media-stage-context';
 import { generateMediaForOutlines } from '@/lib/media/media-orchestrator';
-import {
-  hydrateClassroomFallbackScenes,
-  shouldApplyClassroomFallbackScenes,
-} from '@/lib/classroom/pbl-fallback-hydration';
+import { applyHydratedClassroomFallbackScenes } from '@/lib/classroom/pbl-fallback-hydration';
 import type { Scene } from '@/lib/types/stage';
 
 const log = createLogger('Classroom');
@@ -50,28 +47,31 @@ export default function ClassroomDetailPage() {
             const json = await res.json();
             if (json.success && json.classroom) {
               const { stage, scenes } = json.classroom;
-              useStageStore.getState().setStage(stage);
-              // Normalize legacy slide content (missing schemaVersion) on the
-              // way in, same as the store's setScenes/loadFromStorage paths —
-              // server snapshots predate the schema field.
-              const hydrated = await hydrateClassroomFallbackScenes(stage.id, scenes as Scene[]);
-              const latestStageId = useStageStore.getState().stage?.id;
-              if (!shouldApplyClassroomFallbackScenes(stage.id, latestStageId)) {
+              const applied = await applyHydratedClassroomFallbackScenes({
+                stage,
+                scenes: scenes as Scene[],
+                getLatestStageId: () => useStageStore.getState().stage?.id,
+                applyStageAndScenes: (nextStage, hydrated) => {
+                  useStageStore.getState().setStage(nextStage);
+                  useStageStore.setState({
+                    scenes: hydrated,
+                    currentSceneId: hydrated[0]?.id ?? null,
+                    // Match `loadFromStorage` semantics: mode is transient UI
+                    // state, not persisted with the stage. Reset on every
+                    // classroom load so SPA navigation doesn't carry Pro
+                    // mode across.
+                    mode: 'playback',
+                  });
+                },
+              });
+              if (!applied) {
+                const latestStageId = useStageStore.getState().stage?.id;
                 log.info('Stage changed during server-side fallback hydration, skipping load:', {
                   requestedStageId: stage.id,
                   latestStageId,
                 });
                 return;
               }
-              useStageStore.setState({
-                scenes: hydrated,
-                currentSceneId: hydrated[0]?.id ?? null,
-                // Match `loadFromStorage` semantics: mode is transient UI
-                // state, not persisted with the stage. Reset on every
-                // classroom load so SPA navigation doesn't carry Pro
-                // mode across.
-                mode: 'playback',
-              });
               log.info('Loaded from server-side storage:', classroomId);
 
               // Hydrate server-generated agents into IndexedDB + registry.

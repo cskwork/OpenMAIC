@@ -38,6 +38,10 @@ interface PBLRuntimeDrainWatermark {
   lastEngagementEventId?: string;
 }
 
+interface PBLDrainDeadline {
+  expiresAt: number;
+}
+
 export interface DrainProjectRuntimeArgs {
   stageId: string;
   sceneId: string;
@@ -57,6 +61,14 @@ function watermarkKey(stageId: string, sceneId: string, learnerKey: string): str
 
 function deterministicPBLSessionId(stageId: string, learnerKey: string): string {
   return `pbl-${stageId}-${learnerKey}`;
+}
+
+function createDrainDeadline(ms: number): PBLDrainDeadline {
+  return { expiresAt: Date.now() + ms };
+}
+
+function isDeadlineExpired(deadline: PBLDrainDeadline): boolean {
+  return Date.now() >= deadline.expiresAt;
 }
 
 /** Reject after `ms`, clearing the timer once the raced promise settles. */
@@ -224,14 +236,17 @@ export async function clearStageDrainWatermarks(
   await Promise.all(keys.map((key) => kv.remove(key, WATERMARK_SCOPE)));
 }
 
-async function drainProjectRuntimeWork({
-  stageId,
-  sceneId,
-  project,
-  store: injectedStore,
-  kv: injectedKv,
-  learnerKey: injectedLearnerKey,
-}: DrainProjectRuntimeArgs): Promise<void> {
+async function drainProjectRuntimeWork(
+  {
+    stageId,
+    sceneId,
+    project,
+    store: injectedStore,
+    kv: injectedKv,
+    learnerKey: injectedLearnerKey,
+  }: DrainProjectRuntimeArgs,
+  deadline: PBLDrainDeadline,
+): Promise<void> {
   const kv = injectedKv ?? getDefaultKv();
   const learnerKey = injectedLearnerKey ?? (await getLearnerKey(kv));
   const store = injectedStore ?? getRuntimeStore();
@@ -245,6 +260,7 @@ async function drainProjectRuntimeWork({
   let nextWatermark: PBLRuntimeDrainWatermark = { ...watermark };
 
   if (runtimeEvents.length === 0 && engagementEvents.length === 0) {
+    if (isDeadlineExpired(deadline)) return;
     await persistWatermark(kv, key, nextWatermark);
     return;
   }
@@ -253,6 +269,7 @@ async function drainProjectRuntimeWork({
 
   try {
     for (const item of orderedDrainEvents(runtimeEvents, engagementEvents)) {
+      if (isDeadlineExpired(deadline)) return;
       if (item.ledger === 'runtime') {
         await store.appendRecord({
           id: item.event.id,
@@ -276,10 +293,13 @@ async function drainProjectRuntimeWork({
       }
     }
   } catch (error) {
-    await persistWatermark(kv, key, nextWatermark);
+    if (!isDeadlineExpired(deadline)) {
+      await persistWatermark(kv, key, nextWatermark);
+    }
     throw error;
   }
 
+  if (isDeadlineExpired(deadline)) return;
   await persistWatermark(kv, key, nextWatermark);
 }
 
@@ -289,20 +309,21 @@ async function drainProjectRuntimeSerialized(args: DrainProjectRuntimeArgs): Pro
   const store = args.store ?? getRuntimeStore();
   const inFlightKey = `${args.stageId}:${args.sceneId}:${learnerKey}`;
   const previous = inFlightPblDrains.get(inFlightKey) ?? Promise.resolve();
+  const deadline = createDrainDeadline(PBL_DRAIN_TIMEOUT_MS);
   const work = previous
     .catch(() => {
       // The previous caller already reported its failure; the next drain still
       // needs to re-read the watermark and make progress from the durable point.
     })
     .then(() =>
-      withTimeout(
-        drainProjectRuntimeWork({
+      drainProjectRuntimeWork(
+        {
           ...args,
           store,
           kv,
           learnerKey,
-        }),
-        PBL_DRAIN_TIMEOUT_MS,
+        },
+        deadline,
       ),
     );
   inFlightPblDrains.set(inFlightKey, work);

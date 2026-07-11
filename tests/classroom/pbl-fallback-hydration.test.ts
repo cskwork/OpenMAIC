@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   RuntimePayload,
   RuntimeRecord,
@@ -7,15 +7,29 @@ import type {
 } from '@openmaic/dsl';
 import type { KVScope, KVStore, RuntimeSessionInit, RuntimeStore } from '@openmaic/storage';
 
+const { saveStageDataMock } = vi.hoisted(() => ({
+  saveStageDataMock: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@/lib/utils/stage-storage', () => ({
+  saveStageData: (...args: unknown[]) => saveStageDataMock(...args),
+  loadStageData: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/lib/utils/database', () => ({
+  db: { stageOutlines: { put: vi.fn(), get: vi.fn() } },
+}));
+
 import type { PBLProjectConfig } from '@/lib/pbl/types';
 import { transitionProjectUiPhase } from '@/lib/pbl/v2/operations/runtime-events';
 import { drainProjectRuntime } from '@/lib/pbl/v2/runtime/drain';
 import type { PBLProjectV2 } from '@/lib/pbl/v2/types';
 import {
+  applyHydratedClassroomFallbackScenes,
   hydrateClassroomFallbackScenes,
   shouldApplyClassroomFallbackScenes,
 } from '@/lib/classroom/pbl-fallback-hydration';
-import { makeScene, type Scene } from '@/lib/types/stage';
+import { useStageStore } from '@/lib/store/stage';
+import { makeScene, type Scene, type Stage } from '@/lib/types/stage';
 
 const STAGE_ID = 'stage-1';
 const SCENE_ID = 'scene-1';
@@ -147,6 +161,36 @@ function makePBLScene(project: PBLProjectV2): Scene {
   );
 }
 
+function makeStage(id = STAGE_ID): Stage {
+  return {
+    id,
+    name: 'Fallback stage',
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
+beforeEach(() => {
+  saveStageDataMock.mockClear();
+  saveStageDataMock.mockResolvedValue(undefined);
+  useStageStore.getState().clearStore();
+});
+
+afterEach(async () => {
+  try {
+    if (vi.isFakeTimers()) {
+      await vi.runOnlyPendingTimersAsync();
+      await vi.dynamicImportSettled();
+      expect(vi.getTimerCount()).toBe(0);
+    }
+  } finally {
+    if (vi.isFakeTimers()) {
+      vi.useRealTimers();
+    }
+    useStageStore.getState().clearStore();
+  }
+});
+
 describe('classroom server fallback PBL hydration', () => {
   it('does not apply fallback scenes after navigation changes the current stage', () => {
     expect(shouldApplyClassroomFallbackScenes('stage-a', null)).toBe(true);
@@ -178,6 +222,53 @@ describe('classroom server fallback PBL hydration', () => {
     expect(hydrated[0]?.content.type).toBe('pbl');
     expect(hydrated[0]?.content.type === 'pbl' && hydrated[0].content.projectV2?.uiPhase).toBe(
       'workspace',
+    );
+  });
+
+  it('does not persist a server fallback stage before its hydrated scenes are ready', async () => {
+    vi.useFakeTimers();
+    const stage = makeStage();
+    const serverScene = makePBLScene(makeProject());
+    let resolveHydration!: (scenes: Scene[]) => void;
+    const hydrateScenes = vi.fn(
+      () =>
+        new Promise<Scene[]>((resolve) => {
+          resolveHydration = resolve;
+        }),
+    );
+
+    const applying = applyHydratedClassroomFallbackScenes({
+      stage,
+      scenes: [serverScene],
+      hydrateScenes,
+      getLatestStageId: () => useStageStore.getState().stage?.id,
+      applyStageAndScenes: (nextStage, hydrated) => {
+        useStageStore.getState().setStage(nextStage);
+        useStageStore.setState({
+          scenes: hydrated,
+          currentSceneId: hydrated[0]?.id ?? null,
+          mode: 'playback',
+        });
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(600);
+    expect(saveStageDataMock).not.toHaveBeenCalled();
+    expect(useStageStore.getState().stage).toBeNull();
+    expect(useStageStore.getState().scenes).toEqual([]);
+
+    resolveHydration([serverScene]);
+    await applying;
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(saveStageDataMock).toHaveBeenCalledOnce();
+    expect(saveStageDataMock).toHaveBeenCalledWith(
+      STAGE_ID,
+      expect.objectContaining({
+        stage,
+        scenes: [serverScene],
+        currentSceneId: SCENE_ID,
+      }),
     );
   });
 });
