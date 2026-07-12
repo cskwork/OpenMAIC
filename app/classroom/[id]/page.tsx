@@ -21,7 +21,6 @@ import {
   runClassroomLoad,
   saveGeneratedAgentsForCurrentLoad,
 } from '@/lib/classroom/load-classroom';
-import { shouldRunClassroomGenerationResume } from '@/lib/classroom/resume-generation';
 
 const log = createLogger('Classroom');
 
@@ -108,8 +107,6 @@ export default function ClassroomDetailPage() {
   // Auto-resume generation for pending outlines
   useEffect(() => {
     if (loading || error || generationStartedRef.current) return;
-    let cancelled = false;
-    const canResume = () => shouldRunClassroomGenerationResume({ cancelled });
 
     const state = useStageStore.getState();
     const { outlines, scenes, stage, generationComplete } = state;
@@ -134,7 +131,6 @@ export default function ClassroomDetailPage() {
         .filter(Boolean);
 
       loadImageMapping(storageIds).then((imageMapping) => {
-        if (!canResume()) return;
         generateRemaining({
           pdfImages: params.pdfImages,
           imageMapping,
@@ -159,22 +155,17 @@ export default function ClassroomDetailPage() {
       // ran. Record completion now so a later edit/delete is not treated as
       // an interrupted generation. No-op if already complete or not all
       // outlines have scenes.
-      if (!canResume()) return;
       useStageStore.getState().markGenerationCompleteIfDone();
       // Resume media only for outlines that still have a scene. On a finished
       // deck the user may have deleted a slide, leaving an orphaned outline;
       // generating its media would waste API calls on a slide that is gone.
       const materializedOrders = new Set(scenes.map((s) => s.order));
       const materializedOutlines = outlines.filter((o) => materializedOrders.has(o.order));
-      if (!canResume()) return;
       generateMediaForOutlines(materializedOutlines, stage.id).catch((err) => {
         log.warn('[Classroom] Media generation resume error:', err);
       });
     }
-    return () => {
-      cancelled = true;
-    };
-  }, [loading, error, generateRemaining, classroomId]);
+  }, [loading, error, generateRemaining]);
 
   return (
     <ThemeProvider>
