@@ -21,7 +21,7 @@ import { isTTSProviderEnabled } from '@/lib/audio/provider-enablement';
 import { resolveAgentVoiceOptions, pickNarratorAgent } from '@/lib/audio/agent-voice';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
 import { generateMediaForOutlines } from '@/lib/media/media-orchestrator';
-import { lazyBoundedMap } from '@/lib/utils/concurrency';
+import { lazyBoundedMap, mapWithConcurrency } from '@/lib/utils/concurrency';
 import { createLogger } from '@/lib/logger';
 import {
   isAbortError,
@@ -36,6 +36,8 @@ interface SceneContentResult {
   content?: unknown;
   effectiveOutline?: SceneOutline;
   error?: string;
+  errorCode?: string;
+  statusCode?: number;
 }
 
 interface SceneActionsResult {
@@ -43,6 +45,8 @@ interface SceneActionsResult {
   scene?: Scene;
   previousSpeeches?: string[];
   error?: string;
+  errorCode?: string;
+  statusCode?: number;
 }
 
 type ClientRetryOptions<T> = Partial<
@@ -90,22 +94,34 @@ async function readJsonResponse(response: Response): Promise<Record<string, unkn
 
 function createHttpError(
   response: Response,
-  data: { details?: unknown; error?: unknown },
+  data: { details?: unknown; error?: unknown; errorCode?: unknown },
   fallback: string,
-): Error & { statusCode?: number } {
+): Error & { errorCode?: string; statusCode?: number } {
   const message =
     typeof data.details === 'string'
       ? data.details
       : typeof data.error === 'string'
         ? data.error
         : `${fallback}: HTTP ${response.status}`;
-  const error = new Error(message) as Error & { statusCode?: number };
+  const error = new Error(message) as Error & { errorCode?: string; statusCode?: number };
+  if (typeof data.errorCode === 'string') {
+    error.errorCode = data.errorCode;
+  }
   error.statusCode = response.status;
   return error;
 }
 
 function messageFromError(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
+}
+
+function errorMeta(error: unknown): Pick<SceneContentResult, 'errorCode' | 'statusCode'> {
+  if (!error || typeof error !== 'object') return {};
+  const record = error as { errorCode?: unknown; statusCode?: unknown };
+  return {
+    ...(typeof record.errorCode === 'string' ? { errorCode: record.errorCode } : {}),
+    ...(typeof record.statusCode === 'number' ? { statusCode: record.statusCode } : {}),
+  };
 }
 
 /** Call POST /api/generate/scene-content (step 1) */
@@ -155,7 +171,11 @@ export async function fetchSceneContent(
     );
   } catch (error) {
     if (isAbortError(error)) throw error;
-    return { success: false, error: messageFromError(error, 'Content generation failed') };
+    return {
+      success: false,
+      error: messageFromError(error, 'Content generation failed'),
+      ...errorMeta(error),
+    };
   }
 }
 
@@ -200,7 +220,11 @@ export async function fetchSceneActions(
     );
   } catch (error) {
     if (isAbortError(error)) throw error;
-    return { success: false, error: messageFromError(error, 'Actions generation failed') };
+    return {
+      success: false,
+      error: messageFromError(error, 'Actions generation failed'),
+      ...errorMeta(error),
+    };
   }
 }
 
@@ -323,7 +347,9 @@ async function generateTTSForScene(
   // This prevents audio collision when action IDs are sequential (e.g., action_1, action_2)
   const sceneOrder = scene.order;
 
-  for (const action of speechActions) {
+  // Generate + store one action's audio. Failures are counted, not thrown, so
+  // one bad clip never aborts the rest of the scene.
+  const generateOne = async (action: SpeechAction) => {
     // Include scene order in audioId to prevent collision across scenes
     const audioId = `tts_s${sceneOrder}_${action.id}`;
     action.audioId = audioId;
@@ -342,6 +368,23 @@ async function generateTTSForScene(
         textLength: action.text.length,
         error: lastError,
       });
+    }
+  };
+
+  // #660 follow-up: speech actions within a scene are independent — each renders
+  // its own audio under its own audioId, with no cross-action ordering — so when
+  // the server opts into parallel generation, render them with bounded
+  // concurrency (reusing the PARALLEL_SCENE_CONCURRENCY knob) instead of one at a
+  // time. Default (0 / unset) keeps the original strictly-serial behaviour.
+  const ttsConcurrency = Math.max(
+    0,
+    Math.floor(useSettingsStore.getState().parallelSceneConcurrency ?? 0),
+  );
+  if (ttsConcurrency > 1 && speechActions.length > 1) {
+    await mapWithConcurrency(speechActions, ttsConcurrency, generateOne);
+  } else {
+    for (const action of speechActions) {
+      await generateOne(action);
     }
   }
 
