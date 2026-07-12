@@ -262,11 +262,11 @@ export async function saveGeneratedAgentsForCurrentLoad(
   const { db } = await import('@/lib/utils/database');
   if (!isCurrent()) return [];
 
-  await db.generatedAgents.where('stageId').equals(stageId).delete();
-  if (!isCurrent()) return [];
-
   const records = agents.map((agent) => ({ ...agent, stageId, createdAt: Date.now() }));
-  await db.generatedAgents.bulkPut(records);
+  await db.transaction('rw', db.generatedAgents, async () => {
+    await db.generatedAgents.where('stageId').equals(stageId).delete();
+    await db.generatedAgents.bulkPut(records);
+  });
   if (!isCurrent()) return [];
 
   const registry = useAgentRegistry.getState();

@@ -1,11 +1,31 @@
 import { describe, expect, it, vi } from 'vitest';
-import { applyClassroomStageAndScenes, runClassroomLoad } from '@/lib/classroom/load-classroom';
+import {
+  applyClassroomStageAndScenes,
+  runClassroomLoad,
+  saveGeneratedAgentsForCurrentLoad,
+} from '@/lib/classroom/load-classroom';
 import {
   claimStageSceneLoadToken,
   isCurrentStageSceneLoadToken,
   useStageStore,
 } from '@/lib/store/stage';
 import type { Scene, Stage } from '@/lib/types/stage';
+
+const databaseMocks = vi.hoisted(() => ({
+  deleteGeneratedAgents: vi.fn(),
+  bulkPutGeneratedAgents: vi.fn(),
+  transaction: vi.fn(async (_mode: string, _table: unknown, work: () => Promise<void>) => work()),
+}));
+
+vi.mock('@/lib/utils/database', () => ({
+  db: {
+    generatedAgents: {
+      where: () => ({ equals: () => ({ delete: databaseMocks.deleteGeneratedAgents }) }),
+      bulkPut: databaseMocks.bulkPutGeneratedAgents,
+    },
+    transaction: databaseMocks.transaction,
+  },
+}));
 
 function makeStage(id: string, generatedAgentConfigs: Stage['generatedAgentConfigs'] = []): Stage {
   return {
@@ -290,5 +310,41 @@ describe('runClassroomLoad', () => {
     expect(deps.loadGeneratedAgentRecords).not.toHaveBeenCalled();
     expect(deps.setError).not.toHaveBeenCalled();
     expect(deps.setLoading).not.toHaveBeenCalled();
+  });
+});
+
+describe('saveGeneratedAgentsForCurrentLoad', () => {
+  it('finishes the generated-agent replacement when the load becomes stale during deletion', async () => {
+    const deletion = deferred<void>();
+    let current = true;
+    databaseMocks.deleteGeneratedAgents.mockReturnValueOnce(deletion.promise);
+    databaseMocks.bulkPutGeneratedAgents.mockResolvedValueOnce(undefined);
+    const agents = [
+      {
+        id: 'agent-a',
+        name: 'Agent A',
+        role: 'teacher',
+        persona: 'Teach',
+        avatar: 'A',
+        color: '#000',
+        priority: 1,
+      },
+    ];
+
+    const saving = saveGeneratedAgentsForCurrentLoad('stage-a', agents, () => current);
+    await vi.waitFor(() => expect(databaseMocks.deleteGeneratedAgents).toHaveBeenCalled());
+
+    current = false;
+    deletion.resolve();
+    await saving;
+
+    expect(databaseMocks.transaction).toHaveBeenCalledWith(
+      'rw',
+      expect.anything(),
+      expect.any(Function),
+    );
+    expect(databaseMocks.bulkPutGeneratedAgents).toHaveBeenCalledWith([
+      expect.objectContaining({ id: 'agent-a', stageId: 'stage-a' }),
+    ]);
   });
 });
