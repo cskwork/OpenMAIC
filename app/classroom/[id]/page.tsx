@@ -16,6 +16,7 @@ import { MediaStageProvider } from '@/lib/contexts/media-stage-context';
 import { generateMediaForOutlines } from '@/lib/media/media-orchestrator';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
 import {
+  applyClassroomStageAndScenes,
   defaultClassroomLoadDeps,
   runClassroomLoad,
   saveGeneratedAgentsForCurrentLoad,
@@ -57,18 +58,7 @@ export default function ClassroomDetailPage() {
         applyFallbackScenes: (args) =>
           defaultClassroomLoadDeps.applyFallbackScenes({
             ...args,
-            applyStageAndScenes: (nextStage, hydrated) => {
-              useStageStore.getState().setStage(nextStage);
-              useStageStore.setState({
-                scenes: hydrated,
-                currentSceneId: hydrated[0]?.id ?? null,
-                // Match `loadFromStorage` semantics: mode is transient UI
-                // state, not persisted with the stage. Reset on every
-                // classroom load so SPA navigation doesn't carry Pro
-                // mode across.
-                mode: 'playback',
-              });
-            },
+            applyStageAndScenes: applyClassroomStageAndScenes,
           }),
         saveGeneratedAgents: (stageId, agents) =>
           saveGeneratedAgentsForCurrentLoad(stageId, agents, isCurrent),

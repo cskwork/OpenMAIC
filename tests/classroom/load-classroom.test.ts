@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { runClassroomLoad } from '@/lib/classroom/load-classroom';
+import { applyClassroomStageAndScenes, runClassroomLoad } from '@/lib/classroom/load-classroom';
+import {
+  claimStageSceneLoadToken,
+  isCurrentStageSceneLoadToken,
+  useStageStore,
+} from '@/lib/store/stage';
 import type { Scene, Stage } from '@/lib/types/stage';
 
 function makeStage(id: string, generatedAgentConfigs: Stage['generatedAgentConfigs'] = []): Stage {
@@ -99,6 +104,21 @@ function makeDeps(overrides: Partial<Parameters<typeof runClassroomLoad>[0]> = {
 }
 
 describe('runClassroomLoad', () => {
+  it('keeps the current load token valid when fallback scenes are committed', () => {
+    useStageStore.getState().clearStore();
+    const loadToken = claimStageSceneLoadToken();
+    const stage = makeStage('stage-a');
+    const scene = makeScene('scene-a', 'stage-a');
+
+    applyClassroomStageAndScenes(stage, [scene], { persist: false });
+
+    expect(isCurrentStageSceneLoadToken(loadToken)).toBe(true);
+    expect(useStageStore.getState().stage?.id).toBe('stage-a');
+    expect(useStageStore.getState().scenes).toEqual([scene]);
+    expect(useStageStore.getState().currentSceneId).toBe('scene-a');
+    useStageStore.getState().clearStore();
+  });
+
   it('does not run stale restore phases after a newer navigation wins', async () => {
     const loadStorage = deferred<void>();
     const { deps, setCurrent, setStage } = makeDeps({

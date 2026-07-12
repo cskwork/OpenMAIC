@@ -5,7 +5,7 @@ import { applyHydratedClassroomFallbackScenes } from '@/lib/classroom/pbl-fallba
 import type { TTSProviderId } from '@/lib/audio/types';
 import type { VoiceDesign } from '@/lib/audio/voice-design';
 import { useMediaGenerationStore, type MediaTask } from '@/lib/store/media-generation';
-import type { StageSceneLoadToken } from '@/lib/store/stage';
+import { useStageStore, type StageSceneLoadToken } from '@/lib/store/stage';
 import type { GeneratedAgentRecord, MediaFileRecord } from '@/lib/utils/database';
 import type { Scene, Stage } from '@/lib/types/stage';
 
@@ -165,6 +165,26 @@ export async function fetchClassroomFromApi(classroomId: string): Promise<Classr
   };
   if (!json.success || !json.classroom) return null;
   return json.classroom;
+}
+
+export function applyClassroomStageAndScenes(
+  stage: Stage,
+  scenes: readonly Scene[],
+  options: { persist?: boolean } = {},
+): void {
+  const nextScenes = [...scenes];
+  useStageStore.setState((state) => ({
+    stage,
+    scenes: nextScenes,
+    currentSceneId: nextScenes[0]?.id ?? null,
+    chats: [],
+    generationComplete: false,
+    generationEpoch: state.generationEpoch + 1,
+    mode: 'playback',
+  }));
+  if (options.persist !== false) {
+    void useStageStore.getState().saveToStorage();
+  }
 }
 
 export async function loadRestoredMediaTasksFromDB(
