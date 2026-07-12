@@ -51,6 +51,7 @@ export interface RunClassroomLoadArgs<TMediaTasks = unknown, TGeneratedAgentReco
   ) => Promise<unknown>;
   loadRestoredMediaTasks: (stageId: string) => Promise<TMediaTasks>;
   applyRestoredMediaTasks: (tasks: TMediaTasks) => void;
+  discardRestoredMediaTasks: (tasks: TMediaTasks) => void;
   loadGeneratedAgentRecords: (stageId: string) => Promise<TGeneratedAgentRecord[]>;
   applyGeneratedAgentRecords: (records: TGeneratedAgentRecord[]) => string[];
   getSettings: () => ClassroomLoadSettings;
@@ -72,6 +73,7 @@ export async function runClassroomLoad<TMediaTasks = unknown, TGeneratedAgentRec
   saveGeneratedAgents,
   loadRestoredMediaTasks,
   applyRestoredMediaTasks,
+  discardRestoredMediaTasks,
   loadGeneratedAgentRecords,
   applyGeneratedAgentRecords,
   getSettings,
@@ -114,7 +116,10 @@ export async function runClassroomLoad<TMediaTasks = unknown, TGeneratedAgentRec
 
     if (!isCurrent()) return;
     const mediaTasks = await loadRestoredMediaTasks(classroomId);
-    if (!isCurrent()) return;
+    if (!isCurrent()) {
+      discardRestoredMediaTasks(mediaTasks);
+      return;
+    }
     applyRestoredMediaTasks(mediaTasks);
 
     if (!isCurrent()) return;
@@ -246,6 +251,13 @@ export function applyRestoredMediaTasks(tasks: Record<string, MediaTask>): void 
   }));
 }
 
+export function discardRestoredMediaTasks(tasks: Record<string, MediaTask>): void {
+  for (const task of Object.values(tasks)) {
+    if (task.objectUrl) URL.revokeObjectURL(task.objectUrl);
+    if (task.poster) URL.revokeObjectURL(task.poster);
+  }
+}
+
 export async function loadGeneratedAgentRecordsFromDB(
   stageId: string,
 ): Promise<GeneratedAgentRecord[]> {
@@ -338,6 +350,7 @@ export const defaultClassroomLoadDeps = {
   fetchClassroom: fetchClassroomFromApi,
   loadRestoredMediaTasks: loadRestoredMediaTasksFromDB,
   applyRestoredMediaTasks,
+  discardRestoredMediaTasks,
   loadGeneratedAgentRecords: loadGeneratedAgentRecordsFromDB,
   applyGeneratedAgentRecords: applyGeneratedAgentRecordsToRegistry,
   restoreAgentSelection,

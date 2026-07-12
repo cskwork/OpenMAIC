@@ -62,6 +62,7 @@ export default function ClassroomDetailPage() {
           saveGeneratedAgentsForCurrentLoad(stageId, agents, isCurrent),
         loadRestoredMediaTasks: defaultClassroomLoadDeps.loadRestoredMediaTasks,
         applyRestoredMediaTasks: defaultClassroomLoadDeps.applyRestoredMediaTasks,
+        discardRestoredMediaTasks: defaultClassroomLoadDeps.discardRestoredMediaTasks,
         loadGeneratedAgentRecords: defaultClassroomLoadDeps.loadGeneratedAgentRecords,
         applyGeneratedAgentRecords: defaultClassroomLoadDeps.applyGeneratedAgentRecords,
         getSettings: () => useSettingsStore.getState(),

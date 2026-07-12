@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   applyClassroomStageAndScenes,
+  discardRestoredMediaTasks,
   runClassroomLoad,
   saveGeneratedAgentsForCurrentLoad,
 } from '@/lib/classroom/load-classroom';
@@ -94,6 +95,7 @@ function makeDeps(overrides: Partial<Parameters<typeof runClassroomLoad>[0]> = {
     saveGeneratedAgents: vi.fn().mockResolvedValue([]),
     loadRestoredMediaTasks: vi.fn().mockResolvedValue({}),
     applyRestoredMediaTasks: vi.fn(),
+    discardRestoredMediaTasks: vi.fn(),
     loadGeneratedAgentRecords: vi.fn().mockResolvedValue([]),
     applyGeneratedAgentRecords: vi.fn().mockReturnValue([]),
     getSettings: () => settings,
@@ -227,6 +229,9 @@ describe('runClassroomLoad', () => {
     await loading;
 
     expect(deps.applyRestoredMediaTasks).not.toHaveBeenCalled();
+    expect(deps.discardRestoredMediaTasks).toHaveBeenCalledWith({
+      image: { elementId: 'image' },
+    });
     expect(deps.loadGeneratedAgentRecords).not.toHaveBeenCalled();
     expect(deps.setLoading).not.toHaveBeenCalled();
   });
@@ -346,5 +351,29 @@ describe('saveGeneratedAgentsForCurrentLoad', () => {
     expect(databaseMocks.bulkPutGeneratedAgents).toHaveBeenCalledWith([
       expect.objectContaining({ id: 'agent-a', stageId: 'stage-a' }),
     ]);
+  });
+});
+
+describe('discardRestoredMediaTasks', () => {
+  it('revokes restored media URLs that never enter the store', () => {
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+
+    discardRestoredMediaTasks({
+      image: {
+        elementId: 'image',
+        type: 'image',
+        status: 'done',
+        prompt: 'image',
+        params: {},
+        objectUrl: 'blob:image',
+        poster: 'blob:poster',
+        retryCount: 0,
+        stageId: 'stage-a',
+      },
+    });
+
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:image');
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:poster');
+    revokeObjectURL.mockRestore();
   });
 });
