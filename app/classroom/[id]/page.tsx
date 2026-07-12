@@ -21,6 +21,7 @@ import {
   runClassroomLoad,
   saveGeneratedAgentsForCurrentLoad,
 } from '@/lib/classroom/load-classroom';
+import { shouldRunClassroomGenerationResume } from '@/lib/classroom/resume-generation';
 
 const log = createLogger('Classroom');
 
@@ -34,7 +35,6 @@ export default function ClassroomDetailPage() {
   const [error, setError] = useState<string | null>(null);
 
   const generationStartedRef = useRef(false);
-  const activeLoadTokenRef = useRef<number | null>(null);
 
   const { generateRemaining, retrySingleOutline, stop } = useSceneGenerator({
     onComplete: () => {
@@ -45,7 +45,6 @@ export default function ClassroomDetailPage() {
   const loadClassroom = useCallback(
     async (isEffectCurrent: () => boolean = () => true) => {
       const loadToken = claimStageSceneLoadToken();
-      activeLoadTokenRef.current = loadToken;
       const isCurrent = () => isEffectCurrent() && isCurrentStageSceneLoadToken(loadToken);
 
       await runClassroomLoad({
@@ -110,10 +109,7 @@ export default function ClassroomDetailPage() {
   useEffect(() => {
     if (loading || error || generationStartedRef.current) return;
     let cancelled = false;
-    const isCurrent = () =>
-      !cancelled &&
-      (activeLoadTokenRef.current == null ||
-        isCurrentStageSceneLoadToken(activeLoadTokenRef.current));
+    const canResume = () => shouldRunClassroomGenerationResume({ cancelled });
 
     const state = useStageStore.getState();
     const { outlines, scenes, stage, generationComplete } = state;
@@ -138,7 +134,7 @@ export default function ClassroomDetailPage() {
         .filter(Boolean);
 
       loadImageMapping(storageIds).then((imageMapping) => {
-        if (!isCurrent()) return;
+        if (!canResume()) return;
         generateRemaining({
           pdfImages: params.pdfImages,
           imageMapping,
@@ -163,14 +159,14 @@ export default function ClassroomDetailPage() {
       // ran. Record completion now so a later edit/delete is not treated as
       // an interrupted generation. No-op if already complete or not all
       // outlines have scenes.
-      if (!isCurrent()) return;
+      if (!canResume()) return;
       useStageStore.getState().markGenerationCompleteIfDone();
       // Resume media only for outlines that still have a scene. On a finished
       // deck the user may have deleted a slide, leaving an orphaned outline;
       // generating its media would waste API calls on a slide that is gone.
       const materializedOrders = new Set(scenes.map((s) => s.order));
       const materializedOutlines = outlines.filter((o) => materializedOrders.has(o.order));
-      if (!isCurrent()) return;
+      if (!canResume()) return;
       generateMediaForOutlines(materializedOutlines, stage.id).catch((err) => {
         log.warn('[Classroom] Media generation resume error:', err);
       });
