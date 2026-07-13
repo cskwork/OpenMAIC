@@ -200,6 +200,33 @@ describe('foldPBLRuntime', () => {
     expect(folded.learnerState.milestones[0]?.microtasks[0]?.status).toBe('in_progress');
   });
 
+  it('preserves the learner proficiency model across project_reset', () => {
+    const designTemplate = stripToDesignTemplate(makeProject());
+    const assessment = {
+      ...emptyAssessment(),
+      tier: 'advanced' as const,
+      score: 0.8,
+      confidence: 0.9,
+    };
+    const assessed = extractLearnerState(
+      makeProject({ proficiency: 'advanced', proficiencyAssessment: assessment }),
+    );
+    const resetEvent: PBLRuntimeEvent = {
+      id: 'reset-assessed',
+      kind: 'project_reset',
+      actorType: 'user',
+      ts: '2026-05-29T00:00:02.000Z',
+    };
+
+    const folded = foldPBLRuntime({
+      designTemplate,
+      records: [record(0, snapshotPayload(assessed)), record(1, runtimePayload(resetEvent))],
+    });
+
+    expect(folded.learnerState.proficiencyAssessment).toEqual(assessment);
+    expect(folded.learnerState.runtimeResetEpoch).toBe(1);
+  });
+
   it('uses a snapshot anchor to skip already-reflected duplicate events', () => {
     const designTemplate = stripToDesignTemplate(makeProject());
     const withFirstMessage = extractLearnerState(makeProject());

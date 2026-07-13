@@ -366,8 +366,10 @@ export function foldPBLRuntime({
     seen.add(key);
     const result = applyRuntimeEvent(state, payload, record, gaps);
     if (result === 'reset') {
+      const proficiencyAssessment = clone(state.proficiencyAssessment);
       epoch += 1;
       state = clone(baseline);
+      state.proficiencyAssessment = proficiencyAssessment;
       state.runtimeResetEpoch = epoch;
       gaps.length = 0;
     }

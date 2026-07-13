@@ -28,6 +28,7 @@ import { enrichPBLRuntimeEvent, pblEngagementRecordPayload } from './record-payl
 
 const PBL_DRAIN_TIMEOUT_MS = 10_000;
 const PBL_DRAIN_CHAIN_HARD_CAP_MS = PBL_DRAIN_TIMEOUT_MS * 2;
+const PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS = PBL_DRAIN_CHAIN_HARD_CAP_MS;
 const WATERMARK_SCOPE = 'device';
 
 let defaultKv: KVStore | undefined;
@@ -341,7 +342,10 @@ async function drainProjectRuntimeSerialized(
     })
     .then(async () => {
       if (waitForActualCompletion) {
-        await waitForActiveDrainWork(inFlightKey);
+        await withTimeout(
+          waitForActiveDrainWork(inFlightKey),
+          PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS,
+        );
       }
       const deadline = createDrainDeadline(
         waitForActualCompletion ? Number.POSITIVE_INFINITY : PBL_DRAIN_TIMEOUT_MS,
@@ -357,7 +361,7 @@ async function drainProjectRuntimeSerialized(
       );
       trackActiveDrainWork(inFlightKey, drainWork);
       if (waitForActualCompletion) {
-        return drainWork;
+        return withTimeout(drainWork, PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS);
       }
       // Safety invariant for releasing a stuck chain link: drain work checks
       // the cooperative deadline before each append and before watermark
@@ -378,9 +382,9 @@ async function drainProjectRuntimeSerialized(
 }
 
 /**
- * Drain all currently visible events without the caller timeout. Hydration uses
- * this barrier before reading records or appending a snapshot, so a late event
- * can never land behind the snapshot that is meant to cover it.
+ * Drain all currently visible events behind a bounded completion barrier.
+ * Hydration must either observe the completed drain or abort to its document
+ * fallback; it must never write a snapshot while an earlier append is pending.
  */
 export async function drainProjectRuntimeFully(args: DrainProjectRuntimeArgs): Promise<void> {
   await drainProjectRuntimeSerialized(args, true);

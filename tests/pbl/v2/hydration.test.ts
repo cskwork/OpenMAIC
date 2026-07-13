@@ -432,6 +432,47 @@ describe('PBL runtime hydration', () => {
     }
   });
 
+  it('falls back to the document without a snapshot when the drain barrier times out', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const project = transitionProjectUiPhase(makeProject(), 'workspace');
+    const eventId = project.runtimeEvents![0]!.id;
+    const store = new SlowFirstAppendRuntimeStore(eventId);
+    const scenes = [makePBLScene(project)];
+
+    try {
+      let settled = false;
+      const hydrating = hydratePBLScenesFromRuntime(STAGE_ID, scenes, {
+        store,
+        kv: new MemoryKVStore(),
+        learnerKey: LEARNER_KEY,
+      }).then((result) => {
+        settled = true;
+        return result;
+      });
+      await store.appendStarted;
+      await vi.advanceTimersByTimeAsync(20_001);
+      await Promise.resolve();
+
+      const settledAtBarrierTimeout = settled;
+      const recordsAtBarrierTimeout = await listRecords(store);
+      store.release();
+      const hydrated = await hydrating;
+
+      expect(settledAtBarrierTimeout).toBe(true);
+      expect(hydrated).toEqual(scenes);
+      expect(
+        recordsAtBarrierTimeout.some(
+          (record) => (record.payload as Partial<PBLRuntimeStorePayload>).kind === 'pbl_snapshot',
+        ),
+      ).toBe(false);
+    } finally {
+      store.release();
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps document state and self-heals when runtime history is partial', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const store = new MemoryRuntimeStore();
