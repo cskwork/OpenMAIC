@@ -30,6 +30,8 @@ export interface EditElementsApplyDetails {
   updateCount?: number;
   /** Element types captured when the server-side gate accepted the batch. */
   targetElementTypes?: Record<string, string>;
+  /** Mutable element state captured before the model call, keyed by target id. */
+  targetElementFingerprints?: Record<string, string>;
   /** Present when the tool or host refused; retained for agent history and diagnostics. */
   refuseReason?: string;
 }
@@ -123,6 +125,7 @@ export function applyEditElementsIntents(
   sceneId: string,
   intents: EditIntent[],
   targetElementTypes?: Record<string, string>,
+  targetElementFingerprints?: Record<string, string>,
 ): ApplyEditElementsResult {
   if (!intents.length) return { ok: false, reason: 'no element updates proposed' };
 
@@ -143,6 +146,7 @@ export function applyEditElementsIntents(
     present.canvas.elements as PPTElement[],
     intents,
     targetElementTypes,
+    targetElementFingerprints,
   );
   if (!recheck.ok) return { ok: false, reason: recheck.reason };
 

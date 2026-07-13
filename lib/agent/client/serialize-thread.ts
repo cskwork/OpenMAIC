@@ -33,7 +33,7 @@ export interface SlimToolResult {
      */
     intents?: unknown[] | null;
     updateCount?: number;
-    /** Gate/host refusal reason for the tool-card tooltip. */
+    /** Gate/host refusal reason retained for agent history and diagnostics. */
     refuseReason?: string;
   };
 }

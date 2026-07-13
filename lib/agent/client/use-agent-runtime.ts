@@ -423,6 +423,7 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
               editDetails.sceneId,
               editDetails.intents,
               editDetails.targetElementTypes,
+              editDetails.targetElementFingerprints,
             );
             if (!applied.ok) {
               toolResultsRef.current.set(e.toolCallId, {

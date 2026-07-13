@@ -2,8 +2,7 @@
 
 /**
  * Tool-call UI for `edit_elements` (natural-language per-element edits).
- * Minimal non-expandable ToolCard — title + @scene pill + status badge, with a
- * muted visible refusal reason when an edit was not applied.
+ * Minimal non-expandable ToolCard — title + @scene pill + localized status.
  */
 import { Move } from 'lucide-react';
 import { makeAssistantToolUI } from '@assistant-ui/react';

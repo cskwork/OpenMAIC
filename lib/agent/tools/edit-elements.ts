@@ -21,6 +21,7 @@ import type { RegenerateActionsDeps, SceneContext } from './regenerate-scene-act
 import {
   buildElementInventory,
   collectIntentTargetIds,
+  elementInventoryFingerprint,
   mapProposalsToEditIntents,
   type ElementInventoryItem,
   type ProposedElementUpdate,
@@ -50,10 +51,12 @@ export interface EditElementsDetails {
   intents: EditIntent[] | null;
   /** Number of elements touched (0 on refusal). */
   updateCount: number;
-  /** Gate/host refusal reason (user-visible via tool card body + tooltip). */
+  /** Gate/host refusal reason retained for agent history and diagnostics. */
   refuseReason?: string;
   /** Element types captured when the gate accepted the batch, keyed by id. */
   targetElementTypes?: Record<string, string>;
+  /** Mutable element state captured before the model call, keyed by target id. */
+  targetElementFingerprints?: Record<string, string>;
 }
 
 export type EditElementsDeps = RegenerateActionsDeps & {
@@ -153,6 +156,19 @@ function targetTypesForIntents(
   for (const id of collectIntentTargetIds(intents)) {
     const type = byId.get(id);
     if (type) out[id] = type;
+  }
+  return out;
+}
+
+function targetFingerprintsForIntents(
+  intents: EditIntent[],
+  elements: PPTElement[],
+): Record<string, string> {
+  const byId = new Map(elements.map((el) => [el.id, el] as const));
+  const out: Record<string, string> = {};
+  for (const id of collectIntentTargetIds(intents)) {
+    const element = byId.get(id);
+    if (element) out[id] = elementInventoryFingerprint(element);
   }
   return out;
 }
@@ -329,6 +345,7 @@ export function makeEditElementsTool(
           intents: gated.intents,
           updateCount,
           targetElementTypes: targetTypesForIntents(gated.intents, inventory),
+          targetElementFingerprints: targetFingerprintsForIntents(gated.intents, elements),
         },
       };
     },

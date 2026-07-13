@@ -163,6 +163,27 @@ describe('applyEditElementsIntents', () => {
     expect(commitContent).toHaveBeenCalledTimes(1);
   });
 
+  it('refuses when a target changed after the gate inventory was captured', async () => {
+    const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
+    const { elementInventoryFingerprint } = await import('@/lib/agent/tools/edit-elements-gate');
+    const gateTime = textEl('a');
+    const present = slideWith([textEl('a', { top: 95 })]);
+    mockSession.sceneId = 's1';
+    mockSession.history = { present };
+
+    const result = applyEditElementsIntents(
+      's1',
+      [{ type: 'element.update', id: 'a', props: { top: 10 } }],
+      { a: 'text' },
+      { a: elementInventoryFingerprint(gateTime) },
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/changed while the edit was being prepared/i);
+    expect(commitContent).not.toHaveBeenCalled();
+  });
+
   it('commits one undo entry when session is open and targets are valid', async () => {
     const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
     const present = slideWith([textEl('a')]);

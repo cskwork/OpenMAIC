@@ -268,6 +268,8 @@ export interface ElementInventoryItem {
   label: string;
   /** Style props currently on the element that the DSL owns and AI may edit. */
   style: Record<string, unknown>;
+  /** True when element-level defaultColor would be hidden by inline HTML color. */
+  hasInlineTextColor?: boolean;
 }
 
 export interface ProposedElementUpdate {
@@ -666,6 +668,12 @@ export function mapProposalsToEditIntents(
 
     const keyErr = validatePropsKeys(props);
     if (keyErr) return { ok: false, reason: keyErr };
+    if ('defaultColor' in props && el.hasInlineTextColor) {
+      return {
+        ok: false,
+        reason: `element ${JSON.stringify(id)} has inline text color that defaultColor cannot override`,
+      };
+    }
 
     for (const [key, value] of Object.entries(props)) {
       const valueErr = validatePropValue(key, value, el.type);
@@ -736,12 +744,30 @@ export function buildElementInventory(elements: PPTElement[]): ElementInventoryI
       style,
     };
     if (typeof el.groupId === 'string' && el.groupId) base.groupId = el.groupId;
+    const textContent =
+      el.type === 'text'
+        ? (el as { content?: unknown }).content
+        : el.type === 'shape'
+          ? (el as { text?: { content?: unknown } }).text?.content
+          : undefined;
+    if (
+      typeof textContent === 'string' &&
+      /\bstyle\s*=\s*["'][^"']*\bcolor\s*:/i.test(textContent)
+    ) {
+      base.hasInlineTextColor = true;
+    }
     if (el.type !== 'line') {
       base.height = (el as { height: number }).height;
       base.rotate = (el as { rotate: number }).rotate;
     }
     return base;
   });
+}
+
+/** Stable snapshot of the model-visible mutable state used for apply-time drift checks. */
+export function elementInventoryFingerprint(element: PPTElement): string {
+  const item = buildElementInventory([element])[0];
+  return JSON.stringify(item);
 }
 
 function elementLabel(el: PPTElement): string {
@@ -790,6 +816,7 @@ export function revalidateIntentsAgainstElements(
   elements: PPTElement[],
   intents: EditIntent[],
   targetElementTypes?: Record<string, string>,
+  targetElementFingerprints?: Record<string, string>,
 ): EditElementsGateResult {
   const inventory = buildElementInventory(elements);
   const ids = collectIntentTargetIds(intents);
@@ -805,6 +832,18 @@ export function revalidateIntentsAgainstElements(
       return {
         ok: false,
         reason: `element ${JSON.stringify(id)} changed type from ${expectedType} to ${el.type}`,
+      };
+    }
+    const expectedFingerprint = targetElementFingerprints?.[id];
+    const liveElement = elements.find((item) => item.id === id);
+    if (
+      expectedFingerprint &&
+      liveElement &&
+      elementInventoryFingerprint(liveElement) !== expectedFingerprint
+    ) {
+      return {
+        ok: false,
+        reason: `element ${JSON.stringify(id)} changed while the edit was being prepared`,
       };
     }
   }

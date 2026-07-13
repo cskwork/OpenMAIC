@@ -85,6 +85,32 @@ describe('edit-elements-gate', () => {
     ]);
   });
 
+  it('refuses defaultColor when inline text color would override it', () => {
+    const [inlineColored] = buildElementInventory([
+      {
+        id: 'imported-title',
+        type: 'text',
+        left: 100,
+        top: 80,
+        width: 400,
+        height: 60,
+        rotate: 0,
+        content: '<p><span style="font-size: 28px; color: #123456">Title</span></p>',
+        defaultColor: '#333333',
+        defaultFontName: 'Arial',
+      } as PPTElement,
+    ]);
+
+    const result = mapProposalsToEditIntents(
+      [{ id: 'imported-title', props: { defaultColor: '#0000ff' } }],
+      [inlineColored],
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/inline text color/i);
+  });
+
   it('maps mixed-target updates to one element.updateMany', () => {
     const result = mapProposalsToEditIntents(
       [
