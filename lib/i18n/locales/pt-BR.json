@@ -420,7 +420,8 @@
       "title": "Editar elementos",
       "editing": "Editando",
       "applied": "Aplicado",
-      "notApplied": "Não aplicado"
+      "notApplied": "Não aplicado",
+      "applyFailed": "O editor não conseguiu aplicar a edição do elemento. Nada foi alterado."
     }
   },
   "stage": {

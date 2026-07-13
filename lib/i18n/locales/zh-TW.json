@@ -435,7 +435,8 @@
       "title": "編輯元素",
       "editing": "編輯中",
       "applied": "已套用",
-      "notApplied": "未套用"
+      "notApplied": "未套用",
+      "applyFailed": "編輯器無法套用元素修改，未變更任何內容。"
     }
   },
   "whiteboard": {

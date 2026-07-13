@@ -435,7 +435,8 @@
       "title": "요소 편집",
       "editing": "편집 중",
       "applied": "적용됨",
-      "notApplied": "미적용"
+      "notApplied": "미적용",
+      "applyFailed": "편집기에서 요소 편집을 적용하지 못했습니다. 변경된 내용이 없습니다."
     }
   },
   "classroomComplete": {

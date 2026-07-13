@@ -551,7 +551,6 @@ export function validatePropValue(key: string, value: unknown, type: string): st
 export function clampUpdateProps(
   type: string,
   props: Record<string, unknown>,
-  current: { width: number; height?: number },
 ): Record<string, unknown> {
   const out: Record<string, unknown> = { ...props };
 
@@ -590,7 +589,6 @@ export function clampUpdateProps(
     out.opacity = Math.min(1, Math.max(0, out.opacity));
   }
 
-  void current;
   return out;
 }
 
@@ -676,10 +674,7 @@ export function mapProposalsToEditIntents(
 
     let clamped: Record<string, unknown>;
     try {
-      clamped = clampUpdateProps(el.type, props, {
-        width: el.width,
-        height: el.height,
-      });
+      clamped = clampUpdateProps(el.type, props);
     } catch (err) {
       return {
         ok: false,

@@ -8,6 +8,7 @@
 import { Move } from 'lucide-react';
 import { makeAssistantToolUI } from '@assistant-ui/react';
 import { useI18n } from '@/lib/hooks/use-i18n';
+import { editElementsOutcome } from '@/lib/agent/client/edit-elements-result';
 import { ToolCard, isStoppedResult, type ToolStatus } from './tool-card';
 
 interface EditElementsResult {
@@ -20,24 +21,6 @@ interface EditElementsResult {
   };
 }
 
-function isEditElementsApplied(result?: EditElementsResult | null): boolean {
-  return Array.isArray(result?.details?.intents) && result!.details!.intents!.length > 0;
-}
-
-function isEditElementsRefused(result?: EditElementsResult | null): boolean {
-  const d = result?.details;
-  return !!d && 'intents' in d && d.intents === null;
-}
-
-function refuseReasonOf(result?: EditElementsResult | null): string | undefined {
-  const fromDetails = result?.details?.refuseReason;
-  if (typeof fromDetails === 'string' && fromDetails.trim()) return fromDetails.trim();
-  const text = result?.content?.find((c) => c.type === 'text' && c.text)?.text;
-  if (!text) return undefined;
-  const m = text.match(/Could not apply the edit:\s*(.+?)\.\s*Nothing was changed/i);
-  return m?.[1]?.trim();
-}
-
 function deriveEditElementsFailed(args: {
   running: boolean;
   stopped: boolean;
@@ -46,22 +29,21 @@ function deriveEditElementsFailed(args: {
 }): boolean {
   const { running, stopped, isError, result } = args;
   if (running || stopped) return false;
-  if (isEditElementsApplied(result)) return false;
-  return isError || isEditElementsRefused(result);
+  const outcome = editElementsOutcome(result?.details);
+  if (outcome === 'applied') return false;
+  return isError || outcome === 'refused';
 }
 
-function EditElementsCard({
+export function EditElementsCard({
   running,
   stopped,
   failed,
   sceneId,
-  refuseReason,
 }: {
   running: boolean;
   stopped: boolean;
   failed: boolean;
   sceneId?: string;
-  refuseReason?: string;
 }) {
   const { t } = useI18n();
   const toolStatus: ToolStatus = running
@@ -78,9 +60,6 @@ function EditElementsCard({
       : failed
         ? t('edit.editElements.notApplied')
         : t('edit.editElements.applied');
-  // ToolCard status is icon-only; keep the refusal reason in the hover tooltip
-  // and render it as visible muted body text.
-  const statusLabel = failed && refuseReason ? `${baseLabel}: ${refuseReason}` : baseLabel;
 
   return (
     <ToolCard
@@ -88,10 +67,8 @@ function EditElementsCard({
       icon={Move}
       sceneId={sceneId}
       status={toolStatus}
-      statusLabel={statusLabel}
-    >
-      {failed && refuseReason ? <span>{refuseReason}</span> : null}
-    </ToolCard>
+      statusLabel={baseLabel}
+    />
   );
 }
 
@@ -115,7 +92,6 @@ export const EditElementsUI = makeAssistantToolUI<
         stopped={stopped}
         failed={failed}
         sceneId={args?.sceneId ?? result?.details?.sceneId}
-        refuseReason={refuseReasonOf(result)}
       />
     );
   },

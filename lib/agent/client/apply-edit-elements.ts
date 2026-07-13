@@ -18,6 +18,7 @@ import type { PPTElement } from '@openmaic/dsl';
 import { produce } from 'immer';
 import { useSlideEditSession } from '@/components/edit/surfaces/slide/slide-edit-session';
 import type { SlideContent } from '@/lib/types/stage';
+import { editElementsOutcome } from '@/lib/agent/client/edit-elements-result';
 import {
   revalidateIntentsAgainstElements,
   SHAPE_TEXT_CHROME_PROPS,
@@ -29,7 +30,7 @@ export interface EditElementsApplyDetails {
   updateCount?: number;
   /** Element types captured when the server-side gate accepted the batch. */
   targetElementTypes?: Record<string, string>;
-  /** Present when the tool or host refused; surfaced on the tool card body + tooltip. */
+  /** Present when the tool or host refused; retained for agent history and diagnostics. */
   refuseReason?: string;
 }
 
@@ -54,14 +55,7 @@ function applyPropsToElement(el: PPTElement, props: Partial<PPTElement>): void {
       const shape = el as PPTElement & {
         text?: Record<string, unknown>;
       };
-      shape.text = {
-        content: '',
-        defaultFontName: 'Microsoft YaHei',
-        defaultColor: '#333333',
-        align: 'middle',
-        ...(shape.text ?? {}),
-        ...textPatch,
-      };
+      shape.text = { ...shape.text, ...textPatch };
     }
     return;
   }
@@ -159,9 +153,6 @@ export function hasEditElementsIntents(
   details: EditElementsApplyDetails | null | undefined,
 ): details is EditElementsApplyDetails & { sceneId: string; intents: EditIntent[] } {
   return (
-    !!details &&
-    typeof details.sceneId === 'string' &&
-    Array.isArray(details.intents) &&
-    details.intents.length > 0
+    !!details && typeof details.sceneId === 'string' && editElementsOutcome(details) === 'applied'
   );
 }

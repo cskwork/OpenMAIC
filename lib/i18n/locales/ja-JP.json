@@ -435,7 +435,8 @@
       "title": "要素を編集",
       "editing": "編集中",
       "applied": "適用済み",
-      "notApplied": "未適用"
+      "notApplied": "未適用",
+      "applyFailed": "エディターで要素の編集を適用できませんでした。変更はありません。"
     }
   },
   "classroomComplete": {

@@ -9,6 +9,7 @@
  * unit-tested without React.
  */
 import type { ThreadMessageLike } from '@assistant-ui/react';
+import { editElementsOutcome } from '@/lib/agent/client/edit-elements-result';
 
 export interface SlimToolResult {
   content?: { type: 'text'; text: string }[];
@@ -90,8 +91,11 @@ function slimResult(result: unknown): SlimToolResult | undefined {
     if (typeof ec === 'number') details.editCount = ec;
     // edit_elements: keep applied/refused signal, drop intent prop payloads.
     const di = (d as { intents?: unknown }).intents;
-    if (di === null) details.intents = null;
-    else if (Array.isArray(di)) details.intents = di.map(() => ({}));
+    const editOutcome = editElementsOutcome({
+      intents: Array.isArray(di) || di === null ? di : undefined,
+    });
+    if (editOutcome === 'refused') details.intents = null;
+    else if (editOutcome === 'applied') details.intents = (di as unknown[]).map(() => ({}));
     const uc = (d as { updateCount?: unknown }).updateCount;
     if (typeof uc === 'number') details.updateCount = uc;
     const rr = (d as { refuseReason?: unknown }).refuseReason;

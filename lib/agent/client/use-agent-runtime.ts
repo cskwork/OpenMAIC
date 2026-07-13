@@ -53,6 +53,7 @@ export type { AssistantPart, PiPart } from './merge-assistant-parts';
 import { toPiParts, type PiAssistantContent } from './to-pi-parts';
 import { useThinkingTimers } from './thinking-timers';
 import { useSceneRuntimeErrors } from '@/lib/store/scene-runtime-errors';
+import { useI18n } from '@/lib/hooks/use-i18n';
 
 export interface UseAgentRuntimeOptions {
   scene?: { id: string; title: string };
@@ -98,6 +99,7 @@ function reseedReasoningTimers(saved: SerializedMessage[] | undefined): void {
 }
 
 export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
+  const { t } = useI18n();
   const [messages, setMessages] = useState<ThreadMessageLike[]>([]);
   const [isRunning, setIsRunning] = useState(false);
 
@@ -252,7 +254,7 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
   const turnsRef = useRef<PiPart[][]>([]);
   const toolResultsRef = useRef<Map<string, { result: unknown; isError: boolean }>>(new Map());
   /** Apply-time refusals for edit_elements within the current run (client-side). */
-  const editApplyFailuresRef = useRef<string[]>([]);
+  const editApplyFailedRef = useRef(false);
   const errorRef = useRef<string>('');
   const phaseRef = useRef<'running' | 'complete' | 'error' | 'cancelled'>('complete');
   // Aborts the in-flight run; closing the fetch body cancels the server stream
@@ -441,7 +443,7 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
               });
               // Visible correction after wrap-up may still claim success (server
               // only saw "proposed"); also feeds next-turn history via toHistory.
-              editApplyFailuresRef.current.push(applied.reason);
+              editApplyFailedRef.current = true;
             }
           }
           refresh();
@@ -489,7 +491,7 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
       const assistantId = `a-${turnId}`;
       turnsRef.current = [];
       toolResultsRef.current = new Map();
-      editApplyFailuresRef.current = [];
+      editApplyFailedRef.current = false;
       errorRef.current = '';
       phaseRef.current = 'running';
       const abort = new AbortController();
@@ -632,18 +634,14 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
           if (phaseRef.current === 'running') phaseRef.current = 'complete';
           // If the client refused an edit_elements apply, append a correction so
           // the user (and next-turn history) see it even when wrap-up claimed success.
-          if (editApplyFailuresRef.current.length > 0) {
-            const reasons = [...new Set(editApplyFailuresRef.current)];
+          if (editApplyFailedRef.current) {
             turnsRef.current.push([
               {
                 type: 'text',
-                text:
-                  reasons.length === 1
-                    ? `Editor could not apply the element edit: ${reasons[0]}. Nothing was changed.`
-                    : `Editor could not apply element edits:\n${reasons.map((r) => `- ${r}`).join('\n')}\nNothing was changed.`,
+                text: t('edit.editElements.applyFailed'),
               },
             ]);
-            editApplyFailuresRef.current = [];
+            editApplyFailedRef.current = false;
           }
           // Close any reasoning block still open (e.g. the run ended with the
           // last block as its final phase) so its duration is final.
@@ -659,7 +657,7 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
         }
       }
     },
-    [buildAssistant, handleEvent, opts.scene],
+    [buildAssistant, handleEvent, opts.scene, t],
   );
 
   // Stop the current response: abort the fetch (cancels the server stream) and

@@ -3,6 +3,10 @@
  * Includes edit_elements apply outcomes so a refused client apply is visible
  * to the model on the next turn (tool-call parts are otherwise dropped).
  */
+import {
+  editElementsOutcome,
+  editElementsRefuseReason,
+} from '@/lib/agent/client/edit-elements-result';
 
 export type HistoryTurn = { role: 'user' | 'assistant'; text: string };
 
@@ -24,23 +28,15 @@ type ContentPart = {
 function editElementsOutcomeLine(part: ContentPart): string | null {
   if (part.type !== 'tool-call' || part.toolName !== 'edit_elements') return null;
   const details = part.result?.details;
-  const refuse =
-    (typeof details?.refuseReason === 'string' && details.refuseReason.trim()) ||
-    part.result?.content?.find((c) => c.type === 'text' && c.text)?.text;
-  if (details && 'intents' in details && details.intents === null) {
-    const reason =
-      typeof details.refuseReason === 'string' && details.refuseReason.trim()
-        ? details.refuseReason.trim()
-        : typeof refuse === 'string'
-          ? refuse
-              .replace(/^Could not apply the edit:\s*/i, '')
-              .replace(/\.\s*Nothing was changed\.?$/i, '')
-          : 'refused';
+  const outcome = editElementsOutcome(details);
+  if (outcome === 'refused') {
+    const reason = editElementsRefuseReason(part.result) ?? 'refused';
     return `[edit_elements: not applied — ${reason}]`;
   }
-  if (Array.isArray(details?.intents) && details.intents.length > 0 && !part.isError) {
-    const n =
-      typeof details.updateCount === 'number' ? details.updateCount : details.intents.length;
+  if (outcome === 'applied' && !part.isError) {
+    const intents = details?.intents;
+    if (!Array.isArray(intents)) return null;
+    const n = typeof details?.updateCount === 'number' ? details.updateCount : intents.length;
     return `[edit_elements: applied ${n} update(s)]`;
   }
   if (part.isError) {

@@ -150,7 +150,7 @@ describe('edit-elements-gate', () => {
   });
 
   it('clamps width to MIN_SIZE for text (40)', () => {
-    expect(clampUpdateProps('text', { width: 5 }, { width: 400, height: 60 })).toEqual({
+    expect(clampUpdateProps('text', { width: 5 })).toEqual({
       width: 40,
     });
   });
@@ -440,8 +440,8 @@ describe('edit-elements-gate', () => {
   });
 
   it('clamps line stroke width with min 1, not box MIN_SIZE', () => {
-    expect(clampUpdateProps('line', { width: 0.5 }, { width: 2 })).toEqual({ width: 1 });
-    expect(clampUpdateProps('line', { width: 4 }, { width: 2 })).toEqual({ width: 4 });
+    expect(clampUpdateProps('line', { width: 0.5 })).toEqual({ width: 1 });
+    expect(clampUpdateProps('line', { width: 4 })).toEqual({ width: 4 });
   });
 
   it('clamps opacity overshoot on valid opacity props', () => {
@@ -458,7 +458,7 @@ describe('edit-elements-gate', () => {
         props: { opacity: 1 },
       },
     ]);
-    expect(clampUpdateProps('text', { opacity: -0.25 }, { width: 400, height: 60 })).toEqual({
+    expect(clampUpdateProps('text', { opacity: -0.25 })).toEqual({
       opacity: 0,
     });
   });

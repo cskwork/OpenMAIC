@@ -435,7 +435,8 @@
       "title": "编辑元素",
       "editing": "编辑中",
       "applied": "已应用",
-      "notApplied": "未应用"
+      "notApplied": "未应用",
+      "applyFailed": "编辑器无法应用元素修改，未更改任何内容。"
     }
   },
   "classroomComplete": {

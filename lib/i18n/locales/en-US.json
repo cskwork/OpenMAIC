@@ -435,7 +435,8 @@
       "title": "Edit elements",
       "editing": "Editing",
       "applied": "Applied",
-      "notApplied": "Not applied"
+      "notApplied": "Not applied",
+      "applyFailed": "The editor could not apply the element edit. Nothing was changed."
     }
   },
   "classroomComplete": {
