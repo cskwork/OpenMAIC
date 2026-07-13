@@ -439,24 +439,34 @@ describe('PBL runtime hydration', () => {
     const eventId = project.runtimeEvents![0]!.id;
     const store = new SlowFirstAppendRuntimeStore(eventId);
     const scenes = [makePBLScene(project)];
+    const kv = new MemoryKVStore();
 
     try {
+      const priorDrain = drainProjectRuntime({
+        stageId: STAGE_ID,
+        sceneId: SCENE_ID,
+        project,
+        store,
+        kv,
+        learnerKey: LEARNER_KEY,
+      });
+      await store.appendStarted;
       let settled = false;
       const hydrating = hydratePBLScenesFromRuntime(STAGE_ID, scenes, {
         store,
-        kv: new MemoryKVStore(),
+        kv,
         learnerKey: LEARNER_KEY,
       }).then((result) => {
         settled = true;
         return result;
       });
-      await store.appendStarted;
       await vi.advanceTimersByTimeAsync(20_001);
       await Promise.resolve();
 
       const settledAtBarrierTimeout = settled;
       const recordsAtBarrierTimeout = await listRecords(store);
       store.release();
+      await priorDrain;
       const hydrated = await hydrating;
 
       expect(settledAtBarrierTimeout).toBe(true);

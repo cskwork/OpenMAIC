@@ -387,7 +387,11 @@ async function drainProjectRuntimeSerialized(
  * fallback; it must never write a snapshot while an earlier append is pending.
  */
 export async function drainProjectRuntimeFully(args: DrainProjectRuntimeArgs): Promise<void> {
-  await drainProjectRuntimeSerialized(args, true);
+  const work = drainProjectRuntimeSerialized(args, true);
+  // The budget covers queueing behind prior saves as well as this drain's own
+  // work. A late rejection is observed here after the caller has fallen back.
+  work.catch(() => {});
+  await withTimeout(work, PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS);
 }
 
 export async function drainProjectRuntime(args: DrainProjectRuntimeArgs): Promise<void> {
