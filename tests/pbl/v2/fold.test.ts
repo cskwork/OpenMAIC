@@ -3,6 +3,7 @@ import type { RuntimeRecord } from '@openmaic/dsl';
 
 import { foldPBLRuntime } from '@/lib/pbl/v2/runtime/fold';
 import { MAX_ENGAGEMENT_EVENTS } from '@/lib/pbl/v2/operations/engagement';
+import { emptyAssessment } from '@/lib/pbl/v2/operations/proficiency';
 import {
   PBL_RUNTIME_PAYLOAD_VERSION,
   type PBLRuntimeStorePayload,
@@ -126,11 +127,12 @@ function rawRecord(seq: number, payload: PBLRuntimeEvent, id = `legacy-${seq}`):
 
 describe('foldPBLRuntime', () => {
   it('returns the design baseline for empty history', () => {
-    const designTemplate = stripToDesignTemplate(makeProject());
+    const designTemplate = makeProject({ proficiencyAssessment: emptyAssessment() });
 
     const folded = foldPBLRuntime({ designTemplate, records: [] });
 
-    expect(folded.learnerState).toEqual(extractLearnerState(designTemplate));
+    expect(folded.learnerState).toEqual(extractLearnerState(stripToDesignTemplate(designTemplate)));
+    expect(folded.learnerState.proficiencyAssessment).toBeUndefined();
     expect(folded.diagnostics.gaps).toEqual([]);
   });
 

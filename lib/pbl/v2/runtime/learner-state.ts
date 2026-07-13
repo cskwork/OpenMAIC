@@ -113,6 +113,7 @@ export function stripToDesignTemplate(project: PBLProjectV2): PBLProjectV2 {
   template.submissions = [];
   template.evaluations = [];
   template.engagementEvents = [];
+  template.proficiencyAssessment = undefined;
   template.runtimeEvents = undefined;
   template.runtimeResetEpoch = undefined;
   template.pendingHandover = undefined;

@@ -8,6 +8,37 @@ import {
 import { emptyAssessment } from '@/lib/pbl/v2/operations/proficiency';
 import type { PBLProjectV2, PBLRuntimeEvent } from '@/lib/pbl/v2/types';
 
+type ProjectFieldBoundary = 'learner-state' | 'design-template' | 'transient';
+
+const PROJECT_FIELD_BOUNDARY = {
+  uiPhase: 'learner-state',
+  status: 'learner-state',
+  milestones: 'learner-state',
+  submissions: 'learner-state',
+  evaluations: 'learner-state',
+  threads: 'learner-state',
+  engagementEvents: 'learner-state',
+  proficiencyAssessment: 'learner-state',
+  pendingHandover: 'learner-state',
+  pendingTaskCompletion: 'learner-state',
+  runtimeResetEpoch: 'learner-state',
+  title: 'design-template',
+  description: 'design-template',
+  learningObjective: 'design-template',
+  gains: 'design-template',
+  proficiency: 'design-template',
+  language: 'design-template',
+  languageDirective: 'design-template',
+  tags: 'design-template',
+  scenario: 'design-template',
+  schemaVersion: 'design-template',
+  roles: 'design-template',
+  createdAt: 'design-template',
+  updatedAt: 'design-template',
+  runtimeEvents: 'transient',
+  pendingOpenTaskPriorQuizResults: 'transient',
+} as const satisfies Record<keyof PBLProjectV2, ProjectFieldBoundary>;
+
 function makeProject(overrides: Partial<PBLProjectV2> = {}): PBLProjectV2 {
   return {
     uiPhase: 'hero',
@@ -167,6 +198,7 @@ describe('PBL learner state split', () => {
     expect(restored.milestones[0]!.microtasks[0]!.title).toBe('Design-only task');
     expect(restored.runtimeEvents).toBeUndefined();
     expect(restored.pendingOpenTaskPriorQuizResults).toBeUndefined();
+    expect(template.proficiencyAssessment).toBeUndefined();
   });
 
   it('does not leak design-time fields into PBLLearnerState', () => {
@@ -219,46 +251,6 @@ describe('PBL learner state split', () => {
       createdAt: '2026-05-29T00:03:00.000Z',
     };
 
-    const learnerStateCovered = new Set([
-      'uiPhase',
-      'status',
-      'milestones',
-      'submissions',
-      'evaluations',
-      'threads',
-      'engagementEvents',
-      'proficiencyAssessment',
-      'pendingHandover',
-      'pendingTaskCompletion',
-      'runtimeResetEpoch',
-    ]);
-    const designTemplate = new Set([
-      'title',
-      'description',
-      'learningObjective',
-      'gains',
-      'proficiency',
-      'language',
-      'languageDirective',
-      'tags',
-      'scenario',
-      'schemaVersion',
-      'roles',
-      'createdAt',
-      'updatedAt',
-    ]);
-    const excludedTransient = new Set(['runtimeEvents', 'pendingOpenTaskPriorQuizResults']);
-
-    const classifications = [learnerStateCovered, designTemplate, excludedTransient];
-    const keys = Object.keys(project).sort();
-    const classified = keys.filter(
-      (key) => classifications.filter((classification) => classification.has(key)).length === 1,
-    );
-    const duplicated = keys.filter(
-      (key) => classifications.filter((classification) => classification.has(key)).length > 1,
-    );
-
-    expect(duplicated).toEqual([]);
-    expect(classified).toEqual(keys);
+    expect(Object.keys(PROJECT_FIELD_BOUNDARY).sort()).toEqual(Object.keys(project).sort());
   });
 });
