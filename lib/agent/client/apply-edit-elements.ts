@@ -36,6 +36,31 @@ export interface EditElementsApplyDetails {
 
 export type ApplyEditElementsResult = { ok: true } | { ok: false; reason: string };
 
+const MERGED_STYLE_PROPS = new Set(['outline', 'shadow', 'filters']);
+
+function assignElementProps(el: PPTElement, props: Record<string, unknown>): void {
+  const target = el as unknown as Record<string, unknown>;
+  for (const [key, value] of Object.entries(props)) {
+    const current = target[key];
+    if (
+      MERGED_STYLE_PROPS.has(key) &&
+      current &&
+      typeof current === 'object' &&
+      !Array.isArray(current) &&
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value)
+    ) {
+      target[key] = {
+        ...(current as Record<string, unknown>),
+        ...(value as Record<string, unknown>),
+      };
+    } else {
+      target[key] = value;
+    }
+  }
+}
+
 /** Shape text-chrome keys are nested under `shape.text` (not top-level). */
 function applyPropsToElement(el: PPTElement, props: Partial<PPTElement>): void {
   if (el.type === 'shape') {
@@ -50,16 +75,24 @@ function applyPropsToElement(el: PPTElement, props: Partial<PPTElement>): void {
         rest[key] = value;
       }
     }
-    Object.assign(el, rest);
+    const shape = el as PPTElement & {
+      pattern?: string;
+      gradient?: unknown;
+      text?: Record<string, unknown>;
+    };
+    if ('gradient' in rest) {
+      delete shape.pattern;
+    } else if ('fill' in rest) {
+      delete shape.pattern;
+      delete shape.gradient;
+    }
+    assignElementProps(el, rest);
     if (Object.keys(textPatch).length > 0) {
-      const shape = el as PPTElement & {
-        text?: Record<string, unknown>;
-      };
       shape.text = { ...shape.text, ...textPatch };
     }
     return;
   }
-  Object.assign(el, props);
+  assignElementProps(el, props as Record<string, unknown>);
 }
 
 function applyIntentsToContent(content: SlideContent, intents: EditIntent[]): SlideContent {

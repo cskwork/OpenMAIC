@@ -13,6 +13,7 @@ describe('edit_elements locale coverage', () => {
     'defines the client apply-failure correction',
     (locale) => {
       expect(locale.edit.editElements.applyFailed).toBeTruthy();
+      expect(locale.edit.editElements.applyPartiallyFailed).toBeTruthy();
     },
   );
 });

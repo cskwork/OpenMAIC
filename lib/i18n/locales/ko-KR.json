@@ -436,7 +436,8 @@
       "editing": "편집 중",
       "applied": "적용됨",
       "notApplied": "미적용",
-      "applyFailed": "편집기에서 요소 편집을 적용하지 못했습니다. 변경된 내용이 없습니다."
+      "applyFailed": "편집기에서 요소 편집을 적용하지 못했습니다. 변경된 내용이 없습니다.",
+      "applyPartiallyFailed": "하나 이상의 요소 편집을 적용하지 못했습니다. 다른 편집은 적용되었을 수 있습니다."
     }
   },
   "classroomComplete": {

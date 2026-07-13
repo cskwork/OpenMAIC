@@ -181,6 +181,76 @@ describe('applyEditElementsIntents', () => {
     expect(updateScene).not.toHaveBeenCalled();
   });
 
+  it('merges partial nested style patches without dropping existing values', async () => {
+    const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
+    const image = {
+      id: 'img1',
+      type: 'image',
+      left: 10,
+      top: 10,
+      width: 100,
+      height: 80,
+      rotate: 0,
+      fixedRatio: true,
+      src: 'https://example.com/image.png',
+      filters: { blur: '2px', contrast: '90%' },
+    } as PPTElement;
+    mockSession.sceneId = 's1';
+    mockSession.history = { present: slideWith([image]) };
+
+    const result = applyEditElementsIntents('s1', [
+      {
+        type: 'element.update',
+        id: 'img1',
+        props: { filters: { brightness: '120%' } } as Partial<PPTElement>,
+      },
+    ]);
+
+    expect(result).toEqual({ ok: true });
+    const next = commitContent.mock.calls[0][0] as SlideContent;
+    expect(next.canvas.elements[0]).toMatchObject({
+      filters: { blur: '2px', contrast: '90%', brightness: '120%' },
+    });
+  });
+
+  it('clears higher-priority shape paints when applying a solid fill', async () => {
+    const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
+    const shape = {
+      id: 'sh1',
+      type: 'shape',
+      left: 10,
+      top: 10,
+      width: 100,
+      height: 80,
+      rotate: 0,
+      viewBox: [100, 80],
+      path: 'M0,0 L100,0 L100,80 Z',
+      fixedRatio: false,
+      fill: '#eee',
+      pattern: 'https://example.com/pattern.png',
+      gradient: {
+        type: 'linear',
+        colors: [
+          { pos: 0, color: '#000' },
+          { pos: 100, color: '#fff' },
+        ],
+        rotate: 0,
+      },
+    } as PPTElement;
+    mockSession.sceneId = 's1';
+    mockSession.history = { present: slideWith([shape]) };
+
+    const result = applyEditElementsIntents('s1', [
+      { type: 'element.update', id: 'sh1', props: { fill: '#00f' } },
+    ]);
+
+    expect(result).toEqual({ ok: true });
+    const next = commitContent.mock.calls[0][0] as SlideContent;
+    expect(next.canvas.elements[0]).toMatchObject({ fill: '#00f' });
+    expect(next.canvas.elements[0]).not.toHaveProperty('pattern');
+    expect(next.canvas.elements[0]).not.toHaveProperty('gradient');
+  });
+
   it('refuses when no edit session is open (no irreversible fallback write)', async () => {
     const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
     mockScenes.s1 = { content: slideWith([textEl('a')]) };

@@ -436,7 +436,8 @@
       "editing": "Editing",
       "applied": "Applied",
       "notApplied": "Not applied",
-      "applyFailed": "The editor could not apply the element edit. Nothing was changed."
+      "applyFailed": "The editor could not apply the element edit. Nothing was changed.",
+      "applyPartiallyFailed": "The editor could not apply one or more element edits. Other edits may have been applied."
     }
   },
   "classroomComplete": {

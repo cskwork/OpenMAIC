@@ -436,7 +436,8 @@
       "editing": "编辑中",
       "applied": "已应用",
       "notApplied": "未应用",
-      "applyFailed": "编辑器无法应用元素修改，未更改任何内容。"
+      "applyFailed": "编辑器无法应用元素修改，未更改任何内容。",
+      "applyPartiallyFailed": "编辑器未能应用一项或多项元素修改，其他修改可能已应用。"
     }
   },
   "classroomComplete": {

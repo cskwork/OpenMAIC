@@ -436,7 +436,8 @@
       "editing": "編輯中",
       "applied": "已套用",
       "notApplied": "未套用",
-      "applyFailed": "編輯器無法套用元素修改，未變更任何內容。"
+      "applyFailed": "編輯器無法套用元素修改，未變更任何內容。",
+      "applyPartiallyFailed": "編輯器未能套用一項或多項元素修改，其他修改可能已套用。"
     }
   },
   "whiteboard": {

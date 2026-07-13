@@ -436,7 +436,8 @@
       "editing": "編集中",
       "applied": "適用済み",
       "notApplied": "未適用",
-      "applyFailed": "エディターで要素の編集を適用できませんでした。変更はありません。"
+      "applyFailed": "エディターで要素の編集を適用できませんでした。変更はありません。",
+      "applyPartiallyFailed": "一部の要素編集を適用できませんでした。ほかの編集は適用されている可能性があります。"
     }
   },
   "classroomComplete": {

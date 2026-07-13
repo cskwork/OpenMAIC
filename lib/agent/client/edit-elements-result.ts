@@ -10,6 +10,20 @@ export interface EditElementsResultLike {
 
 export type EditElementsOutcome = 'applied' | 'refused' | 'pending';
 
+export interface EditElementsRunOutcome {
+  applied: boolean;
+  failed: boolean;
+}
+
+export function editElementsApplyCorrectionKey(
+  outcome: EditElementsRunOutcome,
+): 'edit.editElements.applyFailed' | 'edit.editElements.applyPartiallyFailed' | null {
+  if (!outcome.failed) return null;
+  return outcome.applied
+    ? 'edit.editElements.applyPartiallyFailed'
+    : 'edit.editElements.applyFailed';
+}
+
 /** Interpret the structured edit_elements result marker in one place. */
 export function editElementsOutcome(
   details: EditElementsResultDetails | null | undefined,

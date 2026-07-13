@@ -54,6 +54,7 @@ import { toPiParts, type PiAssistantContent } from './to-pi-parts';
 import { useThinkingTimers } from './thinking-timers';
 import { useSceneRuntimeErrors } from '@/lib/store/scene-runtime-errors';
 import { useI18n } from '@/lib/hooks/use-i18n';
+import { editElementsApplyCorrectionKey } from './edit-elements-result';
 
 export interface UseAgentRuntimeOptions {
   scene?: { id: string; title: string };
@@ -254,7 +255,7 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
   const turnsRef = useRef<PiPart[][]>([]);
   const toolResultsRef = useRef<Map<string, { result: unknown; isError: boolean }>>(new Map());
   /** Apply-time refusals for edit_elements within the current run (client-side). */
-  const editApplyFailedRef = useRef(false);
+  const editApplyOutcomeRef = useRef({ applied: false, failed: false });
   const errorRef = useRef<string>('');
   const phaseRef = useRef<'running' | 'complete' | 'error' | 'cancelled'>('complete');
   // Aborts the in-flight run; closing the fetch body cancels the server stream
@@ -443,7 +444,9 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
               });
               // Visible correction after wrap-up may still claim success (server
               // only saw "proposed"); also feeds next-turn history via toHistory.
-              editApplyFailedRef.current = true;
+              editApplyOutcomeRef.current.failed = true;
+            } else {
+              editApplyOutcomeRef.current.applied = true;
             }
           }
           refresh();
@@ -491,7 +494,7 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
       const assistantId = `a-${turnId}`;
       turnsRef.current = [];
       toolResultsRef.current = new Map();
-      editApplyFailedRef.current = false;
+      editApplyOutcomeRef.current = { applied: false, failed: false };
       errorRef.current = '';
       phaseRef.current = 'running';
       const abort = new AbortController();
@@ -634,14 +637,15 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
           if (phaseRef.current === 'running') phaseRef.current = 'complete';
           // If the client refused an edit_elements apply, append a correction so
           // the user (and next-turn history) see it even when wrap-up claimed success.
-          if (editApplyFailedRef.current) {
+          const correctionKey = editElementsApplyCorrectionKey(editApplyOutcomeRef.current);
+          if (correctionKey) {
             turnsRef.current.push([
               {
                 type: 'text',
-                text: t('edit.editElements.applyFailed'),
+                text: t(correctionKey),
               },
             ]);
-            editApplyFailedRef.current = false;
+            editApplyOutcomeRef.current = { applied: false, failed: false };
           }
           // Close any reasoning block still open (e.g. the run ended with the
           // last block as its final phase) so its duration is final.
