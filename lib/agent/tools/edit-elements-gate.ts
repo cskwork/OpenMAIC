@@ -660,18 +660,38 @@ function validatePropsKeys(props: Record<string, unknown>): string | null {
 }
 
 function enforceGroupCohesion(
-  updates: Array<{ id: string }>,
+  updates: Array<{ id: string; props: Partial<PPTElement> }>,
   inventory: ElementInventoryItem[],
 ): string | null {
   const byId = new Map(inventory.map((el) => [el.id, el]));
+  const updateById = new Map(updates.map((update) => [update.id, update]));
   const targeted = new Set(updates.map((u) => u.id));
+  const checkedGroups = new Set<string>();
   for (const id of targeted) {
     const el = byId.get(id);
-    if (!el?.groupId) continue;
-    const members = inventory.filter((x) => x.groupId === el.groupId).map((x) => x.id);
-    const missing = members.filter((m) => !targeted.has(m));
+    if (!el?.groupId || checkedGroups.has(el.groupId)) continue;
+    checkedGroups.add(el.groupId);
+    const members = inventory.filter((x) => x.groupId === el.groupId);
+    const missing = members.filter((member) => !targeted.has(member.id)).map((member) => member.id);
     if (missing.length > 0) {
       return `group ${JSON.stringify(el.groupId)} must be edited as a unit (missing ${missing.map((m) => JSON.stringify(m)).join(', ')})`;
+    }
+
+    for (const member of members) {
+      const props = updateById.get(member.id)?.props ?? {};
+      if ('height' in props || 'rotate' in props || (member.type !== 'line' && 'width' in props)) {
+        return `group ${JSON.stringify(el.groupId)} does not support resize or rotate edits`;
+      }
+    }
+
+    for (const axis of ['left', 'top'] as const) {
+      const deltas = members.map((member) => {
+        const next = updateById.get(member.id)?.props[axis];
+        return (typeof next === 'number' ? next : member[axis]) - member[axis];
+      });
+      if (deltas.some((delta) => Math.abs(delta - deltas[0]) > Number.EPSILON)) {
+        return `group ${JSON.stringify(el.groupId)} must use one rigid translation delta for ${axis}`;
+      }
     }
   }
   return null;
@@ -937,7 +957,13 @@ export function revalidateIntentsAgainstElements(
     }
   }
   const groupErr = enforceGroupCohesion(
-    ids.map((id) => ({ id })),
+    intents.flatMap((intent) =>
+      intent.type === 'element.update'
+        ? [{ id: intent.id, props: intent.props }]
+        : intent.type === 'element.updateMany'
+          ? intent.updates
+          : [],
+    ),
     inventory,
   );
   if (groupErr) return { ok: false, reason: groupErr };

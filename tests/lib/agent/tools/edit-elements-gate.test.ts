@@ -727,12 +727,51 @@ describe('edit-elements-gate', () => {
     ];
     const result = mapProposalsToEditIntents(
       [
-        { id: 'g1', props: { left: 10 } },
-        { id: 'g2', props: { left: 20 } },
+        { id: 'g1', props: { left: 110, top: 100 } },
+        { id: 'g2', props: { left: 10, top: 20 } },
       ],
       grouped,
     );
     expect(result.ok).toBe(true);
+  });
+
+  it('refuses non-rigid group movement and grouped resize', () => {
+    const grouped: ElementInventoryItem[] = [
+      { ...textEl({ id: 'g1' }), groupId: 'grp' },
+      {
+        id: 'g2',
+        type: 'shape',
+        left: 0,
+        top: 0,
+        width: 50,
+        height: 50,
+        rotate: 0,
+        lock: false,
+        label: 'icon',
+        style: {},
+        groupId: 'grp',
+      },
+    ];
+
+    const nonRigid = mapProposalsToEditIntents(
+      [
+        { id: 'g1', props: { left: 110 } },
+        { id: 'g2', props: { left: 20 } },
+      ],
+      grouped,
+    );
+    const resize = mapProposalsToEditIntents(
+      [
+        { id: 'g1', props: { width: 500 } },
+        { id: 'g2', props: { width: 60 } },
+      ],
+      grouped,
+    );
+
+    expect(nonRigid.ok).toBe(false);
+    if (!nonRigid.ok) expect(nonRigid.reason).toMatch(/rigid translation/i);
+    expect(resize.ok).toBe(false);
+    if (!resize.ok) expect(resize.reason).toMatch(/resize or rotate/i);
   });
 
   it('surfaces groupId on inventory items', () => {
