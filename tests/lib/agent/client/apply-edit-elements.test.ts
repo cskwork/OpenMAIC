@@ -187,6 +187,45 @@ describe('applyEditElementsIntents', () => {
     expect(commitContent).not.toHaveBeenCalled();
   });
 
+  it('detects concurrent shape vAlign changes through the gate fingerprint', async () => {
+    const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
+    const { elementInventoryFingerprint } = await import('@/lib/agent/tools/edit-elements-gate');
+    const shape = (align: 'top' | 'middle' | 'bottom') =>
+      ({
+        id: 'sh1',
+        type: 'shape',
+        left: 10,
+        top: 10,
+        width: 100,
+        height: 80,
+        rotate: 0,
+        viewBox: [100, 80],
+        path: 'M0 0',
+        fixedRatio: false,
+        fill: '#fff',
+        text: {
+          content: 'Label',
+          defaultFontName: 'Arial',
+          defaultColor: '#111',
+          align,
+        },
+      }) as PPTElement;
+    mockSession.sceneId = 's1';
+    mockSession.history = { present: slideWith([shape('bottom')]) };
+
+    const result = applyEditElementsIntents(
+      's1',
+      [{ type: 'element.update', id: 'sh1', props: { vAlign: 'middle' } }],
+      { sh1: 'shape' },
+      { sh1: elementInventoryFingerprint(shape('top')) },
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/changed while the edit was being prepared/i);
+    expect(commitContent).not.toHaveBeenCalled();
+  });
+
   it('refuses while a canvas pointer gesture has uncommitted local state', async () => {
     const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
     mockSession.sceneId = 's1';

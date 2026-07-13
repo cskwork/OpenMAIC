@@ -111,6 +111,56 @@ describe('edit-elements-gate', () => {
     expect(result.reason).toMatch(/inline text color/i);
   });
 
+  it('refuses defaultFontName when inline font-family would override it', () => {
+    const [inlineFont] = buildElementInventory([
+      {
+        id: 'imported-title',
+        type: 'text',
+        left: 100,
+        top: 80,
+        width: 400,
+        height: 60,
+        rotate: 0,
+        content: '<p><span style="font-family: Aptos; font-size: 28px">Title</span></p>',
+        defaultColor: '#333333',
+        defaultFontName: 'Arial',
+      } as PPTElement,
+    ]);
+
+    const result = mapProposalsToEditIntents(
+      [{ id: 'imported-title', props: { defaultFontName: 'Inter' } }],
+      [inlineFont],
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/inline font-family/i);
+  });
+
+  it('does not mistake background-color for inline text color', () => {
+    const [backgroundOnly] = buildElementInventory([
+      {
+        id: 'title',
+        type: 'text',
+        left: 100,
+        top: 80,
+        width: 400,
+        height: 60,
+        rotate: 0,
+        content: '<p><span style="background-color: #fff">Title</span></p>',
+        defaultColor: '#333333',
+        defaultFontName: 'Arial',
+      } as PPTElement,
+    ]);
+
+    expect(
+      mapProposalsToEditIntents(
+        [{ id: 'title', props: { defaultColor: '#0000ff' } }],
+        [backgroundOnly],
+      ).ok,
+    ).toBe(true);
+  });
+
   it('maps mixed-target updates to one element.updateMany', () => {
     const result = mapProposalsToEditIntents(
       [
@@ -221,6 +271,30 @@ describe('edit-elements-gate', () => {
     const inv = buildElementInventory(els);
     expect(inv[0].label).toBe('Hello World');
     expect(inv[0].style.defaultColor).toBe('#111');
+  });
+
+  it('maps shape text vertical alignment into inventory and fingerprints', () => {
+    const shape = {
+      id: 'shape-label',
+      type: 'shape',
+      left: 0,
+      top: 0,
+      width: 100,
+      height: 80,
+      rotate: 0,
+      viewBox: [100, 80],
+      path: 'M0 0',
+      fixedRatio: false,
+      fill: '#fff',
+      text: {
+        content: 'Label',
+        defaultFontName: 'Arial',
+        defaultColor: '#111',
+        align: 'bottom',
+      },
+    } as PPTElement;
+
+    expect(buildElementInventory([shape])[0].style.vAlign).toBe('bottom');
   });
 
   it('refuses malformed prop values (outline/shadow/color)', () => {
@@ -451,6 +525,36 @@ describe('edit-elements-gate', () => {
         props: { filters: { brightness: '120', blur: '2' } },
       },
     ]);
+  });
+
+  it('refuses image filter values outside renderable CSS ranges', () => {
+    const imageInventory: ElementInventoryItem[] = [
+      {
+        id: 'img-1',
+        type: 'image',
+        left: 0,
+        top: 0,
+        width: 100,
+        height: 100,
+        rotate: 0,
+        lock: false,
+        label: 'pic',
+        style: {},
+      },
+    ];
+
+    for (const filters of [
+      { blur: '-2' },
+      { brightness: '-20%' },
+      { opacity: '101%' },
+      { invert: '120' },
+    ]) {
+      const result = mapProposalsToEditIntents(
+        [{ id: 'img-1', props: { filters } }],
+        imageInventory,
+      );
+      expect(result.ok, JSON.stringify(filters)).toBe(false);
+    }
   });
 
   it('keeps themeColors non-empty', () => {

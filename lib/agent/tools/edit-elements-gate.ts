@@ -30,6 +30,17 @@ const FILTER_UNITS: Record<string, string> = {
   invert: '%',
   opacity: '%',
 };
+const FILTER_RANGES: Record<string, readonly [number, number]> = {
+  blur: [0, 100],
+  brightness: [0, 1000],
+  contrast: [0, 1000],
+  grayscale: [0, 100],
+  saturate: [0, 1000],
+  'hue-rotate': [-36000, 36000],
+  sepia: [0, 100],
+  invert: [0, 100],
+  opacity: [0, 100],
+};
 
 /** Geometry + style props the AI may mutate. Content / identity are rejected. */
 export const ALLOWED_EDIT_PROPS = new Set([
@@ -281,6 +292,8 @@ export interface ElementInventoryItem {
   style: Record<string, unknown>;
   /** True when element-level defaultColor would be hidden by inline HTML color. */
   hasInlineTextColor?: boolean;
+  /** True when element-level defaultFontName would be hidden by inline HTML font-family. */
+  hasInlineFontFamily?: boolean;
 }
 
 export interface ProposedElementUpdate {
@@ -535,6 +548,14 @@ function validatePolicyOverlay(key: string, value: unknown): string | null {
         if (!match || (match[2] && match[2] !== unit)) {
           return `filters.${filterKey} must be a numeric string${unit ? ` with optional ${unit}` : ''}`;
         }
+        const numeric = Number(match[1]);
+        const [min, max] = FILTER_RANGES[filterKey] ?? [
+          Number.NEGATIVE_INFINITY,
+          Number.POSITIVE_INFINITY,
+        ];
+        if (numeric < min || numeric > max) {
+          return `filters.${filterKey} out of bounds (${min}..${max})`;
+        }
       }
       return null;
     }
@@ -700,6 +721,12 @@ export function mapProposalsToEditIntents(
         reason: `element ${JSON.stringify(id)} has inline text color that defaultColor cannot override`,
       };
     }
+    if ('defaultFontName' in props && el.hasInlineFontFamily) {
+      return {
+        ok: false,
+        reason: `element ${JSON.stringify(id)} has inline font-family that defaultFontName cannot override`,
+      };
+    }
 
     for (const [key, value] of Object.entries(props)) {
       const valueErr = validatePropValue(key, value, el.type);
@@ -748,9 +775,9 @@ export function buildElementInventory(elements: PPTElement[]): ElementInventoryI
       ) {
         continue;
       }
-      if (el.type === 'shape' && SHAPE_TEXT_CHROME_PROPS.has(key)) {
+      if (el.type === 'shape' && (SHAPE_TEXT_CHROME_PROPS.has(key) || key === 'vAlign')) {
         const text = (el as { text?: Record<string, unknown> }).text;
-        const mappedKey = key === 'textType' ? 'type' : key;
+        const mappedKey = key === 'textType' ? 'type' : key === 'vAlign' ? 'align' : key;
         const v = text?.[mappedKey];
         if (v !== undefined) style[key] = v;
         continue;
@@ -776,11 +803,11 @@ export function buildElementInventory(elements: PPTElement[]): ElementInventoryI
         : el.type === 'shape'
           ? (el as { text?: { content?: unknown } }).text?.content
           : undefined;
-    if (
-      typeof textContent === 'string' &&
-      /\bstyle\s*=\s*["'][^"']*\bcolor\s*:/i.test(textContent)
-    ) {
-      base.hasInlineTextColor = true;
+    if (typeof textContent === 'string') {
+      if (hasInlineStyleProperty(textContent, 'color')) base.hasInlineTextColor = true;
+      if (hasInlineStyleProperty(textContent, 'font-family')) {
+        base.hasInlineFontFamily = true;
+      }
     }
     if (el.type !== 'line') {
       base.height = (el as { height: number }).height;
@@ -788,6 +815,22 @@ export function buildElementInventory(elements: PPTElement[]): ElementInventoryI
     }
     return base;
   });
+}
+
+function hasInlineStyleProperty(content: string, property: string): boolean {
+  const styleAttribute = /\bstyle\s*=\s*(["'])(.*?)\1/gi;
+  for (const match of content.matchAll(styleAttribute)) {
+    const declarations = match[2].split(';');
+    if (
+      declarations.some((declaration) => {
+        const colon = declaration.indexOf(':');
+        return colon >= 0 && declaration.slice(0, colon).trim().toLowerCase() === property;
+      })
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Stable snapshot of the model-visible mutable state used for apply-time drift checks. */
