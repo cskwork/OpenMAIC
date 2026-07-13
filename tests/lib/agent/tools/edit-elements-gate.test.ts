@@ -421,6 +421,38 @@ describe('edit-elements-gate', () => {
     expect(filterResult.reason).toMatch(/filters.blur/i);
   });
 
+  it('normalizes image filter values to canonical unitless strings', () => {
+    const imageInventory: ElementInventoryItem[] = [
+      {
+        id: 'img-1',
+        type: 'image',
+        left: 0,
+        top: 0,
+        width: 100,
+        height: 100,
+        rotate: 0,
+        lock: false,
+        label: 'pic',
+        style: {},
+      },
+    ];
+
+    const result = mapProposalsToEditIntents(
+      [{ id: 'img-1', props: { filters: { brightness: '120%', blur: '2px' } } }],
+      imageInventory,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.intents).toEqual([
+      {
+        type: 'element.update',
+        id: 'img-1',
+        props: { filters: { brightness: '120', blur: '2' } },
+      },
+    ]);
+  });
+
   it('keeps themeColors non-empty', () => {
     const chartInventory: ElementInventoryItem[] = [
       {

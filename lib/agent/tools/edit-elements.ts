@@ -125,6 +125,7 @@ function buildProposalPrompt(args: {
     'themeColors, textColor, lineColor, fontSize, showLineNumbers.',
     'Use defaultColor for text color. Use fill for shape body color. Use defaultColor for shape labels/text chrome.',
     'Use color only for line, latex, or audio icon color.',
+    'For image filters, use unitless numeric strings (for example brightness:"120", blur:"2").',
     'Do NOT change: id, type, lock, groupId, content, text, src, lines, latex, html, data, path, keypoints, line endpoints, fileName.',
     'Use absolute canvas values for geometry (not deltas). Prefer editing selected elements when the user says "this" / "these".',
     'For line elements, width is stroke thickness (typically 1–8), not box size.',

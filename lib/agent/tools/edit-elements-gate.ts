@@ -19,6 +19,17 @@ const LINE_STROKE_MAX = 100;
 /** Sanity bounds so model JSON cannot park elements at 1e15. */
 const COORD_MIN = -5000;
 const COORD_MAX = 20000;
+const FILTER_UNITS: Record<string, string> = {
+  blur: 'px',
+  brightness: '%',
+  contrast: '%',
+  grayscale: '%',
+  saturate: '%',
+  'hue-rotate': 'deg',
+  sepia: '%',
+  invert: '%',
+  opacity: '%',
+};
 
 /** Geometry + style props the AI may mutate. Content / identity are rejected. */
 export const ALLOWED_EDIT_PROPS = new Set([
@@ -519,6 +530,11 @@ function validatePolicyOverlay(key: string, value: unknown): string | null {
       for (const [filterKey, filterValue] of Object.entries(value as Record<string, unknown>)) {
         if (typeof filterValue !== 'string') return `filters.${filterKey} must be a string`;
         if (filterValue.length > 40) return `filters.${filterKey} must be at most 40 chars`;
+        const unit = FILTER_UNITS[filterKey];
+        const match = filterValue.trim().match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))(px|%|deg)?$/);
+        if (!match || (match[2] && match[2] !== unit)) {
+          return `filters.${filterKey} must be a numeric string${unit ? ` with optional ${unit}` : ''}`;
+        }
       }
       return null;
     }
@@ -589,6 +605,16 @@ export function clampUpdateProps(
   if ('opacity' in out) {
     if (!isFiniteNumber(out.opacity)) throw new Error(`opacity must be a finite number`);
     out.opacity = Math.min(1, Math.max(0, out.opacity));
+  }
+  if ('filters' in out) {
+    const filters = out.filters as Record<string, string>;
+    out.filters = Object.fromEntries(
+      Object.entries(filters).map(([key, value]) => {
+        const unit = FILTER_UNITS[key];
+        const trimmed = value.trim();
+        return [key, unit && trimmed.endsWith(unit) ? trimmed.slice(0, -unit.length) : trimmed];
+      }),
+    );
   }
 
   return out;

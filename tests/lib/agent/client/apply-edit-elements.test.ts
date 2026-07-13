@@ -11,6 +11,7 @@ vi.mock('@/components/edit/surfaces/slide/slide-edit-session', () => ({
     getState: () => ({
       sceneId: mockSession.sceneId,
       history: mockSession.history,
+      gestureActive: mockSession.gestureActive,
       commitContent,
     }),
   },
@@ -28,7 +29,8 @@ vi.mock('@/lib/store/stage', () => ({
 const mockSession: {
   sceneId: string | null;
   history: { present: SlideContent } | null;
-} = { sceneId: null, history: null };
+  gestureActive: boolean;
+} = { sceneId: null, history: null, gestureActive: false };
 
 const mockScenes: Record<string, { content: SlideContent }> = {};
 
@@ -66,6 +68,7 @@ describe('applyEditElementsIntents', () => {
     updateScene.mockReset();
     mockSession.sceneId = null;
     mockSession.history = null;
+    mockSession.gestureActive = false;
     for (const k of Object.keys(mockScenes)) delete mockScenes[k];
   });
 
@@ -184,6 +187,22 @@ describe('applyEditElementsIntents', () => {
     expect(commitContent).not.toHaveBeenCalled();
   });
 
+  it('refuses while a canvas pointer gesture has uncommitted local state', async () => {
+    const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
+    mockSession.sceneId = 's1';
+    mockSession.history = { present: slideWith([textEl('a')]) };
+    mockSession.gestureActive = true;
+
+    const result = applyEditElementsIntents('s1', [
+      { type: 'element.update', id: 'a', props: { top: 10 } },
+    ]);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/gesture/i);
+    expect(commitContent).not.toHaveBeenCalled();
+  });
+
   it('commits one undo entry when session is open and targets are valid', async () => {
     const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
     const present = slideWith([textEl('a')]);
@@ -270,6 +289,70 @@ describe('applyEditElementsIntents', () => {
     expect(next.canvas.elements[0]).toMatchObject({ fill: '#00f' });
     expect(next.canvas.elements[0]).not.toHaveProperty('pattern');
     expect(next.canvas.elements[0]).not.toHaveProperty('gradient');
+  });
+
+  it('recomputes formula-backed shape geometry when resizing', async () => {
+    const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
+    const shape = {
+      id: 'sh1',
+      type: 'shape',
+      left: 10,
+      top: 10,
+      width: 100,
+      height: 80,
+      rotate: 0,
+      viewBox: [100, 80],
+      path: 'old path',
+      pathFormula: 'roundRect',
+      keypoints: [0.125],
+      fixedRatio: false,
+      fill: '#eee',
+    } as PPTElement;
+    mockSession.sceneId = 's1';
+    mockSession.history = { present: slideWith([shape]) };
+
+    const result = applyEditElementsIntents('s1', [
+      { type: 'element.update', id: 'sh1', props: { width: 200, height: 120 } },
+    ]);
+
+    expect(result).toEqual({ ok: true });
+    const next = commitContent.mock.calls[0][0] as SlideContent;
+    expect(next.canvas.elements[0]).toMatchObject({ viewBox: [200, 120] });
+    expect((next.canvas.elements[0] as { path: string }).path).not.toBe('old path');
+  });
+
+  it('keeps table row height in sync when resizing its height', async () => {
+    const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
+    const table = {
+      id: 'tb1',
+      type: 'table',
+      left: 10,
+      top: 10,
+      width: 300,
+      height: 120,
+      rotate: 0,
+      cellMinHeight: 40,
+      colWidths: [1],
+      data: [[{ id: 'a', text: 'A' }], [{ id: 'b', text: 'B' }]],
+      outline: { width: 1, color: '#000', style: 'solid' },
+      theme: {
+        color: '#00f',
+        rowHeader: false,
+        rowFooter: false,
+        colHeader: false,
+        colFooter: false,
+      },
+    } as unknown as PPTElement;
+    mockSession.sceneId = 's1';
+    mockSession.history = { present: slideWith([table]) };
+
+    const result = applyEditElementsIntents('s1', [
+      { type: 'element.update', id: 'tb1', props: { height: 160 } },
+    ]);
+
+    expect(result).toEqual({ ok: true });
+    const next = commitContent.mock.calls[0][0] as SlideContent;
+    expect(next.canvas.elements[0]).toMatchObject({ height: 160, cellMinHeight: 60 });
   });
 
   it('refuses when no edit session is open (no irreversible fallback write)', async () => {

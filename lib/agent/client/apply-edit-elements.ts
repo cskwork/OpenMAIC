@@ -14,8 +14,9 @@
  */
 
 import type { EditIntent } from '@openmaic/renderer/editing';
-import type { PPTElement } from '@openmaic/dsl';
+import type { PPTElement, PPTShapeElement } from '@openmaic/dsl';
 import { produce } from 'immer';
+import { SHAPE_PATH_FORMULAS } from '@/configs/shapes';
 import { useSlideEditSession } from '@/components/edit/surfaces/slide/slide-edit-session';
 import type { SlideContent } from '@/lib/types/stage';
 import { editElementsOutcome } from '@/lib/agent/client/edit-elements-result';
@@ -77,11 +78,7 @@ function applyPropsToElement(el: PPTElement, props: Partial<PPTElement>): void {
         rest[key] = value;
       }
     }
-    const shape = el as PPTElement & {
-      pattern?: string;
-      gradient?: unknown;
-      text?: Record<string, unknown>;
-    };
+    const shape = el as PPTShapeElement;
     if ('gradient' in rest) {
       delete shape.pattern;
     } else if ('fill' in rest) {
@@ -89,8 +86,28 @@ function applyPropsToElement(el: PPTElement, props: Partial<PPTElement>): void {
       delete shape.gradient;
     }
     assignElementProps(el, rest);
+    if (('width' in rest || 'height' in rest) && shape.pathFormula) {
+      const formula = SHAPE_PATH_FORMULAS[shape.pathFormula];
+      if (formula) {
+        shape.viewBox = [shape.width, shape.height];
+        shape.path = formula.formula(
+          shape.width,
+          shape.height,
+          formula.editable ? (shape.keypoints ?? formula.defaultValue) : undefined,
+        );
+      }
+    }
     if (Object.keys(textPatch).length > 0) {
-      shape.text = { ...shape.text, ...textPatch };
+      shape.text = { ...shape.text, ...textPatch } as PPTShapeElement['text'];
+    }
+    return;
+  }
+  if (el.type === 'table' && 'height' in props) {
+    const oldHeight = el.height;
+    const oldCellMinHeight = el.cellMinHeight;
+    assignElementProps(el, props as Record<string, unknown>);
+    if (el.data.length > 0) {
+      el.cellMinHeight = Math.max(36, oldCellMinHeight + (el.height - oldHeight) / el.data.length);
     }
     return;
   }
@@ -135,6 +152,9 @@ export function applyEditElementsIntents(
       ok: false,
       reason: 'no open edit session for this scene; open Pro mode on the target slide first',
     };
+  }
+  if (session.gestureActive) {
+    return { ok: false, reason: 'a canvas gesture is still in progress' };
   }
 
   const present = session.history.present;
