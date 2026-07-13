@@ -16,6 +16,7 @@ import { MIN_SIZE } from '@/configs/element';
 const DEFAULT_MIN_SIZE = 20;
 const LINE_STROKE_MIN = 1;
 const LINE_STROKE_MAX = 100;
+const GROUP_TRANSLATION_TOLERANCE = 1e-6;
 /** Sanity bounds so model JSON cannot park elements at 1e15. */
 const COORD_MIN = -5000;
 const COORD_MAX = 20000;
@@ -689,7 +690,7 @@ function enforceGroupCohesion(
         const next = updateById.get(member.id)?.props[axis];
         return (typeof next === 'number' ? next : member[axis]) - member[axis];
       });
-      if (deltas.some((delta) => Math.abs(delta - deltas[0]) > Number.EPSILON)) {
+      if (deltas.some((delta) => Math.abs(delta - deltas[0]) > GROUP_TRANSLATION_TOLERANCE)) {
         return `group ${JSON.stringify(el.groupId)} must use one rigid translation delta for ${axis}`;
       }
     }

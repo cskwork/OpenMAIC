@@ -774,6 +774,35 @@ describe('edit-elements-gate', () => {
     if (!resize.ok) expect(resize.reason).toMatch(/resize or rotate/i);
   });
 
+  it('allows rigid group translation with decimal canvas coordinates', () => {
+    const grouped: ElementInventoryItem[] = [
+      { ...textEl({ id: 'g1' }), left: 0.1, groupId: 'grp' },
+      {
+        id: 'g2',
+        type: 'shape',
+        left: 100.2,
+        top: 0,
+        width: 50,
+        height: 50,
+        rotate: 0,
+        lock: false,
+        label: 'icon',
+        style: {},
+        groupId: 'grp',
+      },
+    ];
+
+    const result = mapProposalsToEditIntents(
+      [
+        { id: 'g1', props: { left: 10.2 } },
+        { id: 'g2', props: { left: 110.3 } },
+      ],
+      grouped,
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
   it('surfaces groupId on inventory items', () => {
     const els = [
       {
