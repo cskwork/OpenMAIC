@@ -59,6 +59,8 @@ interface RoundtableProps {
   readonly endFlashSessionType?: 'qa' | 'discussion';
   readonly thinkingState?: { stage: string; agentId?: string } | null;
   readonly isCueUser?: boolean;
+  /** Session entered the soft-closing grace window (client-side, ~15s). */
+  readonly isSoftClosing?: boolean;
   readonly isTopicPending?: boolean;
   readonly onMessageSend?: (message: string) => void;
   readonly onDiscussionStart?: (request: DiscussionAction) => void;
@@ -147,6 +149,7 @@ export function Roundtable({
   endFlashSessionType = 'discussion',
   thinkingState,
   isCueUser,
+  isSoftClosing,
   isTopicPending,
   onMessageSend,
   onDiscussionStart,
@@ -626,6 +629,7 @@ export function Roundtable({
             : 'idle'
       }
       isLiveSession={isStreaming || isTopicPending || engineMode === 'live'}
+      isSoftClosing={isSoftClosing}
       whiteboardOpen={whiteboardOpen}
       sidebarCollapsed={sidebarCollapsed}
       chatCollapsed={chatCollapsed}

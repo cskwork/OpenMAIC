@@ -30,6 +30,7 @@ export function CanvasArea({
   mode,
   engineState,
   isLiveSession,
+  isSoftClosing,
   whiteboardOpen,
   sidebarCollapsed,
   chatCollapsed,
@@ -254,6 +255,7 @@ export function CanvasArea({
           scenesCount={scenesCount}
           engineState={engineState}
           isLiveSession={isLiveSession}
+          isSoftClosing={isSoftClosing}
           whiteboardOpen={whiteboardOpen}
           sidebarCollapsed={sidebarCollapsed}
           chatCollapsed={chatCollapsed}

@@ -26,6 +26,7 @@ export interface CanvasToolbarProps {
   readonly scenesCount: number;
   readonly engineState: 'idle' | 'playing' | 'paused';
   readonly isLiveSession?: boolean;
+  readonly isSoftClosing?: boolean;
   readonly whiteboardOpen: boolean;
   readonly sidebarCollapsed?: boolean;
   readonly chatCollapsed?: boolean;
@@ -85,6 +86,7 @@ export function CanvasToolbar({
   scenesCount,
   engineState,
   isLiveSession,
+  isSoftClosing,
   whiteboardOpen,
   sidebarCollapsed,
   chatCollapsed,
@@ -302,13 +304,29 @@ export function CanvasToolbar({
                 'text-[11px] font-semibold whitespace-nowrap',
                 'hover:bg-red-500/20 dark:hover:bg-red-400/20 active:scale-95 transition-all cursor-pointer',
               )}
-              title={t('roundtable.stopDiscussion')}
+              title={
+                isSoftClosing
+                  ? `${t('roundtable.stopDiscussion')} · ${t('roundtable.softClosing')}`
+                  : t('roundtable.stopDiscussion')
+              }
             >
               <span className="relative flex h-1.5 w-1.5 shrink-0">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
                 <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-red-500" />
               </span>
               {t('roundtable.stopDiscussion')}
+              {isSoftClosing && (
+                <>
+                  <span className="text-red-400/70 dark:text-red-300/70">·</span>
+                  <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                    <span className="relative flex h-1.5 w-1.5 shrink-0">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-amber-500" />
+                    </span>
+                    {t('roundtable.softClosing')}
+                  </span>
+                </>
+              )}
             </button>
           ) : showPlayPause ? (
             <button

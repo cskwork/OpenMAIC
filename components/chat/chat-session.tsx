@@ -168,8 +168,10 @@ export function ChatSessionComponent({
   const activeBubbleRef = useRef<HTMLDivElement>(null);
   const isDiscussion = session.type === 'discussion';
   const isQA = session.type === 'qa';
-  const canEnd = (isDiscussion || isQA) && session.status === 'active';
+  const canEnd =
+    (isDiscussion || isQA) && (session.status === 'active' || session.status === 'soft-closing');
   const isEnded = session.status === 'completed' && (isDiscussion || isQA);
+  const isSoftClosing = session.status === 'soft-closing' && (isDiscussion || isQA);
 
   // Track whether user is at the bottom of the scroll container.
   // When user scrolls up to read history, auto-scroll is suppressed.
@@ -359,6 +361,18 @@ export function ChatSessionComponent({
               <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500 dark:bg-red-400"></span>
             </span>
             {endButtonText}
+            {isSoftClosing && (
+              <>
+                <span className="text-red-400/70 dark:text-red-300/70">·</span>
+                <span className="flex items-center gap-1 text-amber-600 dark:text-amber-300">
+                  <span className="relative flex h-2 w-2 shrink-0">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
+                  </span>
+                  {t('chat.softClosing')}
+                </span>
+              </>
+            )}
           </motion.button>
         )}
       </AnimatePresence>

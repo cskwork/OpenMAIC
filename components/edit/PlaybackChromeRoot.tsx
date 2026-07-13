@@ -18,7 +18,7 @@ import { SceneSidebar } from '@/components/stage/scene-sidebar';
 import { Header } from '@/components/header';
 import { CanvasArea } from '@/components/canvas/canvas-area';
 import { Roundtable } from '@/components/roundtable';
-import { PlaybackEngine, computePlaybackView } from '@/lib/playback';
+import { PlaybackEngine, computePlaybackView, shouldAutoResumeLecture } from '@/lib/playback';
 import type { EngineMode, TriggerEvent, Effect } from '@/lib/playback';
 import {
   canJumpWithinReconstructablePrefix,
@@ -41,6 +41,7 @@ import type { Action, DiscussionAction, SpeechAction } from '@/lib/types/action'
 import { cn } from '@/lib/utils';
 // Playback state persistence removed — refresh always starts from the beginning
 import { ChatArea, type ChatAreaRef } from '@/components/chat/chat-area';
+import type { SessionCleanupPayload } from '@/components/chat/use-chat-sessions';
 import { agentsToParticipants, useAgentRegistry } from '@/lib/orchestration/registry/store';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import {
@@ -138,6 +139,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
 
     // Streaming state for stop button (Issue 1)
     const [chatIsStreaming, setChatIsStreaming] = useState(false);
+    const [chatIsSoftClosing, setChatIsSoftClosing] = useState(false);
     const [chatSessionType, setChatSessionType] = useState<string | null>(null);
 
     // Topic pending state: session is soft-paused, bubble stays visible, waiting for user input
@@ -304,6 +306,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       setIsCueUser(false);
       setIsTopicPending(false);
       setChatIsStreaming(false);
+      setChatIsSoftClosing(false);
       setChatSessionType(null);
       setIsDiscussionPaused(false);
     }, []);
@@ -360,6 +363,52 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       await chatAreaRef.current?.endActiveSession();
       doSessionCleanup();
     }, [doSessionCleanup]);
+
+    /**
+     * Session-stop callback from the chat layer. Runs the normal cleanup, then —
+     * only when a soft-close timeout ended a Q&A that had interrupted an active
+     * lecture — auto-resumes the lecture from where it was paused.
+     *
+     * hadLectureInterruption MUST be read before doSessionCleanup(), because
+     * handleEndDiscussion() restores and clears the saved lecture position.
+     */
+    const handleSessionStop = useCallback(
+      async (payload: SessionCleanupPayload) => {
+        const engine = engineRef.current;
+        const hadLectureInterruption = engine?.hasLectureInterruption() ?? false;
+
+        doSessionCleanup();
+
+        if (!engine) return;
+        const eligible = shouldAutoResumeLecture({
+          source: payload.source,
+          endReason: payload.endReason,
+          hadLectureInterruption,
+          engineMode: engine.getMode(),
+          isExhausted: engine.isExhausted(),
+          playbackCompleted,
+        });
+        if (!eligible) return;
+
+        // Use the restored engine position, not the stale React currentScene.
+        const sceneId = engine.getCurrentSceneId();
+        if (!sceneId || !chatAreaRef.current) return;
+
+        // startLecture is async — re-check the engine is still idle afterwards so
+        // we never override a live session the user started during the await.
+        const sessionId = await chatAreaRef.current.startLecture(sceneId);
+        if (engine.getMode() !== 'idle') {
+          // The engine left idle during the async startLecture (e.g. a new live
+          // session began) — tear down the lecture session we just
+          // created/reactivated so it doesn't linger without playing.
+          await chatAreaRef.current.endSession(sessionId);
+          return;
+        }
+        lectureSessionIdRef.current = sessionId;
+        engine.continuePlayback();
+      },
+      [doSessionCleanup, playbackCompleted],
+    );
 
     // Imperative teardown so the parent can `await` SSE / engine / TTS
     // shutdown before flipping mode to 'edit'. Mirrors what the old in-
@@ -1222,8 +1271,13 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
               mode={mode}
               engineState={canvasEngineState}
               isLiveSession={
-                chatIsStreaming || isTopicPending || engineMode === 'live' || !!chatSessionType
+                chatIsStreaming ||
+                chatIsSoftClosing ||
+                isTopicPending ||
+                engineMode === 'live' ||
+                !!chatSessionType
               }
+              isSoftClosing={chatIsSoftClosing}
               whiteboardOpen={whiteboardOpen}
               sidebarCollapsed={sidebarCollapsed}
               chatCollapsed={chatAreaCollapsed}
@@ -1237,7 +1291,8 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
               onTogglePresentation={togglePresentation}
               showStopDiscussion={
                 engineMode === 'live' ||
-                (chatIsStreaming && (chatSessionType === 'qa' || chatSessionType === 'discussion'))
+                ((chatIsStreaming || chatIsSoftClosing) &&
+                  (chatSessionType === 'qa' || chatSessionType === 'discussion'))
               }
               onStopDiscussion={handleStopDiscussion}
               hideToolbar={mode === 'playback' || (isPresenting && !controlsVisible)}
@@ -1289,6 +1344,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                 endFlashSessionType={endFlashSessionType}
                 thinkingState={thinkingState}
                 isCueUser={isCueUser}
+                isSoftClosing={chatIsSoftClosing}
                 isTopicPending={isTopicPending}
                 onMessageSend={async (msg) => {
                   // Always clear Level-1 pause state — the closure may hold a stale
@@ -1308,6 +1364,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                     setLiveSpeech(null);
                     setSpeakingAgentId(null);
                   }
+                  setChatIsSoftClosing(false);
                   // User interrupts during playback — handleUserInterrupt triggers
                   // onUserInterrupt callback which already calls sendMessage, so skip
                   // the direct sendMessage below to avoid sending twice.
@@ -1454,7 +1511,14 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
               setIsCueUser(true);
             }}
             onLiveSessionError={handleLiveSessionError}
-            onStopSession={doSessionCleanup}
+            onSoftCloseSession={() => {
+              setThinkingState(null);
+              setSpeechProgress(null);
+              setIsCueUser(false);
+              setActiveBubbleId(null);
+            }}
+            onSoftClosingChange={setChatIsSoftClosing}
+            onStopSession={handleSessionStop}
             onSegmentSealed={discussionTTS.handleSegmentSealed}
             shouldHoldAfterReveal={discussionTTS.shouldHold}
           />

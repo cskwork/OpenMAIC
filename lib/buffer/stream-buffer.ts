@@ -70,6 +70,9 @@ export interface DoneItem {
   totalActions: number;
   totalAgents: number;
   agentHadContent?: boolean;
+  cueUserReceived?: boolean;
+  sessionClosed?: boolean;
+  endReason?: string;
   directorState?: DirectorState;
 }
 
@@ -121,6 +124,9 @@ export interface StreamBufferCallbacks {
     totalActions: number;
     totalAgents: number;
     agentHadContent?: boolean;
+    cueUserReceived?: boolean;
+    sessionClosed?: boolean;
+    endReason?: string;
     directorState?: DirectorState;
   }): void;
   onError(message: string): void;
@@ -188,6 +194,7 @@ export class StreamBuffer {
   private readonly actionDelayTicks: number;
   private readonly cb: StreamBufferCallbacks;
   private partCounter = 0;
+  private _drained = false;
   private _drainResolve: (() => void) | null = null;
   private _drainReject: ((err: Error) => void) | null = null;
 
@@ -267,6 +274,9 @@ export class StreamBuffer {
     totalActions: number;
     totalAgents: number;
     agentHadContent?: boolean;
+    cueUserReceived?: boolean;
+    sessionClosed?: boolean;
+    endReason?: string;
     directorState?: DirectorState;
   }): void {
     if (this._disposed) return;
@@ -308,6 +318,9 @@ export class StreamBuffer {
    * no items are processed and drain never fires until resumed.
    */
   waitUntilDrained(): Promise<void> {
+    if (this._drained) {
+      return Promise.resolve();
+    }
     if (this._disposed) {
       return Promise.reject(new Error('Buffer already disposed'));
     }
@@ -366,10 +379,7 @@ export class StreamBuffer {
           this.cb.onSpeechProgress(null);
           this.cb.onThinking(null);
           this.cb.onDone(item);
-          // Resolve drain promise
-          this._drainResolve?.();
-          this._drainResolve = null;
-          this._drainReject = null;
+          this.resolveDrain();
           break;
         case 'error':
           this.cb.onError(item.message);
@@ -431,6 +441,13 @@ export class StreamBuffer {
       // Stop searching once we hit a non-text item
       if (item.kind !== 'text') break;
     }
+  }
+
+  private resolveDrain(): void {
+    this._drained = true;
+    this._drainResolve?.();
+    this._drainResolve = null;
+    this._drainReject = null;
   }
 
   private tick(): void {
@@ -594,10 +611,7 @@ export class StreamBuffer {
           clearInterval(this.timer);
           this.timer = null;
         }
-        // Resolve drain promise
-        this._drainResolve?.();
-        this._drainResolve = null;
-        this._drainReject = null;
+        this.resolveDrain();
         break;
 
       case 'error':
@@ -662,10 +676,7 @@ export class StreamBuffer {
             clearInterval(this.timer);
             this.timer = null;
           }
-          // Resolve drain promise
-          this._drainResolve?.();
-          this._drainResolve = null;
-          this._drainReject = null;
+          this.resolveDrain();
           return; // done — stop advancing
         case 'error':
           this.cb.onError(next.message);

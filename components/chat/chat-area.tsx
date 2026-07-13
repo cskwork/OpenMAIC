@@ -1,6 +1,14 @@
 'use client';
 
-import { useImperativeHandle, forwardRef, useRef, useCallback, useState, useMemo } from 'react';
+import {
+  useImperativeHandle,
+  forwardRef,
+  useRef,
+  useCallback,
+  useState,
+  useMemo,
+  useEffect,
+} from 'react';
 import type { SessionType } from '@/lib/types/chat';
 import type { DiscussionRequest } from '@/components/roundtable';
 import type { Action } from '@/lib/types/action';
@@ -10,7 +18,7 @@ import { useStageStore } from '@/lib/store';
 import { buildLectureNotes } from '@/lib/chat/lecture-notes';
 import { PanelRightClose, BookOpen, MessageSquare } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { useChatSessions } from './use-chat-sessions';
+import { useChatSessions, type SessionCleanupPayload } from './use-chat-sessions';
 import { SessionList } from './session-list';
 import { LectureNotesView } from './lecture-notes-view';
 
@@ -27,7 +35,9 @@ interface ChatAreaProps {
   onThinking?: (state: { stage: string; agentId?: string } | null) => void;
   onCueUser?: (fromAgentId?: string, prompt?: string) => void;
   onLiveSessionError?: () => void;
-  onStopSession?: () => void;
+  onSoftCloseSession?: (payload: SessionCleanupPayload) => void;
+  onSoftClosingChange?: (softClosing: boolean) => void;
+  onStopSession?: (payload: SessionCleanupPayload) => void;
   onSegmentSealed?: (
     messageId: string,
     partId: string,
@@ -81,6 +91,8 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       onThinking,
       onCueUser,
       onLiveSessionError,
+      onSoftCloseSession,
+      onSoftClosingChange,
       onStopSession,
       onSegmentSealed,
       shouldHoldAfterReveal,
@@ -120,6 +132,7 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       onCueUser,
       onActiveBubble,
       onLiveSessionError,
+      onSoftCloseSession,
       onStopSession,
       onSegmentSealed,
       shouldHoldAfterReveal,
@@ -142,11 +155,20 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       [chatSessions],
     );
 
+    const hasSoftClosingChatSession = useMemo(
+      () => chatSessions.some((s) => s.status === 'soft-closing'),
+      [chatSessions],
+    );
+
+    useEffect(() => {
+      onSoftClosingChange?.(hasSoftClosingChatSession);
+    }, [hasSoftClosingChatSession, onSoftClosingChange]);
+
     // Wrap endSession for QA/Discussion: also notify parent for engine cleanup
     const handleEndSession = useCallback(
       async (sessionId: string) => {
         await endSession(sessionId);
-        onStopSession?.();
+        onStopSession?.({ sessionId, source: 'manual_stop' });
       },
       [endSession, onStopSession],
     );
