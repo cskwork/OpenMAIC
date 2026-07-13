@@ -33,6 +33,7 @@ const WATERMARK_SCOPE = 'device';
 let defaultKv: KVStore | undefined;
 const inFlightPblSessions = new Map<string, Promise<string>>();
 const inFlightPblDrains = new Map<string, Promise<void>>();
+const activePblDrainWork = new Map<string, Set<Promise<void>>>();
 
 interface PBLRuntimeDrainWatermark {
   lastRuntimeEventId?: string;
@@ -304,7 +305,30 @@ async function drainProjectRuntimeWork(
   await persistWatermark(kv, key, nextWatermark);
 }
 
-async function drainProjectRuntimeSerialized(args: DrainProjectRuntimeArgs): Promise<void> {
+function trackActiveDrainWork(key: string, work: Promise<void>): void {
+  const active = activePblDrainWork.get(key) ?? new Set<Promise<void>>();
+  active.add(work);
+  activePblDrainWork.set(key, active);
+  void work
+    .finally(() => {
+      active.delete(work);
+      if (active.size === 0) activePblDrainWork.delete(key);
+    })
+    .catch(() => {});
+}
+
+async function waitForActiveDrainWork(key: string): Promise<void> {
+  while (true) {
+    const active = [...(activePblDrainWork.get(key) ?? [])];
+    if (active.length === 0) return;
+    await Promise.allSettled(active);
+  }
+}
+
+async function drainProjectRuntimeSerialized(
+  args: DrainProjectRuntimeArgs,
+  waitForActualCompletion = false,
+): Promise<void> {
   const kv = args.kv ?? getDefaultKv();
   const learnerKey = args.learnerKey ?? (await getLearnerKey(kv));
   const store = args.store ?? getRuntimeStore();
@@ -315,8 +339,13 @@ async function drainProjectRuntimeSerialized(args: DrainProjectRuntimeArgs): Pro
       // The previous caller already reported its failure; the next drain still
       // needs to re-read the watermark and make progress from the durable point.
     })
-    .then(() => {
-      const deadline = createDrainDeadline(PBL_DRAIN_TIMEOUT_MS);
+    .then(async () => {
+      if (waitForActualCompletion) {
+        await waitForActiveDrainWork(inFlightKey);
+      }
+      const deadline = createDrainDeadline(
+        waitForActualCompletion ? Number.POSITIVE_INFINITY : PBL_DRAIN_TIMEOUT_MS,
+      );
       const drainWork = drainProjectRuntimeWork(
         {
           ...args,
@@ -326,6 +355,10 @@ async function drainProjectRuntimeSerialized(args: DrainProjectRuntimeArgs): Pro
         },
         deadline,
       );
+      trackActiveDrainWork(inFlightKey, drainWork);
+      if (waitForActualCompletion) {
+        return drainWork;
+      }
       // Safety invariant for releasing a stuck chain link: drain work checks
       // the cooperative deadline before each append and before watermark
       // writes. After that deadline, an overdue append may still complete, but
@@ -342,6 +375,15 @@ async function drainProjectRuntimeSerialized(args: DrainProjectRuntimeArgs): Pro
       inFlightPblDrains.delete(inFlightKey);
     }
   }
+}
+
+/**
+ * Drain all currently visible events without the caller timeout. Hydration uses
+ * this barrier before reading records or appending a snapshot, so a late event
+ * can never land behind the snapshot that is meant to cover it.
+ */
+export async function drainProjectRuntimeFully(args: DrainProjectRuntimeArgs): Promise<void> {
+  await drainProjectRuntimeSerialized(args, true);
 }
 
 export async function drainProjectRuntime(args: DrainProjectRuntimeArgs): Promise<void> {

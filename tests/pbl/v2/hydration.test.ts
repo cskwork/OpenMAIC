@@ -138,6 +138,35 @@ class ThrowingRuntimeStore extends MemoryRuntimeStore {
   }
 }
 
+class SlowFirstAppendRuntimeStore extends MemoryRuntimeStore {
+  private releaseAppend!: () => void;
+  private readonly appendGate = new Promise<void>((resolve) => {
+    this.releaseAppend = resolve;
+  });
+  private markStarted!: () => void;
+  readonly appendStarted = new Promise<void>((resolve) => {
+    this.markStarted = resolve;
+  });
+
+  constructor(private readonly slowRecordId: string) {
+    super();
+  }
+
+  override async appendRecord<TPayload extends RuntimePayload>(
+    init: RuntimeRecordInit<TPayload>,
+  ): Promise<RuntimeRecord<TPayload>> {
+    if (init.id === this.slowRecordId) {
+      this.markStarted();
+      await this.appendGate;
+    }
+    return super.appendRecord(init);
+  }
+
+  release(): void {
+    this.releaseAppend();
+  }
+}
+
 function makeProject(overrides: Partial<PBLProjectV2> = {}): PBLProjectV2 {
   return {
     uiPhase: 'hero',
@@ -370,6 +399,37 @@ describe('PBL runtime hydration', () => {
         (record) => (record.payload as PBLRuntimeStorePayload).kind === 'pbl_snapshot',
       ),
     ).toHaveLength(0);
+  });
+
+  it('waits for the actual drain before reading records or writing a snapshot', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const project = transitionProjectUiPhase(makeProject(), 'workspace');
+    const eventId = project.runtimeEvents![0]!.id;
+    const store = new SlowFirstAppendRuntimeStore(eventId);
+
+    try {
+      const hydrating = hydrate(project, store);
+      await store.appendStarted;
+      await vi.advanceTimersByTimeAsync(10_001);
+      await Promise.resolve();
+
+      const recordsAfterCallerTimeout = await listRecords(store);
+      store.release();
+      const hydrated = await hydrating;
+
+      expect(
+        recordsAfterCallerTimeout.some(
+          (record) => (record.payload as Partial<PBLRuntimeStorePayload>).kind === 'pbl_snapshot',
+        ),
+      ).toBe(false);
+      expect(hydrated.source).toBe('fold');
+      expect((await listRecords(store)).map((record) => record.id)).toEqual([eventId]);
+    } finally {
+      store.release();
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('keeps document state and self-heals when runtime history is partial', async () => {

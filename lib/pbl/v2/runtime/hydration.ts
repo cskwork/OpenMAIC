@@ -6,7 +6,7 @@ import { getLearnerKey } from '@/lib/runtime/learner-key';
 import { getRuntimeStore } from '@/lib/runtime/store';
 import type { Scene } from '@/lib/types/stage';
 import type { PBLProjectV2 } from '@/lib/pbl/v2/types';
-import { drainProjectRuntime, ensurePBLRuntimeSession } from './drain';
+import { drainProjectRuntimeFully, ensurePBLRuntimeSession } from './drain';
 import { foldPBLRuntime, type PBLFoldDiagnostics } from './fold';
 import {
   applyLearnerState,
@@ -143,7 +143,7 @@ export async function hydratePBLProjectFromRuntime(
   const learnerKey = args.learnerKey ?? (await getLearnerKey(kv));
   const store = args.store ?? getRuntimeStore();
 
-  await drainProjectRuntime({
+  await drainProjectRuntimeFully({
     stageId: args.stageId,
     sceneId: args.sceneId,
     project: args.project,

@@ -16,6 +16,7 @@ export async function hydrateClassroomFallbackScenes(
 
 export interface ApplyHydratedClassroomFallbackScenesArgs {
   loadToken: StageSceneLoadToken;
+  isCurrent?: () => boolean;
   stage: Stage;
   scenes: readonly Scene[];
   hydrateScenes?: (stageId: string, scenes: readonly Scene[]) => Promise<Scene[]>;
@@ -24,13 +25,14 @@ export interface ApplyHydratedClassroomFallbackScenesArgs {
 
 export async function applyHydratedClassroomFallbackScenes({
   loadToken,
+  isCurrent = () => true,
   stage,
   scenes,
   hydrateScenes = hydrateClassroomFallbackScenes,
   applyStageAndScenes,
 }: ApplyHydratedClassroomFallbackScenesArgs): Promise<boolean> {
   const hydrated = await hydrateScenes(stage.id, scenes);
-  if (!isCurrentStageSceneLoadToken(loadToken)) {
+  if (!isCurrent() || !isCurrentStageSceneLoadToken(loadToken)) {
     return false;
   }
   applyStageAndScenes(stage, hydrated);

@@ -56,6 +56,7 @@ export default function ClassroomDetailPage() {
         applyFallbackScenes: (args) =>
           defaultClassroomLoadDeps.applyFallbackScenes({
             ...args,
+            isCurrent,
             applyStageAndScenes: applyClassroomStageAndScenes,
           }),
         saveGeneratedAgents: (stageId, agents) =>

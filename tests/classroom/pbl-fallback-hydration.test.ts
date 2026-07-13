@@ -253,6 +253,37 @@ describe('classroom server fallback PBL hydration', () => {
     expect(useStageStore.getState().scenes).toEqual([]);
   });
 
+  it('does not apply fallback scenes after the initiating effect is cancelled', async () => {
+    const stage = makeStage('stage-a');
+    const fallbackScene = makePBLScene(makeProject());
+    const token = claimStageSceneLoadToken();
+    let effectCurrent = true;
+    let resolveHydration!: (scenes: Scene[]) => void;
+    const hydrateScenes = vi.fn(
+      () =>
+        new Promise<Scene[]>((resolve) => {
+          resolveHydration = resolve;
+        }),
+    );
+    const applyStageAndScenes = vi.fn();
+
+    const applying = applyHydratedClassroomFallbackScenes({
+      loadToken: token,
+      isCurrent: () => effectCurrent,
+      stage,
+      scenes: [fallbackScene],
+      hydrateScenes,
+      applyStageAndScenes,
+    });
+    await vi.waitFor(() => expect(hydrateScenes).toHaveBeenCalled());
+
+    effectCurrent = false;
+    resolveHydration([fallbackScene]);
+
+    await expect(applying).resolves.toBe(false);
+    expect(applyStageAndScenes).not.toHaveBeenCalled();
+  });
+
   it('hydrates server-fallback scenes from existing runtime records', async () => {
     const store = new MemoryRuntimeStore();
     const kv = new MemoryKVStore();
