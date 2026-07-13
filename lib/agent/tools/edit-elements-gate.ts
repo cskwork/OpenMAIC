@@ -521,7 +521,11 @@ function validatePolicyOverlay(key: string, value: unknown): string | null {
     }
     case 'shadow': {
       const o = value as Record<string, unknown>;
-      return isColorString(o.color) ? null : 'shadow.color must be a color string';
+      if (!isColorString(o.color)) return 'shadow.color must be a color string';
+      if (!isFiniteNumber(o.blur) || o.blur < 0) {
+        return 'shadow.blur must be a non-negative finite number';
+      }
+      return null;
     }
     case 'gradient': {
       const o = value as { colors?: unknown[] };
@@ -731,6 +735,22 @@ export function mapProposalsToEditIntents(
     for (const [key, value] of Object.entries(props)) {
       const valueErr = validatePropValue(key, value, el.type);
       if (valueErr) return { ok: false, reason: valueErr };
+    }
+
+    if (el.type === 'text') {
+      const vertical = 'vertical' in props ? props.vertical === true : el.style.vertical === true;
+      if (vertical && 'width' in props) {
+        return {
+          ok: false,
+          reason: `element ${JSON.stringify(id)} has automatic width in vertical text mode`,
+        };
+      }
+      if (!vertical && 'height' in props) {
+        return {
+          ok: false,
+          reason: `element ${JSON.stringify(id)} has automatic height in horizontal text mode`,
+        };
+      }
     }
 
     let clamped: Record<string, unknown>;

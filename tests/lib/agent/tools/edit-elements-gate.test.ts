@@ -85,6 +85,31 @@ describe('edit-elements-gate', () => {
     ]);
   });
 
+  it('refuses edits to the renderer-managed text sizing axis', () => {
+    const horizontal = textEl({ id: 'horizontal' });
+    const vertical = { ...textEl({ id: 'vertical' }), style: { vertical: true } };
+
+    const horizontalHeight = mapProposalsToEditIntents(
+      [{ id: 'horizontal', props: { height: 120 } }],
+      [horizontal],
+    );
+    const verticalWidth = mapProposalsToEditIntents(
+      [{ id: 'vertical', props: { width: 120 } }],
+      [vertical],
+    );
+
+    expect(horizontalHeight.ok).toBe(false);
+    expect(verticalWidth.ok).toBe(false);
+    if (!horizontalHeight.ok) expect(horizontalHeight.reason).toMatch(/automatic height/i);
+    if (!verticalWidth.ok) expect(verticalWidth.reason).toMatch(/automatic width/i);
+    expect(
+      mapProposalsToEditIntents([{ id: 'horizontal', props: { width: 500 } }], [horizontal]).ok,
+    ).toBe(true);
+    expect(
+      mapProposalsToEditIntents([{ id: 'vertical', props: { height: 500 } }], [vertical]).ok,
+    ).toBe(true);
+  });
+
   it('refuses defaultColor when inline text color would override it', () => {
     const [inlineColored] = buildElementInventory([
       {
@@ -313,6 +338,21 @@ describe('edit-elements-gate', () => {
         inventory,
       ).ok,
     ).toBe(false);
+  });
+
+  it('refuses negative shadow blur that would produce invalid CSS', () => {
+    const result = mapProposalsToEditIntents(
+      [
+        {
+          id: 'title-1',
+          props: { shadow: { h: 2, v: 2, blur: -10, color: '#000000' } },
+        },
+      ],
+      inventory,
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toMatch(/shadow\.blur/i);
   });
 
   it('refuses junk nested inside gradient', () => {
