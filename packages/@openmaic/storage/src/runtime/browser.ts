@@ -32,6 +32,7 @@ import type {
   RuntimeSessionInit,
   RuntimeStore,
 } from './types.js';
+import { RuntimeAppendConflictError } from './types.js';
 
 const SESSIONS = 'sessions';
 const RECORDS = 'records';
@@ -336,6 +337,14 @@ export class BrowserRuntimeStore implements RuntimeStore {
       validateRuntimeRecord({ ...init, seq: 0 }),
       `runtime record ${JSON.stringify(init.id)}`,
     );
+    const expectedLastSeq = options.expectedLastSeq;
+    if (
+      expectedLastSeq !== undefined &&
+      expectedLastSeq !== null &&
+      (!Number.isSafeInteger(expectedLastSeq) || expectedLastSeq < 0)
+    ) {
+      throw new Error('@openmaic/storage: expectedLastSeq must be null or a non-negative integer');
+    }
 
     return this.txRun([SESSIONS, RECORDS], 'readwrite', async (tx) => {
       const sessions = tx.objectStore(SESSIONS);
@@ -369,7 +378,11 @@ export class BrowserRuntimeStore implements RuntimeStore {
       // O(payload) for no benefit.
       const records = tx.objectStore(RECORDS);
       const last = await reqP(records.openKeyCursor(sessionRecordRange(init.sessionId), 'prev'));
-      const seq = last ? (last.primaryKey as [string, number])[1] + 1 : 0;
+      const actualLastSeq = last ? (last.primaryKey as [string, number])[1] : null;
+      if (expectedLastSeq !== undefined && expectedLastSeq !== actualLastSeq) {
+        throw new RuntimeAppendConflictError(init.sessionId, expectedLastSeq, actualLastSeq);
+      }
+      const seq = actualLastSeq === null ? 0 : actualLastSeq + 1;
       const record: RuntimeRecord<TPayload> = { ...init, seq };
       // The pre-flight above fails before the transaction opens (no write
       // started); this assert on the REAL record — with the store-assigned

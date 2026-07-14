@@ -149,6 +149,59 @@ describe('quiz attempt runtime persistence', () => {
     expect((await store.listRecords('attempt-race')).length).toBeGreaterThanOrEqual(1);
   });
 
+  it('deduplicates concurrent identical lifecycle writes without Web Locks', async () => {
+    const { store } = makeHarness();
+    await store.createSession({
+      id: 'attempt-race',
+      kind: 'quizAttempt',
+      stageId: 'stage-1',
+      learnerKey: 'learner-1',
+      status: 'active',
+      createdAt: '2026-07-14T12:00:00.000Z',
+      updatedAt: '2026-07-14T12:00:00.000Z',
+    });
+    let emptyReads = 0;
+    let releaseBoth!: () => void;
+    const bothReadEmpty = new Promise<void>((resolve) => {
+      releaseBoth = resolve;
+    });
+    const racingList: RuntimeStore['listRecords'] = async (sessionId, options) => {
+      const records = await store.listRecords(sessionId, options);
+      if (records.length === 0) {
+        emptyReads += 1;
+        if (emptyReads === 2) releaseBoth();
+        await bothReadEmpty;
+      }
+      return records;
+    };
+    const tabA = wrapStore(store, { listRecords: racingList });
+    const tabB = wrapStore(store, { listRecords: racingList });
+    const input = {
+      stageId: 'stage-1',
+      sceneId: 'scene-quiz',
+      attemptId: 'attempt-race',
+      phase: 'submitted' as const,
+      answers: { q1: 'A' },
+    };
+
+    await Promise.all([
+      recordQuizAttempt(input, {
+        store: tabA,
+        learnerKey: 'learner-1',
+        mintRecordId: () => 'record-a',
+      }),
+      recordQuizAttempt(input, {
+        store: tabB,
+        learnerKey: 'learner-1',
+        mintRecordId: () => 'record-b',
+      }),
+    ]);
+
+    expect((await store.listRecords('attempt-race')).map((record) => record.payload)).toEqual([
+      { payloadVersion: 1, phase: 'submitted', answers: { q1: 'A' } },
+    ]);
+  });
+
   it('rolls over when another tab completes after this tab observed active', async () => {
     const { store } = makeHarness();
     await store.createSession({

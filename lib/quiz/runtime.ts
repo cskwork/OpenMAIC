@@ -4,7 +4,7 @@ import type {
   RuntimeRecord,
   RuntimeSession,
 } from '@openmaic/dsl';
-import type { RuntimeStore } from '@openmaic/storage';
+import { RuntimeAppendConflictError, type RuntimeStore } from '@openmaic/storage';
 import type { QuestionResult } from '@/lib/quiz/grading';
 import type { QuizAnswers } from '@/lib/quiz/persistence';
 import { getLearnerKey } from '@/lib/runtime/learner-key';
@@ -257,7 +257,8 @@ export async function recordQuizAttempt(
               `${JSON.stringify(foreignAnchor.sceneId)}`,
           );
         }
-        const last = asQuizPayload(records.at(-1));
+        const lastRecord = records.at(-1);
+        const last = asQuizPayload(lastRecord);
 
         if (session.status === 'active') {
           if (last && PHASE_ORDER[payload.phase] < PHASE_ORDER[last.phase]) return;
@@ -276,11 +277,15 @@ export async function recordQuizAttempt(
                 createdAt: timestamp,
                 payload,
               },
-              payload.phase === 'reviewed'
-                ? { sessionTransition: { status: 'completed', updatedAt: timestamp } }
-                : undefined,
+              {
+                expectedLastSeq: lastRecord?.seq ?? null,
+                ...(payload.phase === 'reviewed'
+                  ? { sessionTransition: { status: 'completed' as const, updatedAt: timestamp } }
+                  : {}),
+              },
             );
           } catch (error) {
+            if (error instanceof RuntimeAppendConflictError) continue;
             if (!isInactiveSessionAppendError(error, sessionId)) throw error;
             const raced = await store.getSession(sessionId);
             if (!raced || raced.status === 'active') throw error;

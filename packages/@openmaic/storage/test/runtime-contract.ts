@@ -9,6 +9,7 @@
 import { describe, expect, test } from 'vitest';
 import { RUNTIME_DSL_VERSION } from '@openmaic/dsl';
 import type { RuntimeRecordInit } from '@openmaic/dsl';
+import { RuntimeAppendConflictError } from '../src/index.js';
 import type { RuntimeStore, RuntimeSessionInit } from '../src/index.js';
 
 // --- fixtures ---------------------------------------------------------------
@@ -195,6 +196,7 @@ export function runRuntimeStoreContract(name: string, makeStore: () => RuntimeSt
         await store.createSession(makeSession());
 
         const record = await store.appendRecord(makeRecordInit('sess-1'), {
+          expectedLastSeq: null,
           sessionTransition: { status: 'completed', updatedAt: T1 },
         });
 
@@ -205,6 +207,28 @@ export function runRuntimeStoreContract(name: string, makeStore: () => RuntimeSt
           updatedAt: T1,
         });
         await expect(store.appendRecord(makeRecordInit('sess-1'))).rejects.toThrow(/active/);
+      });
+
+      test('appendRecord rejects a stale expectedLastSeq without appending', async () => {
+        const store = makeStore();
+        await store.createSession(makeSession());
+        const existing = await store.appendRecord(makeRecordInit('sess-1'));
+
+        let failure: unknown;
+        try {
+          await store.appendRecord(makeRecordInit('sess-1'), { expectedLastSeq: null });
+        } catch (error) {
+          failure = error;
+        }
+
+        expect(failure).toMatchObject({
+          name: 'RuntimeAppendConflictError',
+          sessionId: 'sess-1',
+          expectedLastSeq: null,
+          actualLastSeq: 0,
+        });
+        expect(failure).toBeInstanceOf(RuntimeAppendConflictError);
+        expect(await store.listRecords('sess-1')).toEqual([existing]);
       });
 
       test('appendRecord validates skeleton payloads for skeleton kinds by default', async () => {

@@ -47,8 +47,29 @@ export type RuntimePayloadValidator = (
   payload: unknown,
 ) => { valid: true } | { valid: false; errors: { path: string; message: string }[] };
 
+/** A compare-and-append precondition failed inside the store transaction. */
+export class RuntimeAppendConflictError extends Error {
+  override readonly name = 'RuntimeAppendConflictError';
+
+  constructor(
+    readonly sessionId: string,
+    readonly expectedLastSeq: number | null,
+    readonly actualLastSeq: number | null,
+  ) {
+    super(
+      `@openmaic/storage: session ${JSON.stringify(sessionId)} last seq changed from ` +
+        `${String(expectedLastSeq)} to ${String(actualLastSeq)}`,
+    );
+  }
+}
+
 /** Optional parent-session mutation committed with one appended record. */
 export interface RuntimeAppendOptions {
+  /**
+   * Compare-and-append guard checked in the write transaction. `null` means
+   * the caller observed no records; omitted means no precondition.
+   */
+  expectedLastSeq?: number | null;
   sessionTransition?: {
     status: RuntimeSessionStatus;
     updatedAt: string;
@@ -122,9 +143,11 @@ export interface RuntimeStore {
    * validator if one is configured. Throws if the parent session is absent,
    * not `active`, or future-stamped — or throws the runtime version line's
    * own error when the stored row's stamp is corrupt (absent / malformed /
-   * sibling-stamped). When `sessionTransition` is supplied, the completed
-   * parent envelope and record are validated and committed atomically in the
-   * same transaction; either both persist or neither does.
+   * sibling-stamped). When `expectedLastSeq` is supplied, a mismatch throws
+   * {@link RuntimeAppendConflictError}. When `sessionTransition` is supplied,
+   * the completed parent envelope and record are validated and committed
+   * atomically in the same transaction; a conflict or validation failure
+   * persists neither.
    */
   appendRecord<TPayload extends RuntimePayload>(
     init: RuntimeRecordInit<TPayload>,
