@@ -30,6 +30,8 @@ export interface QuizAttemptRecordInput {
   phase: QuizAttemptPhase;
   answers: QuizAnswers;
   results?: QuestionResult[];
+  /** Begin a distinct retry even when the prior attempt has the same payload. */
+  startNewAttempt?: boolean;
 }
 
 export interface LegacyQuizAttemptInput {
@@ -378,6 +380,7 @@ export async function recordQuizAttempt(
 
       while (true) {
         let session = await store.getSession(sessionId);
+        let created = false;
         if (!session) {
           try {
             session = await store.createSession({
@@ -389,6 +392,7 @@ export async function recordQuizAttempt(
               createdAt: timestamp,
               updatedAt: timestamp,
             });
+            created = true;
           } catch (error) {
             // Without Web Locks, another tab may win the deterministic create
             // after our read. Re-read the winner instead of losing this write.
@@ -410,6 +414,12 @@ export async function recordQuizAttempt(
         }
         const lastRecord = records.at(-1);
         const last = asQuizPayload(lastRecord);
+
+        if (input.startNewAttempt && !created) {
+          rolloverIndex += 1;
+          sessionId = rolloverAttemptId(input.attemptId, rolloverIndex);
+          continue;
+        }
 
         if (session.status === 'active') {
           if (last && PHASE_ORDER[payload.phase] < PHASE_ORDER[last.phase]) return;

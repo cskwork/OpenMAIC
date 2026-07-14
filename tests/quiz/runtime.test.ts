@@ -273,6 +273,26 @@ describe('quiz attempt runtime persistence', () => {
     ]);
   });
 
+  it('starts a retry even when the completed attempt also has empty answers', async () => {
+    const { store, deps } = makeHarness();
+    const base = {
+      stageId: 'stage-1',
+      sceneId: 'scene-quiz',
+      attemptId: 'attempt-empty',
+      answers: {},
+    };
+    await recordQuizAttempt({ ...base, phase: 'reviewed', results: [] }, deps);
+
+    await recordQuizAttempt({ ...base, phase: 'draft', startNewAttempt: true }, deps);
+
+    const sessions = await store.listSessions('stage-1', 'learner-1');
+    expect(sessions).toHaveLength(2);
+    expect(sessions.map((session) => session.status)).toEqual(['completed', 'active']);
+    expect(
+      (await store.listRecords('attempt-empty:retry:1')).map((record) => record.payload),
+    ).toEqual([{ payloadVersion: 1, phase: 'draft', answers: {} }]);
+  });
+
   it('does not disguise an unrelated append failure as a completion race', async () => {
     const { store } = makeHarness();
     await store.createSession({

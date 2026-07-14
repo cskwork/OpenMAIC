@@ -28,7 +28,12 @@ import {
   loadQuizAttemptState,
   type QuizAttemptWriter,
 } from '@/lib/quiz/runtime';
-import { quizViewStateFromAttempt } from '@/lib/quiz/view-state';
+import {
+  isQuizRuntimeReady,
+  persistQuizRetry,
+  quizViewStateFromAttempt,
+  type QuizRuntimeGate,
+} from '@/lib/quiz/view-state';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -690,8 +695,9 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
   const [phase, setPhase] = useState<Phase>('not_started');
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
   const [results, setResults] = useState<QuestionResult[]>([]);
-  const [attemptId, setAttemptId] = useState<string | null>(null);
-  const [hydrated, setHydrated] = useState(false);
+  const [runtimeGate, setRuntimeGate] = useState<QuizRuntimeGate>({ status: 'loading' });
+  const [hydrationVersion, setHydrationVersion] = useState(0);
+  const [retrying, setRetrying] = useState(false);
   const runtimeWriterRef = useRef<QuizAttemptWriter | null>(null);
   runtimeWriterRef.current ??= createQuizAttemptWriter({
     onError: (error) => log.warn('Failed to persist quiz runtime:', error),
@@ -706,25 +712,26 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
 
   useEffect(() => {
     let cancelled = false;
-    setHydrated(false);
+    setRuntimeGate({ status: 'loading' });
     void loadQuizAttemptState({ stageId, sceneId })
       .then(({ attemptId: nextAttemptId, state }) => {
         if (cancelled) return;
         const next = quizViewStateFromAttempt(state);
-        setAttemptId(nextAttemptId);
         setPhase(next.phase);
         setAnswers(next.answers);
         setResults(next.results);
-        setHydrated(true);
+        setRuntimeGate({ status: 'ready', attemptId: nextAttemptId });
       })
       .catch((error) => {
         log.warn('Failed to hydrate quiz runtime:', error);
-        if (!cancelled) setHydrated(true);
+        if (!cancelled) setRuntimeGate({ status: 'error' });
       });
     return () => {
       cancelled = true;
     };
-  }, [sceneId, stageId]);
+  }, [hydrationVersion, sceneId, stageId]);
+
+  const attemptId = isQuizRuntimeReady(runtimeGate) ? runtimeGate.attemptId : null;
 
   const totalPoints = useMemo(
     () => questions.reduce((sum, q) => sum + (q.points ?? 1), 0),
@@ -816,12 +823,21 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
     };
   }, [phase, questions, answers, locale, sceneId, stageId, attemptId, runtimeWriter]);
 
-  const handleRetry = useCallback(() => {
-    setPhase('not_started');
-    setAnswers({});
-    setResults([]);
+  const handleRetry = useCallback(async () => {
+    if (!attemptId || retrying) return;
+    setRetrying(true);
     runtimeWriter.cancelDraft();
-  }, [runtimeWriter]);
+    try {
+      await persistQuizRetry({ stageId, sceneId, attemptId }, runtimeWriter);
+      setPhase('not_started');
+      setAnswers({});
+      setResults([]);
+    } catch (error) {
+      log.warn('Failed to persist quiz retry:', error);
+    } finally {
+      setRetrying(false);
+    }
+  }, [attemptId, retrying, runtimeWriter, sceneId, stageId]);
 
   const earnedScore = useMemo(() => results.reduce((sum, r) => sum + r.earned, 0), [results]);
 
@@ -833,7 +849,22 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
     return map;
   }, [results]);
 
-  if (!hydrated) {
+  if (runtimeGate.status === 'error') {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-gray-50 dark:bg-gray-900">
+        <button
+          type="button"
+          onClick={() => setHydrationVersion((version) => version + 1)}
+          className="flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-700"
+        >
+          <RotateCcw className="h-4 w-4" />
+          {t('quiz.retry')}
+        </button>
+      </div>
+    );
+  }
+
+  if (!isQuizRuntimeReady(runtimeGate)) {
     return (
       <div className="flex h-full w-full items-center justify-center bg-gray-50 dark:bg-gray-900">
         <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
@@ -992,8 +1023,10 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
                 </span>
               </div>
               <button
-                onClick={handleRetry}
-                className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 hover:text-violet-600 dark:hover:text-violet-400 transition-colors"
+                type="button"
+                onClick={() => void handleRetry()}
+                disabled={retrying}
+                className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 hover:text-violet-600 dark:hover:text-violet-400 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 {t('quiz.retry')}
