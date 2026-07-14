@@ -499,6 +499,9 @@ function validatePolicyOverlay(key: string, value: unknown): string | null {
     case 'opacity':
       return isFiniteNumber(value) ? null : 'opacity must be a finite number';
     case 'lineHeight':
+      if (!isFiniteNumber(value)) return `${key} must be a finite number`;
+      if (value < 1 || value > 3) return `${key} out of bounds (1..3)`;
+      return null;
     case 'wordSpace':
     case 'paragraphSpace':
       if (!isFiniteNumber(value)) return `${key} must be a finite number`;

@@ -340,6 +340,30 @@ describe('edit-elements-gate', () => {
     ).toBe(false);
   });
 
+  it('validates lineHeight as a multiplier independently from pixel spacing', () => {
+    for (const lineHeight of [1, 1.5, 3]) {
+      expect(
+        mapProposalsToEditIntents([{ id: 'title-1', props: { lineHeight } }], inventory).ok,
+      ).toBe(true);
+    }
+
+    for (const lineHeight of [0.9, 3.1, 20]) {
+      const result = mapProposalsToEditIntents(
+        [{ id: 'title-1', props: { lineHeight } }],
+        inventory,
+      );
+      expect(result.ok, String(lineHeight)).toBe(false);
+      if (!result.ok) expect(result.reason).toMatch(/lineHeight.*1\.\.3/i);
+    }
+
+    expect(
+      mapProposalsToEditIntents(
+        [{ id: 'title-1', props: { wordSpace: 20, paragraphSpace: 20 } }],
+        inventory,
+      ).ok,
+    ).toBe(true);
+  });
+
   it('refuses negative shadow blur that would produce invalid CSS', () => {
     const result = mapProposalsToEditIntents(
       [
