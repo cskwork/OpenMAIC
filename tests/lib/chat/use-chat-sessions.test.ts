@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ChatSession } from '@/lib/types/chat';
 import {
   getPiSingleRequestOutcome,
   isOpenLiveSession,
   normalizeStoredSessionsForRestore,
+  retireLiveRequestResources,
   resumeSoftClosingSessionForFollowUp,
+  shouldAwaitPresentationAction,
   withPiInclassWhiteboardTools,
 } from '@/components/chat/use-chat-sessions';
 import type { ChatRequestTemplate } from '@/components/chat/use-chat-sessions';
@@ -162,5 +164,42 @@ describe('withPiInclassWhiteboardTools', () => {
       piEnableWhiteboardTools: true,
     });
     expect(request.config).not.toHaveProperty('piEnableWhiteboardTools');
+  });
+});
+
+describe('retireLiveRequestResources', () => {
+  it('retires resources immediately but waits for an in-flight action to settle', async () => {
+    const controller = new AbortController();
+    let finishAction: (() => void) | undefined;
+    const actionCompletion = new Promise<void>((resolve) => {
+      finishAction = resolve;
+    });
+    const buffer = {
+      shutdown: vi.fn(),
+      waitForCurrentAction: vi.fn(() => actionCompletion),
+    };
+    const buffers = new Map([['session-1', buffer]]);
+
+    let retirementSettled = false;
+    const retirement = retireLiveRequestResources(controller, 'session-1', buffers).then(() => {
+      retirementSettled = true;
+    });
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(buffer.shutdown).toHaveBeenCalledOnce();
+    expect(buffers.has('session-1')).toBe(false);
+    expect(retirementSettled).toBe(false);
+
+    finishAction?.();
+    await retirement;
+    expect(retirementSettled).toBe(true);
+  });
+});
+
+describe('shouldAwaitPresentationAction', () => {
+  it('waits for shared whiteboard mutations without blocking on long media playback', () => {
+    expect(shouldAwaitPresentationAction('wb_clear')).toBe(true);
+    expect(shouldAwaitPresentationAction('wb_edit_code')).toBe(true);
+    expect(shouldAwaitPresentationAction('play_video')).toBe(false);
   });
 });

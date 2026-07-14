@@ -9,7 +9,39 @@ import type { WhiteboardActionRecord } from '../types';
 interface VirtualWhiteboardElement {
   agentName: string;
   summary: string;
-  elementId?: string; // Present for elements from initial whiteboard state
+  elementId?: string;
+}
+
+function getRecordElementId(record: WhiteboardActionRecord): string | undefined {
+  const elementId = record.params.elementId;
+  return typeof elementId === 'string' && elementId ? elementId : undefined;
+}
+
+function getInitialCodeSummaries(
+  storeState: StatelessChatRequest['storeState'],
+): Map<string, string> {
+  const whiteboards = storeState.stage?.whiteboard;
+  const latestWhiteboard = Array.isArray(whiteboards) ? whiteboards[whiteboards.length - 1] : null;
+  const elements = latestWhiteboard?.elements;
+  if (!Array.isArray(elements)) return new Map();
+
+  const summaries = new Map<string, string>();
+  for (const element of elements) {
+    if (!element || typeof element !== 'object') continue;
+    const code = element as {
+      id?: unknown;
+      type?: unknown;
+      language?: unknown;
+      fileName?: unknown;
+      lines?: unknown;
+    };
+    if (code.type !== 'code' || typeof code.id !== 'string' || !code.id) continue;
+    const language = typeof code.language === 'string' ? code.language : '';
+    const fileName = typeof code.fileName === 'string' ? ` "${code.fileName}"` : '';
+    const lineCount = Array.isArray(code.lines) ? code.lines.length : 0;
+    summaries.set(code.id, `existing code block${fileName} (${language}, ${lineCount} lines)`);
+  }
+  return summaries;
 }
 
 /**
@@ -29,18 +61,22 @@ export function buildVirtualWhiteboardContext(
 
   // Replay ledger to build current element list
   const elements: VirtualWhiteboardElement[] = [];
+  const initialCodeSummaries = getInitialCodeSummaries(storeState);
+  const removedInitialElementIds = new Set<string>();
+  let initialElementsAvailable = true;
 
   for (const record of ledger) {
     switch (record.actionName) {
       case 'wb_clear':
         elements.length = 0;
+        initialElementsAvailable = false;
         break;
       case 'wb_delete': {
-        // Remove element by matching elementId from initial whiteboard state
-        // (elements drawn this round don't have tracked IDs)
         const deleteId = String(record.params.elementId || '');
-        const idx = elements.findIndex((el) => el.elementId === deleteId);
-        if (idx >= 0) elements.splice(idx, 1);
+        removedInitialElementIds.add(deleteId);
+        for (let index = elements.length - 1; index >= 0; index -= 1) {
+          if (elements[index].elementId === deleteId) elements.splice(index, 1);
+        }
         break;
       }
       case 'wb_draw_text': {
@@ -51,6 +87,7 @@ export function buildVirtualWhiteboardContext(
         const h = record.params.height ?? 100;
         elements.push({
           agentName: record.agentName,
+          elementId: getRecordElementId(record),
           summary: `text: "${content}${content.length >= 40 ? '...' : ''}" at (${x},${y}), size ~${w}x${h}`,
         });
         break;
@@ -63,6 +100,7 @@ export function buildVirtualWhiteboardContext(
         const h = record.params.height ?? 100;
         elements.push({
           agentName: record.agentName,
+          elementId: getRecordElementId(record),
           summary: `shape(${shapeType}) at (${x},${y}), size ${w}x${h}`,
         });
         break;
@@ -78,6 +116,7 @@ export function buildVirtualWhiteboardContext(
         const h = record.params.height ?? 250;
         elements.push({
           agentName: record.agentName,
+          elementId: getRecordElementId(record),
           summary: `chart(${chartType})${labels ? `: labels=[${(labels as string[]).slice(0, 4).join(',')}]` : ''} at (${x},${y}), size ${w}x${h}`,
         });
         break;
@@ -91,6 +130,7 @@ export function buildVirtualWhiteboardContext(
         const h = record.params.height ?? 80;
         elements.push({
           agentName: record.agentName,
+          elementId: getRecordElementId(record),
           summary: `latex: "${latex}${latex.length >= 40 ? '...' : ''}" at (${x},${y}), size ~${w}x${h}`,
         });
         break;
@@ -105,6 +145,7 @@ export function buildVirtualWhiteboardContext(
         const h = record.params.height ?? rows * 40 + 20;
         elements.push({
           agentName: record.agentName,
+          elementId: getRecordElementId(record),
           summary: `table(${rows}×${cols}) at (${x},${y}), size ${w}x${h}`,
         });
         break;
@@ -118,6 +159,7 @@ export function buildVirtualWhiteboardContext(
         const hasArrow = pts?.includes('arrow') ? ' (arrow)' : '';
         elements.push({
           agentName: record.agentName,
+          elementId: getRecordElementId(record),
           summary: `line${hasArrow}: (${sx},${sy}) → (${ex},${ey})`,
         });
         break;
@@ -133,17 +175,25 @@ export function buildVirtualWhiteboardContext(
         const lineCount = code.split('\n').length;
         elements.push({
           agentName: record.agentName,
+          elementId: getRecordElementId(record),
           summary: `code block${codeFileName} (${lang}, ${lineCount} lines) at (${x},${y}), size ${w}x${h}`,
         });
         break;
       }
       case 'wb_edit_code': {
         const op = record.params.operation || 'edit';
-        const targetId = record.params.elementId || '?';
-        elements.push({
-          agentName: record.agentName,
-          summary: `edited code "${targetId}" (${op})`,
-        });
+        const targetId = String(record.params.elementId || '');
+        let target = elements.find((element) => element.elementId === targetId);
+        if (!target && initialElementsAvailable && !removedInitialElementIds.has(targetId)) {
+          const initialSummary = initialCodeSummaries.get(targetId);
+          if (initialSummary) {
+            target = { agentName: record.agentName, elementId: targetId, summary: initialSummary };
+            elements.push(target);
+          }
+        }
+        if (target) {
+          target.summary = `${target.summary}; edited by ${record.agentName} (${op})`;
+        }
         break;
       }
       // wb_open, wb_close — skip

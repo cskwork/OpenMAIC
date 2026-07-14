@@ -128,6 +128,25 @@ export function withPiInclassWhiteboardTools(
   };
 }
 
+export function shouldAwaitPresentationAction(actionName: string): boolean {
+  return actionName.startsWith('wb_');
+}
+
+export async function retireLiveRequestResources<
+  T extends { shutdown(): void; waitForCurrentAction?(): Promise<void> },
+>(
+  controller: AbortController | null,
+  sessionId: string | null,
+  buffers: Map<string, T>,
+): Promise<void> {
+  controller?.abort();
+  if (!sessionId) return;
+  const buffer = buffers.get(sessionId);
+  buffer?.shutdown();
+  buffers.delete(sessionId);
+  await buffer?.waitForCurrentAction?.();
+}
+
 type StatelessStreamConsumerFactory = (
   sessionId: string,
   controller: AbortController,
@@ -383,6 +402,27 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
 
   // StreamBuffer instances per session (SSE + lecture share the same buffer model)
   const buffersRef = useRef<Map<string, StreamBuffer>>(new Map());
+  const pendingRetirementRef = useRef<Promise<void>>(Promise.resolve());
+
+  const retireActiveLiveRequest = useCallback(
+    (fallbackSessionId?: string | null): string | null => {
+      const interruptedSessionId = streamingSessionIdRef.current ?? fallbackSessionId ?? null;
+      const previousRetirement = pendingRetirementRef.current;
+      const retirement = retireLiveRequestResources(
+        abortControllerRef.current,
+        interruptedSessionId,
+        buffersRef.current,
+      );
+      pendingRetirementRef.current = Promise.all([previousRetirement, retirement]).then(
+        () => undefined,
+      );
+      abortControllerRef.current = null;
+      streamingSessionIdRef.current = null;
+      setIsStreaming(false);
+      return interruptedSessionId;
+    },
+    [],
+  );
 
   // Abort active stream and destroy buffers on unmount
   useEffect(() => {
@@ -642,7 +682,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             );
           },
 
-          onActionReady(messageId: string, data: ActionItem) {
+          async onActionReady(messageId: string, data: ActionItem) {
             // Add action badge to message parts
             const actionPart = {
               type: `action-${data.actionName}`,
@@ -666,7 +706,8 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               }),
             );
 
-            // Execute the action via ActionEngine (fire-and-forget for visual effects)
+            // Whiteboard effects mutate shared stage state after animation delays,
+            // so keep them ordered. Long-running media playback stays interruptible.
             try {
               const actionEngine = new ActionEngine(useStageStore);
               const action = {
@@ -674,7 +715,12 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
                 type: data.actionName,
                 ...data.params,
               } as Action;
-              actionEngine.execute(action);
+              const execution = actionEngine.execute(action);
+              if (shouldAwaitPresentationAction(data.actionName)) {
+                await execution;
+              } else {
+                void execution.catch((err) => log.warn('[Buffer] Action execution error:', err));
+              }
             } catch (err) {
               log.warn('[Buffer] Action execution error:', err);
             }
@@ -1036,20 +1082,17 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         abortControllerRef.current && streamingSessionIdRef.current === sessionId
       );
 
-      // Only abort if this session owns the active stream
+      // Retire presentation work before callers start another session. An action
+      // already inside ActionEngine cannot be cancelled, so wait for it to settle.
       if (wasStreaming) {
-        abortControllerRef.current!.abort();
-        abortControllerRef.current = null;
-        streamingSessionIdRef.current = null;
-        setIsStreaming(false);
+        retireActiveLiveRequest(sessionId);
+      } else {
+        const retirement = retireLiveRequestResources(null, sessionId, buffersRef.current);
+        pendingRetirementRef.current = Promise.all([pendingRetirementRef.current, retirement]).then(
+          () => undefined,
+        );
       }
-
-      // Destroy buffer — shutdown avoids firing stale onLiveSpeech(null,null)
-      const buf = buffersRef.current.get(sessionId);
-      if (buf) {
-        buf.shutdown();
-        buffersRef.current.delete(sessionId);
-      }
+      await pendingRetirementRef.current;
       lectureMessageIds.current.delete(sessionId);
       lectureLastActionIndexRef.current.delete(sessionId);
 
@@ -1106,7 +1149,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         setActiveSessionId(null);
       }
     },
-    [activeSessionId, clearSoftCloseTimer],
+    [activeSessionId, clearSoftCloseTimer, retireActiveLiveRequest],
   );
 
   /**
@@ -1124,7 +1167,8 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
    * Aborts SSE and appends "..." + interrupted marker, but keeps session 'active'
    * so the user can continue speaking in the same topic.
    */
-  const softPauseSession = useCallback(async (sessionId: string): Promise<void> => {
+  const softPauseSession = useCallback(
+    async (sessionId: string): Promise<void> => {
     livePausedRef.current = false;
     const session = sessionsRef.current.find((s) => s.id === sessionId);
     if (!session) return;
@@ -1135,21 +1179,15 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       abortControllerRef.current && streamingSessionIdRef.current === sessionId
     );
 
-    // Destroy buffer — no more ticks, no stale onDone/onLiveSpeech callbacks.
-    // Resume will create a fresh buffer.
-    const buf = buffersRef.current.get(sessionId);
-    if (buf) {
-      buf.shutdown();
-      buffersRef.current.delete(sessionId);
-    }
-
-    // Abort SSE stream
     if (wasStreaming) {
-      abortControllerRef.current!.abort();
-      abortControllerRef.current = null;
-      streamingSessionIdRef.current = null;
-      setIsStreaming(false);
+        retireActiveLiveRequest(sessionId);
+      } else {
+        const retirement = retireLiveRequestResources(null, sessionId, buffersRef.current);
+        pendingRetirementRef.current = Promise.all([pendingRetirementRef.current, retirement]).then(
+          () => undefined,
+        );
     }
+      await pendingRetirementRef.current;
 
     if (wasStreaming) {
       // Append "..." + interrupted marker to last assistant message, keep status 'active'
@@ -1195,7 +1233,9 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     }
 
     log.info(`[ChatArea] Soft-paused session: ${sessionId}`);
-  }, []);
+    },
+    [retireActiveLiveRequest],
+  );
 
   /**
    * Soft-pause the currently active QA/Discussion session (if any).
@@ -1215,6 +1255,8 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     async (sessionId: string): Promise<void> => {
       const session = sessionsRef.current.find((s) => s.id === sessionId);
       if (!session || session.status !== 'active') return;
+
+      await pendingRetirementRef.current;
 
       const controller = new AbortController();
       abortControllerRef.current = controller;
@@ -1306,14 +1348,14 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       let sessionId = activeSessionId;
 
       // Interrupt active generation: abort stream and append "..." to the last agent message
-      if (isStreaming && abortControllerRef.current) {
-        abortControllerRef.current.abort();
-        abortControllerRef.current = null;
+      if (abortControllerRef.current) {
+        const interruptedSessionId = retireActiveLiveRequest(sessionId);
+        const interruptedMessageSessionId = interruptedSessionId ?? sessionId;
 
-        if (sessionId) {
+        if (interruptedMessageSessionId) {
           setSessions((prev) =>
             prev.map((s) => {
-              if (s.id !== sessionId) return s;
+              if (s.id !== interruptedMessageSessionId) return s;
               const messages = [...s.messages];
               for (let i = messages.length - 1; i >= 0; i--) {
                 if (messages[i].role === 'assistant') {
@@ -1340,6 +1382,10 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
           );
         }
       }
+
+      // An interrupted action may still be finishing a delayed state mutation.
+      // Capture the next request only after that mutation has settled.
+      await pendingRetirementRef.current;
 
       // Validate model configuration before sending
       const modelConfig = getCurrentModelConfig();
@@ -1497,10 +1543,10 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     [
       activeSessionId,
       clearLiveSessionAfterError,
-      isStreaming,
       createSession,
       endSession,
       clearSoftCloseTimer,
+      retireActiveLiveRequest,
       runAgentLoopFn,
       t,
     ],
@@ -1649,11 +1695,8 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     if (!abortControllerRef.current) return;
 
     log.info('[ChatArea] Interrupting active request');
-    abortControllerRef.current.abort();
-    abortControllerRef.current = null;
-    setIsStreaming(false);
-    streamingSessionIdRef.current = null;
-  }, []);
+    retireActiveLiveRequest(activeSessionId);
+  }, [activeSessionId, retireActiveLiveRequest]);
 
   /**
    * Start a lecture session for a scene.

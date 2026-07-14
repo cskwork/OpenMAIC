@@ -96,7 +96,7 @@ const WbDrawTableParams = Type.Object({
   y: Type.Number(),
   width: Type.Number(),
   height: Type.Number(),
-  data: Type.Array(Type.Array(Type.String())),
+  data: Type.Array(Type.Array(Type.String(), { minItems: 1 }), { minItems: 1 }),
   outline: Type.Optional(
     Type.Object({
       width: Type.Number(),
@@ -145,18 +145,31 @@ const WbDrawCodeParams = Type.Object({
 });
 type WbDrawCodeParams = Static<typeof WbDrawCodeParams>;
 
-const WbEditCodeParams = Type.Object({
-  elementId: Type.String(),
-  operation: Type.Union([
-    Type.Literal('insert_after'),
-    Type.Literal('insert_before'),
-    Type.Literal('delete_lines'),
-    Type.Literal('replace_lines'),
-  ]),
-  lineId: Type.Optional(Type.String()),
-  lineIds: Type.Optional(Type.Array(Type.String())),
-  content: Type.Optional(Type.String()),
-});
+const WbEditCodeParams = Type.Union([
+  Type.Object({
+    elementId: Type.String(),
+    operation: Type.Literal('insert_after'),
+    lineId: Type.String(),
+    content: Type.String(),
+  }),
+  Type.Object({
+    elementId: Type.String(),
+    operation: Type.Literal('insert_before'),
+    lineId: Type.String(),
+    content: Type.String(),
+  }),
+  Type.Object({
+    elementId: Type.String(),
+    operation: Type.Literal('delete_lines'),
+    lineIds: Type.Array(Type.String(), { minItems: 1 }),
+  }),
+  Type.Object({
+    elementId: Type.String(),
+    operation: Type.Literal('replace_lines'),
+    lineIds: Type.Array(Type.String(), { minItems: 1 }),
+    content: Type.String(),
+  }),
+]);
 type WbEditCodeParams = Static<typeof WbEditCodeParams>;
 
 function getInitialWhiteboardElementCount(body: StatelessChatRequest): number {
@@ -183,14 +196,53 @@ function getInitialWhiteboardElementIds(body: StatelessChatRequest): Set<string>
   );
 }
 
+function getInitialWhiteboardCodeLineIds(body: StatelessChatRequest): Map<string, Set<string>> {
+  const whiteboards = body.storeState.stage?.whiteboard;
+  const latestWhiteboard = Array.isArray(whiteboards) ? whiteboards[whiteboards.length - 1] : null;
+  const elements = latestWhiteboard?.elements;
+  if (!Array.isArray(elements)) return new Map();
+
+  const result = new Map<string, Set<string>>();
+  for (const element of elements) {
+    if (!element || typeof element !== 'object') continue;
+    const candidate = element as { id?: unknown; type?: unknown; lines?: unknown };
+    if (candidate.type !== 'code' || typeof candidate.id !== 'string') continue;
+    if (!Array.isArray(candidate.lines)) continue;
+    const lineIds = candidate.lines
+      .map((line) =>
+        line && typeof line === 'object' && 'id' in line
+          ? String((line as { id?: unknown }).id ?? '')
+          : '',
+      )
+      .filter(Boolean);
+    result.set(candidate.id, new Set(lineIds));
+  }
+  return result;
+}
+
 function isWhiteboardDrawAction(name: string): boolean {
   return name.startsWith('wb_draw_');
+}
+
+function isNonEmptyRectangularStringMatrix(value: unknown): value is string[][] {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  const columnCount = Array.isArray(value[0]) ? value[0].length : 0;
+  return (
+    columnCount > 0 &&
+    value.every(
+      (row) =>
+        Array.isArray(row) &&
+        row.length === columnCount &&
+        row.every((cell) => typeof cell === 'string'),
+    )
+  );
 }
 
 export interface PiWhiteboardRuntimeState {
   open: boolean;
   visibleElementCount: number;
   knownElementIds: Set<string>;
+  codeLineIdsByElementId: Map<string, Set<string>>;
 }
 
 export function createPiWhiteboardRuntimeState(
@@ -200,6 +252,7 @@ export function createPiWhiteboardRuntimeState(
     open: Boolean(body.storeState.whiteboardOpen),
     visibleElementCount: getInitialWhiteboardElementCount(body),
     knownElementIds: getInitialWhiteboardElementIds(body),
+    codeLineIdsByElementId: getInitialWhiteboardCodeLineIds(body),
   };
 }
 
@@ -363,6 +416,113 @@ export function buildChildActionTools(opts: {
 
       const actionParams = params as Record<string, unknown>;
 
+      if (name === 'wb_draw_table' && !isNonEmptyRectangularStringMatrix(actionParams.data)) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'Action wb_draw_table skipped because data must be a non-empty rectangular string matrix.',
+            },
+          ],
+          details: {
+            skipped: true,
+            reason: 'whiteboard_invalid_table',
+            actionName: name,
+          },
+        };
+      }
+
+      if (isWhiteboardDrawAction(name)) {
+        const elementId = actionParams.elementId;
+        if (
+          typeof elementId === 'string' &&
+          elementId &&
+          whiteboardState.knownElementIds.has(elementId)
+        ) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Action ${name} skipped because whiteboard element id "${elementId}" already exists.`,
+              },
+            ],
+            details: {
+              skipped: true,
+              reason: 'whiteboard_element_id_conflict',
+              actionName: name,
+              elementId,
+            },
+          };
+        }
+      }
+
+      if (name === 'wb_delete') {
+        const elementId = String(actionParams.elementId ?? '');
+        if (!whiteboardState.knownElementIds.has(elementId)) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Action wb_delete skipped because whiteboard element "${elementId}" was not found.`,
+              },
+            ],
+            details: {
+              skipped: true,
+              reason: 'whiteboard_element_not_found',
+              actionName: name,
+              elementId,
+            },
+          };
+        }
+      }
+
+      if (name === 'wb_edit_code') {
+        const elementId = String(actionParams.elementId ?? '');
+        const knownLineIds = whiteboardState.codeLineIdsByElementId.get(elementId);
+        if (!knownLineIds) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Action wb_edit_code skipped because code element "${elementId}" was not found.`,
+              },
+            ],
+            details: {
+              skipped: true,
+              reason: 'whiteboard_code_element_not_found',
+              actionName: name,
+              elementId,
+            },
+          };
+        }
+
+        const operation = actionParams.operation;
+        const targetLineIds =
+          operation === 'insert_after' || operation === 'insert_before'
+            ? [String(actionParams.lineId ?? '')]
+            : Array.isArray(actionParams.lineIds)
+              ? actionParams.lineIds.map(String)
+              : [];
+        const missingLineId = targetLineIds.find((lineId) => !knownLineIds.has(lineId));
+        if (missingLineId) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Action wb_edit_code skipped because line "${missingLineId}" was not found in code element "${elementId}".`,
+              },
+            ],
+            details: {
+              skipped: true,
+              reason: 'whiteboard_code_line_not_found',
+              actionName: name,
+              elementId,
+              lineId: missingLineId,
+            },
+          };
+        }
+      }
+
       const actionId = nanoid();
       emittedActionCount += 1;
       await opts.send({
@@ -381,6 +541,7 @@ export function buildChildActionTools(opts: {
         whiteboardState.open = true;
         whiteboardState.visibleElementCount = 0;
         whiteboardState.knownElementIds.clear();
+        whiteboardState.codeLineIdsByElementId.clear();
       }
       if (isWhiteboardDrawAction(name)) {
         whiteboardState.open = true;
@@ -388,21 +549,33 @@ export function buildChildActionTools(opts: {
         const elementId = actionParams.elementId;
         if (typeof elementId === 'string' && elementId) {
           whiteboardState.knownElementIds.add(elementId);
+          if (name === 'wb_draw_code') {
+            const code = String(actionParams.code ?? '');
+            whiteboardState.codeLineIdsByElementId.set(
+              elementId,
+              new Set(code.split('\n').map((_line, index) => `L${index + 1}`)),
+            );
+          }
         }
       }
       if (name === 'wb_delete') {
         whiteboardState.open = true;
-        const elementId = actionParams.elementId;
-        if (typeof elementId !== 'string' || whiteboardState.knownElementIds.size === 0) {
-          whiteboardState.visibleElementCount = Math.max(
-            whiteboardState.visibleElementCount - 1,
-            0,
-          );
-        } else if (whiteboardState.knownElementIds.delete(elementId)) {
-          whiteboardState.visibleElementCount = Math.max(
-            whiteboardState.visibleElementCount - 1,
-            0,
-          );
+        const elementId = String(actionParams.elementId);
+        whiteboardState.knownElementIds.delete(elementId);
+        whiteboardState.visibleElementCount = Math.max(whiteboardState.visibleElementCount - 1, 0);
+        whiteboardState.codeLineIdsByElementId.delete(elementId);
+      }
+      if (name === 'wb_edit_code') {
+        const elementId = String(actionParams.elementId);
+        const lineIds = whiteboardState.codeLineIdsByElementId.get(elementId);
+        const operation = actionParams.operation;
+        if (lineIds && (operation === 'delete_lines' || operation === 'replace_lines')) {
+          const targetLineIds = (actionParams.lineIds as string[]) ?? [];
+          targetLineIds.forEach((lineId) => lineIds.delete(lineId));
+          if (operation === 'replace_lines') {
+            const replacementCount = String(actionParams.content ?? '').split('\n').length;
+            targetLineIds.slice(0, replacementCount).forEach((lineId) => lineIds.add(lineId));
+          }
         }
       }
       opts.onActionDone(

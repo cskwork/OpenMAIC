@@ -126,6 +126,37 @@ describe('POST /api/chat/pi model and thinking resolution', () => {
     expect(mocks.runPiDirectorLoop).not.toHaveBeenCalled();
   });
 
+  it('returns 400 for a malformed agentIds value before resolving a model', async () => {
+    const body = makeBody();
+    body.config.agentIds = 'default-1' as never;
+    const { POST } = await import('@/app/api/chat/pi/route');
+    const response = await POST(makeRequest(body));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      success: false,
+      errorCode: 'INVALID_REQUEST',
+      error: 'config.agentIds must be a non-empty array of unique, non-empty strings',
+    });
+    expect(mocks.resolveModel).not.toHaveBeenCalled();
+    expect(mocks.runPiDirectorLoop).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when only some requested agent IDs resolve', async () => {
+    const body = makeBody();
+    body.config.agentIds.push('missing-agent');
+    const { POST } = await import('@/app/api/chat/pi/route');
+    const response = await POST(makeRequest(body));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      success: false,
+      errorCode: 'INVALID_REQUEST',
+      error: 'Unknown classroom agents in config.agentIds: missing-agent',
+    });
+    expect(mocks.runPiDirectorLoop).not.toHaveBeenCalled();
+  });
+
   it('resolves through chat-adapter and passes the resolved thinking config into Pi runtime', async () => {
     const { POST } = await import('@/app/api/chat/pi/route');
     const response = await POST(makeRequest(makeBody()));

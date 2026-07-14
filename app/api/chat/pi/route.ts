@@ -47,8 +47,24 @@ export async function POST(req: NextRequest) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'Missing required field: storeState');
     }
 
-    if (!body.config || !body.config.agentIds || body.config.agentIds.length === 0) {
+    if (!body.config || body.config.agentIds == null) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'Missing required field: config.agentIds');
+    }
+
+    const agentIds = body.config.agentIds;
+    if (
+      !Array.isArray(agentIds) ||
+      agentIds.length === 0 ||
+      agentIds.some(
+        (id) => typeof id !== 'string' || id.trim().length === 0 || id !== id.trim(),
+      ) ||
+      new Set(agentIds).size !== agentIds.length
+    ) {
+      return apiError(
+        'INVALID_REQUEST',
+        400,
+        'config.agentIds must be a non-empty array of unique, non-empty strings',
+      );
     }
 
     const {
@@ -73,6 +89,15 @@ export async function POST(req: NextRequest) {
     }
 
     const agentConfigs = resolveAgentConfigs(body);
+    const resolvedAgentIds = new Set(agentConfigs.map((agent) => agent.id));
+    const unresolvedAgentIds = agentIds.filter((id) => !resolvedAgentIds.has(id));
+    if (unresolvedAgentIds.length > 0) {
+      return apiError(
+        'INVALID_REQUEST',
+        400,
+        `Unknown classroom agents in config.agentIds: ${unresolvedAgentIds.join(', ')}`,
+      );
+    }
     if (agentConfigs.length === 0) {
       return apiError(
         'INVALID_REQUEST',

@@ -150,6 +150,8 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
 
     // Scene switch confirmation dialog state
     const [pendingSceneId, setPendingSceneId] = useState<string | null>(null);
+    const sceneSwitchRequestRef = useRef(0);
+    const sceneSwitchConfirmingRef = useRef(false);
     const [isPresenting, setIsPresenting] = useState(false);
     const [controlsVisible, setControlsVisible] = useState(true);
     const [isPresentationInteractionActive, setIsPresentationInteractionActive] = useState(false);
@@ -529,6 +531,8 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
 
     // Initialize playback engine when scene changes
     useEffect(() => {
+      let cancelled = false;
+      const initializeScene = async () => {
       const previousSceneId = activeSceneIdRef.current;
       if (previousSceneId && previousSceneId !== currentScene?.id) {
         saveSceneResumePosition(previousSceneId, currentPlaybackActionIndexRef.current);
@@ -537,10 +541,10 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       // Bump epoch so any stale SSE callbacks from the previous scene are discarded
       sceneEpochRef.current++;
 
-      // End any active QA/discussion session — this synchronously aborts the SSE
-      // stream inside use-chat-sessions (abortControllerRef.abort()), preventing
-      // stale onLiveSpeech callbacks from leaking into the new scene.
-      chatAreaRef.current?.endActiveSession();
+        // Wait for an in-flight presentation action before initializing the next
+        // scene against shared whiteboard state.
+        await chatAreaRef.current?.endActiveSession();
+        if (cancelled) return;
 
       // Also abort the engine-level discussion controller
       if (discussionAbortRef.current) {
@@ -743,7 +747,10 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                 }
                 autoStartRef.current = true;
                 stageState.setCurrentSceneId(allScenes[idx + 1].id);
-              } else if (idx === allScenes.length - 1 && stageState.generatingOutlines.length > 0) {
+                } else if (
+                  idx === allScenes.length - 1 &&
+                  stageState.generatingOutlines.length > 0
+                ) {
                 // Last scene exhausted but next is still generating — go to pending page
                 const currentScene = allScenes[idx];
                 if (
@@ -791,6 +798,12 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
             });
         }
       }
+      };
+
+      void initializeScene();
+      return () => {
+        cancelled = true;
+      };
       // eslint-disable-next-line react-hooks/exhaustive-deps -- Only re-run when scene changes, functions are stable refs
     }, [currentScene]);
 
@@ -911,12 +924,18 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
      * Returns true if the switch was immediate, false if gated (dialog shown).
      */
     const gatedSceneSwitch = useCallback(
-      (targetSceneId: string): boolean => {
-        if (targetSceneId === currentSceneId) return false;
+      async (targetSceneId: string): Promise<boolean> => {
+        const requestId = ++sceneSwitchRequestRef.current;
+        if (targetSceneId === currentSceneId) {
+          setPendingSceneId(null);
+          return false;
+        }
         if (isTopicActive) {
           setPendingSceneId(targetSceneId);
           return false;
         }
+        await chatAreaRef.current?.endActiveSession();
+        if (requestId !== sceneSwitchRequestRef.current) return false;
         setCurrentSceneId(targetSceneId);
         return true;
       },
@@ -924,16 +943,25 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     );
 
     /** User confirmed scene switch via AlertDialog */
-    const confirmSceneSwitch = useCallback(() => {
+    const confirmSceneSwitch = useCallback(async () => {
       if (!pendingSceneId) return;
-      chatAreaRef.current?.endActiveSession();
-      doSessionCleanup();
-      setCurrentSceneId(pendingSceneId);
+      const targetSceneId = pendingSceneId;
+      const requestId = ++sceneSwitchRequestRef.current;
+      sceneSwitchConfirmingRef.current = true;
       setPendingSceneId(null);
+      try {
+        await chatAreaRef.current?.endActiveSession();
+        if (requestId !== sceneSwitchRequestRef.current) return;
+        doSessionCleanup();
+        setCurrentSceneId(targetSceneId);
+      } finally {
+        sceneSwitchConfirmingRef.current = false;
+      }
     }, [pendingSceneId, setCurrentSceneId, doSessionCleanup]);
 
     /** User cancelled scene switch via AlertDialog */
     const cancelSceneSwitch = useCallback(() => {
+      sceneSwitchRequestRef.current += 1;
       setPendingSceneId(null);
     }, []);
 
@@ -996,13 +1024,13 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       if (isPendingScene) {
         // From pending page → go to last real scene
         if (scenes.length > 0) {
-          gatedSceneSwitch(scenes[scenes.length - 1].id);
+          void gatedSceneSwitch(scenes[scenes.length - 1].id);
         }
         return;
       }
       const currentIndex = scenes.findIndex((s) => s.id === currentSceneId);
       if (currentIndex > 0) {
-        gatedSceneSwitch(scenes[currentIndex - 1].id);
+        void gatedSceneSwitch(scenes[currentIndex - 1].id);
       }
     }, [currentSceneId, gatedSceneSwitch, isPendingScene, scenes]);
 
@@ -1011,19 +1039,12 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       if (isPendingScene) return; // Already on pending, nowhere to go
       const currentIndex = scenes.findIndex((s) => s.id === currentSceneId);
       if (currentIndex < scenes.length - 1) {
-        gatedSceneSwitch(scenes[currentIndex + 1].id);
+        void gatedSceneSwitch(scenes[currentIndex + 1].id);
       } else if (canAdvanceToPendingSlot) {
         // On last real scene → advance to pending slot (generating or completion page)
-        setCurrentSceneId(PENDING_SCENE_ID);
+        void gatedSceneSwitch(PENDING_SCENE_ID);
       }
-    }, [
-      currentSceneId,
-      gatedSceneSwitch,
-      canAdvanceToPendingSlot,
-      isPendingScene,
-      scenes,
-      setCurrentSceneId,
-    ]);
+    }, [currentSceneId, gatedSceneSwitch, canAdvanceToPendingSlot, isPendingScene, scenes]);
 
     const currentSceneIndex = isPendingScene
       ? scenes.length
@@ -1528,7 +1549,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
         <AlertDialog
           open={!!pendingSceneId}
           onOpenChange={(open) => {
-            if (!open) cancelSceneSwitch();
+            if (!open && !sceneSwitchConfirmingRef.current) cancelSceneSwitch();
           }}
         >
           <AlertDialogContent

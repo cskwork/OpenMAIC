@@ -181,9 +181,16 @@ function isNumberMatrix(value: unknown): value is number[][] {
 }
 
 function isStringMatrix(value: unknown): value is string[][] {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  const columnCount = Array.isArray(value[0]) ? value[0].length : 0;
   return (
-    Array.isArray(value) &&
-    value.every((row) => Array.isArray(row) && row.every((item) => typeof item === 'string'))
+    columnCount > 0 &&
+    value.every(
+      (row) =>
+        Array.isArray(row) &&
+        row.length === columnCount &&
+        row.every((item) => typeof item === 'string'),
+    )
   );
 }
 
@@ -298,7 +305,9 @@ function validateActionParams(action: ParsedAction): string | null {
   if (action.actionName === 'wb_draw_table') {
     return (
       validateRequiredPosition(params, 'wb_draw_table', ['x', 'y', 'width', 'height']) ??
-      (isStringMatrix(params.data) ? null : 'wb_draw_table requires params.data string matrix') ??
+      (isStringMatrix(params.data)
+        ? null
+        : 'wb_draw_table requires a non-empty rectangular params.data string matrix') ??
       validateOptionalElementId(params, 'wb_draw_table')
     );
   }
@@ -329,17 +338,29 @@ function validateActionParams(action: ParsedAction): string | null {
   }
 
   if (action.actionName === 'wb_edit_code') {
-    return (
+    const commonError =
       requireString(params, 'elementId', 'wb_edit_code') ??
       (typeof params.operation === 'string' && CODE_EDIT_OPERATIONS.has(params.operation)
         ? null
-        : 'wb_edit_code requires params.operation insert_after|insert_before|delete_lines|replace_lines') ??
-      optionalString(params, 'lineId', 'wb_edit_code') ??
-      (params.lineIds !== undefined && !isStringArray(params.lineIds)
-        ? 'wb_edit_code params.lineIds must be a string array'
-        : null) ??
-      optionalString(params, 'content', 'wb_edit_code')
-    );
+        : 'wb_edit_code requires params.operation insert_after|insert_before|delete_lines|replace_lines');
+    if (commonError) return commonError;
+
+    if (params.operation === 'insert_after' || params.operation === 'insert_before') {
+      if (requireString(params, 'lineId', 'wb_edit_code')) {
+        return `wb_edit_code ${params.operation} requires params.lineId string`;
+      }
+      return requireString(params, 'content', 'wb_edit_code')
+        ? `wb_edit_code ${params.operation} requires params.content string`
+        : null;
+    }
+
+    if (!isStringArray(params.lineIds) || params.lineIds.length === 0) {
+      return `wb_edit_code ${String(params.operation)} requires non-empty params.lineIds string array`;
+    }
+
+    return params.operation === 'replace_lines' && requireString(params, 'content', 'wb_edit_code')
+      ? 'wb_edit_code replace_lines requires params.content string'
+      : null;
   }
 
   return null;
@@ -401,7 +422,40 @@ async function executeParsedAction(
       return;
     }
   }
-  await tool.execute(action.actionId, action.params);
+  const result = await tool.execute(action.actionId, action.params);
+  if (
+    (action.actionName === 'wb_edit_code' ||
+      action.actionName === 'wb_delete' ||
+      action.actionName.startsWith('wb_draw_')) &&
+    result &&
+    typeof result === 'object' &&
+    'details' in result &&
+    (result.details as { skipped?: boolean } | undefined)?.skipped
+  ) {
+    const details = result.details as { skipped?: boolean; reason?: string } | undefined;
+    const reportSkippedTarget =
+      action.actionName === 'wb_edit_code' ||
+      (action.actionName === 'wb_delete' && details?.reason === 'whiteboard_element_not_found') ||
+      (action.actionName.startsWith('wb_draw_') &&
+        details?.reason === 'whiteboard_element_id_conflict');
+    if (!reportSkippedTarget) return;
+    const content = 'content' in result && Array.isArray(result.content) ? result.content : [];
+    const message = content.find((item): item is { type: 'text'; text: string } =>
+      Boolean(
+        item &&
+        typeof item === 'object' &&
+        'type' in item &&
+        item.type === 'text' &&
+        'text' in item &&
+        typeof item.text === 'string',
+      ),
+    )?.text;
+    warn({
+      actionName: action.actionName,
+      reason: 'invalid_params',
+      message: message ?? `${action.actionName} was skipped`,
+    });
+  }
 }
 
 async function processParseResult(opts: {

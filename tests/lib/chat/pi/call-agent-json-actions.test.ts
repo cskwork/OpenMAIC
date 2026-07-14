@@ -837,6 +837,55 @@ describe('Pi call_agent JSON action output', () => {
     });
   });
 
+  it('skips wb_delete when the target id is not on a nonempty whiteboard', async () => {
+    mockChildWithJsonOutput(
+      JSON.stringify([
+        { type: 'action', name: 'wb_delete', params: { elementId: 'missing-note' } },
+        { type: 'text', content: '找不到目标时不删除白板元素。' },
+      ]),
+    );
+
+    const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
+    const events: StatelessEvent[] = [];
+    const onActionDone = vi.fn();
+    const tool = buildCallAgentTool({
+      body: makeBody({
+        whiteboardElements: [{ id: 'note-1', type: 'text', content: 'keep', left: 80, top: 120 }],
+      }),
+      agentConfigs: [slideTeacher],
+      send: async (event) => {
+        events.push(event);
+      },
+      languageModel: {} as never,
+      onAgentDone: vi.fn(),
+      onActionDone,
+      thinkingConfig: { mode: 'disabled', enabled: false },
+      abortSignal: new AbortController().signal,
+      maxAgentTurns: 6,
+      getAgentTurnCount: () => 0,
+      getAgentResponses: () => [],
+      getWhiteboardLedger: () => [],
+      maxActionsPerAgent: 8,
+      enableWhiteboardTools: true,
+    });
+
+    const result = await tool.execute('call-1', {
+      agentId: slideTeacher.id,
+      instruction: 'Try deleting a missing note.',
+    });
+
+    expect(events.filter((event) => event.type === 'action')).toEqual([]);
+    expect(onActionDone).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      actionWarnings: [
+        expect.objectContaining({
+          message:
+            'Action wb_delete skipped because whiteboard element "missing-note" was not found.',
+        }),
+      ],
+    });
+  });
+
   it('skips redundant wb_open without sending duplicate frontend actions or ledger records', async () => {
     mockChildWithJsonOutput(
       JSON.stringify([
@@ -896,6 +945,61 @@ describe('Pi call_agent JSON action output', () => {
       actionWarnings: [],
     });
     expect(onAgentDone).toHaveBeenCalledWith(expect.objectContaining({ actionCount: 2 }));
+  });
+
+  it('skips a draw action that reuses an existing whiteboard element id', async () => {
+    mockChildWithJsonOutput(
+      JSON.stringify([
+        {
+          type: 'action',
+          name: 'wb_draw_text',
+          params: { elementId: 'note-1', content: 'duplicate', x: 80, y: 120 },
+        },
+        { type: 'text', content: '已有元素 id 不会重复绘制。' },
+      ]),
+    );
+
+    const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
+    const events: StatelessEvent[] = [];
+    const onActionDone = vi.fn();
+    const tool = buildCallAgentTool({
+      body: makeBody({
+        whiteboardElements: [
+          { id: 'note-1', type: 'text', content: 'existing', left: 80, top: 120 },
+        ],
+      }),
+      agentConfigs: [slideTeacher],
+      send: async (event) => {
+        events.push(event);
+      },
+      languageModel: {} as never,
+      onAgentDone: vi.fn(),
+      onActionDone,
+      thinkingConfig: { mode: 'disabled', enabled: false },
+      abortSignal: new AbortController().signal,
+      maxAgentTurns: 6,
+      getAgentTurnCount: () => 0,
+      getAgentResponses: () => [],
+      getWhiteboardLedger: () => [],
+      maxActionsPerAgent: 8,
+      enableWhiteboardTools: true,
+    });
+
+    const result = await tool.execute('call-1', {
+      agentId: slideTeacher.id,
+      instruction: 'Try drawing with a duplicate id.',
+    });
+
+    expect(events.filter((event) => event.type === 'action')).toEqual([]);
+    expect(onActionDone).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      actionWarnings: [
+        expect.objectContaining({
+          message:
+            'Action wb_draw_text skipped because whiteboard element id "note-1" already exists.',
+        }),
+      ],
+    });
   });
 
   it('continues on an already-open whiteboard instead of sending another wb_open', async () => {
@@ -1256,6 +1360,72 @@ describe('Pi call_agent JSON action output', () => {
     );
   });
 
+  it('rejects empty and ragged whiteboard tables without emitting actions', async () => {
+    mockChildWithJsonOutput(
+      JSON.stringify([
+        {
+          type: 'action',
+          name: 'wb_draw_table',
+          params: { x: 80, y: 280, width: 360, height: 120, data: [] },
+        },
+        {
+          type: 'action',
+          name: 'wb_draw_table',
+          params: { x: 80, y: 280, width: 360, height: 120, data: [[]] },
+        },
+        {
+          type: 'action',
+          name: 'wb_draw_table',
+          params: {
+            x: 80,
+            y: 280,
+            width: 360,
+            height: 120,
+            data: [['A', 'B'], ['only A']],
+          },
+        },
+        { type: 'text', content: '无效表格不会写入白板。' },
+      ]),
+    );
+
+    const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
+    const events: StatelessEvent[] = [];
+    const onActionDone = vi.fn();
+    const tool = buildCallAgentTool({
+      body: makeBody(),
+      agentConfigs: [slideTeacher],
+      send: async (event) => {
+        events.push(event);
+      },
+      languageModel: {} as never,
+      onAgentDone: vi.fn(),
+      onActionDone,
+      thinkingConfig: { mode: 'disabled', enabled: false },
+      abortSignal: new AbortController().signal,
+      maxAgentTurns: 6,
+      getAgentTurnCount: () => 0,
+      getAgentResponses: () => [],
+      getWhiteboardLedger: () => [],
+      maxActionsPerAgent: 8,
+      enableWhiteboardTools: true,
+    });
+
+    const result = await tool.execute('call-1', {
+      agentId: slideTeacher.id,
+      instruction: 'Try invalid tables.',
+    });
+
+    expect(events.filter((event) => event.type === 'action')).toEqual([]);
+    expect(onActionDone).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      actionWarnings: [
+        expect.objectContaining({
+          message: 'wb_draw_table requires a non-empty rectangular params.data string matrix',
+        }),
+      ],
+    });
+  });
+
   it('supports the full in-scope whiteboard action surface', async () => {
     mockChildWithJsonOutput(
       JSON.stringify([
@@ -1306,7 +1476,7 @@ describe('Pi call_agent JSON action output', () => {
           name: 'wb_draw_code',
           params: {
             language: 'python',
-            code: 'shade = 28\\nsun = 34',
+            code: 'shade = 28\nsun = 34',
             x: 470,
             y: 260,
             fileName: 'temperature.py',
@@ -1464,6 +1634,156 @@ describe('Pi call_agent JSON action output', () => {
           message:
             'wb_edit_code requires params.operation insert_after|insert_before|delete_lines|replace_lines',
         },
+      ],
+    });
+  });
+
+  it('requires operation-specific wb_edit_code fields', async () => {
+    mockChildWithJsonOutput(
+      JSON.stringify([
+        {
+          type: 'action',
+          name: 'wb_edit_code',
+          params: { elementId: 'code-1', operation: 'insert_after', content: 'x = 1' },
+        },
+        {
+          type: 'action',
+          name: 'wb_edit_code',
+          params: { elementId: 'code-1', operation: 'insert_before', lineId: 'L1' },
+        },
+        {
+          type: 'action',
+          name: 'wb_edit_code',
+          params: { elementId: 'code-1', operation: 'delete_lines', lineIds: [] },
+        },
+        {
+          type: 'action',
+          name: 'wb_edit_code',
+          params: { elementId: 'code-1', operation: 'replace_lines', lineIds: ['L1'] },
+        },
+        { type: 'text', content: '缺少编辑参数时只保留文字说明。' },
+      ]),
+    );
+
+    const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
+    const events: StatelessEvent[] = [];
+    const tool = buildCallAgentTool({
+      body: makeBody(),
+      agentConfigs: [slideTeacher],
+      send: async (event) => {
+        events.push(event);
+      },
+      languageModel: {} as never,
+      onAgentDone: vi.fn(),
+      onActionDone: vi.fn(),
+      thinkingConfig: { mode: 'disabled', enabled: false },
+      abortSignal: new AbortController().signal,
+      maxAgentTurns: 6,
+      getAgentTurnCount: () => 0,
+      getAgentResponses: () => [],
+      getWhiteboardLedger: () => [],
+      maxActionsPerAgent: 8,
+      enableWhiteboardTools: true,
+    });
+
+    const result = await tool.execute('call-1', {
+      agentId: slideTeacher.id,
+      instruction: 'Try incomplete code edits.',
+    });
+
+    expect(events.filter((event) => event.type === 'action')).toEqual([]);
+    expect(result.details).toMatchObject({
+      actionWarnings: [
+        expect.objectContaining({
+          message: 'wb_edit_code insert_after requires params.lineId string',
+        }),
+        expect.objectContaining({
+          message: 'wb_edit_code insert_before requires params.content string',
+        }),
+        expect.objectContaining({
+          message: 'wb_edit_code delete_lines requires non-empty params.lineIds string array',
+        }),
+        expect.objectContaining({
+          message: 'wb_edit_code replace_lines requires params.content string',
+        }),
+      ],
+    });
+  });
+
+  it('skips wb_edit_code when the code element or target line does not exist', async () => {
+    mockChildWithJsonOutput(
+      JSON.stringify([
+        {
+          type: 'action',
+          name: 'wb_edit_code',
+          params: {
+            elementId: 'missing-code',
+            operation: 'insert_after',
+            lineId: 'L1',
+            content: 'x = 1',
+          },
+        },
+        {
+          type: 'action',
+          name: 'wb_edit_code',
+          params: {
+            elementId: 'code-1',
+            operation: 'replace_lines',
+            lineIds: ['L99'],
+            content: 'x = 2',
+          },
+        },
+        { type: 'text', content: '找不到目标时不执行代码编辑。' },
+      ]),
+    );
+
+    const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
+    const events: StatelessEvent[] = [];
+    const onActionDone = vi.fn();
+    const tool = buildCallAgentTool({
+      body: makeBody({
+        whiteboardElements: [
+          {
+            id: 'code-1',
+            type: 'code',
+            language: 'python',
+            lines: [{ id: 'L1', content: 'x = 0' }],
+          },
+        ],
+      }),
+      agentConfigs: [slideTeacher],
+      send: async (event) => {
+        events.push(event);
+      },
+      languageModel: {} as never,
+      onAgentDone: vi.fn(),
+      onActionDone,
+      thinkingConfig: { mode: 'disabled', enabled: false },
+      abortSignal: new AbortController().signal,
+      maxAgentTurns: 6,
+      getAgentTurnCount: () => 0,
+      getAgentResponses: () => [],
+      getWhiteboardLedger: () => [],
+      maxActionsPerAgent: 8,
+      enableWhiteboardTools: true,
+    });
+
+    const result = await tool.execute('call-1', {
+      agentId: slideTeacher.id,
+      instruction: 'Try edits against missing targets.',
+    });
+
+    expect(events.filter((event) => event.type === 'action')).toEqual([]);
+    expect(onActionDone).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      actionWarnings: [
+        expect.objectContaining({
+          message: 'Action wb_edit_code skipped because code element "missing-code" was not found.',
+        }),
+        expect.objectContaining({
+          message:
+            'Action wb_edit_code skipped because line "L99" was not found in code element "code-1".',
+        }),
       ],
     });
   });
