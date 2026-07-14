@@ -100,10 +100,9 @@ export async function runPiDirectorLoop(opts: {
         ...(opts.body.directorState?.agentResponses ?? []),
         ...piAgentResponses,
       ],
-      getWhiteboardLedger: () => [
-        ...(opts.body.directorState?.whiteboardLedger ?? []),
-        ...piWhiteboardLedger,
-      ],
+      // storeState is already the request-start whiteboard snapshot, so replay
+      // only mutations produced during this request in child-agent prompts.
+      getWhiteboardLedger: () => piWhiteboardLedger,
       maxActionsPerAgent: opts.maxActionsPerAgent,
       enableWhiteboardTools: opts.enableWhiteboardTools,
       isTeacherWrapUpUsed: () => teacherWrapUpUsed,
