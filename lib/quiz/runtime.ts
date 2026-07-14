@@ -300,7 +300,6 @@ export async function recordQuizAttempt(
         if (last && samePayload(last, payload)) return;
         if (
           last &&
-          payload.phase !== 'draft' &&
           PHASE_ORDER[payload.phase] < PHASE_ORDER[last.phase] &&
           sameAnswers(payload.answers, last.answers)
         ) {

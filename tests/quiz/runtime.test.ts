@@ -331,6 +331,26 @@ describe('quiz attempt runtime persistence', () => {
     ]);
   });
 
+  it('drops a delayed draft with the same answers after another tab completed', async () => {
+    const { store, deps } = makeHarness();
+    const base = {
+      stageId: 'stage-1',
+      sceneId: 'scene-quiz',
+      attemptId: 'attempt-shared',
+      answers: { q1: 'A' },
+    };
+    await recordQuizAttempt({ ...base, phase: 'reviewed', results }, deps);
+
+    await recordQuizAttempt({ ...base, phase: 'draft' }, deps);
+
+    expect((await store.listSessions('stage-1', 'learner-1')).map((session) => session.id)).toEqual(
+      ['attempt-shared'],
+    );
+    expect((await store.listRecords('attempt-shared')).map((record) => record.payload)).toEqual([
+      { payloadVersion: 1, phase: 'reviewed', answers: { q1: 'A' }, results },
+    ]);
+  });
+
   it('records the quiz lifecycle in one learner-scoped session', async () => {
     const { store, deps } = makeHarness();
     const base = {
