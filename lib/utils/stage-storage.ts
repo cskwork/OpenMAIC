@@ -75,7 +75,7 @@ export async function saveStageData(stageId: string, data: StageStoreData): Prom
       );
     }
 
-    // Save chat sessions to independent table
+    // Chat sessions live in the learner RuntimeStore, outside the document DB.
     if (data.chats) {
       await saveChatSessions(stageId, data.chats);
     }
@@ -102,7 +102,7 @@ export async function loadStageData(stageId: string): Promise<StageStoreData | n
     // Load scenes
     const scenes = await db.scenes.where('stageId').equals(stageId).sortBy('order');
 
-    // Load chat sessions from independent table
+    // Load learner chat sessions, migrating legacy Dexie rows on first access.
     const chats = await loadChatSessions(stageId);
 
     log.info(`Loaded stage: ${stageId}, scenes: ${scenes.length}, chats: ${chats.length}`);
@@ -137,7 +137,8 @@ export async function deleteStageData(stageId: string): Promise<void> {
     // Delete scenes
     await db.scenes.where('stageId').equals(stageId).delete();
 
-    // Delete chat sessions and playback state
+    // Clear legacy chat rows and the still-Dexie playback state. Runtime chat
+    // rows are removed by the all-kind cascade below.
     await deleteChatSessions(stageId);
     await clearPlaybackState(stageId);
 

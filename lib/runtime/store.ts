@@ -1,8 +1,8 @@
 /**
  * Lazy app-wide RuntimeStore singleton (#869). One `maic-runtime` IndexedDB
  * per origin, shared by every runtime kind (pbl, chat, quizAttempt, playback)
- * as they migrate onto the runtime layer. Nothing reads or writes it yet
- * except the stage-deletion cascade; Part C2 adds the first real writer.
+ * as they migrate onto the runtime layer. PBL events and chat sessions use it
+ * today; the stage-deletion cascade clears every kind together.
  *
  * Client-only: the store lazily opens IndexedDB. Server code must not import
  * this module without injecting its own `RuntimeStore`.
@@ -58,9 +58,8 @@ async function withTimeout(work: Promise<void>, ms: number): Promise<void> {
  * (`maic-runtime`), so a broken or hung runtime DB must not brick stage
  * deletion in the main app DB — the cascade is bounded by a timeout, and any
  * failure warns and moves on. A failed or timed-out cascade leaves orphaned
- * runtime rows, which are inert today (nothing reads them yet); a startup
- * sweep is deliberately deferred to Part C2, when the store gains real
- * readers.
+ * runtime rows; they are not reachable through normal navigation once the
+ * stage is gone, and a future startup sweep can reclaim them.
  */
 export async function deleteStageRuntimeSafely(
   stageId: string,
