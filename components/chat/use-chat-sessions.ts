@@ -1169,70 +1169,70 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
    */
   const softPauseSession = useCallback(
     async (sessionId: string): Promise<void> => {
-    livePausedRef.current = false;
-    const session = sessionsRef.current.find((s) => s.id === sessionId);
-    if (!session) return;
-    const isLiveSession = session.type === 'qa' || session.type === 'discussion';
-    if (!isLiveSession || session.status !== 'active') return;
+      livePausedRef.current = false;
+      const session = sessionsRef.current.find((s) => s.id === sessionId);
+      if (!session) return;
+      const isLiveSession = session.type === 'qa' || session.type === 'discussion';
+      if (!isLiveSession || session.status !== 'active') return;
 
-    const wasStreaming = !!(
-      abortControllerRef.current && streamingSessionIdRef.current === sessionId
-    );
+      const wasStreaming = !!(
+        abortControllerRef.current && streamingSessionIdRef.current === sessionId
+      );
 
-    if (wasStreaming) {
+      if (wasStreaming) {
         retireActiveLiveRequest(sessionId);
       } else {
         const retirement = retireLiveRequestResources(null, sessionId, buffersRef.current);
         pendingRetirementRef.current = Promise.all([pendingRetirementRef.current, retirement]).then(
           () => undefined,
         );
-    }
+      }
       await pendingRetirementRef.current;
 
-    if (wasStreaming) {
-      // Append "..." + interrupted marker to last assistant message, keep status 'active'
-      setSessions((prev) =>
-        prev.map((s) => {
-          if (s.id !== sessionId) return s;
-          const messages = [...s.messages];
-          for (let i = messages.length - 1; i >= 0; i--) {
-            if (messages[i].role === 'assistant') {
-              const parts = [...messages[i].parts];
-              let appended = false;
-              for (let j = parts.length - 1; j >= 0; j--) {
-                if (parts[j].type === 'text') {
-                  const textPart = parts[j] as { type: 'text'; text: string };
-                  parts[j] = {
-                    type: 'text',
-                    text: (textPart.text || '') + '...',
-                  } as UIMessage<ChatMessageMetadata>['parts'][number];
-                  appended = true;
-                  break;
+      if (wasStreaming) {
+        // Append "..." + interrupted marker to last assistant message, keep status 'active'
+        setSessions((prev) =>
+          prev.map((s) => {
+            if (s.id !== sessionId) return s;
+            const messages = [...s.messages];
+            for (let i = messages.length - 1; i >= 0; i--) {
+              if (messages[i].role === 'assistant') {
+                const parts = [...messages[i].parts];
+                let appended = false;
+                for (let j = parts.length - 1; j >= 0; j--) {
+                  if (parts[j].type === 'text') {
+                    const textPart = parts[j] as { type: 'text'; text: string };
+                    parts[j] = {
+                      type: 'text',
+                      text: (textPart.text || '') + '...',
+                    } as UIMessage<ChatMessageMetadata>['parts'][number];
+                    appended = true;
+                    break;
+                  }
                 }
+                if (!appended) {
+                  parts.push({
+                    type: 'text',
+                    text: '...',
+                  } as UIMessage<ChatMessageMetadata>['parts'][number]);
+                }
+                messages[i] = {
+                  ...messages[i],
+                  parts,
+                  metadata: { ...messages[i].metadata, interrupted: true },
+                };
+                break;
               }
-              if (!appended) {
-                parts.push({
-                  type: 'text',
-                  text: '...',
-                } as UIMessage<ChatMessageMetadata>['parts'][number]);
-              }
-              messages[i] = {
-                ...messages[i],
-                parts,
-                metadata: { ...messages[i].metadata, interrupted: true },
-              };
-              break;
             }
-          }
-          // Keep status 'active' — session continues when user speaks
-          return { ...s, messages, updatedAt: Date.now() };
-        }),
-      );
-      // Note: Do NOT call onLiveSpeech/onThinking here.
-      // Caller (doSoftPause) manages roundtable state to keep the interrupted bubble visible.
-    }
+            // Keep status 'active' — session continues when user speaks
+            return { ...s, messages, updatedAt: Date.now() };
+          }),
+        );
+        // Note: Do NOT call onLiveSpeech/onThinking here.
+        // Caller (doSoftPause) manages roundtable state to keep the interrupted bubble visible.
+      }
 
-    log.info(`[ChatArea] Soft-paused session: ${sessionId}`);
+      log.info(`[ChatArea] Soft-paused session: ${sessionId}`);
     },
     [retireActiveLiveRequest],
   );

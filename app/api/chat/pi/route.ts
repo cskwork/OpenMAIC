@@ -55,9 +55,7 @@ export async function POST(req: NextRequest) {
     if (
       !Array.isArray(agentIds) ||
       agentIds.length === 0 ||
-      agentIds.some(
-        (id) => typeof id !== 'string' || id.trim().length === 0 || id !== id.trim(),
-      ) ||
+      agentIds.some((id) => typeof id !== 'string' || id.trim().length === 0 || id !== id.trim()) ||
       new Set(agentIds).size !== agentIds.length
     ) {
       return apiError(
