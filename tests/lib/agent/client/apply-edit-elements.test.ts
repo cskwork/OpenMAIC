@@ -394,6 +394,7 @@ describe('applyEditElementsIntents', () => {
       height: 120,
       rotate: 0,
       cellMinHeight: 40,
+      rowHeights: [50, 70],
       colWidths: [1],
       data: [[{ id: 'a', text: 'A' }], [{ id: 'b', text: 'B' }]],
       outline: { width: 1, color: '#000', style: 'solid' },
@@ -414,7 +415,11 @@ describe('applyEditElementsIntents', () => {
 
     expect(result).toEqual({ ok: true });
     const next = commitContent.mock.calls[0][0] as SlideContent;
-    expect(next.canvas.elements[0]).toMatchObject({ height: 160, cellMinHeight: 60 });
+    expect(next.canvas.elements[0]).toMatchObject({
+      height: 160,
+      cellMinHeight: 60,
+      rowHeights: [50 * (160 / 120), 70 * (160 / 120)],
+    });
   });
 
   it('refuses when no edit session is open (no irreversible fallback write)', async () => {

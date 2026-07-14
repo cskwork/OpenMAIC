@@ -74,7 +74,7 @@ function applyPropsToElement(el: PPTElement, props: Partial<PPTElement>): void {
     const textPatch: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(props as Record<string, unknown>)) {
       if (SHAPE_TEXT_CHROME_PROPS.has(key)) {
-        textPatch[key === 'textType' ? 'type' : key] = value;
+        textPatch[key] = value;
       } else if (key === 'vAlign') {
         textPatch.align = value;
       } else {
@@ -108,9 +108,14 @@ function applyPropsToElement(el: PPTElement, props: Partial<PPTElement>): void {
   if (el.type === 'table' && 'height' in props) {
     const oldHeight = el.height;
     const oldCellMinHeight = el.cellMinHeight;
+    const oldRowHeights = el.rowHeights;
     assignElementProps(el, props as Record<string, unknown>);
     if (el.data.length > 0) {
       el.cellMinHeight = Math.max(36, oldCellMinHeight + (el.height - oldHeight) / el.data.length);
+    }
+    if (oldRowHeights?.length && oldHeight > 0) {
+      const scale = el.height / oldHeight;
+      el.rowHeights = oldRowHeights.map((height) => height * scale);
     }
     return;
   }
