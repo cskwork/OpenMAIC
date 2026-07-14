@@ -283,6 +283,62 @@ describe('applyEditElementsIntents', () => {
     expect(updateScene).not.toHaveBeenCalled();
   });
 
+  it('applies text content and style intents in the same undo entry', async () => {
+    const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
+    const present = slideWith([textEl('a')]);
+    mockSession.sceneId = 's1';
+    mockSession.history = { present };
+
+    const result = applyEditElementsIntents('s1', [
+      { type: 'element.update', id: 'a', props: { defaultColor: '#00f' } },
+      {
+        type: 'text.updateContent',
+        id: 'a',
+        content: '<p>Updated title</p>',
+        target: 'text',
+      },
+    ]);
+
+    expect(result).toEqual({ ok: true });
+    expect(commitContent).toHaveBeenCalledTimes(1);
+    const next = commitContent.mock.calls[0][0] as SlideContent;
+    expect(next.canvas.elements[0]).toMatchObject({
+      defaultColor: '#00f',
+      content: '<p>Updated title</p>',
+    });
+  });
+
+  it('refuses a text content intent when its target changed type at apply time', async () => {
+    const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
+    const shape = {
+      id: 'a',
+      type: 'shape',
+      left: 100,
+      top: 80,
+      width: 400,
+      height: 60,
+      rotate: 0,
+      viewBox: [400, 60],
+      path: 'M0 0',
+      fixedRatio: false,
+      fill: '#eee',
+      text: { content: '<p>Shape</p>', defaultFontName: 'Arial', defaultColor: '#333' },
+    } as PPTElement;
+    mockSession.sceneId = 's1';
+    mockSession.history = { present: slideWith([shape]) };
+
+    const result = applyEditElementsIntents(
+      's1',
+      [{ type: 'text.updateContent', id: 'a', content: '<p>Updated</p>', target: 'text' }],
+      { a: 'text' },
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/changed type/i);
+    expect(commitContent).not.toHaveBeenCalled();
+  });
+
   it('merges partial nested style patches without dropping existing values', async () => {
     const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
     const image = {

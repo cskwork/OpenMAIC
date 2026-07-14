@@ -278,6 +278,14 @@ export function getEditablePropSchema(type: string, key: string): JsonSchema | n
   return EDITABLE_PROP_SCHEMAS_BY_TYPE.get(type)?.get(key) ?? null;
 }
 
+/** Validate one complete element against the generated DSL schema. */
+export function validateElementAgainstDslSchema(element: PPTElement): string | null {
+  const definitionName = ELEMENT_SCHEMA_DEFINITION_BY_TYPE.get(element.type);
+  const schema = definitionName ? schemaDefinitions[definitionName] : undefined;
+  if (!schema) return `element type ${JSON.stringify(element.type)} is out of contract`;
+  return validateJsonSchemaSubset(element, schema, 'element');
+}
+
 export interface ElementInventoryItem {
   id: string;
   type: string;
@@ -2225,6 +2233,8 @@ export function collectIntentTargetIds(intents: EditIntent[]): string[] {
     if (intent.type === 'element.update') ids.push(intent.id);
     else if (intent.type === 'element.updateMany') {
       for (const u of intent.updates) ids.push(u.id);
+    } else if (intent.type === 'text.updateContent') {
+      ids.push(intent.id);
     }
   }
   return ids;

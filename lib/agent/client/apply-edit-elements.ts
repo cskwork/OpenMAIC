@@ -135,6 +135,14 @@ function applyIntentsToContent(content: SlideContent, intents: EditIntent[]): Sl
           if (!el) continue;
           applyPropsToElement(el, u.props as Partial<PPTElement>);
         }
+      } else if (intent.type === 'text.updateContent') {
+        const el = draft.canvas.elements.find((element) => element.id === intent.id);
+        if (!el) continue;
+        if (intent.target === 'text' && el.type === 'text') {
+          el.content = intent.content;
+        } else if (intent.target === 'shape' && el.type === 'shape' && el.text) {
+          el.text.content = intent.content;
+        }
       }
       // Other EditIntent kinds are out of scope for this vertical.
     }
@@ -187,8 +195,19 @@ export function applyEditElementsIntents(
   );
   if (!recheck.ok) return { ok: false, reason: recheck.reason };
 
-  // Refuse fabricating shape.text when the shape has no label (no content authoring).
   const byId = new Map((present.canvas.elements as PPTElement[]).map((el) => [el.id, el] as const));
+  for (const intent of intents) {
+    if (intent.type !== 'text.updateContent') continue;
+    const element = byId.get(intent.id);
+    if (intent.target === 'text' && element?.type !== 'text') {
+      return { ok: false, reason: `element ${JSON.stringify(intent.id)} is not a text element` };
+    }
+    if (intent.target === 'shape' && (element?.type !== 'shape' || !element.text)) {
+      return { ok: false, reason: `shape ${JSON.stringify(intent.id)} has no text label to edit` };
+    }
+  }
+
+  // Refuse fabricating shape.text when the shape has no label (no content authoring).
   for (const intent of intents) {
     const updates =
       intent.type === 'element.update'
