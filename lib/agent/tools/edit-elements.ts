@@ -22,6 +22,7 @@ import {
   buildElementInventory,
   collectIntentTargetIds,
   elementInventoryFingerprint,
+  elementInventorySnapshotFingerprint,
   mapProposalsToEditIntents,
   type ElementInventoryItem,
   type ProposedElementUpdate,
@@ -57,6 +58,8 @@ export interface EditElementsDetails {
   targetElementTypes?: Record<string, string>;
   /** Mutable element state captured before the model call, keyed by target id. */
   targetElementFingerprints?: Record<string, string>;
+  /** Full prompt-visible inventory captured before the model call. */
+  inventoryFingerprint?: string;
 }
 
 export type EditElementsDeps = RegenerateActionsDeps & {
@@ -347,6 +350,7 @@ export function makeEditElementsTool(
           updateCount,
           targetElementTypes: targetTypesForIntents(gated.intents, inventory),
           targetElementFingerprints: targetFingerprintsForIntents(gated.intents, elements),
+          inventoryFingerprint: elementInventorySnapshotFingerprint(elements),
         },
       };
     },

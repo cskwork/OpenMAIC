@@ -162,6 +162,65 @@ describe('edit-elements-gate', () => {
     expect(result.reason).toMatch(/inline font-family/i);
   });
 
+  it('refuses text spacing props hidden by descendant inline styles', () => {
+    const [inlineSpacing] = buildElementInventory([
+      {
+        id: 'imported-title',
+        type: 'text',
+        left: 100,
+        top: 80,
+        width: 400,
+        height: 60,
+        rotate: 0,
+        content:
+          '<p style="line-height: 1.8; margin-bottom: 12px"><span style="letter-spacing: 2px">Title</span></p>',
+        defaultColor: '#333333',
+        defaultFontName: 'Arial',
+      } as PPTElement,
+    ]);
+
+    for (const props of [{ lineHeight: 1.5 }, { wordSpace: 4 }, { paragraphSpace: 8 }]) {
+      const result = mapProposalsToEditIntents([{ id: 'imported-title', props }], [inlineSpacing]);
+      expect(result.ok, JSON.stringify(props)).toBe(false);
+      if (!result.ok) expect(result.reason).toMatch(/inline/i);
+    }
+  });
+
+  it('detects inline spacing overrides inside shape labels', () => {
+    const [shapeLabel] = buildElementInventory([
+      {
+        id: 'shape-label',
+        type: 'shape',
+        left: 0,
+        top: 0,
+        width: 100,
+        height: 80,
+        rotate: 0,
+        viewBox: [100, 80],
+        path: 'M0 0',
+        fixedRatio: false,
+        fill: '#fff',
+        text: {
+          content: '<p style="line-height: 2; margin-bottom: 6px">Label</p>',
+          defaultFontName: 'Arial',
+          defaultColor: '#111',
+          align: 'middle',
+        },
+      } as PPTElement,
+    ]);
+
+    expect(
+      mapProposalsToEditIntents([{ id: 'shape-label', props: { lineHeight: 1.5 } }], [shapeLabel])
+        .ok,
+    ).toBe(false);
+    expect(
+      mapProposalsToEditIntents(
+        [{ id: 'shape-label', props: { paragraphSpace: 10 } }],
+        [shapeLabel],
+      ).ok,
+    ).toBe(false);
+  });
+
   it('does not mistake background-color for inline text color', () => {
     const [backgroundOnly] = buildElementInventory([
       {

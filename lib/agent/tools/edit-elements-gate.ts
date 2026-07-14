@@ -295,6 +295,12 @@ export interface ElementInventoryItem {
   hasInlineTextColor?: boolean;
   /** True when element-level defaultFontName would be hidden by inline HTML font-family. */
   hasInlineFontFamily?: boolean;
+  /** True when element-level lineHeight would be hidden by inline HTML line-height. */
+  hasInlineLineHeight?: boolean;
+  /** True when element-level wordSpace would be hidden by inline HTML letter-spacing. */
+  hasInlineLetterSpacing?: boolean;
+  /** True when element-level paragraphSpace would be hidden by inline HTML margin-bottom. */
+  hasInlineParagraphSpacing?: boolean;
 }
 
 export interface ProposedElementUpdate {
@@ -755,6 +761,24 @@ export function mapProposalsToEditIntents(
         reason: `element ${JSON.stringify(id)} has inline font-family that defaultFontName cannot override`,
       };
     }
+    if ('lineHeight' in props && el.hasInlineLineHeight) {
+      return {
+        ok: false,
+        reason: `element ${JSON.stringify(id)} has inline line-height that lineHeight cannot override`,
+      };
+    }
+    if ('wordSpace' in props && el.hasInlineLetterSpacing) {
+      return {
+        ok: false,
+        reason: `element ${JSON.stringify(id)} has inline letter-spacing that wordSpace cannot override`,
+      };
+    }
+    if ('paragraphSpace' in props && el.hasInlineParagraphSpacing) {
+      return {
+        ok: false,
+        reason: `element ${JSON.stringify(id)} has inline margin-bottom that paragraphSpace cannot override`,
+      };
+    }
 
     for (const [key, value] of Object.entries(props)) {
       const valueErr = validatePropValue(key, value, el.type);
@@ -852,6 +876,13 @@ export function buildElementInventory(elements: PPTElement[]): ElementInventoryI
       if (hasInlineStyleProperty(textContent, 'font-family')) {
         base.hasInlineFontFamily = true;
       }
+      if (hasInlineStyleProperty(textContent, 'line-height')) base.hasInlineLineHeight = true;
+      if (hasInlineStyleProperty(textContent, 'letter-spacing')) {
+        base.hasInlineLetterSpacing = true;
+      }
+      if (hasInlineStyleProperty(textContent, 'margin-bottom')) {
+        base.hasInlineParagraphSpacing = true;
+      }
     }
     if (el.type !== 'line') {
       base.height = (el as { height: number }).height;
@@ -881,6 +912,11 @@ function hasInlineStyleProperty(content: string, property: string): boolean {
 export function elementInventoryFingerprint(element: PPTElement): string {
   const item = buildElementInventory([element])[0];
   return JSON.stringify(item);
+}
+
+/** Stable snapshot of every prompt-visible element, including order and membership. */
+export function elementInventorySnapshotFingerprint(elements: PPTElement[]): string {
+  return JSON.stringify(buildElementInventory(elements));
 }
 
 function elementLabel(el: PPTElement): string {

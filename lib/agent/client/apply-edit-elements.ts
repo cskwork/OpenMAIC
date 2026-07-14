@@ -21,6 +21,7 @@ import { useSlideEditSession } from '@/components/edit/surfaces/slide/slide-edit
 import type { SlideContent } from '@/lib/types/stage';
 import { editElementsOutcome } from '@/lib/agent/client/edit-elements-result';
 import {
+  elementInventorySnapshotFingerprint,
   revalidateIntentsAgainstElements,
   SHAPE_TEXT_CHROME_PROPS,
 } from '@/lib/agent/tools/edit-elements-gate';
@@ -33,6 +34,8 @@ export interface EditElementsApplyDetails {
   targetElementTypes?: Record<string, string>;
   /** Mutable element state captured before the model call, keyed by target id. */
   targetElementFingerprints?: Record<string, string>;
+  /** Full prompt-visible inventory captured before the model call. */
+  inventoryFingerprint?: string;
   /** Present when the tool or host refused; retained for agent history and diagnostics. */
   refuseReason?: string;
 }
@@ -143,6 +146,7 @@ export function applyEditElementsIntents(
   intents: EditIntent[],
   targetElementTypes?: Record<string, string>,
   targetElementFingerprints?: Record<string, string>,
+  inventoryFingerprint?: string,
 ): ApplyEditElementsResult {
   if (!intents.length) return { ok: false, reason: 'no element updates proposed' };
 
@@ -160,6 +164,14 @@ export function applyEditElementsIntents(
   const present = session.history.present;
   if (present.type !== 'slide') {
     return { ok: false, reason: 'edit session content is not a slide' };
+  }
+
+  if (
+    inventoryFingerprint &&
+    elementInventorySnapshotFingerprint(present.canvas.elements as PPTElement[]) !==
+      inventoryFingerprint
+  ) {
+    return { ok: false, reason: 'slide elements changed while the edit was being prepared' };
   }
 
   const recheck = revalidateIntentsAgainstElements(

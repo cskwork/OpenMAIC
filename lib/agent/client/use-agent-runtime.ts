@@ -424,6 +424,7 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
               editDetails.intents,
               editDetails.targetElementTypes,
               editDetails.targetElementFingerprints,
+              editDetails.inventoryFingerprint,
             );
             if (!applied.ok) {
               toolResultsRef.current.set(e.toolCallId, {

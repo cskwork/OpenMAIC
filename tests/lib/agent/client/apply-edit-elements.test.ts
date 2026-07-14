@@ -187,6 +187,29 @@ describe('applyEditElementsIntents', () => {
     expect(commitContent).not.toHaveBeenCalled();
   });
 
+  it('refuses when a non-target element changed after the prompt inventory was captured', async () => {
+    const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
+    const { elementInventorySnapshotFingerprint } =
+      await import('@/lib/agent/tools/edit-elements-gate');
+    const gateTime = [textEl('a'), textEl('reference', { left: 600 })];
+    const present = slideWith([textEl('a'), textEl('reference', { left: 700 })]);
+    mockSession.sceneId = 's1';
+    mockSession.history = { present };
+
+    const result = applyEditElementsIntents(
+      's1',
+      [{ type: 'element.update', id: 'a', props: { top: 200 } }],
+      { a: 'text' },
+      undefined,
+      elementInventorySnapshotFingerprint(gateTime),
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/slide elements changed while the edit was being prepared/i);
+    expect(commitContent).not.toHaveBeenCalled();
+  });
+
   it('detects concurrent shape vAlign changes through the gate fingerprint', async () => {
     const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
     const { elementInventoryFingerprint } = await import('@/lib/agent/tools/edit-elements-gate');

@@ -75,6 +75,7 @@ describe('edit_elements tool', () => {
     expect(res.details.updateCount).toBe(1);
     expect(res.details.targetElementTypes).toEqual({ 'title-1': 'text' });
     expect(res.details.targetElementFingerprints?.['title-1']).toEqual(expect.any(String));
+    expect(res.details.inventoryFingerprint).toEqual(expect.any(String));
     expect(res.details.intents).toEqual([
       {
         type: 'element.update',
