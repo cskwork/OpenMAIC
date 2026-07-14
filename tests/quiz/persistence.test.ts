@@ -65,10 +65,14 @@ describe('quiz persistence', () => {
     });
   });
 
-  it('falls back to answering when results array is empty', () => {
+  it('returns reviewing when a persisted results array is empty', () => {
     writeSubmittedAnswers('s1', { q1: 'a' });
     writeSubmittedResults('s1', []);
-    expect(readSubmittedState('s1')).toEqual({ kind: 'answering', answers: { q1: 'a' } });
+    expect(readSubmittedState('s1')).toEqual({
+      kind: 'reviewing',
+      answers: { q1: 'a' },
+      results: [],
+    });
   });
 
   it('returns null on corrupt answers JSON', () => {

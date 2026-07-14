@@ -95,7 +95,7 @@ export function readSubmittedState(sceneId: string): SubmittedState {
     const rawR = safeGet(RESULTS_KEY_PREFIX + sceneId);
     if (rawR) {
       const results = JSON.parse(rawR) as QuestionResult[];
-      if (Array.isArray(results) && results.length > 0) {
+      if (Array.isArray(results)) {
         return { kind: 'reviewing', answers, results };
       }
     }

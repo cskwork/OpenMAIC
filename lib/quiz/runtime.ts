@@ -180,6 +180,13 @@ function rolloverAttemptId(attemptId: string, index: number): string {
   return `${attemptId}:retry:${index}`;
 }
 
+function isInactiveSessionAppendError(error: unknown, sessionId: string): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.message.includes(
+    `cannot append to session ${JSON.stringify(sessionId)} with status`,
+  );
+}
+
 function assertPartition(session: RuntimeSession, stageId: string, learnerKey: string): void {
   if (
     session.kind !== 'quizAttempt' ||
@@ -262,18 +269,28 @@ export async function recordQuizAttempt(
             return;
           }
 
-          await store.appendRecord({
-            id: mintRecordId(),
-            sessionId,
-            sceneId: input.sceneId,
-            createdAt: timestamp,
-            payload,
-          });
-          await store.setSessionStatus(
-            sessionId,
-            payload.phase === 'reviewed' ? 'completed' : 'active',
-            timestamp,
-          );
+          try {
+            await store.appendRecord({
+              id: mintRecordId(),
+              sessionId,
+              sceneId: input.sceneId,
+              createdAt: timestamp,
+              payload,
+            });
+          } catch (error) {
+            if (!isInactiveSessionAppendError(error, sessionId)) throw error;
+            const raced = await store.getSession(sessionId);
+            if (!raced || raced.status === 'active') throw error;
+            assertPartition(raced, input.stageId, learnerKey);
+            // Another tab completed between our active read and append. Re-run
+            // the loop so the immutable completed attempt rolls forward.
+            continue;
+          }
+          // Draft/submitted sessions are already active. Avoid a redundant
+          // active write that could reopen a session another tab just completed.
+          if (payload.phase === 'reviewed') {
+            await store.setSessionStatus(sessionId, 'completed', timestamp);
+          }
           return;
         }
 

@@ -30,10 +30,10 @@ function makeHarness(): { store: RuntimeStore; deps: QuizAttemptRuntimeDeps } {
   };
 }
 
-function wrapStore(store: RuntimeStore, getSession: RuntimeStore['getSession']): RuntimeStore {
+function wrapStore(store: RuntimeStore, overrides: Partial<RuntimeStore>): RuntimeStore {
   return new Proxy(store, {
     get(target, property) {
-      if (property === 'getSession') return getSession;
+      if (property in overrides) return overrides[property as keyof RuntimeStore];
       const value = Reflect.get(target, property);
       return typeof value === 'function' ? value.bind(target) : value;
     },
@@ -120,8 +120,8 @@ describe('quiz attempt runtime persistence', () => {
       await bothMissing;
       return undefined;
     };
-    const tabA = wrapStore(store, racingGet);
-    const tabB = wrapStore(store, racingGet);
+    const tabA = wrapStore(store, { getSession: racingGet });
+    const tabB = wrapStore(store, { getSession: racingGet });
     const input = {
       stageId: 'stage-1',
       sceneId: 'scene-quiz',
@@ -147,6 +147,110 @@ describe('quiz attempt runtime persistence', () => {
 
     expect(await store.listSessions('stage-1', 'learner-1')).toHaveLength(1);
     expect((await store.listRecords('attempt-race')).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('rolls over when another tab completes after this tab observed active', async () => {
+    const { store } = makeHarness();
+    await store.createSession({
+      id: 'attempt-race',
+      kind: 'quizAttempt',
+      stageId: 'stage-1',
+      learnerKey: 'learner-1',
+      status: 'active',
+      createdAt: '2026-07-14T12:00:00.000Z',
+      updatedAt: '2026-07-14T12:00:00.000Z',
+    });
+    let appendStarted!: () => void;
+    const didStartAppend = new Promise<void>((resolve) => {
+      appendStarted = resolve;
+    });
+    let releaseAppend!: () => void;
+    const mayAppend = new Promise<void>((resolve) => {
+      releaseAppend = resolve;
+    });
+    const staleTab = wrapStore(store, {
+      appendRecord: async (input) => {
+        appendStarted();
+        await mayAppend;
+        return store.appendRecord(input);
+      },
+    });
+    const staleWrite = recordQuizAttempt(
+      {
+        stageId: 'stage-1',
+        sceneId: 'scene-quiz',
+        attemptId: 'attempt-race',
+        phase: 'draft',
+        answers: { q1: 'B' },
+      },
+      {
+        store: staleTab,
+        learnerKey: 'learner-1',
+        now: () => '2026-07-14T12:00:00.002Z',
+        mintRecordId: () => 'record-stale',
+      },
+    );
+    await didStartAppend;
+
+    await recordQuizAttempt(
+      {
+        stageId: 'stage-1',
+        sceneId: 'scene-quiz',
+        attemptId: 'attempt-race',
+        phase: 'reviewed',
+        answers: { q1: 'A' },
+        results,
+      },
+      {
+        store,
+        learnerKey: 'learner-1',
+        now: () => '2026-07-14T12:00:00.001Z',
+        mintRecordId: () => 'record-completed',
+      },
+    );
+    releaseAppend();
+    await staleWrite;
+
+    const sessions = await store.listSessions('stage-1', 'learner-1');
+    expect(sessions).toHaveLength(2);
+    const rollover = sessions.find((session) => session.id !== 'attempt-race');
+    expect(rollover?.status).toBe('active');
+    expect((await store.listRecords(rollover!.id)).map((record) => record.payload)).toEqual([
+      { payloadVersion: 1, phase: 'draft', answers: { q1: 'B' } },
+    ]);
+  });
+
+  it('does not disguise an unrelated append failure as a completion race', async () => {
+    const { store } = makeHarness();
+    await store.createSession({
+      id: 'attempt-failure',
+      kind: 'quizAttempt',
+      stageId: 'stage-1',
+      learnerKey: 'learner-1',
+      status: 'active',
+      createdAt: '2026-07-14T12:00:00.000Z',
+      updatedAt: '2026-07-14T12:00:00.000Z',
+    });
+    const failingTab = wrapStore(store, {
+      appendRecord: async () => {
+        await store.setSessionStatus('attempt-failure', 'completed', '2026-07-14T12:00:00.001Z');
+        throw new Error('storage unavailable');
+      },
+    });
+
+    await expect(
+      recordQuizAttempt(
+        {
+          stageId: 'stage-1',
+          sceneId: 'scene-quiz',
+          attemptId: 'attempt-failure',
+          phase: 'draft',
+          answers: { q1: 'B' },
+        },
+        { store: failingTab, learnerKey: 'learner-1' },
+      ),
+    ).rejects.toThrow('storage unavailable');
+    expect(await store.listSessions('stage-1', 'learner-1')).toHaveLength(1);
   });
 
   it('rolls stale-tab writes onto a new session after the shared attempt completed', async () => {
