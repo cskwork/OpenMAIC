@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { BrowserRuntimeStore, type RuntimeStore } from '@openmaic/storage';
 import {
   backfillQuizAttempt,
+  createQuizAttemptWriter,
   recordQuizAttempt,
   type QuizAttemptRuntimeDeps,
 } from '@/lib/quiz/runtime';
@@ -35,6 +36,63 @@ describe('quiz attempt runtime persistence', () => {
       configurable: true,
       value: IDBKeyRange,
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('coalesces rapid draft changes into one latest snapshot', async () => {
+    vi.useFakeTimers();
+    const write = vi.fn().mockResolvedValue(undefined);
+    const writer = createQuizAttemptWriter({ debounceMs: 500, write });
+    const base = {
+      stageId: 'stage-1',
+      sceneId: 'scene-quiz',
+      attemptId: 'attempt-1',
+    };
+
+    writer.scheduleDraft({ ...base, answers: { q1: 'A' } });
+    writer.scheduleDraft({ ...base, answers: { q1: 'AB' } });
+    writer.scheduleDraft({ ...base, answers: { q1: 'ABC' } });
+
+    await vi.advanceTimersByTimeAsync(499);
+    expect(write).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(write).toHaveBeenCalledExactlyOnceWith({
+      ...base,
+      phase: 'draft',
+      answers: { q1: 'ABC' },
+    });
+  });
+
+  it('flushes the latest draft to completion before writing submitted', async () => {
+    let releaseDraft!: () => void;
+    const order: string[] = [];
+    const write = vi.fn(async (input: { phase: string }) => {
+      order.push(`start:${input.phase}`);
+      if (input.phase === 'draft') {
+        await new Promise<void>((resolve) => {
+          releaseDraft = resolve;
+        });
+      }
+      order.push(`end:${input.phase}`);
+    });
+    const writer = createQuizAttemptWriter({ write });
+    const base = {
+      stageId: 'stage-1',
+      sceneId: 'scene-quiz',
+      attemptId: 'attempt-1',
+      answers: { q1: 'A' },
+    };
+
+    writer.scheduleDraft(base);
+    const submitted = writer.recordPhase({ ...base, phase: 'submitted' });
+    await vi.waitFor(() => expect(order).toEqual(['start:draft']));
+    releaseDraft();
+    await submitted;
+
+    expect(order).toEqual(['start:draft', 'end:draft', 'start:submitted', 'end:submitted']);
   });
 
   it('records the quiz lifecycle in one learner-scoped session', async () => {

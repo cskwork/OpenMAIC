@@ -42,6 +42,21 @@ export interface QuizAttemptRuntimeDeps {
   mintRecordId?: () => string;
 }
 
+export type QuizDraftInput = Omit<QuizAttemptRecordInput, 'phase' | 'results'>;
+
+export interface QuizAttemptWriter {
+  scheduleDraft(input: QuizDraftInput): void;
+  flushDraft(): Promise<void>;
+  recordPhase(input: QuizAttemptRecordInput): Promise<void>;
+  cancelDraft(): void;
+}
+
+export interface QuizAttemptWriterOptions {
+  debounceMs?: number;
+  write?: (input: QuizAttemptRecordInput) => Promise<void>;
+  onError?: (error: unknown) => void;
+}
+
 const PHASE_ORDER: Record<QuizAttemptPhase, number> = {
   draft: 0,
   submitted: 1,
@@ -49,6 +64,60 @@ const PHASE_ORDER: Record<QuizAttemptPhase, number> = {
 };
 
 const queues = new WeakMap<RuntimeStore, Map<string, Promise<void>>>();
+
+/**
+ * Coalesce draft snapshots and serialize every phase through one local chain.
+ * `recordPhase` synchronously queues a pending draft first, so submitted and
+ * reviewed can never overtake the latest answers even though UI callers remain
+ * fire-and-forget.
+ */
+export function createQuizAttemptWriter(options: QuizAttemptWriterOptions = {}): QuizAttemptWriter {
+  const debounceMs = options.debounceMs ?? 500;
+  const write = options.write ?? ((input) => recordQuizAttempt(input));
+  const onError = options.onError ?? (() => {});
+  let pendingDraft: QuizDraftInput | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let tail: Promise<void> = Promise.resolve();
+
+  const clearTimer = () => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+  };
+
+  const run = (input: QuizAttemptRecordInput): Promise<void> => {
+    const operation = tail.then(() => write(input));
+    void operation.catch(onError);
+    tail = operation.catch(() => {});
+    return operation;
+  };
+
+  const flushDraft = (): Promise<void> => {
+    clearTimer();
+    if (!pendingDraft) return tail;
+    const input = pendingDraft;
+    pendingDraft = undefined;
+    return run({ ...input, phase: 'draft' });
+  };
+
+  return {
+    scheduleDraft(input) {
+      pendingDraft = input;
+      clearTimer();
+      timer = setTimeout(() => {
+        void flushDraft();
+      }, debounceMs);
+    },
+    flushDraft,
+    recordPhase(input) {
+      void flushDraft();
+      return run(input);
+    },
+    cancelDraft() {
+      clearTimer();
+      pendingDraft = undefined;
+    },
+  };
+}
 
 function enqueue<T>(store: RuntimeStore, attemptId: string, work: () => Promise<T>): Promise<T> {
   let storeQueues = queues.get(store);

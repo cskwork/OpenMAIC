@@ -34,7 +34,11 @@ import {
   writeSubmittedResults,
   type SubmittedState,
 } from '@/lib/quiz/persistence';
-import { backfillQuizAttempt, recordQuizAttempt } from '@/lib/quiz/runtime';
+import {
+  backfillQuizAttempt,
+  createQuizAttemptWriter,
+  type QuizAttemptWriter,
+} from '@/lib/quiz/runtime';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -708,6 +712,17 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
     initialSubmitted?.kind === 'reviewing' ? initialSubmitted.results : [],
   );
   const [attemptId, setAttemptId] = useState<string | null>(null);
+  const runtimeWriterRef = useRef<QuizAttemptWriter | null>(null);
+  runtimeWriterRef.current ??= createQuizAttemptWriter({
+    onError: (error) => log.warn('Failed to persist quiz runtime:', error),
+  });
+  const runtimeWriter = runtimeWriterRef.current;
+
+  useEffect(() => {
+    return () => {
+      void runtimeWriter.flushDraft();
+    };
+  }, [runtimeWriter]);
 
   useEffect(() => {
     // The id must be acquired after hydration. Minting during SSR cannot persist
@@ -793,18 +808,17 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
         const next = { ...prev, [questionId]: value };
         updateAnswersCache(next);
         if (attemptId) {
-          void recordQuizAttempt({
+          runtimeWriter.scheduleDraft({
             stageId,
             sceneId,
             attemptId,
-            phase: 'draft',
             answers: next,
-          }).catch((error) => log.warn('Failed to persist quiz draft runtime:', error));
+          });
         }
         return next;
       });
     },
-    [attemptId, sceneId, stageId, updateAnswersCache],
+    [attemptId, runtimeWriter, sceneId, stageId, updateAnswersCache],
   );
 
   const handleSubmit = useCallback(() => {
@@ -812,15 +826,15 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
     clearAnswersCache();
     writeSubmittedAnswers(sceneId, answers);
     if (attemptId) {
-      void recordQuizAttempt({
+      void runtimeWriter.recordPhase({
         stageId,
         sceneId,
         attemptId,
         phase: 'submitted',
         answers,
-      }).catch((error) => log.warn('Failed to persist submitted quiz runtime:', error));
+      });
     }
-  }, [attemptId, clearAnswersCache, answers, sceneId, stageId]);
+  }, [attemptId, clearAnswersCache, answers, runtimeWriter, sceneId, stageId]);
 
   // When entering grading phase, grade choice questions locally + call API for short-answer
   useEffect(() => {
@@ -852,21 +866,21 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
       setPhase('reviewing');
       writeSubmittedResults(sceneId, ordered);
       if (attemptId) {
-        void recordQuizAttempt({
+        void runtimeWriter.recordPhase({
           stageId,
           sceneId,
           attemptId,
           phase: 'reviewed',
           answers,
           results: ordered,
-        }).catch((error) => log.warn('Failed to persist reviewed quiz runtime:', error));
+        });
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [phase, questions, answers, locale, sceneId, stageId, attemptId]);
+  }, [phase, questions, answers, locale, sceneId, stageId, attemptId, runtimeWriter]);
 
   const handleRetry = useCallback(() => {
     setPhase('not_started');
@@ -874,8 +888,9 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
     setResults([]);
     clearAnswersCache();
     clearSubmitted(sceneId);
+    runtimeWriter.cancelDraft();
     setAttemptId(rotateQuizAttemptId(sceneId));
-  }, [clearAnswersCache, sceneId]);
+  }, [clearAnswersCache, runtimeWriter, sceneId]);
 
   const earnedScore = useMemo(() => results.reduce((sum, r) => sum + r.earned, 0), [results]);
 
