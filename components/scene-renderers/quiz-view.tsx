@@ -29,12 +29,15 @@ import {
   type QuizAttemptWriter,
 } from '@/lib/quiz/runtime';
 import {
+  createQuizViewLifetime,
   isQuizRuntimeReady,
   persistQuizReview,
   persistQuizRetry,
   persistQuizSubmission,
   quizViewStateFromAttempt,
+  runQuizPersistenceTransition,
   type QuizRuntimeGate,
+  type QuizViewLifetime,
 } from '@/lib/quiz/view-state';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -700,6 +703,9 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
   const [runtimeGate, setRuntimeGate] = useState<QuizRuntimeGate>({ status: 'loading' });
   const [hydrationVersion, setHydrationVersion] = useState(0);
   const [retrying, setRetrying] = useState(false);
+  const viewLifetimeRef = useRef<QuizViewLifetime | null>(null);
+  viewLifetimeRef.current ??= createQuizViewLifetime();
+  const viewLifetime = viewLifetimeRef.current;
   const runtimeWriterRef = useRef<QuizAttemptWriter | null>(null);
   runtimeWriterRef.current ??= createQuizAttemptWriter({
     onError: (error) => log.warn('Failed to persist quiz runtime:', error),
@@ -715,6 +721,7 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
   useEffect(() => {
     let cancelled = false;
     setRuntimeGate({ status: 'loading' });
+    setRetrying(false);
     void loadQuizAttemptState({ stageId, sceneId })
       .then(({ attemptId: nextAttemptId, state }) => {
         if (cancelled) return;
@@ -730,8 +737,9 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
       });
     return () => {
       cancelled = true;
+      viewLifetime.invalidate();
     };
-  }, [hydrationVersion, sceneId, stageId]);
+  }, [hydrationVersion, sceneId, stageId, viewLifetime]);
 
   const attemptId = isQuizRuntimeReady(runtimeGate) ? runtimeGate.attemptId : null;
 
@@ -770,14 +778,16 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
   const handleSubmit = useCallback(async () => {
     if (!attemptId) return;
     setPhase('submitting');
-    try {
-      await persistQuizSubmission({ stageId, sceneId, attemptId, answers }, runtimeWriter);
-      setPhase('grading');
-    } catch (error) {
-      log.warn('Failed to persist quiz submission:', error);
-      setRuntimeGate({ status: 'error' });
-    }
-  }, [attemptId, answers, runtimeWriter, sceneId, stageId]);
+    await runQuizPersistenceTransition(
+      () => persistQuizSubmission({ stageId, sceneId, attemptId, answers }, runtimeWriter),
+      viewLifetime,
+      () => setPhase('grading'),
+      (error) => {
+        log.warn('Failed to persist quiz submission:', error);
+        setRuntimeGate({ status: 'error' });
+      },
+    );
+  }, [attemptId, answers, runtimeWriter, sceneId, stageId, viewLifetime]);
 
   // When entering grading phase, grade choice questions locally + call API for short-answer
   useEffect(() => {
@@ -833,17 +843,22 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
     if (!attemptId || retrying) return;
     setRetrying(true);
     runtimeWriter.cancelDraft();
-    try {
-      await persistQuizRetry({ stageId, sceneId, attemptId }, runtimeWriter);
-      setPhase('not_started');
-      setAnswers({});
-      setResults([]);
-    } catch (error) {
-      log.warn('Failed to persist quiz retry:', error);
-    } finally {
-      setRetrying(false);
-    }
-  }, [attemptId, retrying, runtimeWriter, sceneId, stageId]);
+    await runQuizPersistenceTransition(
+      () => persistQuizRetry({ stageId, sceneId, attemptId }, runtimeWriter),
+      viewLifetime,
+      () => {
+        setPhase('not_started');
+        setAnswers({});
+        setResults([]);
+        setRetrying(false);
+      },
+      (error) => {
+        log.warn('Failed to persist quiz retry:', error);
+        setRetrying(false);
+        setRuntimeGate({ status: 'error' });
+      },
+    );
+  }, [attemptId, retrying, runtimeWriter, sceneId, stageId, viewLifetime]);
 
   const earnedScore = useMemo(() => results.reduce((sum, r) => sum + r.earned, 0), [results]);
 

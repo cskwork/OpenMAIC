@@ -312,6 +312,34 @@ describe('quiz runtime authoritative reads', () => {
     });
   });
 
+  it('migrates a newer equal-phase legacy draft over its stale shadow record', async () => {
+    const store = makeStore();
+    const runtimeDeps = deps(store, 'learner-a');
+    await recordQuizAttempt(
+      {
+        stageId: 'stage-1',
+        sceneId: 'quiz-1',
+        attemptId: 'same-attempt',
+        phase: 'draft',
+        answers: { q1: 'stale' },
+      },
+      runtimeDeps,
+    );
+    localStorageStub.setItem(ATTEMPT_ID_KEY_PREFIX + 'quiz-1', 'same-attempt');
+    localStorageStub.setItem(DRAFT_KEY_PREFIX + 'quiz-1', JSON.stringify({ q1: 'latest' }));
+
+    const loaded = await loadQuizAttemptState(
+      { stageId: 'stage-1', sceneId: 'quiz-1' },
+      runtimeDeps,
+    );
+
+    expect(loaded.state).toMatchObject({
+      sessionId: 'same-attempt',
+      phase: 'draft',
+      answers: { q1: 'latest' },
+    });
+  });
+
   it('retains legacy keys when migration cannot commit to RuntimeStore', async () => {
     const store = makeStore();
     const failingStore = new Proxy(store, {

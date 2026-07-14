@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  createQuizViewLifetime,
   isQuizRuntimeReady,
   persistQuizReview,
   persistQuizRetry,
   persistQuizSubmission,
   quizViewStateFromAttempt,
+  runQuizPersistenceTransition,
 } from '@/lib/quiz/view-state';
 
 describe('quiz view runtime hydration', () => {
@@ -131,5 +133,40 @@ describe('quiz view runtime hydration', () => {
     release();
     await Promise.all([submitting, reviewing]);
     expect(settled).toBe(true);
+  });
+
+  it('does not update an unmounted view after an async persistence transition', async () => {
+    let release!: () => void;
+    const persisted = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const lifetime = createQuizViewLifetime();
+    const onSuccess = vi.fn();
+    const onError = vi.fn();
+
+    const running = runQuizPersistenceTransition(() => persisted, lifetime, onSuccess, onError);
+    lifetime.invalidate();
+    release();
+    await running;
+
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('routes persistence failures to the recoverable error transition', async () => {
+    const lifetime = createQuizViewLifetime();
+    const error = new Error('storage unavailable');
+    const onSuccess = vi.fn();
+    const onError = vi.fn();
+
+    await runQuizPersistenceTransition(
+      async () => Promise.reject(error),
+      lifetime,
+      onSuccess,
+      onError,
+    );
+
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledExactlyOnceWith(error);
   });
 });

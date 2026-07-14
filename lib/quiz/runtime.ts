@@ -259,10 +259,24 @@ async function migrateLegacyQuizState(
     (!existing ||
       (existing.sessionId !== legacyAttemptId &&
         !existing.sessionId.startsWith(`${legacyAttemptId}:retry:`)));
+  const legacyPayloadMatchesExisting =
+    existing !== undefined &&
+    legacyPhase === existing.phase &&
+    (legacyPhase === 'reviewed' && submitted?.kind === 'reviewing'
+      ? sameAnswers(submitted.answers, existing.answers) &&
+        JSON.stringify(submitted.results) === JSON.stringify(existing.results ?? [])
+      : legacyPhase === 'submitted' && submitted?.kind === 'answering'
+        ? sameAnswers(submitted.answers, existing.answers)
+        : legacyPhase === 'draft' && draft !== null
+          ? sameAnswers(draft, existing.answers)
+          : false);
   const shouldMigrate =
     legacyPointsToNewAttempt ||
     (legacyPhase !== undefined &&
-      (!existing || PHASE_ORDER[legacyPhase] > PHASE_ORDER[existing.phase]));
+      (!existing ||
+        PHASE_ORDER[legacyPhase] > PHASE_ORDER[existing.phase] ||
+        (PHASE_ORDER[legacyPhase] === PHASE_ORDER[existing.phase] &&
+          !legacyPayloadMatchesExisting)));
 
   if (shouldMigrate) {
     const attemptId =

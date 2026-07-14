@@ -7,6 +7,39 @@ export type QuizRuntimeGate =
   | { status: 'error' }
   | { status: 'ready'; attemptId: string };
 
+export interface QuizViewLifetime {
+  capture(): number;
+  invalidate(): void;
+  isCurrent(token: number): boolean;
+}
+
+export function createQuizViewLifetime(): QuizViewLifetime {
+  let generation = 0;
+  return {
+    capture: () => generation,
+    invalidate: () => {
+      generation += 1;
+    },
+    isCurrent: (token) => token === generation,
+  };
+}
+
+export async function runQuizPersistenceTransition(
+  persist: () => Promise<void>,
+  lifetime: QuizViewLifetime,
+  onSuccess: () => void,
+  onError: (error: unknown) => void,
+): Promise<void> {
+  const token = lifetime.capture();
+  try {
+    await persist();
+  } catch (error) {
+    if (lifetime.isCurrent(token)) onError(error);
+    return;
+  }
+  if (lifetime.isCurrent(token)) onSuccess();
+}
+
 export function isQuizRuntimeReady(
   gate: QuizRuntimeGate,
 ): gate is Extract<QuizRuntimeGate, { status: 'ready' }> {
