@@ -30,6 +30,16 @@ function makeHarness(): { store: RuntimeStore; deps: QuizAttemptRuntimeDeps } {
   };
 }
 
+function wrapStore(store: RuntimeStore, getSession: RuntimeStore['getSession']): RuntimeStore {
+  return new Proxy(store, {
+    get(target, property) {
+      if (property === 'getSession') return getSession;
+      const value = Reflect.get(target, property);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
 describe('quiz attempt runtime persistence', () => {
   beforeEach(() => {
     Object.defineProperty(globalThis, 'IDBKeyRange', {
@@ -93,6 +103,75 @@ describe('quiz attempt runtime persistence', () => {
     await submitted;
 
     expect(order).toEqual(['start:draft', 'end:draft', 'start:submitted', 'end:submitted']);
+  });
+
+  it('recovers when another tab wins the same session create race without Web Locks', async () => {
+    const { store } = makeHarness();
+    let missingReads = 0;
+    let releaseBoth!: () => void;
+    const bothMissing = new Promise<void>((resolve) => {
+      releaseBoth = resolve;
+    });
+    const racingGet: RuntimeStore['getSession'] = async (sessionId) => {
+      const session = await store.getSession(sessionId);
+      if (session) return session;
+      missingReads += 1;
+      if (missingReads === 2) releaseBoth();
+      await bothMissing;
+      return undefined;
+    };
+    const tabA = wrapStore(store, racingGet);
+    const tabB = wrapStore(store, racingGet);
+    const input = {
+      stageId: 'stage-1',
+      sceneId: 'scene-quiz',
+      attemptId: 'attempt-race',
+      phase: 'draft' as const,
+      answers: { q1: 'A' },
+    };
+
+    await Promise.all([
+      recordQuizAttempt(input, {
+        store: tabA,
+        learnerKey: 'learner-1',
+        now: () => '2026-07-14T12:00:00.000Z',
+        mintRecordId: () => 'record-a',
+      }),
+      recordQuizAttempt(input, {
+        store: tabB,
+        learnerKey: 'learner-1',
+        now: () => '2026-07-14T12:00:00.001Z',
+        mintRecordId: () => 'record-b',
+      }),
+    ]);
+
+    expect(await store.listSessions('stage-1', 'learner-1')).toHaveLength(1);
+    expect((await store.listRecords('attempt-race')).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('rolls stale-tab writes onto a new session after the shared attempt completed', async () => {
+    const { store, deps } = makeHarness();
+    const base = {
+      stageId: 'stage-1',
+      sceneId: 'scene-quiz',
+      attemptId: 'attempt-shared',
+    };
+    await recordQuizAttempt({ ...base, phase: 'reviewed', answers: { q1: 'A' }, results }, deps);
+
+    await recordQuizAttempt({ ...base, phase: 'draft', answers: { q1: 'B' } }, deps);
+    await recordQuizAttempt({ ...base, phase: 'submitted', answers: { q1: 'B' } }, deps);
+    await recordQuizAttempt({ ...base, phase: 'reviewed', answers: { q1: 'B' }, results }, deps);
+
+    const sessions = await store.listSessions('stage-1', 'learner-1');
+    expect(sessions).toHaveLength(2);
+    expect(sessions.every((session) => session.status === 'completed')).toBe(true);
+    const rollover = sessions.find((session) => session.id !== 'attempt-shared');
+    expect(rollover).toBeDefined();
+    expect((await store.listRecords(rollover!.id)).map((record) => record.payload)).toEqual([
+      { payloadVersion: 1, phase: 'draft', answers: { q1: 'B' } },
+      { payloadVersion: 1, phase: 'submitted', answers: { q1: 'B' } },
+      { payloadVersion: 1, phase: 'reviewed', answers: { q1: 'B' }, results },
+    ]);
   });
 
   it('records the quiz lifecycle in one learner-scoped session', async () => {

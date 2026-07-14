@@ -172,6 +172,14 @@ function samePayload(left: QuizAttemptPayload, right: QuizAttemptPayload): boole
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function sameAnswers(left: QuizAnswers, right: QuizAnswers): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function rolloverAttemptId(attemptId: string, index: number): string {
+  return `${attemptId}:retry:${index}`;
+}
+
 function assertPartition(session: RuntimeSession, stageId: string, learnerKey: string): void {
   if (
     session.kind !== 'quizAttempt' ||
@@ -201,66 +209,87 @@ export async function recordQuizAttempt(
   return enqueue(store, input.attemptId, () =>
     withAttemptLock(input.attemptId, async () => {
       const timestamp = now();
-      let session = await store.getSession(input.attemptId);
-      if (!session) {
-        session = await store.createSession({
-          id: input.attemptId,
-          kind: 'quizAttempt',
-          stageId: input.stageId,
-          learnerKey,
-          status: 'active',
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        });
-      } else {
-        assertPartition(session, input.stageId, learnerKey);
-      }
-
-      const records = await store.listRecords(input.attemptId);
-      const foreignAnchor = records.find(
-        (record) => record.sceneId !== undefined && record.sceneId !== input.sceneId,
-      );
-      if (foreignAnchor) {
-        throw new Error(
-          `Quiz attempt ${JSON.stringify(input.attemptId)} is already anchored to scene ` +
-            `${JSON.stringify(foreignAnchor.sceneId)}`,
-        );
-      }
-      const last = asQuizPayload(records.at(-1));
       const payload: QuizAttemptPayload = {
         payloadVersion: 1,
         phase: input.phase,
         answers: input.answers,
         ...(input.results === undefined ? {} : { results: input.results }),
       };
+      let rolloverIndex = 0;
+      let sessionId = input.attemptId;
 
-      if (last && PHASE_ORDER[payload.phase] < PHASE_ORDER[last.phase]) return;
-
-      if (last && samePayload(last, payload)) {
-        if (payload.phase === 'reviewed' && session.status !== 'completed') {
-          await store.setSessionStatus(input.attemptId, 'completed', timestamp);
+      while (true) {
+        let session = await store.getSession(sessionId);
+        if (!session) {
+          try {
+            session = await store.createSession({
+              id: sessionId,
+              kind: 'quizAttempt',
+              stageId: input.stageId,
+              learnerKey,
+              status: 'active',
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            });
+          } catch (error) {
+            // Without Web Locks, another tab may win the deterministic create
+            // after our read. Re-read the winner instead of losing this write.
+            session = await store.getSession(sessionId);
+            if (!session) throw error;
+          }
         }
-        return;
-      }
+        assertPartition(session, input.stageId, learnerKey);
 
-      if (session.status !== 'active') {
-        throw new Error(
-          `Quiz attempt ${JSON.stringify(input.attemptId)} is already ${session.status}`,
+        const records = await store.listRecords(sessionId);
+        const foreignAnchor = records.find(
+          (record) => record.sceneId !== undefined && record.sceneId !== input.sceneId,
         );
-      }
+        if (foreignAnchor) {
+          throw new Error(
+            `Quiz attempt ${JSON.stringify(sessionId)} is already anchored to scene ` +
+              `${JSON.stringify(foreignAnchor.sceneId)}`,
+          );
+        }
+        const last = asQuizPayload(records.at(-1));
 
-      await store.appendRecord({
-        id: mintRecordId(),
-        sessionId: input.attemptId,
-        sceneId: input.sceneId,
-        createdAt: timestamp,
-        payload,
-      });
-      await store.setSessionStatus(
-        input.attemptId,
-        payload.phase === 'reviewed' ? 'completed' : 'active',
-        timestamp,
-      );
+        if (session.status === 'active') {
+          if (last && PHASE_ORDER[payload.phase] < PHASE_ORDER[last.phase]) return;
+
+          if (last && samePayload(last, payload)) {
+            if (payload.phase === 'reviewed') {
+              await store.setSessionStatus(sessionId, 'completed', timestamp);
+            }
+            return;
+          }
+
+          await store.appendRecord({
+            id: mintRecordId(),
+            sessionId,
+            sceneId: input.sceneId,
+            createdAt: timestamp,
+            payload,
+          });
+          await store.setSessionStatus(
+            sessionId,
+            payload.phase === 'reviewed' ? 'completed' : 'active',
+            timestamp,
+          );
+          return;
+        }
+
+        if (last && samePayload(last, payload)) return;
+        if (
+          last &&
+          payload.phase !== 'draft' &&
+          PHASE_ORDER[payload.phase] < PHASE_ORDER[last.phase] &&
+          sameAnswers(payload.answers, last.answers)
+        ) {
+          return;
+        }
+
+        rolloverIndex += 1;
+        sessionId = rolloverAttemptId(input.attemptId, rolloverIndex);
+      }
     }),
   );
 }
