@@ -190,6 +190,23 @@ export function runRuntimeStoreContract(name: string, makeStore: () => RuntimeSt
         await expect(store.appendRecord(makeRecordInit('sess-1'))).rejects.toThrow(/active/);
       });
 
+      test('appendRecord can atomically transition its active parent session', async () => {
+        const store = makeStore();
+        await store.createSession(makeSession());
+
+        const record = await store.appendRecord(makeRecordInit('sess-1'), {
+          sessionTransition: { status: 'completed', updatedAt: T1 },
+        });
+
+        expect(record.seq).toBe(0);
+        expect(await store.listRecords('sess-1')).toEqual([record]);
+        expect(await store.getSession('sess-1')).toMatchObject({
+          status: 'completed',
+          updatedAt: T1,
+        });
+        await expect(store.appendRecord(makeRecordInit('sess-1'))).rejects.toThrow(/active/);
+      });
+
       test('appendRecord validates skeleton payloads for skeleton kinds by default', async () => {
         const store = makeStore();
         await store.createSession(makeSession()); // kind: 'chat'

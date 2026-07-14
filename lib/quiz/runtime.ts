@@ -262,21 +262,24 @@ export async function recordQuizAttempt(
         if (session.status === 'active') {
           if (last && PHASE_ORDER[payload.phase] < PHASE_ORDER[last.phase]) return;
 
-          if (last && samePayload(last, payload)) {
-            if (payload.phase === 'reviewed') {
-              await store.setSessionStatus(sessionId, 'completed', timestamp);
-            }
-            return;
-          }
+          // An active session with a reviewed tail can exist from an older
+          // client that appended before its separate completion write. Heal
+          // it by appending reviewed once more with the atomic transition.
+          if (last && samePayload(last, payload) && payload.phase !== 'reviewed') return;
 
           try {
-            await store.appendRecord({
-              id: mintRecordId(),
-              sessionId,
-              sceneId: input.sceneId,
-              createdAt: timestamp,
-              payload,
-            });
+            await store.appendRecord(
+              {
+                id: mintRecordId(),
+                sessionId,
+                sceneId: input.sceneId,
+                createdAt: timestamp,
+                payload,
+              },
+              payload.phase === 'reviewed'
+                ? { sessionTransition: { status: 'completed', updatedAt: timestamp } }
+                : undefined,
+            );
           } catch (error) {
             if (!isInactiveSessionAppendError(error, sessionId)) throw error;
             const raced = await store.getSession(sessionId);
@@ -285,11 +288,6 @@ export async function recordQuizAttempt(
             // Another tab completed between our active read and append. Re-run
             // the loop so the immutable completed attempt rolls forward.
             continue;
-          }
-          // Draft/submitted sessions are already active. Avoid a redundant
-          // active write that could reopen a session another tab just completed.
-          if (payload.phase === 'reviewed') {
-            await store.setSessionStatus(sessionId, 'completed', timestamp);
           }
           return;
         }

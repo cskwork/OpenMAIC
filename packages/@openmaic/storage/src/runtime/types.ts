@@ -47,6 +47,14 @@ export type RuntimePayloadValidator = (
   payload: unknown,
 ) => { valid: true } | { valid: false; errors: { path: string; message: string }[] };
 
+/** Optional parent-session mutation committed with one appended record. */
+export interface RuntimeAppendOptions {
+  sessionTransition?: {
+    status: RuntimeSessionStatus;
+    updatedAt: string;
+  };
+}
+
 /**
  * Persistence contract for runtime sessions + records. All reads migrate on
  * read (`migrateRuntime`); all writes validate the full envelope and stamp /
@@ -114,10 +122,13 @@ export interface RuntimeStore {
    * validator if one is configured. Throws if the parent session is absent,
    * not `active`, or future-stamped — or throws the runtime version line's
    * own error when the stored row's stamp is corrupt (absent / malformed /
-   * sibling-stamped).
+   * sibling-stamped). When `sessionTransition` is supplied, the completed
+   * parent envelope and record are validated and committed atomically in the
+   * same transaction; either both persist or neither does.
    */
   appendRecord<TPayload extends RuntimePayload>(
     init: RuntimeRecordInit<TPayload>,
+    options?: RuntimeAppendOptions,
   ): Promise<RuntimeRecord<TPayload>>;
 
   /**

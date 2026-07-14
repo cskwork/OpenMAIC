@@ -26,7 +26,12 @@ import type {
   RuntimeSession,
   RuntimeSessionStatus,
 } from '@openmaic/dsl';
-import type { RuntimePayloadValidator, RuntimeSessionInit, RuntimeStore } from './types.js';
+import type {
+  RuntimeAppendOptions,
+  RuntimePayloadValidator,
+  RuntimeSessionInit,
+  RuntimeStore,
+} from './types.js';
 
 const SESSIONS = 'sessions';
 const RECORDS = 'records';
@@ -322,6 +327,7 @@ export class BrowserRuntimeStore implements RuntimeStore {
 
   async appendRecord<TPayload extends RuntimePayload>(
     init: RuntimeRecordInit<TPayload>,
+    options: RuntimeAppendOptions = {},
   ): Promise<RuntimeRecord<TPayload>> {
     // Pre-flight the envelope BEFORE opening the write transaction. `seq` is
     // store-assigned, so validate with a placeholder the in-tx value replaces —
@@ -338,12 +344,11 @@ export class BrowserRuntimeStore implements RuntimeStore {
         throw new Error(`@openmaic/storage: no session ${JSON.stringify(init.sessionId)}`);
       }
       if (isFutureRuntimeVersioned(row)) throw futureSessionError(init.sessionId, row);
-      // Migrate a stale parent in place inside the same transaction, so the
-      // stored session and the record appended under it land together.
+      // Migrate a stale parent inside the same transaction, so the stored
+      // session and the record appended under it land together.
       let session = row;
       if (needsRuntimeMigration(row)) {
         session = migrateSession(row);
-        sessions.put(session);
       }
       if (session.status !== 'active') {
         throw new Error(
@@ -372,7 +377,22 @@ export class BrowserRuntimeStore implements RuntimeStore {
       // literally true. validateRuntimeRecord is pure and synchronous, so the
       // transaction cannot idle out here.
       assertValid(validateRuntimeRecord(record), `runtime record ${JSON.stringify(init.id)}`);
+
+      const transition = options.sessionTransition;
+      const updatedSession: RuntimeSession | undefined = transition
+        ? { ...session, status: transition.status, updatedAt: transition.updatedAt }
+        : session === row
+          ? undefined
+          : session;
+      if (updatedSession) {
+        assertValid(
+          validateRuntimeSession(updatedSession),
+          `runtime session ${JSON.stringify(init.sessionId)}`,
+        );
+      }
+
       records.add(record);
+      if (updatedSession) sessions.put(updatedSession);
       return record;
     });
   }
