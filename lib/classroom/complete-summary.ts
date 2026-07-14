@@ -6,9 +6,12 @@ export interface CompleteSummary {
   quiz: { correct: number; total: number; pct: number } | null;
 }
 
-export type AnswerReader = (sceneId: string) => Record<string, string | string[]>;
+export type AnswerReader = (sceneId: string) => Promise<Record<string, string | string[]>>;
 
-export function summarizeScenes(scenes: Scene[], readAnswers: AnswerReader): CompleteSummary {
+export async function summarizeScenes(
+  scenes: Scene[],
+  readAnswers: AnswerReader,
+): Promise<CompleteSummary> {
   const countsByType: Partial<Record<SceneType, number>> = {};
   for (const scene of scenes) {
     countsByType[scene.type] = (countsByType[scene.type] ?? 0) + 1;
@@ -19,7 +22,7 @@ export function summarizeScenes(scenes: Scene[], readAnswers: AnswerReader): Com
   for (const scene of scenes) {
     if (scene.type !== 'quiz') continue;
     const questions = (scene.content as QuizContent).questions ?? [];
-    const answers = readAnswers(scene.id);
+    const answers = await readAnswers(scene.id);
     const results = gradeChoiceQuestions(questions, answers);
     for (const r of results) {
       total += 1;

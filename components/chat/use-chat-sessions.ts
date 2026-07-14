@@ -441,7 +441,6 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       sessionId: string,
       requestTemplate: {
         messages: UIMessage<ChatMessageMetadata>[];
-        storeState: Record<string, unknown>;
         config: {
           agentIds: string[];
           sessionType?: string;
@@ -486,7 +485,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
           thinkingConfig: requestTemplate.thinkingConfig,
         },
         {
-          getStoreState: (): AgentLoopStoreState => {
+          getStoreState: async (): Promise<AgentLoopStoreState> => {
             const freshState = useStageStore.getState();
             return {
               stage: freshState.stage,
@@ -494,7 +493,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               currentSceneId: freshState.currentSceneId,
               mode: freshState.mode,
               whiteboardOpen: useCanvasStore.getState().whiteboardOpen,
-              quizResults: buildQuizResultsForStoreState(
+              quizResults: await buildQuizResultsForStoreState(
                 freshState.scenes,
                 freshState.currentSceneId,
               ),
@@ -877,8 +876,6 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       streamingSessionIdRef.current = sessionId;
       setIsStreaming(true);
 
-      const currentState = useStageStore.getState();
-
       try {
         log.info(`[ChatArea] Resuming session: ${sessionId}`);
 
@@ -894,17 +891,6 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
           sessionId,
           {
             messages: session.messages,
-            storeState: {
-              stage: currentState.stage,
-              scenes: currentState.scenes,
-              currentSceneId: currentState.currentSceneId,
-              mode: currentState.mode,
-              whiteboardOpen: useCanvasStore.getState().whiteboardOpen,
-              quizResults: buildQuizResultsForStoreState(
-                currentState.scenes,
-                currentState.currentSceneId,
-              ),
-            },
             config: {
               agentIds,
               sessionType: session.type,
@@ -1094,8 +1080,6 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         }
       });
 
-      const currentState = useStageStore.getState();
-
       try {
         log.info(
           `[ChatArea] Sending message: "${content.slice(0, 50)}..." agents: ${agentIds.join(', ')}`,
@@ -1108,17 +1092,6 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
           sessionId!,
           {
             messages: sessionMessages,
-            storeState: {
-              stage: currentState.stage,
-              scenes: currentState.scenes,
-              currentSceneId: currentState.currentSceneId,
-              mode: currentState.mode,
-              whiteboardOpen: useCanvasStore.getState().whiteboardOpen,
-              quizResults: buildQuizResultsForStoreState(
-                currentState.scenes,
-                currentState.currentSceneId,
-              ),
-            },
             config: {
               agentIds,
               sessionType,
@@ -1240,8 +1213,6 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       streamingSessionIdRef.current = sessionId;
       setIsStreaming(true);
 
-      const currentState = useStageStore.getState();
-
       try {
         const userProfileState = useUserProfileStore.getState();
         const mc = getCurrentModelConfig();
@@ -1250,17 +1221,6 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
           sessionId,
           {
             messages: [],
-            storeState: {
-              stage: currentState.stage,
-              scenes: currentState.scenes,
-              currentSceneId: currentState.currentSceneId,
-              mode: currentState.mode,
-              whiteboardOpen: useCanvasStore.getState().whiteboardOpen,
-              quizResults: buildQuizResultsForStoreState(
-                currentState.scenes,
-                currentState.currentSceneId,
-              ),
-            },
             config: {
               agentIds,
               sessionType: 'discussion',

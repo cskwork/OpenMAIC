@@ -1,31 +1,24 @@
 import type { QuestionResult } from '@/lib/quiz/grading';
 
 /**
- * Quiz state persistence in localStorage, keyed per scene.
+ * One-time compatibility reader for quiz state written before RuntimeStore.
  *
- * Three keys coexist with distinct lifecycles:
+ * Four legacy keys may coexist:
  *
- *   quizDraft:<sceneId>    — in-progress answers (debounced via useDraftCache),
- *                            cleared at submit time.
- *   quizAnswers:<sceneId>  — answers written once at submit, cleared on retry.
- *   quizResults:<sceneId>  — graded results written once at reviewing, cleared on retry.
- *   quizAttemptId:<sceneId> — stable id linking those keys to one RuntimeSession,
- *                             rotated on retry and cleared with the scene.
+ *   quizDraft:<sceneId>
+ *   quizAnswers:<sceneId>
+ *   quizResults:<sceneId>
+ *   quizAttemptId:<sceneId>
  *
- * Both quiz-view (to rehydrate its own state) and the classroom-complete page
- * (to compute aggregate scores) read through this module so the storage
- * schema is a single source of truth.
+ * RuntimeStore is the only live read/write source. `loadQuizAttemptState`
+ * consumes these keys once, commits the strongest valid state to the current
+ * learner partition, then deletes all four keys. No UI consumer reads here.
  */
 
 export const DRAFT_KEY_PREFIX = 'quizDraft:';
 export const ANSWERS_KEY_PREFIX = 'quizAnswers:';
 export const RESULTS_KEY_PREFIX = 'quizResults:';
 export const ATTEMPT_ID_KEY_PREFIX = 'quizAttemptId:';
-
-/** Build the draft cache key for a scene. Use this everywhere that needs the
- *  in-progress quiz answers (e.g. `useDraftCache`) so the prefix stays in
- *  sync with the readers/clearers below. */
-export const draftKey = (sceneId: string): string => DRAFT_KEY_PREFIX + sceneId;
 
 export type QuizAnswers = Record<string, string | string[]>;
 
@@ -34,21 +27,18 @@ export type SubmittedState =
   | { kind: 'answering'; answers: QuizAnswers }
   | null;
 
+export function hasLegacyQuizState(sceneId: string): boolean {
+  return [DRAFT_KEY_PREFIX, ANSWERS_KEY_PREFIX, RESULTS_KEY_PREFIX, ATTEMPT_ID_KEY_PREFIX].some(
+    (prefix) => safeGet(prefix + sceneId) !== null,
+  );
+}
+
 function safeGet(key: string): string | null {
   if (typeof window === 'undefined') return null;
   try {
     return localStorage.getItem(key);
   } catch {
     return null;
-  }
-}
-
-function safeSet(key: string, value: string): void {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    // ignore quota / disabled storage
   }
 }
 
@@ -61,46 +51,7 @@ function safeRemove(key: string): void {
   }
 }
 
-function mintQuizAttemptId(): string {
-  const suffix =
-    typeof crypto !== 'undefined' && 'randomUUID' in crypto
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  return `quiz-attempt:${suffix}`;
-}
-
-function withQuizAttemptIdLock<T>(sceneId: string, work: () => T): Promise<T> {
-  if (typeof navigator !== 'undefined' && navigator.locks) {
-    return navigator.locks.request(`maic:quiz-attempt-id:${sceneId}`, work);
-  }
-  return Promise.resolve(work());
-}
-
-function mintAndStoreQuizAttemptId(sceneId: string): string {
-  const attemptId = mintQuizAttemptId();
-  safeSet(ATTEMPT_ID_KEY_PREFIX + sceneId, attemptId);
-  return attemptId;
-}
-
-/** Stable bridge from the legacy per-scene keys to one runtime attempt session. */
-export async function getOrCreateQuizAttemptId(sceneId: string): Promise<string | null> {
-  if (typeof window === 'undefined') return null;
-  return withQuizAttemptIdLock(sceneId, () => {
-    const existing = safeGet(ATTEMPT_ID_KEY_PREFIX + sceneId);
-    return existing ?? mintAndStoreQuizAttemptId(sceneId);
-  });
-}
-
-/** Start a distinct attempt after retry without deleting historical runtime data. */
-export async function rotateQuizAttemptId(sceneId: string): Promise<string | null> {
-  if (typeof window === 'undefined') return null;
-  return withQuizAttemptIdLock(sceneId, () => {
-    safeRemove(ATTEMPT_ID_KEY_PREFIX + sceneId);
-    return mintAndStoreQuizAttemptId(sceneId);
-  });
-}
-
-/** Read quiz-view's post-submit state: answers + optional graded results. */
+/** Parse legacy post-submit state: answers + optional graded results. */
 export function readSubmittedState(sceneId: string): SubmittedState {
   const rawA = safeGet(ANSWERS_KEY_PREFIX + sceneId);
   if (!rawA) return null;
@@ -119,48 +70,19 @@ export function readSubmittedState(sceneId: string): SubmittedState {
   }
 }
 
-/**
- * Convenience reader for the classroom-complete page: returns the submitted
- * answers if present, else falls back to the in-progress draft so a partial
- * attempt still contributes to the aggregate instead of showing 0/N.
- */
-export function readAnswersForSummary(sceneId: string): QuizAnswers {
-  const rawA = safeGet(ANSWERS_KEY_PREFIX + sceneId);
-  if (rawA) {
-    try {
-      return JSON.parse(rawA) as QuizAnswers;
-    } catch {
-      /* fall through */
-    }
+export function readDraftState(sceneId: string): QuizAnswers | null {
+  const raw = safeGet(DRAFT_KEY_PREFIX + sceneId);
+  if (!raw) return null;
+  try {
+    const answers = JSON.parse(raw) as unknown;
+    if (typeof answers !== 'object' || answers === null || Array.isArray(answers)) return null;
+    return answers as QuizAnswers;
+  } catch {
+    return null;
   }
-  const rawD = safeGet(DRAFT_KEY_PREFIX + sceneId);
-  if (rawD) {
-    try {
-      return JSON.parse(rawD) as QuizAnswers;
-    } catch {
-      /* fall through */
-    }
-  }
-  return {};
 }
 
-/** Called by quiz-view at submit time. */
-export function writeSubmittedAnswers(sceneId: string, answers: QuizAnswers): void {
-  safeSet(ANSWERS_KEY_PREFIX + sceneId, JSON.stringify(answers));
-}
-
-/** Called by quiz-view when grading transitions to reviewing. */
-export function writeSubmittedResults(sceneId: string, results: QuestionResult[]): void {
-  safeSet(RESULTS_KEY_PREFIX + sceneId, JSON.stringify(results));
-}
-
-/** Called by quiz-view on retry: wipes submitted answers + results but keeps draft lifecycle. */
-export function clearSubmitted(sceneId: string): void {
-  safeRemove(ANSWERS_KEY_PREFIX + sceneId);
-  safeRemove(RESULTS_KEY_PREFIX + sceneId);
-}
-
-/** Called by the stage-delete flow: wipes all three keys for a single scene. */
+/** Retire every legacy key after migration or during stage deletion. */
 export function clearAllForScene(sceneId: string): void {
   safeRemove(DRAFT_KEY_PREFIX + sceneId);
   safeRemove(ANSWERS_KEY_PREFIX + sceneId);

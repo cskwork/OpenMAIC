@@ -20,25 +20,15 @@ import { createLogger } from '@/lib/logger';
 
 const log = createLogger('QuizView');
 import type { QuizQuestion } from '@/lib/types/stage';
-import { useDraftCache } from '@/lib/hooks/use-draft-cache';
 import { SpeechButton } from '@/components/audio/speech-button';
 import { gradeChoiceQuestions, isShortAnswer, type QuestionResult } from '@/lib/quiz/grading';
 import { renderQuizMathText } from '@/lib/quiz/math-text';
 import {
-  clearSubmitted,
-  draftKey,
-  getOrCreateQuizAttemptId,
-  readSubmittedState,
-  rotateQuizAttemptId,
-  writeSubmittedAnswers,
-  writeSubmittedResults,
-  type SubmittedState,
-} from '@/lib/quiz/persistence';
-import {
-  backfillQuizAttempt,
   createQuizAttemptWriter,
+  loadQuizAttemptState,
   type QuizAttemptWriter,
 } from '@/lib/quiz/runtime';
+import { quizViewStateFromAttempt } from '@/lib/quiz/view-state';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -697,21 +687,11 @@ function ScoreBanner({
 export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
   const { t, locale } = useI18n();
 
-  // Rehydrate submitted state from localStorage on first mount. Runs once.
-  const [initialSubmitted] = useState<SubmittedState>(() => readSubmittedState(sceneId));
-
-  const [phase, setPhase] = useState<Phase>(() => {
-    if (initialSubmitted?.kind === 'reviewing') return 'reviewing';
-    if (initialSubmitted?.kind === 'answering') return 'answering';
-    return 'not_started';
-  });
-  const [answers, setAnswers] = useState<Record<string, string | string[]>>(
-    () => initialSubmitted?.answers ?? {},
-  );
-  const [results, setResults] = useState<QuestionResult[]>(() =>
-    initialSubmitted?.kind === 'reviewing' ? initialSubmitted.results : [],
-  );
+  const [phase, setPhase] = useState<Phase>('not_started');
+  const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
+  const [results, setResults] = useState<QuestionResult[]>([]);
   const [attemptId, setAttemptId] = useState<string | null>(null);
+  const [hydrated, setHydrated] = useState(false);
   const runtimeWriterRef = useRef<QuizAttemptWriter | null>(null);
   runtimeWriterRef.current ??= createQuizAttemptWriter({
     onError: (error) => log.warn('Failed to persist quiz runtime:', error),
@@ -725,76 +705,26 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
   }, [runtimeWriter]);
 
   useEffect(() => {
-    // The id must be acquired after hydration. Minting during SSR cannot persist
-    // it, and React would otherwise preserve that orphaned initializer value.
     let cancelled = false;
-    void getOrCreateQuizAttemptId(sceneId)
-      .then((nextAttemptId) => {
-        if (!cancelled) setAttemptId(nextAttemptId);
+    setHydrated(false);
+    void loadQuizAttemptState({ stageId, sceneId })
+      .then(({ attemptId: nextAttemptId, state }) => {
+        if (cancelled) return;
+        const next = quizViewStateFromAttempt(state);
+        setAttemptId(nextAttemptId);
+        setPhase(next.phase);
+        setAnswers(next.answers);
+        setResults(next.results);
+        setHydrated(true);
       })
-      .catch((error) => log.warn('Failed to acquire quiz attempt id:', error));
+      .catch((error) => {
+        log.warn('Failed to hydrate quiz runtime:', error);
+        if (!cancelled) setHydrated(true);
+      });
     return () => {
       cancelled = true;
     };
-  }, [sceneId]);
-
-  // Draft cache for quiz answers, keyed by sceneId to isolate across classrooms
-  const {
-    cachedValue: cachedAnswers,
-    updateCache: updateAnswersCache,
-    clearCache: clearAnswersCache,
-  } = useDraftCache<Record<string, string | string[]>>({
-    key: draftKey(sceneId),
-  });
-
-  // Backfill legacy localStorage once. It remains the read source until the
-  // later read-flip PR, so a runtime failure only warns and never clears data.
-  const didBackfillRef = useRef(false);
-  useEffect(() => {
-    if (didBackfillRef.current || !attemptId) return;
-    const base = { stageId, sceneId, attemptId };
-    // Re-read after mount instead of trusting the SSR initializer, which cannot
-    // see localStorage and is preserved by React through hydration.
-    const legacySubmitted = readSubmittedState(sceneId);
-    if (legacySubmitted?.kind === 'reviewing') {
-      didBackfillRef.current = true;
-      void backfillQuizAttempt({
-        ...base,
-        submittedAnswers: legacySubmitted.answers,
-        results: legacySubmitted.results,
-      }).catch((error) => log.warn('Failed to backfill reviewed quiz attempt:', error));
-      return;
-    }
-    if (legacySubmitted?.kind === 'answering') {
-      didBackfillRef.current = true;
-      void backfillQuizAttempt({
-        ...base,
-        submittedAnswers: legacySubmitted.answers,
-      }).catch((error) => log.warn('Failed to backfill submitted quiz attempt:', error));
-      return;
-    }
-    if (cachedAnswers && Object.keys(cachedAnswers).length > 0) {
-      didBackfillRef.current = true;
-      void backfillQuizAttempt({ ...base, draftAnswers: cachedAnswers }).catch((error) =>
-        log.warn('Failed to backfill draft quiz attempt:', error),
-      );
-    }
-  }, [attemptId, cachedAnswers, sceneId, stageId]);
-
-  // Restore cached draft answers (only when there is no submitted state).
-  const [prevCachedAnswers, setPrevCachedAnswers] = useState(cachedAnswers);
-  if (cachedAnswers !== prevCachedAnswers) {
-    setPrevCachedAnswers(cachedAnswers);
-    if (
-      !initialSubmitted &&
-      cachedAnswers &&
-      Object.keys(cachedAnswers).length > 0 &&
-      phase === 'not_started'
-    ) {
-      setAnswers(cachedAnswers);
-      setPhase('answering');
-    }
-  }
+  }, [sceneId, stageId]);
 
   const totalPoints = useMemo(
     () => questions.reduce((sum, q) => sum + (q.points ?? 1), 0),
@@ -814,7 +744,6 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
     (questionId: string, value: string | string[]) => {
       setAnswers((prev) => {
         const next = { ...prev, [questionId]: value };
-        updateAnswersCache(next);
         if (attemptId) {
           runtimeWriter.scheduleDraft({
             stageId,
@@ -826,13 +755,11 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
         return next;
       });
     },
-    [attemptId, runtimeWriter, sceneId, stageId, updateAnswersCache],
+    [attemptId, runtimeWriter, sceneId, stageId],
   );
 
   const handleSubmit = useCallback(() => {
     setPhase('grading');
-    clearAnswersCache();
-    writeSubmittedAnswers(sceneId, answers);
     if (attemptId) {
       void runtimeWriter.recordPhase({
         stageId,
@@ -842,7 +769,7 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
         answers,
       });
     }
-  }, [attemptId, clearAnswersCache, answers, runtimeWriter, sceneId, stageId]);
+  }, [attemptId, answers, runtimeWriter, sceneId, stageId]);
 
   // When entering grading phase, grade choice questions locally + call API for short-answer
   useEffect(() => {
@@ -872,7 +799,6 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
 
       setResults(ordered);
       setPhase('reviewing');
-      writeSubmittedResults(sceneId, ordered);
       if (attemptId) {
         void runtimeWriter.recordPhase({
           stageId,
@@ -894,14 +820,8 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
     setPhase('not_started');
     setAnswers({});
     setResults([]);
-    clearAnswersCache();
-    clearSubmitted(sceneId);
     runtimeWriter.cancelDraft();
-    setAttemptId(null);
-    void rotateQuizAttemptId(sceneId)
-      .then(setAttemptId)
-      .catch((error) => log.warn('Failed to rotate quiz attempt id:', error));
-  }, [clearAnswersCache, runtimeWriter, sceneId]);
+  }, [runtimeWriter]);
 
   const earnedScore = useMemo(() => results.reduce((sum, r) => sum + r.earned, 0), [results]);
 
@@ -912,6 +832,14 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
     });
     return map;
   }, [results]);
+
+  if (!hydrated) {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-gray-50 dark:bg-gray-900">
+        <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+      </div>
+    );
+  }
 
   return (
     <div className="w-full h-full bg-gradient-to-b from-gray-50 to-white dark:from-gray-900 dark:to-gray-900 overflow-hidden flex flex-col">

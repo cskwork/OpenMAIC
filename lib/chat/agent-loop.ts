@@ -27,7 +27,7 @@ export interface AgentLoopStoreState {
   mode: string;
   whiteboardOpen: boolean;
   /**
-   * Post-submit quiz state for the current scene. Hydrated from localStorage
+   * Post-submit quiz state for the current scene. Hydrated from RuntimeStore
    * client-side; absent when the active scene is not a graded quiz or the
    * student has not submitted yet.
    */
@@ -71,7 +71,7 @@ export interface AgentLoopIterationResult {
 /** Callbacks injected by the caller (frontend or eval) */
 export interface AgentLoopCallbacks {
   /** Get fresh store state for each iteration (whiteboard may have changed) */
-  getStoreState: () => AgentLoopStoreState;
+  getStoreState: () => AgentLoopStoreState | Promise<AgentLoopStoreState>;
 
   /** Get current messages for the request */
   getMessages: () => unknown[];
@@ -138,7 +138,10 @@ export async function runAgentLoop(
 
     // Refresh store state each iteration — agent actions may have changed
     // whiteboard, scene, or mode between turns
-    const freshStoreState = callbacks.getStoreState();
+    const freshStoreState = await callbacks.getStoreState();
+    if (signal.aborted) {
+      return { reason: 'aborted', directorState, turnCount };
+    }
     const currentMessages = callbacks.getMessages();
 
     // Build request body

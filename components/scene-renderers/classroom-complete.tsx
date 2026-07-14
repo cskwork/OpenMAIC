@@ -7,8 +7,11 @@ import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { useStageStore } from '@/lib/store';
 import type { Scene, SceneType } from '@/lib/types/stage';
-import { summarizeScenes } from '@/lib/classroom/complete-summary';
-import { readAnswersForSummary } from '@/lib/quiz/persistence';
+import { summarizeScenes, type CompleteSummary } from '@/lib/classroom/complete-summary';
+import { loadQuizAttemptState } from '@/lib/quiz/runtime';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('ClassroomComplete');
 
 const SCENE_TYPE_ICONS: Record<SceneType, typeof FileText> = {
   slide: FileText,
@@ -309,10 +312,33 @@ export function ClassroomCompletePage({ scenes, title }: ClassroomCompletePagePr
   const { t, locale } = useI18n();
   const prefersReducedMotion = useReducedMotion();
 
-  // Computed once on mount: re-grading on every render would be wasteful and
-  // the underlying localStorage values only change when the user revisits a
-  // quiz scene (which unmounts this page).
-  const summary = useMemo(() => summarizeScenes(scenes, readAnswersForSummary), [scenes]);
+  const [summary, setSummary] = useState<CompleteSummary>(() => ({
+    countsByType: scenes.reduce<CompleteSummary['countsByType']>((counts, scene) => {
+      counts[scene.type] = (counts[scene.type] ?? 0) + 1;
+      return counts;
+    }, {}),
+    quiz: null,
+  }));
+
+  useEffect(() => {
+    let cancelled = false;
+    void summarizeScenes(scenes, async (sceneId) => {
+      const scene = scenes.find((candidate) => candidate.id === sceneId);
+      if (!scene) return {};
+      try {
+        const { state } = await loadQuizAttemptState({ stageId: scene.stageId, sceneId });
+        return state?.answers ?? {};
+      } catch (error) {
+        log.warn(`Failed to load quiz summary for scene ${sceneId}:`, error);
+        return {};
+      }
+    }).then((next) => {
+      if (!cancelled) setSummary(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [scenes]);
 
   const dateLabel = useMemo(() => {
     try {

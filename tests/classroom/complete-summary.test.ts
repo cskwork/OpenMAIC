@@ -49,19 +49,19 @@ const choiceQ = (id: string, answer: string[]): QuizQuestion => ({
 });
 
 describe('summarizeScenes', () => {
-  it('counts scenes by type and omits zeros', () => {
+  it('counts scenes by type and omits zeros', async () => {
     const scenes = [slide('s1', 0), slide('s2', 1), interactive('i1', 2)];
-    const result = summarizeScenes(scenes, () => ({}));
+    const result = await summarizeScenes(scenes, async () => ({}));
     expect(result.countsByType).toEqual({ slide: 2, interactive: 1 });
     expect(result.quiz).toBeNull();
   });
 
-  it('returns null quiz when no quiz scenes exist', () => {
-    const result = summarizeScenes([slide('s1', 0)], () => ({}));
+  it('returns null quiz when no quiz scenes exist', async () => {
+    const result = await summarizeScenes([slide('s1', 0)], async () => ({}));
     expect(result.quiz).toBeNull();
   });
 
-  it('aggregates quiz answers across multiple quiz scenes', () => {
+  it('aggregates quiz answers across multiple quiz scenes', async () => {
     const scenes = [
       quizScene('q1', 0, [choiceQ('qa', ['a']), choiceQ('qb', ['b'])]),
       quizScene('q2', 1, [choiceQ('qc', ['a'])]),
@@ -70,12 +70,12 @@ describe('summarizeScenes', () => {
       q1: { qa: 'a', qb: 'a' },
       q2: { qc: 'a' },
     };
-    const result = summarizeScenes(scenes, (sceneId) => answers[sceneId] ?? {});
+    const result = await summarizeScenes(scenes, async (sceneId) => answers[sceneId] ?? {});
     expect(result.quiz).toEqual({ correct: 2, total: 3, pct: Math.round((2 / 3) * 100) });
     expect(result.countsByType.quiz).toBe(2);
   });
 
-  it('returns null quiz when quiz scenes exist but have no gradeable questions', () => {
+  it('returns null quiz when quiz scenes exist but have no gradeable questions', async () => {
     const saOnly = quizScene('q1', 0, [
       {
         id: 'sa',
@@ -85,14 +85,14 @@ describe('summarizeScenes', () => {
         hasAnswer: false,
       },
     ]);
-    const result = summarizeScenes([saOnly], () => ({}));
+    const result = await summarizeScenes([saOnly], async () => ({}));
     expect(result.quiz).toBeNull();
     expect(result.countsByType.quiz).toBe(1);
   });
 
-  it('treats missing answers as incorrect (not skipped)', () => {
+  it('treats missing answers as incorrect (not skipped)', async () => {
     const scenes = [quizScene('q1', 0, [choiceQ('qa', ['a']), choiceQ('qb', ['b'])])];
-    const result = summarizeScenes(scenes, () => ({}));
+    const result = await summarizeScenes(scenes, async () => ({}));
     expect(result.quiz).toEqual({ correct: 0, total: 2, pct: 0 });
   });
 });

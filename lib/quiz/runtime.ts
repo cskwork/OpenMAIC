@@ -6,7 +6,13 @@ import type {
 } from '@openmaic/dsl';
 import { RuntimeAppendConflictError, type RuntimeStore } from '@openmaic/storage';
 import type { QuestionResult } from '@/lib/quiz/grading';
-import type { QuizAnswers } from '@/lib/quiz/persistence';
+import {
+  clearAllForScene,
+  hasLegacyQuizState,
+  readDraftState,
+  readSubmittedState,
+  type QuizAnswers,
+} from '@/lib/quiz/persistence';
 import { getLearnerKey } from '@/lib/runtime/learner-key';
 import { getRuntimeStore } from '@/lib/runtime/store';
 
@@ -40,6 +46,25 @@ export interface QuizAttemptRuntimeDeps {
   learnerKey?: string;
   now?: () => string;
   mintRecordId?: () => string;
+}
+
+export interface QuizAttemptState {
+  sessionId: string;
+  status: RuntimeSession['status'];
+  phase: QuizAttemptPhase;
+  answers: QuizAnswers;
+  results?: QuestionResult[];
+}
+
+export interface LoadedQuizAttemptState {
+  /** Learner-scoped deterministic root id used by every new write/retry. */
+  attemptId: string;
+  state?: QuizAttemptState;
+}
+
+export interface QuizAttemptStateInput {
+  stageId: string;
+  sceneId: string;
 }
 
 export type QuizDraftInput = Omit<QuizAttemptRecordInput, 'phase' | 'results'>;
@@ -166,6 +191,132 @@ function asQuizPayload(record: RuntimeRecord | undefined): QuizAttemptPayload | 
     return undefined;
   }
   return payload as QuizAttemptPayload;
+}
+
+function attemptIdSegment(value: string): string {
+  return encodeURIComponent(value);
+}
+
+export function quizAttemptId(stageId: string, sceneId: string, learnerKey: string): string {
+  return [
+    'quiz-attempt',
+    attemptIdSegment(stageId),
+    attemptIdSegment(sceneId),
+    attemptIdSegment(learnerKey),
+  ].join(':');
+}
+
+async function readLatestQuizAttemptState(
+  input: QuizAttemptStateInput,
+  store: RuntimeStore,
+  learnerKey: string,
+): Promise<QuizAttemptState | undefined> {
+  const sessions = await store.listSessions(input.stageId, learnerKey);
+  for (let index = sessions.length - 1; index >= 0; index -= 1) {
+    const session = sessions[index];
+    if (session.kind !== 'quizAttempt') continue;
+    const records = await store.listRecords(session.id, { sceneId: input.sceneId });
+    const payload = asQuizPayload(records.at(-1));
+    if (!payload) continue;
+    return {
+      sessionId: session.id,
+      status: session.status,
+      phase: payload.phase,
+      answers: payload.answers,
+      ...(payload.phase === 'reviewed'
+        ? { results: Array.isArray(payload.results) ? payload.results : [] }
+        : {}),
+    };
+  }
+  return undefined;
+}
+
+async function migrateLegacyQuizState(
+  input: QuizAttemptStateInput,
+  store: RuntimeStore,
+  learnerKey: string,
+  deps: QuizAttemptRuntimeDeps,
+): Promise<void> {
+  if (!hasLegacyQuizState(input.sceneId)) return;
+
+  const existing = await readLatestQuizAttemptState(input, store, learnerKey);
+  if (!existing) {
+    const submitted = readSubmittedState(input.sceneId);
+    const draft = readDraftState(input.sceneId);
+    const attemptId = quizAttemptId(input.stageId, input.sceneId, learnerKey);
+    if (submitted?.kind === 'reviewing') {
+      await backfillQuizAttempt(
+        {
+          ...input,
+          attemptId,
+          submittedAnswers: submitted.answers,
+          results: submitted.results,
+        },
+        { ...deps, store, learnerKey },
+      );
+    } else if (submitted?.kind === 'answering') {
+      await backfillQuizAttempt(
+        { ...input, attemptId, submittedAnswers: submitted.answers },
+        { ...deps, store, learnerKey },
+      );
+    } else if (draft) {
+      await backfillQuizAttempt(
+        { ...input, attemptId, draftAnswers: draft },
+        { ...deps, store, learnerKey },
+      );
+    }
+  }
+
+  // Legacy state is deleted only after every required runtime write succeeds.
+  // Corrupt/unusable blobs are retired too, so later reads never dual-source.
+  clearAllForScene(input.sceneId);
+}
+
+/** Load the learner's latest quiz state, migrating legacy localStorage once. */
+export async function loadQuizAttemptState(
+  input: QuizAttemptStateInput,
+  deps: QuizAttemptRuntimeDeps = {},
+): Promise<LoadedQuizAttemptState> {
+  const store = deps.store ?? getRuntimeStore();
+  const learnerKey = deps.learnerKey ?? (await getLearnerKey());
+  const attemptId = quizAttemptId(input.stageId, input.sceneId, learnerKey);
+  // A UI transition can expose the next consumer while its fire-and-forget
+  // writer is still queued. Wait for this tab's chain before opening a read.
+  await queues.get(store)?.get(attemptId);
+  await migrateLegacyQuizState(input, store, learnerKey, deps);
+  let state = await withAttemptLock(attemptId, () =>
+    readLatestQuizAttemptState(input, store, learnerKey),
+  );
+  if (state?.status === 'active' && state.sessionId !== attemptId) {
+    // Continue a shadow-written attempt whose legacy random id predates the
+    // deterministic learner-scoped root. Its current writer queue/lock still
+    // uses that session id, so drain it before returning the active attempt.
+    await queues.get(store)?.get(state.sessionId);
+    state = await withAttemptLock(state.sessionId, () =>
+      readLatestQuizAttemptState(input, store, learnerKey),
+    );
+  }
+
+  // Older shadow writers could append reviewed and crash before completing
+  // the session. Replaying the same fact invokes the atomic tail-CAS repair.
+  if (state?.phase === 'reviewed' && state.status === 'active') {
+    await recordQuizAttempt(
+      {
+        ...input,
+        attemptId: state.sessionId,
+        phase: 'reviewed',
+        answers: state.answers,
+        results: state.results ?? [],
+      },
+      { ...deps, store, learnerKey },
+    );
+    state = await readLatestQuizAttemptState(input, store, learnerKey);
+  }
+
+  return {
+    attemptId: state?.status === 'active' ? state.sessionId : attemptId,
+    state,
+  };
 }
 
 function samePayload(left: QuizAttemptPayload, right: QuizAttemptPayload): boolean {

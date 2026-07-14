@@ -1,48 +1,61 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const store: Record<string, string> = {};
-const localStorageStub = {
-  getItem: (key: string) => (key in store ? store[key] : null),
-  setItem: (key: string, value: string) => {
-    store[key] = String(value);
-  },
-  removeItem: (key: string) => {
-    delete store[key];
-  },
-  clear: () => {
-    for (const key of Object.keys(store)) delete store[key];
-  },
-};
-
-vi.stubGlobal('localStorage', localStorageStub);
-vi.stubGlobal('window', { localStorage: localStorageStub });
+vi.mock('@/lib/quiz/runtime', () => ({
+  loadQuizAttemptState: vi.fn(),
+}));
 
 import { buildQuizResultsForStoreState } from '@/lib/chat/quiz-results-for-store-state';
-import { writeSubmittedAnswers, writeSubmittedResults } from '@/lib/quiz/persistence';
+import { loadQuizAttemptState } from '@/lib/quiz/runtime';
 
 describe('quiz results for chat store state', () => {
   beforeEach(() => {
-    localStorageStub.clear();
+    vi.mocked(loadQuizAttemptState).mockReset();
   });
 
-  it('omits an explicitly reviewed quiz when the grader returned no results', () => {
-    writeSubmittedAnswers('quiz-1', { q1: 'A' });
-    writeSubmittedResults('quiz-1', []);
-
-    expect(
-      buildQuizResultsForStoreState([{ id: 'quiz-1', type: 'quiz' }], 'quiz-1'),
-    ).toBeUndefined();
-  });
-
-  it('includes non-empty reviewed results for the active quiz', () => {
-    const results = [{ questionId: 'q1', correct: true, status: 'correct' as const, earned: 1 }];
-    writeSubmittedAnswers('quiz-1', { q1: 'A' });
-    writeSubmittedResults('quiz-1', results);
-
-    expect(buildQuizResultsForStoreState([{ id: 'quiz-1', type: 'quiz' }], 'quiz-1')).toEqual({
-      sceneId: 'quiz-1',
-      answers: { q1: 'A' },
-      results,
+  it('omits an explicitly reviewed quiz when the grader returned no results', async () => {
+    vi.mocked(loadQuizAttemptState).mockResolvedValue({
+      attemptId: 'attempt-1',
+      state: {
+        sessionId: 'attempt-1',
+        status: 'completed',
+        phase: 'reviewed',
+        answers: { q1: 'A' },
+        results: [],
+      },
     });
+
+    await expect(
+      buildQuizResultsForStoreState([{ id: 'quiz-1', type: 'quiz', stageId: 'stage-1' }], 'quiz-1'),
+    ).resolves.toBeUndefined();
+    expect(loadQuizAttemptState).toHaveBeenCalledWith({
+      stageId: 'stage-1',
+      sceneId: 'quiz-1',
+    });
+  });
+
+  it('includes non-empty reviewed results for the active quiz', async () => {
+    const results = [{ questionId: 'q1', correct: true, status: 'correct' as const, earned: 1 }];
+    vi.mocked(loadQuizAttemptState).mockResolvedValue({
+      attemptId: 'attempt-1',
+      state: {
+        sessionId: 'attempt-1',
+        status: 'completed',
+        phase: 'reviewed',
+        answers: { q1: 'A' },
+        results,
+      },
+    });
+
+    await expect(
+      buildQuizResultsForStoreState([{ id: 'quiz-1', type: 'quiz', stageId: 'stage-1' }], 'quiz-1'),
+    ).resolves.toEqual({ sceneId: 'quiz-1', answers: { q1: 'A' }, results });
+  });
+
+  it('omits quiz context when RuntimeStore is unavailable', async () => {
+    vi.mocked(loadQuizAttemptState).mockRejectedValue(new Error('indexedDB unavailable'));
+
+    await expect(
+      buildQuizResultsForStoreState([{ id: 'quiz-1', type: 'quiz', stageId: 'stage-1' }], 'quiz-1'),
+    ).resolves.toBeUndefined();
   });
 });
