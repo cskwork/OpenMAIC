@@ -82,6 +82,12 @@ export function readDraftState(sceneId: string): QuizAnswers | null {
   }
 }
 
+/** Read the legacy attempt pointer only to order one-time migration snapshots. */
+export function readLegacyAttemptId(sceneId: string): string | null {
+  const attemptId = safeGet(ATTEMPT_ID_KEY_PREFIX + sceneId);
+  return attemptId && attemptId.trim().length > 0 ? attemptId : null;
+}
+
 /** Retire every legacy key after migration or during stage deletion. */
 export function clearAllForScene(sceneId: string): void {
   safeRemove(DRAFT_KEY_PREFIX + sceneId);

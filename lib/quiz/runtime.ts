@@ -10,6 +10,7 @@ import {
   clearAllForScene,
   hasLegacyQuizState,
   readDraftState,
+  readLegacyAttemptId,
   readSubmittedState,
   type QuizAnswers,
 } from '@/lib/quiz/persistence';
@@ -244,6 +245,7 @@ async function migrateLegacyQuizState(
   const existing = await readLatestQuizAttemptState(input, store, learnerKey);
   const submitted = readSubmittedState(input.sceneId);
   const draft = readDraftState(input.sceneId);
+  const legacyAttemptId = readLegacyAttemptId(input.sceneId);
   const legacyPhase: QuizAttemptPhase | undefined =
     submitted?.kind === 'reviewing'
       ? 'reviewed'
@@ -252,13 +254,20 @@ async function migrateLegacyQuizState(
         : draft
           ? 'draft'
           : undefined;
+  const legacyPointsToNewAttempt =
+    legacyAttemptId !== null &&
+    (!existing ||
+      (existing.sessionId !== legacyAttemptId &&
+        !existing.sessionId.startsWith(`${legacyAttemptId}:retry:`)));
   const shouldMigrate =
-    legacyPhase !== undefined &&
-    (!existing || PHASE_ORDER[legacyPhase] > PHASE_ORDER[existing.phase]);
+    legacyPointsToNewAttempt ||
+    (legacyPhase !== undefined &&
+      (!existing || PHASE_ORDER[legacyPhase] > PHASE_ORDER[existing.phase]));
 
   if (shouldMigrate) {
     const attemptId =
-      existing?.sessionId ?? quizAttemptId(input.stageId, input.sceneId, learnerKey);
+      (legacyPointsToNewAttempt ? legacyAttemptId : existing?.sessionId) ??
+      quizAttemptId(input.stageId, input.sceneId, learnerKey);
     if (submitted?.kind === 'reviewing') {
       await backfillQuizAttempt(
         {
@@ -277,6 +286,11 @@ async function migrateLegacyQuizState(
     } else if (draft) {
       await backfillQuizAttempt(
         { ...input, attemptId, draftAnswers: draft },
+        { ...deps, store, learnerKey },
+      );
+    } else if (legacyPointsToNewAttempt) {
+      await recordQuizAttempt(
+        { ...input, attemptId, phase: 'draft', answers: {} },
         { ...deps, store, learnerKey },
       );
     }

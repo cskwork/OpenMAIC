@@ -56,5 +56,8 @@ export function quizViewStateFromAttempt(
       results: state.results ?? [],
     };
   }
+  if (state.phase === 'draft' && Object.keys(state.answers).length === 0) {
+    return { phase: 'not_started', answers: {}, results: [] };
+  }
   return { phase: 'answering', answers: state.answers, results: [] };
 }

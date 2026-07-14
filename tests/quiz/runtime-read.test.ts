@@ -247,6 +247,71 @@ describe('quiz runtime authoritative reads', () => {
     expect(localStorageStub.getItem(RESULTS_KEY_PREFIX + 'quiz-1')).toBeNull();
   });
 
+  it('preserves a newer legacy retry over an older reviewed runtime attempt', async () => {
+    const store = makeStore();
+    const runtimeDeps = deps(store, 'learner-a');
+    await recordQuizAttempt(
+      {
+        stageId: 'stage-1',
+        sceneId: 'quiz-1',
+        attemptId: 'old-attempt',
+        phase: 'reviewed',
+        answers: { q1: 'A' },
+        results,
+      },
+      runtimeDeps,
+    );
+    localStorageStub.setItem(ATTEMPT_ID_KEY_PREFIX + 'quiz-1', 'new-retry');
+    localStorageStub.setItem(DRAFT_KEY_PREFIX + 'quiz-1', JSON.stringify({ q1: 'B' }));
+
+    const loaded = await loadQuizAttemptState(
+      { stageId: 'stage-1', sceneId: 'quiz-1' },
+      runtimeDeps,
+    );
+
+    expect(loaded).toMatchObject({
+      attemptId: 'new-retry',
+      state: {
+        sessionId: 'new-retry',
+        phase: 'draft',
+        status: 'active',
+        answers: { q1: 'B' },
+      },
+    });
+  });
+
+  it('preserves a pointer-only legacy retry as an empty draft attempt', async () => {
+    const store = makeStore();
+    const runtimeDeps = deps(store, 'learner-a');
+    await recordQuizAttempt(
+      {
+        stageId: 'stage-1',
+        sceneId: 'quiz-1',
+        attemptId: 'old-attempt',
+        phase: 'reviewed',
+        answers: { q1: 'A' },
+        results,
+      },
+      runtimeDeps,
+    );
+    localStorageStub.setItem(ATTEMPT_ID_KEY_PREFIX + 'quiz-1', 'new-empty-retry');
+
+    const loaded = await loadQuizAttemptState(
+      { stageId: 'stage-1', sceneId: 'quiz-1' },
+      runtimeDeps,
+    );
+
+    expect(loaded).toMatchObject({
+      attemptId: 'new-empty-retry',
+      state: {
+        sessionId: 'new-empty-retry',
+        phase: 'draft',
+        status: 'active',
+        answers: {},
+      },
+    });
+  });
+
   it('retains legacy keys when migration cannot commit to RuntimeStore', async () => {
     const store = makeStore();
     const failingStore = new Proxy(store, {

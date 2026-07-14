@@ -39,6 +39,17 @@ describe('quiz view runtime hydration', () => {
     });
   });
 
+  it('uses the cover for a persisted empty retry marker', () => {
+    expect(
+      quizViewStateFromAttempt({
+        sessionId: 'attempt-1:retry:1',
+        status: 'active',
+        phase: 'draft',
+        answers: {},
+      }),
+    ).toEqual({ phase: 'not_started', answers: {}, results: [] });
+  });
+
   it('keeps the quiz blocked when runtime hydration fails', () => {
     expect(isQuizRuntimeReady({ status: 'loading' })).toBe(false);
     expect(isQuizRuntimeReady({ status: 'error' })).toBe(false);
