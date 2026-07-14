@@ -1,6 +1,6 @@
 import type { QuestionResult } from '@/lib/quiz/grading';
 import type { QuizAnswers } from '@/lib/quiz/persistence';
-import type { QuizAttemptState, QuizAttemptWriter } from '@/lib/quiz/runtime';
+import type { QuizAttemptState, QuizAttemptWriter, QuizDraftInput } from '@/lib/quiz/runtime';
 
 export type QuizRuntimeGate =
   | { status: 'loading' }
@@ -23,6 +23,20 @@ export async function persistQuizRetry(
     answers: {},
     startNewAttempt: true,
   });
+}
+
+export async function persistQuizSubmission(
+  input: QuizDraftInput,
+  writer: Pick<QuizAttemptWriter, 'recordPhase'>,
+): Promise<void> {
+  await writer.recordPhase({ ...input, phase: 'submitted' });
+}
+
+export async function persistQuizReview(
+  input: QuizDraftInput & { results: QuestionResult[] },
+  writer: Pick<QuizAttemptWriter, 'recordPhase'>,
+): Promise<void> {
+  await writer.recordPhase({ ...input, phase: 'reviewed' });
 }
 
 export interface QuizViewHydratedState {

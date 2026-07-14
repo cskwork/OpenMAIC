@@ -192,7 +192,7 @@ describe('quiz runtime authoritative reads', () => {
     }
   });
 
-  it('keeps runtime authoritative over stale legacy data and retires the stale keys', async () => {
+  it('keeps a stronger runtime submission over a stale legacy draft', async () => {
     const store = makeStore();
     const runtimeDeps = deps(store, 'learner-a');
     await recordQuizAttempt(
@@ -205,8 +205,7 @@ describe('quiz runtime authoritative reads', () => {
       },
       runtimeDeps,
     );
-    localStorageStub.setItem(ANSWERS_KEY_PREFIX + 'quiz-1', JSON.stringify({ q1: 'legacy' }));
-    localStorageStub.setItem(RESULTS_KEY_PREFIX + 'quiz-1', JSON.stringify(results));
+    localStorageStub.setItem(DRAFT_KEY_PREFIX + 'quiz-1', JSON.stringify({ q1: 'legacy' }));
 
     const loaded = await loadQuizAttemptState(
       { stageId: 'stage-1', sceneId: 'quiz-1' },
@@ -214,6 +213,36 @@ describe('quiz runtime authoritative reads', () => {
     );
 
     expect(loaded.state).toMatchObject({ phase: 'submitted', answers: { q1: 'runtime' } });
+    expect(localStorageStub.getItem(DRAFT_KEY_PREFIX + 'quiz-1')).toBeNull();
+  });
+
+  it('migrates a reviewed legacy result over a weaker runtime submission', async () => {
+    const store = makeStore();
+    const runtimeDeps = deps(store, 'learner-a');
+    await recordQuizAttempt(
+      {
+        stageId: 'stage-1',
+        sceneId: 'quiz-1',
+        attemptId: 'runtime-attempt',
+        phase: 'submitted',
+        answers: { q1: 'A' },
+      },
+      runtimeDeps,
+    );
+    localStorageStub.setItem(ANSWERS_KEY_PREFIX + 'quiz-1', JSON.stringify({ q1: 'A' }));
+    localStorageStub.setItem(RESULTS_KEY_PREFIX + 'quiz-1', JSON.stringify(results));
+
+    const loaded = await loadQuizAttemptState(
+      { stageId: 'stage-1', sceneId: 'quiz-1' },
+      runtimeDeps,
+    );
+
+    expect(loaded.state).toMatchObject({
+      phase: 'reviewed',
+      status: 'completed',
+      answers: { q1: 'A' },
+      results,
+    });
     expect(localStorageStub.getItem(ANSWERS_KEY_PREFIX + 'quiz-1')).toBeNull();
     expect(localStorageStub.getItem(RESULTS_KEY_PREFIX + 'quiz-1')).toBeNull();
   });

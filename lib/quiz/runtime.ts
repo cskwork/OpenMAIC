@@ -242,10 +242,23 @@ async function migrateLegacyQuizState(
   if (!hasLegacyQuizState(input.sceneId)) return;
 
   const existing = await readLatestQuizAttemptState(input, store, learnerKey);
-  if (!existing) {
-    const submitted = readSubmittedState(input.sceneId);
-    const draft = readDraftState(input.sceneId);
-    const attemptId = quizAttemptId(input.stageId, input.sceneId, learnerKey);
+  const submitted = readSubmittedState(input.sceneId);
+  const draft = readDraftState(input.sceneId);
+  const legacyPhase: QuizAttemptPhase | undefined =
+    submitted?.kind === 'reviewing'
+      ? 'reviewed'
+      : submitted?.kind === 'answering'
+        ? 'submitted'
+        : draft
+          ? 'draft'
+          : undefined;
+  const shouldMigrate =
+    legacyPhase !== undefined &&
+    (!existing || PHASE_ORDER[legacyPhase] > PHASE_ORDER[existing.phase]);
+
+  if (shouldMigrate) {
+    const attemptId =
+      existing?.sessionId ?? quizAttemptId(input.stageId, input.sceneId, learnerKey);
     if (submitted?.kind === 'reviewing') {
       await backfillQuizAttempt(
         {

@@ -95,4 +95,18 @@ describe('summarizeScenes', () => {
     const result = await summarizeScenes(scenes, async () => ({}));
     expect(result.quiz).toEqual({ correct: 0, total: 2, pct: 0 });
   });
+
+  it('omits quiz scenes whose authoritative answers are unavailable', async () => {
+    const scenes = [
+      quizScene('unavailable', 0, [choiceQ('qa', ['a'])]),
+      quizScene('available', 1, [choiceQ('qb', ['b'])]),
+    ];
+
+    const result = await summarizeScenes(scenes, async (sceneId) => {
+      if (sceneId === 'unavailable') throw new Error('storage unavailable');
+      return { qb: 'b' };
+    });
+
+    expect(result.quiz).toEqual({ correct: 1, total: 1, pct: 100 });
+  });
 });

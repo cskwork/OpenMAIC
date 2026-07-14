@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   isQuizRuntimeReady,
+  persistQuizReview,
   persistQuizRetry,
+  persistQuizSubmission,
   quizViewStateFromAttempt,
 } from '@/lib/quiz/view-state';
 
@@ -79,6 +81,44 @@ describe('quiz view runtime hydration', () => {
 
     release();
     await retry;
+    expect(settled).toBe(true);
+  });
+
+  it('does not complete submit or review transitions before runtime persistence', async () => {
+    let release!: () => void;
+    const persisted = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls: unknown[] = [];
+    const writer = {
+      recordPhase: async (input: unknown) => {
+        calls.push(input);
+        await persisted;
+      },
+    };
+    const base = {
+      stageId: 'stage-1',
+      sceneId: 'scene-1',
+      attemptId: 'attempt-1',
+      answers: { q1: 'A' },
+    };
+
+    const submitting = persistQuizSubmission(base, writer);
+    const reviewing = persistQuizReview({ ...base, results: [] }, writer);
+    let settled = false;
+    void Promise.all([submitting, reviewing]).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+
+    expect(calls).toEqual([
+      { ...base, phase: 'submitted' },
+      { ...base, phase: 'reviewed', results: [] },
+    ]);
+    expect(settled).toBe(false);
+
+    release();
+    await Promise.all([submitting, reviewing]);
     expect(settled).toBe(true);
   });
 });

@@ -30,14 +30,16 @@ import {
 } from '@/lib/quiz/runtime';
 import {
   isQuizRuntimeReady,
+  persistQuizReview,
   persistQuizRetry,
+  persistQuizSubmission,
   quizViewStateFromAttempt,
   type QuizRuntimeGate,
 } from '@/lib/quiz/view-state';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-type Phase = 'not_started' | 'answering' | 'grading' | 'reviewing';
+type Phase = 'not_started' | 'answering' | 'submitting' | 'grading' | 'reviewing';
 
 interface QuizViewProps {
   readonly questions: QuizQuestion[];
@@ -765,16 +767,15 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
     [attemptId, runtimeWriter, sceneId, stageId],
   );
 
-  const handleSubmit = useCallback(() => {
-    setPhase('grading');
-    if (attemptId) {
-      void runtimeWriter.recordPhase({
-        stageId,
-        sceneId,
-        attemptId,
-        phase: 'submitted',
-        answers,
-      });
+  const handleSubmit = useCallback(async () => {
+    if (!attemptId) return;
+    setPhase('submitting');
+    try {
+      await persistQuizSubmission({ stageId, sceneId, attemptId, answers }, runtimeWriter);
+      setPhase('grading');
+    } catch (error) {
+      log.warn('Failed to persist quiz submission:', error);
+      setRuntimeGate({ status: 'error' });
     }
   }, [attemptId, answers, runtimeWriter, sceneId, stageId]);
 
@@ -804,18 +805,23 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
       }
       const ordered = questions.map((q) => allResultsMap.get(q.id)!).filter(Boolean);
 
+      if (!attemptId) {
+        setRuntimeGate({ status: 'error' });
+        return;
+      }
+      try {
+        await persistQuizReview(
+          { stageId, sceneId, attemptId, answers, results: ordered },
+          runtimeWriter,
+        );
+      } catch (error) {
+        log.warn('Failed to persist quiz review:', error);
+        if (!cancelled) setRuntimeGate({ status: 'error' });
+        return;
+      }
+      if (cancelled) return;
       setResults(ordered);
       setPhase('reviewing');
-      if (attemptId) {
-        void runtimeWriter.recordPhase({
-          stageId,
-          sceneId,
-          attemptId,
-          phase: 'reviewed',
-          answers,
-          results: ordered,
-        });
-      }
     })();
 
     return () => {
@@ -918,7 +924,8 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
                 </span>
               </div>
               <button
-                onClick={handleSubmit}
+                type="button"
+                onClick={() => void handleSubmit()}
                 disabled={!allAnswered}
                 className={cn(
                   'px-4 py-1.5 rounded-lg text-xs font-medium transition-all',
@@ -970,7 +977,7 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
           </motion.div>
         )}
 
-        {phase === 'grading' && (
+        {(phase === 'submitting' || phase === 'grading') && (
           <motion.div
             key="grading"
             initial={{ opacity: 0 }}

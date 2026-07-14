@@ -6,7 +6,9 @@ export interface CompleteSummary {
   quiz: { correct: number; total: number; pct: number } | null;
 }
 
-export type AnswerReader = (sceneId: string) => Promise<Record<string, string | string[]>>;
+export type AnswerReader = (
+  sceneId: string,
+) => Promise<Record<string, string | string[]> | undefined>;
 
 export async function summarizeScenes(
   scenes: Scene[],
@@ -22,7 +24,13 @@ export async function summarizeScenes(
   for (const scene of scenes) {
     if (scene.type !== 'quiz') continue;
     const questions = (scene.content as QuizContent).questions ?? [];
-    const answers = await readAnswers(scene.id);
+    let answers: Awaited<ReturnType<AnswerReader>>;
+    try {
+      answers = await readAnswers(scene.id);
+    } catch {
+      continue;
+    }
+    if (answers === undefined) continue;
     const results = gradeChoiceQuestions(questions, answers);
     for (const r of results) {
       total += 1;

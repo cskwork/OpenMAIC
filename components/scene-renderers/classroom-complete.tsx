@@ -330,7 +330,7 @@ export function ClassroomCompletePage({ scenes, title }: ClassroomCompletePagePr
         return state?.answers ?? {};
       } catch (error) {
         log.warn(`Failed to load quiz summary for scene ${sceneId}:`, error);
-        return {};
+        return undefined;
       }
     }).then((next) => {
       if (!cancelled) setSummary(next);
