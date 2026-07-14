@@ -35,7 +35,7 @@ describe('buildVirtualWhiteboardContext', () => {
       record('wb_delete', { elementId: 'note-1' }),
     ]);
 
-    expect(context).toBe('');
+    expect(context).toContain('whiteboard is now empty');
   });
 
   it('keeps other newly drawn elements when one supplied id is deleted', () => {
@@ -74,7 +74,7 @@ describe('buildVirtualWhiteboardContext', () => {
       record('wb_delete', { elementId: 'code-1' }),
     ]);
 
-    expect(context).toBe('');
+    expect(context).toContain('whiteboard is now empty');
   });
 
   it('includes edits to a code element that existed before the current ledger', () => {
@@ -110,7 +110,32 @@ describe('buildVirtualWhiteboardContext', () => {
     ]);
 
     expect(context).toContain('Current whiteboard elements (1)');
-    expect(context).toContain('existing code block "main.py" (python, 1 lines)');
-    expect(context).toContain('edited by Teacher (replace_lines)');
+    expect(context).toContain('code block "main.py" (python, 1 lines): L1: x = 2');
+    expect(context).toContain('edited (replace_lines)');
+  });
+
+  it('reports initial elements removed by delete or clear as absent', () => {
+    const initialStoreState = {
+      ...storeState,
+      stage: {
+        id: 'stage-1',
+        name: 'Whiteboard lesson',
+        whiteboard: [
+          {
+            id: 'whiteboard-1',
+            elements: [{ id: 'note-1', type: 'text', content: '<p>old note</p>' }],
+          },
+        ],
+      },
+    } as StatelessChatRequest['storeState'];
+
+    expect(
+      buildVirtualWhiteboardContext(initialStoreState, [
+        record('wb_delete', { elementId: 'note-1' }),
+      ]),
+    ).toContain('whiteboard is now empty');
+    expect(buildVirtualWhiteboardContext(initialStoreState, [record('wb_clear', {})])).toContain(
+      'whiteboard is now empty',
+    );
   });
 });

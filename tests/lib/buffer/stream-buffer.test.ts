@@ -323,4 +323,40 @@ describe('StreamBuffer Pi wrap-up ordering', () => {
 
     expect(lifecycle).toEqual(['action']);
   });
+
+  it('aborts background action work when the buffer shuts down', async () => {
+    let actionSignal: AbortSignal | undefined;
+    const buffer = new StreamBuffer(
+      {
+        onAgentStart() {},
+        onAgentEnd() {},
+        onTextReveal() {},
+        onActionReady(_messageId, _action, signal) {
+          actionSignal = signal;
+        },
+        onLiveSpeech() {},
+        onSpeechProgress() {},
+        onThinking() {},
+        onCueUser() {},
+        onDone() {},
+        onError(message) {
+          throw new Error(message);
+        },
+      },
+      { tickMs: 1 },
+    );
+    buffer.pushAction({
+      messageId: 'message-1',
+      actionId: 'video-1',
+      actionName: 'play_video',
+      params: { elementId: 'video-element-1' },
+      agentId: 'teacher-1',
+    });
+    buffer.start();
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(actionSignal?.aborted).toBe(false);
+    buffer.shutdown();
+    expect(actionSignal?.aborted).toBe(true);
+  });
 });

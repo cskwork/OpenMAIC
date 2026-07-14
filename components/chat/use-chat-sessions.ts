@@ -227,7 +227,7 @@ export function getPiSingleRequestOutcome(
   return { type: 'completed', directorState: doneData.directorState };
 }
 
-async function runPiSingleRequest(
+export async function runPiSingleRequest(
   sessionId: string,
   requestTemplate: ChatRequestTemplate,
   controller: AbortController,
@@ -264,6 +264,7 @@ async function runPiSingleRequest(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let sseBuffer = '';
+  let sawDoneEvent = false;
 
   for (;;) {
     const { done, value } = await reader.read();
@@ -277,11 +278,12 @@ async function runPiSingleRequest(
       const dataLine = part.split('\n').find((line) => line.startsWith('data: '));
       if (!dataLine) continue;
       const event = JSON.parse(dataLine.slice(6)) as StatelessEvent;
+      if (event.type === 'done') sawDoneEvent = true;
       consumer.onEvent(event);
     }
   }
 
-  const doneData = await consumer.onIterationEnd();
+  const doneData = sawDoneEvent ? await consumer.onIterationEnd() : null;
 
   if (controller.signal.aborted) return;
 
@@ -508,6 +510,10 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
 
       const timer = setTimeout(() => {
         softCloseTimersRef.current.delete(sessionId);
+        const retirement = retireLiveRequestResources(null, sessionId, buffersRef.current);
+        pendingRetirementRef.current = Promise.all([pendingRetirementRef.current, retirement]).then(
+          () => undefined,
+        );
         markSessionCompleted(sessionId, data);
         onStopSessionRef.current?.({
           sessionId,
@@ -688,7 +694,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             );
           },
 
-          async onActionReady(messageId: string, data: ActionItem) {
+          async onActionReady(messageId: string, data: ActionItem, signal: AbortSignal) {
             // Add action badge to message parts
             const actionPart = {
               type: `action-${data.actionName}`,
@@ -721,7 +727,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
                 type: data.actionName,
                 ...data.params,
               } as Action;
-              const execution = actionEngine.execute(action);
+              const execution = actionEngine.execute(action, { signal });
               if (shouldAwaitPresentationAction(data.actionName)) {
                 await execution;
               } else {

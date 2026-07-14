@@ -6,6 +6,7 @@ import {
   normalizeStoredSessionsForRestore,
   retireLiveRequestResources,
   resumeSoftClosingSessionForFollowUp,
+  runPiSingleRequest,
   shouldAwaitPresentationAction,
   withPiInclassWhiteboardTools,
 } from '@/components/chat/use-chat-sessions';
@@ -201,5 +202,62 @@ describe('shouldAwaitPresentationAction', () => {
     expect(shouldAwaitPresentationAction('wb_clear')).toBe(true);
     expect(shouldAwaitPresentationAction('wb_edit_code')).toBe(true);
     expect(shouldAwaitPresentationAction('play_video')).toBe(false);
+  });
+});
+
+describe('runPiSingleRequest', () => {
+  it('treats EOF without a done event as interrupted without waiting for drain', async () => {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({
+              type: 'agent_start',
+              data: {
+                messageId: 'message-1',
+                agentId: 'teacher-1',
+                agentName: 'Teacher',
+              },
+            })}\n\n`,
+          ),
+        );
+        controller.close();
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(body, { status: 200 })),
+    );
+    const onIterationEnd = vi.fn(async () => {
+      throw new Error('must not wait for a missing done event');
+    });
+    const clearAfterError = vi.fn();
+
+    try {
+      await runPiSingleRequest(
+        'session-1',
+        {
+          messages: [],
+          storeState: {},
+          config: { agentIds: ['teacher-1'] },
+          apiKey: '',
+        } as unknown as ChatRequestTemplate,
+        new AbortController(),
+        'qa',
+        () => ({ onEvent: vi.fn(), onIterationEnd }),
+        clearAfterError,
+        vi.fn(),
+        vi.fn(),
+        vi.fn(),
+        { current: vi.fn() },
+        (key) => key,
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(onIterationEnd).not.toHaveBeenCalled();
+    expect(clearAfterError).toHaveBeenCalledWith('session-1', 'chat.error.streamInterrupted');
   });
 });

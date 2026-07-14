@@ -105,7 +105,7 @@ export interface StreamBufferCallbacks {
    */
   onTextReveal(messageId: string, partId: string, revealedText: string, isComplete: boolean): void;
   /** Fired when tick reaches an action item. Callers should execute the effect + add badge. */
-  onActionReady(messageId: string, data: ActionItem): void | Promise<void>;
+  onActionReady(messageId: string, data: ActionItem, signal: AbortSignal): void | Promise<void>;
   /**
    * Unified speech feed for the Roundtable bubble.
    * Reports only the CURRENT segment text (resets on action / agent switch).
@@ -190,6 +190,7 @@ export class StreamBuffer {
   private _actionCompletion: Promise<void> | null = null;
   private _flushing = false;
   private _flushPromise: Promise<void> | null = null;
+  private readonly lifecycleAbortController = new AbortController();
 
   // Config
   private readonly tickMs: number;
@@ -431,6 +432,7 @@ export class StreamBuffer {
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
+    this.lifecycleAbortController.abort();
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
@@ -452,6 +454,7 @@ export class StreamBuffer {
   shutdown(): void {
     if (this._disposed) return;
     this._disposed = true;
+    this.lifecycleAbortController.abort();
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
@@ -720,7 +723,9 @@ export class StreamBuffer {
   private trackAction(item: ActionItem): Promise<void> {
     let completion: Promise<void>;
     try {
-      completion = Promise.resolve(this.cb.onActionReady(item.messageId, item));
+      completion = Promise.resolve(
+        this.cb.onActionReady(item.messageId, item, this.lifecycleAbortController.signal),
+      );
     } catch (error) {
       this.reportActionError(item, error);
       completion = Promise.resolve();

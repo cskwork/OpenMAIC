@@ -1536,6 +1536,19 @@ describe('Pi call_agent JSON action output', () => {
       'wb_draw_code',
       'wb_edit_code',
     ]);
+    const emittedActions = events.filter((event) => event.type === 'action');
+    const drawActions = emittedActions.filter((event) =>
+      event.data.actionName.startsWith('wb_draw_'),
+    );
+    expect(drawActions.every((event) => typeof event.data.params.elementId === 'string')).toBe(
+      true,
+    );
+    expect(
+      emittedActions.find((event) => event.data.actionName === 'wb_draw_code')?.data.params,
+    ).toMatchObject({ elementId: 'code-1', lineIds: ['L1', 'L2'] });
+    expect(
+      emittedActions.find((event) => event.data.actionName === 'wb_edit_code')?.data.params,
+    ).toMatchObject({ newLineIds: [expect.any(String)] });
     expect(events.filter((event) => event.type === 'text_delta')).toEqual([
       {
         type: 'text_delta',

@@ -416,6 +416,10 @@ export function buildChildActionTools(opts: {
 
       const actionParams = params as Record<string, unknown>;
 
+      if (isWhiteboardDrawAction(name) && !actionParams.elementId) {
+        actionParams.elementId = nanoid();
+      }
+
       if (name === 'wb_draw_table' && !isNonEmptyRectangularStringMatrix(actionParams.data)) {
         return {
           content: [
@@ -523,6 +527,30 @@ export function buildChildActionTools(opts: {
         }
       }
 
+      if (name === 'wb_draw_code') {
+        actionParams.lineIds = String(actionParams.code ?? '')
+          .split('\n')
+          .map((_line, index) => `L${index + 1}`);
+      }
+      if (name === 'wb_edit_code') {
+        const operation = actionParams.operation;
+        if (
+          operation === 'insert_after' ||
+          operation === 'insert_before' ||
+          operation === 'replace_lines'
+        ) {
+          const contentLineCount = String(actionParams.content ?? '').split('\n').length;
+          const replacedLineIds =
+            operation === 'replace_lines' && Array.isArray(actionParams.lineIds)
+              ? actionParams.lineIds.map(String)
+              : [];
+          actionParams.newLineIds = Array.from(
+            { length: contentLineCount },
+            (_unused, index) => replacedLineIds[index] ?? nanoid(),
+          );
+        }
+      }
+
       const actionId = nanoid();
       emittedActionCount += 1;
       await opts.send({
@@ -550,10 +578,9 @@ export function buildChildActionTools(opts: {
         if (typeof elementId === 'string' && elementId) {
           whiteboardState.knownElementIds.add(elementId);
           if (name === 'wb_draw_code') {
-            const code = String(actionParams.code ?? '');
             whiteboardState.codeLineIdsByElementId.set(
               elementId,
-              new Set(code.split('\n').map((_line, index) => `L${index + 1}`)),
+              new Set((actionParams.lineIds as string[]) ?? []),
             );
           }
         }
@@ -573,9 +600,10 @@ export function buildChildActionTools(opts: {
           const targetLineIds = (actionParams.lineIds as string[]) ?? [];
           targetLineIds.forEach((lineId) => lineIds.delete(lineId));
           if (operation === 'replace_lines') {
-            const replacementCount = String(actionParams.content ?? '').split('\n').length;
-            targetLineIds.slice(0, replacementCount).forEach((lineId) => lineIds.add(lineId));
+            ((actionParams.newLineIds as string[]) ?? []).forEach((lineId) => lineIds.add(lineId));
           }
+        } else if (lineIds && (operation === 'insert_after' || operation === 'insert_before')) {
+          ((actionParams.newLineIds as string[]) ?? []).forEach((lineId) => lineIds.add(lineId));
         }
       }
       opts.onActionDone(
