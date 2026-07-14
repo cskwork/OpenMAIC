@@ -9,6 +9,8 @@ import type { QuestionResult } from '@/lib/quiz/grading';
  *                            cleared at submit time.
  *   quizAnswers:<sceneId>  — answers written once at submit, cleared on retry.
  *   quizResults:<sceneId>  — graded results written once at reviewing, cleared on retry.
+ *   quizAttemptId:<sceneId> — stable id linking those keys to one RuntimeSession,
+ *                             rotated on retry and cleared with the scene.
  *
  * Both quiz-view (to rehydrate its own state) and the classroom-complete page
  * (to compute aggregate scores) read through this module so the storage
@@ -18,6 +20,7 @@ import type { QuestionResult } from '@/lib/quiz/grading';
 export const DRAFT_KEY_PREFIX = 'quizDraft:';
 export const ANSWERS_KEY_PREFIX = 'quizAnswers:';
 export const RESULTS_KEY_PREFIX = 'quizResults:';
+export const ATTEMPT_ID_KEY_PREFIX = 'quizAttemptId:';
 
 /** Build the draft cache key for a scene. Use this everywhere that needs the
  *  in-progress quiz answers (e.g. `useDraftCache`) so the prefix stays in
@@ -56,6 +59,31 @@ function safeRemove(key: string): void {
   } catch {
     // ignore
   }
+}
+
+function mintQuizAttemptId(): string {
+  const suffix =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `quiz-attempt:${suffix}`;
+}
+
+/** Stable bridge from the legacy per-scene keys to one runtime attempt session. */
+export function getOrCreateQuizAttemptId(sceneId: string): string | null {
+  if (typeof window === 'undefined') return null;
+  const key = ATTEMPT_ID_KEY_PREFIX + sceneId;
+  const existing = safeGet(key);
+  if (existing) return existing;
+  const attemptId = mintQuizAttemptId();
+  safeSet(key, attemptId);
+  return attemptId;
+}
+
+/** Start a distinct attempt after retry without deleting historical runtime data. */
+export function rotateQuizAttemptId(sceneId: string): string | null {
+  safeRemove(ATTEMPT_ID_KEY_PREFIX + sceneId);
+  return getOrCreateQuizAttemptId(sceneId);
 }
 
 /** Read quiz-view's post-submit state: answers + optional graded results. */
@@ -123,4 +151,5 @@ export function clearAllForScene(sceneId: string): void {
   safeRemove(DRAFT_KEY_PREFIX + sceneId);
   safeRemove(ANSWERS_KEY_PREFIX + sceneId);
   safeRemove(RESULTS_KEY_PREFIX + sceneId);
+  safeRemove(ATTEMPT_ID_KEY_PREFIX + sceneId);
 }

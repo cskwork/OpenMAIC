@@ -23,12 +23,15 @@ vi.stubGlobal('window', { localStorage: localStorageStub });
 
 import {
   ANSWERS_KEY_PREFIX,
+  ATTEMPT_ID_KEY_PREFIX,
   DRAFT_KEY_PREFIX,
   RESULTS_KEY_PREFIX,
   clearAllForScene,
   clearSubmitted,
+  getOrCreateQuizAttemptId,
   readAnswersForSummary,
   readSubmittedState,
+  rotateQuizAttemptId,
   writeSubmittedAnswers,
   writeSubmittedResults,
 } from '@/lib/quiz/persistence';
@@ -37,6 +40,7 @@ import type { QuestionResult } from '@/lib/quiz/grading';
 describe('quiz persistence', () => {
   beforeEach(() => {
     localStorageStub.clear();
+    vi.stubGlobal('window', { localStorage: localStorageStub });
   });
 
   it('readSubmittedState returns null when nothing is stored', () => {
@@ -85,8 +89,9 @@ describe('quiz persistence', () => {
     expect(localStorageStub.getItem(DRAFT_KEY_PREFIX + 's1')).not.toBeNull();
   });
 
-  it('clearAllForScene wipes all three keys for a single scene', () => {
+  it('clearAllForScene wipes quiz state and its runtime attempt pointer', () => {
     localStorageStub.setItem(DRAFT_KEY_PREFIX + 's1', '{}');
+    getOrCreateQuizAttemptId('s1');
     writeSubmittedAnswers('s1', { q1: 'a' });
     writeSubmittedResults('s1', [
       { questionId: 'q1', correct: true, status: 'correct', earned: 1 },
@@ -99,7 +104,29 @@ describe('quiz persistence', () => {
     expect(localStorageStub.getItem(DRAFT_KEY_PREFIX + 's1')).toBeNull();
     expect(localStorageStub.getItem(ANSWERS_KEY_PREFIX + 's1')).toBeNull();
     expect(localStorageStub.getItem(RESULTS_KEY_PREFIX + 's1')).toBeNull();
+    expect(localStorageStub.getItem(ATTEMPT_ID_KEY_PREFIX + 's1')).toBeNull();
     expect(localStorageStub.getItem(ANSWERS_KEY_PREFIX + 's2')).not.toBeNull();
+  });
+
+  it('keeps a stable attempt id until retry rotates it', () => {
+    const first = getOrCreateQuizAttemptId('s1');
+    expect(getOrCreateQuizAttemptId('s1')).toBe(first);
+
+    const second = rotateQuizAttemptId('s1');
+    expect(second).not.toBe(first);
+    expect(getOrCreateQuizAttemptId('s1')).toBe(second);
+  });
+
+  it('does not mint an unpersisted attempt id during SSR', () => {
+    vi.stubGlobal('window', undefined);
+
+    expect(getOrCreateQuizAttemptId('s1')).toBeNull();
+    expect(localStorageStub.getItem(ATTEMPT_ID_KEY_PREFIX + 's1')).toBeNull();
+
+    vi.stubGlobal('window', { localStorage: localStorageStub });
+    const clientId = getOrCreateQuizAttemptId('s1');
+    expect(clientId).not.toBeNull();
+    expect(localStorageStub.getItem(ATTEMPT_ID_KEY_PREFIX + 's1')).toBe(clientId);
   });
 
   it('readAnswersForSummary prefers submitted over draft', () => {
