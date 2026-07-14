@@ -69,21 +69,35 @@ function mintQuizAttemptId(): string {
   return `quiz-attempt:${suffix}`;
 }
 
-/** Stable bridge from the legacy per-scene keys to one runtime attempt session. */
-export function getOrCreateQuizAttemptId(sceneId: string): string | null {
-  if (typeof window === 'undefined') return null;
-  const key = ATTEMPT_ID_KEY_PREFIX + sceneId;
-  const existing = safeGet(key);
-  if (existing) return existing;
+function withQuizAttemptIdLock<T>(sceneId: string, work: () => T): Promise<T> {
+  if (typeof navigator !== 'undefined' && navigator.locks) {
+    return navigator.locks.request(`maic:quiz-attempt-id:${sceneId}`, work);
+  }
+  return Promise.resolve(work());
+}
+
+function mintAndStoreQuizAttemptId(sceneId: string): string {
   const attemptId = mintQuizAttemptId();
-  safeSet(key, attemptId);
+  safeSet(ATTEMPT_ID_KEY_PREFIX + sceneId, attemptId);
   return attemptId;
 }
 
+/** Stable bridge from the legacy per-scene keys to one runtime attempt session. */
+export async function getOrCreateQuizAttemptId(sceneId: string): Promise<string | null> {
+  if (typeof window === 'undefined') return null;
+  return withQuizAttemptIdLock(sceneId, () => {
+    const existing = safeGet(ATTEMPT_ID_KEY_PREFIX + sceneId);
+    return existing ?? mintAndStoreQuizAttemptId(sceneId);
+  });
+}
+
 /** Start a distinct attempt after retry without deleting historical runtime data. */
-export function rotateQuizAttemptId(sceneId: string): string | null {
-  safeRemove(ATTEMPT_ID_KEY_PREFIX + sceneId);
-  return getOrCreateQuizAttemptId(sceneId);
+export async function rotateQuizAttemptId(sceneId: string): Promise<string | null> {
+  if (typeof window === 'undefined') return null;
+  return withQuizAttemptIdLock(sceneId, () => {
+    safeRemove(ATTEMPT_ID_KEY_PREFIX + sceneId);
+    return mintAndStoreQuizAttemptId(sceneId);
+  });
 }
 
 /** Read quiz-view's post-submit state: answers + optional graded results. */

@@ -93,9 +93,9 @@ describe('quiz persistence', () => {
     expect(localStorageStub.getItem(DRAFT_KEY_PREFIX + 's1')).not.toBeNull();
   });
 
-  it('clearAllForScene wipes quiz state and its runtime attempt pointer', () => {
+  it('clearAllForScene wipes quiz state and its runtime attempt pointer', async () => {
     localStorageStub.setItem(DRAFT_KEY_PREFIX + 's1', '{}');
-    getOrCreateQuizAttemptId('s1');
+    await getOrCreateQuizAttemptId('s1');
     writeSubmittedAnswers('s1', { q1: 'a' });
     writeSubmittedResults('s1', [
       { questionId: 'q1', correct: true, status: 'correct', earned: 1 },
@@ -112,25 +112,54 @@ describe('quiz persistence', () => {
     expect(localStorageStub.getItem(ANSWERS_KEY_PREFIX + 's2')).not.toBeNull();
   });
 
-  it('keeps a stable attempt id until retry rotates it', () => {
-    const first = getOrCreateQuizAttemptId('s1');
-    expect(getOrCreateQuizAttemptId('s1')).toBe(first);
+  it('keeps a stable attempt id until retry rotates it', async () => {
+    const first = await getOrCreateQuizAttemptId('s1');
+    expect(await getOrCreateQuizAttemptId('s1')).toBe(first);
 
-    const second = rotateQuizAttemptId('s1');
+    const second = await rotateQuizAttemptId('s1');
     expect(second).not.toBe(first);
-    expect(getOrCreateQuizAttemptId('s1')).toBe(second);
+    expect(await getOrCreateQuizAttemptId('s1')).toBe(second);
   });
 
-  it('does not mint an unpersisted attempt id during SSR', () => {
+  it('does not mint an unpersisted attempt id during SSR', async () => {
     vi.stubGlobal('window', undefined);
 
-    expect(getOrCreateQuizAttemptId('s1')).toBeNull();
+    expect(await getOrCreateQuizAttemptId('s1')).toBeNull();
     expect(localStorageStub.getItem(ATTEMPT_ID_KEY_PREFIX + 's1')).toBeNull();
 
     vi.stubGlobal('window', { localStorage: localStorageStub });
-    const clientId = getOrCreateQuizAttemptId('s1');
+    const clientId = await getOrCreateQuizAttemptId('s1');
     expect(clientId).not.toBeNull();
     expect(localStorageStub.getItem(ATTEMPT_ID_KEY_PREFIX + 's1')).toBe(clientId);
+  });
+
+  it('serializes concurrent attempt id creation across tabs', async () => {
+    let tail = Promise.resolve();
+    const request = vi.fn(
+      async <T>(_name: string, callback: () => T | PromiseLike<T>): Promise<T> => {
+        const prior = tail;
+        let release!: () => void;
+        tail = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        await prior;
+        try {
+          return await callback();
+        } finally {
+          release();
+        }
+      },
+    );
+    vi.stubGlobal('navigator', { locks: { request } });
+
+    const [first, second] = await Promise.all([
+      getOrCreateQuizAttemptId('s1'),
+      getOrCreateQuizAttemptId('s1'),
+    ]);
+
+    expect(first).toBe(second);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledWith('maic:quiz-attempt-id:s1', expect.any(Function));
   });
 
   it('readAnswersForSummary prefers submitted over draft', () => {

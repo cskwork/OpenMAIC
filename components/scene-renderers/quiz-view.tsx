@@ -727,7 +727,15 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
   useEffect(() => {
     // The id must be acquired after hydration. Minting during SSR cannot persist
     // it, and React would otherwise preserve that orphaned initializer value.
-    setAttemptId(getOrCreateQuizAttemptId(sceneId));
+    let cancelled = false;
+    void getOrCreateQuizAttemptId(sceneId)
+      .then((nextAttemptId) => {
+        if (!cancelled) setAttemptId(nextAttemptId);
+      })
+      .catch((error) => log.warn('Failed to acquire quiz attempt id:', error));
+    return () => {
+      cancelled = true;
+    };
   }, [sceneId]);
 
   // Draft cache for quiz answers, keyed by sceneId to isolate across classrooms
@@ -889,7 +897,10 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
     clearAnswersCache();
     clearSubmitted(sceneId);
     runtimeWriter.cancelDraft();
-    setAttemptId(rotateQuizAttemptId(sceneId));
+    setAttemptId(null);
+    void rotateQuizAttemptId(sceneId)
+      .then(setAttemptId)
+      .catch((error) => log.warn('Failed to rotate quiz attempt id:', error));
   }, [clearAnswersCache, runtimeWriter, sceneId]);
 
   const earnedScore = useMemo(() => results.reduce((sum, r) => sum + r.earned, 0), [results]);
