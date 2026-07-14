@@ -525,50 +525,56 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   // When true, newly created discussion/QA buffers are immediately paused.
   const livePausedRef = useRef(false);
 
-  const clearLiveSessionAfterError = useCallback((sessionId: string, message: string) => {
-    const now = Date.now();
-    const errorMessageId = `error-${now}`;
+  const clearLiveSessionAfterError = useCallback(
+    (sessionId: string, message: string) => {
+      const now = Date.now();
+      const errorMessageId = `error-${now}`;
 
-    const buf = buffersRef.current.get(sessionId);
-    if (buf) {
-      buf.shutdown();
-      buffersRef.current.delete(sessionId);
-    }
+      if (streamingSessionIdRef.current === sessionId) {
+        retireActiveLiveRequest(sessionId);
+      } else {
+        const retirement = retireLiveRequestResources(null, sessionId, buffersRef.current);
+        pendingRetirementRef.current = Promise.all([pendingRetirementRef.current, retirement]).then(
+          () => undefined,
+        );
+      }
 
-    setSessions((prev) =>
-      prev.map((s) =>
-        s.id === sessionId
-          ? {
-              ...s,
-              status: 'error' as SessionStatus,
-              updatedAt: now,
-              messages: [
-                ...s.messages,
-                {
-                  id: errorMessageId,
-                  role: 'assistant' as const,
-                  parts: [{ type: 'text', text: message }],
-                  metadata: {
-                    senderName: 'System',
-                    originalRole: 'agent' as const,
-                    createdAt: now,
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.id === sessionId
+            ? {
+                ...s,
+                status: 'error' as SessionStatus,
+                updatedAt: now,
+                messages: [
+                  ...s.messages,
+                  {
+                    id: errorMessageId,
+                    role: 'assistant' as const,
+                    parts: [{ type: 'text', text: message }],
+                    metadata: {
+                      senderName: 'System',
+                      originalRole: 'agent' as const,
+                      createdAt: now,
+                    },
                   },
-                },
-              ],
-            }
-          : s,
-      ),
-    );
+                ],
+              }
+            : s,
+        ),
+      );
 
-    onActiveBubbleRef.current?.(null);
-    if (onLiveSessionErrorRef.current) {
-      onLiveSessionErrorRef.current();
-    } else {
-      onSpeechProgressRef.current?.(null);
-      onThinkingRef.current?.(null);
-      onLiveSpeechRef.current?.(null, null);
-    }
-  }, []);
+      onActiveBubbleRef.current?.(null);
+      if (onLiveSessionErrorRef.current) {
+        onLiveSessionErrorRef.current();
+      } else {
+        onSpeechProgressRef.current?.(null);
+        onThinkingRef.current?.(null);
+        onLiveSpeechRef.current?.(null, null);
+      }
+    },
+    [retireActiveLiveRequest],
+  );
 
   // Tracks the single message ID per lecture session
   const lectureMessageIds = useRef<Map<string, string>>(new Map());
