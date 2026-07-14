@@ -63,13 +63,17 @@ export class RuntimeAppendConflictError extends Error {
   }
 }
 
-/** Optional parent-session mutation committed with one appended record. */
-export interface RuntimeAppendOptions {
+/** Optional compare-and-swap guard against a session's current record tail. */
+export interface RuntimeTailOptions {
   /**
-   * Compare-and-append guard checked in the write transaction. `null` means
+   * Compare guard checked in the write transaction. `null` means
    * the caller observed no records; omitted means no precondition.
    */
   expectedLastSeq?: number | null;
+}
+
+/** Optional parent-session mutation committed with one appended record. */
+export interface RuntimeAppendOptions extends RuntimeTailOptions {
   sessionTransition?: {
     status: RuntimeSessionStatus;
     updatedAt: string;
@@ -124,12 +128,15 @@ export interface RuntimeStore {
    * (the store is clock-free). Throws if the session is absent, if the stored
    * copy is future-stamped, or if the envelope would become invalid — or
    * throws the runtime version line's own error when the stored row's stamp
-   * is corrupt (absent / malformed / sibling-stamped).
+   * is corrupt (absent / malformed / sibling-stamped). When
+   * `expectedLastSeq` is supplied, the status changes only if the record tail
+   * still matches, in the same transaction.
    */
   setSessionStatus(
     sessionId: string,
     status: RuntimeSessionStatus,
     updatedAt: string,
+    options?: RuntimeTailOptions,
   ): Promise<void>;
 
   /** Delete one session and all its records. Idempotent. */

@@ -465,6 +465,49 @@ describe('quiz attempt runtime persistence', () => {
     ]);
   });
 
+  it('heals an active reviewed tail without appending the reviewed fact twice', async () => {
+    const { store, deps } = makeHarness();
+    await store.createSession({
+      id: 'attempt-orphan',
+      kind: 'quizAttempt',
+      stageId: 'stage-1',
+      learnerKey: 'learner-1',
+      status: 'active',
+      createdAt: '2026-07-14T12:00:00.000Z',
+      updatedAt: '2026-07-14T12:00:00.000Z',
+    });
+    const reviewedPayload = {
+      payloadVersion: 1 as const,
+      phase: 'reviewed' as const,
+      answers: { q1: 'A' },
+      results,
+    };
+    await store.appendRecord({
+      id: 'legacy-reviewed',
+      sessionId: 'attempt-orphan',
+      sceneId: 'scene-quiz',
+      createdAt: '2026-07-14T12:00:00.001Z',
+      payload: reviewedPayload,
+    });
+
+    await recordQuizAttempt(
+      {
+        stageId: 'stage-1',
+        sceneId: 'scene-quiz',
+        attemptId: 'attempt-orphan',
+        phase: 'reviewed',
+        answers: { q1: 'A' },
+        results,
+      },
+      deps,
+    );
+
+    expect((await store.getSession('attempt-orphan'))?.status).toBe('completed');
+    expect((await store.listRecords('attempt-orphan')).map((record) => record.payload)).toEqual([
+      reviewedPayload,
+    ]);
+  });
+
   it('keeps repeated attempts in separate sessions', async () => {
     const { store, deps } = makeHarness();
 

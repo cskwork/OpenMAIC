@@ -145,6 +145,20 @@ export function runRuntimeStoreContract(name: string, makeStore: () => RuntimeSt
         );
       });
 
+      test('setSessionStatus can compare the record tail before transitioning', async () => {
+        const store = makeStore();
+        await store.createSession(makeSession());
+        await store.appendRecord(makeRecordInit('sess-1'));
+
+        await expect(
+          store.setSessionStatus('sess-1', 'completed', T1, { expectedLastSeq: null }),
+        ).rejects.toBeInstanceOf(RuntimeAppendConflictError);
+        expect((await store.getSession('sess-1'))?.status).toBe('active');
+
+        await store.setSessionStatus('sess-1', 'completed', T1, { expectedLastSeq: 0 });
+        expect((await store.getSession('sess-1'))?.status).toBe('completed');
+      });
+
       test('deleteSession removes the session and its records; idempotent', async () => {
         const store = makeStore();
         await store.createSession(makeSession());

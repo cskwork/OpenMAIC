@@ -265,8 +265,19 @@ export async function recordQuizAttempt(
 
           // An active session with a reviewed tail can exist from an older
           // client that appended before its separate completion write. Heal
-          // it by appending reviewed once more with the atomic transition.
+          // only the status, guarded by the record tail in the same transaction.
           if (last && samePayload(last, payload) && payload.phase !== 'reviewed') return;
+          if (last && lastRecord && samePayload(last, payload)) {
+            try {
+              await store.setSessionStatus(sessionId, 'completed', timestamp, {
+                expectedLastSeq: lastRecord.seq,
+              });
+            } catch (error) {
+              if (error instanceof RuntimeAppendConflictError) continue;
+              throw error;
+            }
+            return;
+          }
 
           try {
             await store.appendRecord(

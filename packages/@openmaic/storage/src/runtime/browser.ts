@@ -31,6 +31,7 @@ import type {
   RuntimePayloadValidator,
   RuntimeSessionInit,
   RuntimeStore,
+  RuntimeTailOptions,
 } from './types.js';
 import { RuntimeAppendConflictError } from './types.js';
 
@@ -298,8 +299,18 @@ export class BrowserRuntimeStore implements RuntimeStore {
     sessionId: string,
     status: RuntimeSessionStatus,
     updatedAt: string,
+    options: RuntimeTailOptions = {},
   ): Promise<void> {
-    await this.txRun([SESSIONS], 'readwrite', async (tx) => {
+    const expectedLastSeq = options.expectedLastSeq;
+    if (
+      expectedLastSeq !== undefined &&
+      expectedLastSeq !== null &&
+      (!Number.isSafeInteger(expectedLastSeq) || expectedLastSeq < 0)
+    ) {
+      throw new Error('@openmaic/storage: expectedLastSeq must be null or a non-negative integer');
+    }
+
+    await this.txRun([SESSIONS, RECORDS], 'readwrite', async (tx) => {
       const sessions = tx.objectStore(SESSIONS);
       const row = await reqP<RuntimeSession | undefined>(sessions.get(sessionId));
       if (!row) {
@@ -313,6 +324,15 @@ export class BrowserRuntimeStore implements RuntimeStore {
       // this interface has no full-session save for a caller-side remedy.
       const updated: RuntimeSession = { ...migrateSession(row), status, updatedAt };
       assertValid(validateRuntimeSession(updated), `runtime session ${JSON.stringify(sessionId)}`);
+      if (expectedLastSeq !== undefined) {
+        const last = await reqP(
+          tx.objectStore(RECORDS).openKeyCursor(sessionRecordRange(sessionId), 'prev'),
+        );
+        const actualLastSeq = last ? (last.primaryKey as [string, number])[1] : null;
+        if (expectedLastSeq !== actualLastSeq) {
+          throw new RuntimeAppendConflictError(sessionId, expectedLastSeq, actualLastSeq);
+        }
+      }
       sessions.put(updated);
     });
   }
