@@ -56,6 +56,15 @@ export interface RenderOptions {
   quality?: VideoQuality;
 }
 
+/** Fully-resolved render options (the store always holds concrete values). */
+type ResolvedOptions = Required<RenderOptions>;
+
+const DEFAULT_OPTIONS: ResolvedOptions = {
+  resolution: '1080p',
+  fps: 30,
+  quality: 'standard',
+};
+
 interface JobStatusResponse {
   jobId: string;
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
@@ -73,9 +82,16 @@ interface VideoRenderState {
   etaMs: number | null;
   filename: string | null;
   error: string | null;
+  /**
+   * The user's selected render options. Held in the store (not the menu
+   * component) so they survive the menu unmounting on scene switches and, while
+   * a render runs, reflect the options that render is actually using.
+   */
+  options: ResolvedOptions;
+  setOptions: (patch: Partial<ResolvedOptions>) => void;
   /** True while a render is in flight (compiling or rendering). */
   isActive: () => boolean;
-  startRender: (options: RenderOptions, t: Translate) => Promise<void>;
+  startRender: (t: Translate) => Promise<void>;
   reset: () => void;
 }
 
@@ -90,16 +106,19 @@ export const useVideoRenderStore = create<VideoRenderState>()((set, get) => ({
   etaMs: null,
   filename: null,
   error: null,
+  options: DEFAULT_OPTIONS,
+
+  setOptions: (patch) => set((s) => ({ options: { ...s.options, ...patch } })),
 
   isActive: () => inFlight(get().status),
 
   reset: () => set({ status: 'idle', percent: 0, etaMs: null, filename: null, error: null }),
 
-  startRender: async (options, t) => {
+  startRender: async (t) => {
     // Guard against a duplicate submit — the whole reason state lives here.
     if (inFlight(get().status)) return;
 
-    const { resolution = '1080p', fps = 30, quality = 'standard' } = options;
+    const { resolution, fps, quality } = get().options;
 
     set({ status: 'compiling', percent: 0, etaMs: null, filename: null, error: null });
     const toastId = toast.loading(t('export.videoCompiling'));

@@ -25,8 +25,6 @@ import {
   VIDEO_FPS,
   VIDEO_QUALITIES,
   VIDEO_RESOLUTIONS,
-  type VideoFps,
-  type VideoQuality,
   type VideoResolution,
 } from '@/lib/video-export-app/build-export-zip';
 
@@ -89,11 +87,8 @@ function OptionRow<T extends string | number>({
 export function VideoExportMenu({ onClose }: { onClose: () => void }) {
   const { t } = useI18n();
   const { exporting: isExportingVideo, exportVideo } = useExportVideo();
-  const { rendering, percent, etaMs, renderVideo } = useRenderVideo();
-
-  const [resolution, setResolution] = useState<VideoResolution>('1080p');
-  const [fps, setFps] = useState<VideoFps>(30);
-  const [quality, setQuality] = useState<VideoQuality>('standard');
+  const { rendering, percent, etaMs, options, setOptions, renderVideo } = useRenderVideo();
+  const { resolution, fps, quality } = options;
   // undefined = unknown (still probing); true/false = capability answer.
   const [serviceEnabled, setServiceEnabled] = useState<boolean | undefined>(undefined);
 
@@ -131,7 +126,7 @@ export function VideoExportMenu({ onClose }: { onClose: () => void }) {
         label={t('export.videoResolution')}
         options={RESOLUTIONS}
         value={resolution}
-        onChange={setResolution}
+        onChange={(resolution) => setOptions({ resolution })}
         format={(r) => (r === '4k' ? '4K' : r)}
         disabled={busy}
       />
@@ -143,14 +138,14 @@ export function VideoExportMenu({ onClose }: { onClose: () => void }) {
             label={t('export.videoFps')}
             options={VIDEO_FPS}
             value={fps}
-            onChange={setFps}
+            onChange={(fps) => setOptions({ fps })}
             disabled={busy}
           />
           <OptionRow
             label={t('export.videoQuality')}
             options={VIDEO_QUALITIES}
             value={quality}
-            onChange={setQuality}
+            onChange={(quality) => setOptions({ quality })}
             format={(q) => t(`export.videoQuality_${q}`)}
             disabled={busy}
           />
@@ -174,7 +169,7 @@ export function VideoExportMenu({ onClose }: { onClose: () => void }) {
       <div className="px-4 pb-2.5 flex flex-col gap-1.5">
         {serviceEnabled && (
           <button
-            onClick={() => renderVideo({ resolution, fps, quality })}
+            onClick={() => renderVideo()}
             disabled={busy}
             className="w-full px-2 py-1.5 text-xs rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center justify-center gap-1.5"
           >
