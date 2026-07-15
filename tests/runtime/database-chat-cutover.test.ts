@@ -105,86 +105,116 @@ describe('database runtime chat integration', () => {
     );
   });
 
-  it('keeps backup staging and runtime clearing in the same cross-tab lock', async () => {
-    const indexedDB = globalThis.indexedDB;
-    const importingStore = new BrowserRuntimeStore({ indexedDB, dbName: 'restore-lock' });
-    const loadingStore = new BrowserRuntimeStore({ indexedDB, dbName: 'restore-lock' });
-    const { db, exportDatabase, importDatabase } = await import('@/lib/utils/database');
-    const { loadChatSessions, saveChatSessions } = await import('@/lib/utils/chat-storage');
-    vi.stubGlobal('navigator', { locks: serialLockManager() });
-    await db.stages.bulkPut([
-      {
-        id: 'stage-backup',
-        name: 'Backup stage',
-        createdAt: 1_000,
-        updatedAt: 2_000,
-      },
-      {
-        id: 'stage-z-backup',
-        name: 'Later backup stage',
-        createdAt: 1_000,
-        updatedAt: 2_000,
-      },
-    ]);
-    await saveChatSessions('stage-backup', [chatSession()], {
-      store: importingStore,
-      learnerKey,
-    });
-    await saveChatSessions(
-      'stage-z-backup',
-      [{ ...chatSession(), id: 'chat-z-backup', title: 'Later persisted chat' }],
-      { store: importingStore, learnerKey },
-    );
-    const exported = await exportDatabase({ store: importingStore, learnerKey });
-    await saveChatSessions(
-      'stage-backup',
-      [{ ...chatSession(), title: 'Newer local chat', updatedAt: 3_000 }],
-      { store: importingStore, learnerKey },
-    );
-    await saveChatSessions(
-      'stage-z-backup',
-      [
+  it.each(['Web Locks', 'IndexedDB lease fallback'])(
+    'keeps backup staging and runtime clearing in the same cross-tab lock with %s',
+    async (lockMode) => {
+      const indexedDB = globalThis.indexedDB;
+      const importingStore = new BrowserRuntimeStore({ indexedDB, dbName: 'restore-lock' });
+      const loadingStore = new BrowserRuntimeStore({ indexedDB, dbName: 'restore-lock' });
+      const { db, exportDatabase, importDatabase } = await import('@/lib/utils/database');
+      const { loadChatSessions, saveChatSessions } = await import('@/lib/utils/chat-storage');
+      if (lockMode === 'Web Locks') {
+        vi.stubGlobal('navigator', { locks: serialLockManager() });
+      } else {
+        vi.stubGlobal('navigator', {});
+      }
+      await db.stages.bulkPut([
         {
-          ...chatSession(),
-          id: 'chat-z-backup',
-          title: 'Later newer local chat',
-          updatedAt: 3_000,
+          id: 'stage-backup',
+          name: 'Backup stage',
+          createdAt: 1_000,
+          updatedAt: 2_000,
         },
-      ],
-      { store: importingStore, learnerKey },
-    );
+        {
+          id: 'stage-z-backup',
+          name: 'Later backup stage',
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      ]);
+      await saveChatSessions('stage-backup', [chatSession()], {
+        store: importingStore,
+        learnerKey,
+      });
+      await saveChatSessions(
+        'stage-z-backup',
+        [{ ...chatSession(), id: 'chat-z-backup', title: 'Later persisted chat' }],
+        { store: importingStore, learnerKey },
+      );
+      const exported = await exportDatabase({ store: importingStore, learnerKey });
+      await saveChatSessions(
+        'stage-backup',
+        [{ ...chatSession(), title: 'Newer local chat', updatedAt: 3_000 }],
+        { store: importingStore, learnerKey },
+      );
+      await saveChatSessions(
+        'stage-z-backup',
+        [
+          {
+            ...chatSession(),
+            id: 'chat-z-backup',
+            title: 'Later newer local chat',
+            updatedAt: 3_000,
+          },
+        ],
+        { store: importingStore, learnerKey },
+      );
 
-    const originalTransaction = db.transaction.bind(db) as (...args: unknown[]) => Promise<unknown>;
-    let transactionCommitted!: () => void;
-    const didCommit = new Promise<void>((resolve) => {
-      transactionCommitted = resolve;
+      const originalTransaction = db.transaction.bind(db) as (
+        ...args: unknown[]
+      ) => Promise<unknown>;
+      let transactionCommitted!: () => void;
+      const didCommit = new Promise<void>((resolve) => {
+        transactionCommitted = resolve;
+      });
+      let releaseImport!: () => void;
+      const importMayContinue = new Promise<void>((resolve) => {
+        releaseImport = resolve;
+      });
+      vi.spyOn(db, 'transaction').mockImplementation(((...args: unknown[]) =>
+        originalTransaction(...args).then(async (result) => {
+          if (!Array.isArray(args[1])) return result;
+          transactionCommitted();
+          await importMayContinue;
+          return result;
+        })) as typeof db.transaction);
+
+      const importing = importDatabase(exported, { store: importingStore, learnerKey });
+      await didCommit;
+      const loading = loadChatSessions('stage-z-backup', { store: loadingStore, learnerKey });
+      const earlyOutcome = await Promise.race([
+        loading.then(() => 'read' as const),
+        new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 50)),
+      ]);
+      expect(earlyOutcome).toBe('blocked');
+
+      releaseImport();
+      await importing;
+      await expect(loading).resolves.toMatchObject([{ title: 'Later persisted chat' }]);
+      await expect(
+        loadChatSessions('stage-backup', { store: loadingStore, learnerKey }),
+      ).resolves.toMatchObject([{ title: 'Persisted chat' }]);
+    },
+  );
+
+  it('recovers an expired IndexedDB fallback lease after a tab disappears', async () => {
+    vi.stubGlobal('navigator', {});
+    const runtimeStore = new BrowserRuntimeStore({
+      indexedDB: globalThis.indexedDB,
+      dbName: 'expired-restore-lock',
     });
-    let releaseImport!: () => void;
-    const importMayContinue = new Promise<void>((resolve) => {
-      releaseImport = resolve;
+    const { db } = await import('@/lib/utils/database');
+    const { loadChatSessions } = await import('@/lib/utils/chat-storage');
+    await db.chatStorageLocks.put({
+      key: 'stage-expired-lock',
+      owner: 'closed-tab',
+      expiresAt: Date.now() - 1,
     });
-    vi.spyOn(db, 'transaction').mockImplementation(((...args: unknown[]) =>
-      originalTransaction(...args).then(async (result) => {
-        transactionCommitted();
-        await importMayContinue;
-        return result;
-      })) as typeof db.transaction);
 
-    const importing = importDatabase(exported, { store: importingStore, learnerKey });
-    await didCommit;
-    const loading = loadChatSessions('stage-z-backup', { store: loadingStore, learnerKey });
-    const earlyOutcome = await Promise.race([
-      loading.then(() => 'read' as const),
-      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 50)),
-    ]);
-    expect(earlyOutcome).toBe('blocked');
-
-    releaseImport();
-    await importing;
-    await expect(loading).resolves.toMatchObject([{ title: 'Later persisted chat' }]);
     await expect(
-      loadChatSessions('stage-backup', { store: loadingStore, learnerKey }),
-    ).resolves.toMatchObject([{ title: 'Persisted chat' }]);
+      loadChatSessions('stage-expired-lock', { store: runtimeStore, learnerKey }),
+    ).resolves.toEqual([]);
+    await expect(db.chatStorageLocks.get('stage-expired-lock')).resolves.toBeUndefined();
   });
 
   it('fails loud without deleting documents when the runtime-wide clear fails', async () => {

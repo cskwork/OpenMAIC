@@ -139,6 +139,13 @@ export interface PlaybackStateRecord {
   updatedAt: number;
 }
 
+/** Cross-tab fallback lease used when the Web Locks API is unavailable. */
+export interface ChatStorageLockRecord {
+  key: string;
+  owner: string;
+  expiresAt: number;
+}
+
 /**
  * StageOutlines table - Persisted outlines for resume-on-refresh
  */
@@ -226,7 +233,7 @@ export function mediaFileKey(stageId: string, elementId: string): string {
 // ==================== Database Definition ====================
 
 const DATABASE_NAME = 'MAIC-Database';
-const _DATABASE_VERSION = 12;
+const _DATABASE_VERSION = 13;
 
 /**
  * MAIC Database Instance
@@ -246,6 +253,7 @@ class MAICDatabase extends Dexie {
   voiceProfiles!: EntityTable<VoiceProfileRecord, 'id'>;
   autoVoiceCache!: EntityTable<AutoVoiceCacheRecord, 'voiceId'>;
   agentEditSessions!: EntityTable<AgentEditSessionRecord, 'id'>;
+  chatStorageLocks!: EntityTable<ChatStorageLockRecord, 'key'>;
 
   constructor() {
     super(DATABASE_NAME);
@@ -445,6 +453,24 @@ class MAICDatabase extends Dexie {
       voiceProfiles: 'id, providerId, kind, updatedAt',
       autoVoiceCache: 'voiceId, updatedAt',
       agentEditSessions: 'id, stageId, [stageId+updatedAt]',
+    });
+
+    // Version 13: Add a small lease table for browsers without Web Locks.
+    this.version(13).stores({
+      stages: 'id, updatedAt',
+      scenes: 'id, stageId, order, [stageId+order]',
+      audioFiles: 'id, createdAt',
+      imageFiles: 'id, createdAt',
+      snapshots: '++id',
+      chatSessions: 'id, stageId, [stageId+createdAt]',
+      playbackState: 'stageId',
+      stageOutlines: 'stageId',
+      mediaFiles: 'id, stageId, [stageId+type]',
+      generatedAgents: 'id, stageId',
+      voiceProfiles: 'id, providerId, kind, updatedAt',
+      autoVoiceCache: 'voiceId, updatedAt',
+      agentEditSessions: 'id, stageId, [stageId+updatedAt]',
+      chatStorageLocks: 'key, expiresAt',
     });
   }
 }
