@@ -1216,6 +1216,28 @@ describe('chat RuntimeStore cutover', () => {
     await expect(loadChatSessions(STAGE_ID, options)).resolves.toEqual([]);
   });
 
+  it('does not delete runtime-only chats after a legacy clear failure', async () => {
+    const store = makeRuntimeStore();
+    await saveChatSessions(STAGE_ID, [session({ id: 'runtime-only', title: 'Runtime only' })], {
+      store,
+      learnerKey: LEARNER_KEY,
+      legacyStore: new MemoryLegacyChatStore(),
+    });
+    const legacyStore = new FailingClearLegacyChatStore([
+      session({ id: 'legacy-only', title: 'Legacy only' }),
+    ]);
+    const options = { store, learnerKey: LEARNER_KEY, legacyStore };
+
+    await expect(loadChatSessions(STAGE_ID, options)).resolves.toMatchObject([
+      { id: 'legacy-only' },
+    ]);
+    await saveChatSessions(STAGE_ID, [], options);
+
+    await expect(loadChatSessions(STAGE_ID, options)).resolves.toMatchObject([
+      { id: 'runtime-only', title: 'Runtime only' },
+    ]);
+  });
+
   it('does not resurrect a legacy snapshot when a concurrent save removes it', async () => {
     const store = makeRuntimeStore();
     const legacyStore = new MemoryLegacyChatStore([session({ status: 'completed' })]);

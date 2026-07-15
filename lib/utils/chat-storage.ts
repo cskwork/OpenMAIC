@@ -957,7 +957,18 @@ export async function loadChatSessions(
     // A failed runtime read is not an authoritative empty snapshot. Forget the
     // prior observation so a later stage save cannot retire unseen data. A
     // legacy-clear failure happens after migration succeeded, so retain it.
-    if (!runtimeReadSucceeded) rememberObservedIds(resolved.store, queueKey, []);
+    if (!runtimeReadSucceeded) {
+      rememberObservedIds(resolved.store, queueKey, []);
+    } else {
+      // The fallback returns only the legacy rows. Runtime-only sessions that
+      // were discovered during sync were not exposed to the caller, so their
+      // omission from the next UI snapshot must not be treated as deletion.
+      rememberObservedIds(
+        resolved.store,
+        queueKey,
+        legacy.map((session) => session.id),
+      );
+    }
     if (legacy.length === 0) throw error;
     console.warn(`Failed to migrate chat sessions for stage ${stageId}:`, error);
     return legacy;
