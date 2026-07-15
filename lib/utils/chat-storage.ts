@@ -35,6 +35,10 @@ export interface ChatStorageOptions {
   legacyStore?: LegacyChatStore;
 }
 
+interface ChatStorageReadOptions extends ChatStorageOptions {
+  fallbackToLegacyOnError?: boolean;
+}
+
 interface ChatMessagePayload extends ChatMessageSkeleton {
   kind: 'chat_message';
   payloadVersion: typeof CHAT_PAYLOAD_VERSION;
@@ -909,7 +913,7 @@ export async function saveChatSessions(
 /** Load chat sessions, migrating legacy Dexie rows on first access. */
 export async function loadChatSessions(
   stageId: string,
-  options: ChatStorageOptions = {},
+  options: ChatStorageReadOptions = {},
 ): Promise<ChatSession[]> {
   const resolved = await context(options);
   const queueKey = `${stageId}\0${resolved.learnerKey}`;
@@ -971,6 +975,7 @@ export async function loadChatSessions(
         legacy.map((session) => session.id),
       );
     }
+    if (options.fallbackToLegacyOnError === false) throw error;
     if (legacy.length === 0) throw error;
     console.warn(`Failed to migrate chat sessions for stage ${stageId}:`, error);
     return legacy;

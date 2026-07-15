@@ -540,9 +540,12 @@ export async function exportDatabase(chatOptions: ChatStorageOptions = {}): Prom
   const runtimeChats = (
     await Promise.all(
       stages.map(async (stage) =>
-        (await loadChatSessions(stage.id, chatOptions)).map((session) =>
-          toChatSessionRecord(stage.id, session),
-        ),
+        (
+          await loadChatSessions(stage.id, {
+            ...chatOptions,
+            fallbackToLegacyOnError: false,
+          })
+        ).map((session) => toChatSessionRecord(stage.id, session)),
       ),
     )
   ).flat();

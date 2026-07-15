@@ -7,6 +7,7 @@ import type { UIMessage } from 'ai';
 import {
   interruptActiveChatSessions,
   nextChatUpdatedAt,
+  withChatSegmentSealed,
   withChatSessionStatus,
   type ChatMessageMetadata,
   type ChatSession,
@@ -268,6 +269,12 @@ describe('chat RuntimeStore cutover', () => {
 
     expect(completed).toMatchObject({ status: 'completed', updatedAt: 10_001 });
     expect(reactivated).toMatchObject({ status: 'active', updatedAt: 10_002 });
+  });
+
+  it('advances conflict order when a streamed message segment is sealed', () => {
+    expect(withChatSegmentSealed(session({ updatedAt: 10_000 }), 9_000)).toMatchObject({
+      updatedAt: 10_001,
+    });
   });
 
   it('advances conflict order when reload interrupts active sessions', () => {

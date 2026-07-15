@@ -75,6 +75,11 @@ export function withChatSessionStatus(
   return { ...session, status, updatedAt: nextChatUpdatedAt(session, now) };
 }
 
+/** Advance conflict order once a streamed message segment is fully revealed. */
+export function withChatSegmentSealed(session: ChatSession, now = Date.now()): ChatSession {
+  return { ...session, updatedAt: nextChatUpdatedAt(session, now) };
+}
+
 /** Mark streams that cannot survive a reload as interrupted without stale ordering. */
 export function interruptActiveChatSessions(
   sessions: ChatSession[],

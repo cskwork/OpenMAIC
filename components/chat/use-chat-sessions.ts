@@ -4,6 +4,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   interruptActiveChatSessions,
   nextChatUpdatedAt,
+  withChatSegmentSealed,
   withChatSessionStatus,
   type ChatSession,
   type SessionType,
@@ -444,6 +445,11 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             fullText: string,
             agentId: string | null,
           ) {
+            setSessions((prev) =>
+              prev.map((session) =>
+                session.id === sessionId ? withChatSegmentSealed(session) : session,
+              ),
+            );
             onSegmentSealedRef.current?.(messageId, partId, fullText, agentId);
           },
 

@@ -111,6 +111,33 @@ describe('database runtime chat integration', () => {
     );
   });
 
+  it('fails backup export instead of returning legacy-only chats after a runtime read error', async () => {
+    const runtimeStore = new BrowserRuntimeStore({ indexedDB: globalThis.indexedDB });
+    const failingStore = new Proxy(runtimeStore, {
+      get(target, property) {
+        if (property === 'listSessions') {
+          return async () => {
+            throw new Error('runtime read failed');
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as BrowserRuntimeStore;
+    const { db, exportDatabase } = await import('@/lib/utils/database');
+    await db.stages.put({
+      id: 'stage-backup',
+      name: 'Backup stage',
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    });
+    await db.chatSessions.put({ ...chatSession(), stageId: 'stage-backup' });
+
+    await expect(exportDatabase({ store: failingStore, learnerKey })).rejects.toThrow(
+      'runtime read failed',
+    );
+  });
+
   it('upgrades past the abandoned lease schema and deletes its table', async () => {
     const { default: Dexie } = await import('dexie');
     const intermediate = new Dexie('MAIC-Database', {
