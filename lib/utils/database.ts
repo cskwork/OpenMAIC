@@ -617,33 +617,35 @@ export async function getScenesByStageId(stageId: string): Promise<SceneRecord[]
  * Delete a course and all its related data
  */
 export async function deleteStageWithRelatedData(stageId: string): Promise<void> {
-  await db.transaction(
-    'rw',
-    [
-      db.stages,
-      db.scenes,
-      db.chatSessions,
-      db.playbackState,
-      db.stageOutlines,
-      db.mediaFiles,
-      db.generatedAgents,
-      db.agentEditSessions,
-    ],
-    async () => {
-      await db.stages.delete(stageId);
-      await db.scenes.where('stageId').equals(stageId).delete();
-      await db.chatSessions.where('stageId').equals(stageId).delete();
-      await db.playbackState.delete(stageId);
-      await db.stageOutlines.delete(stageId);
-      await db.mediaFiles.where('stageId').equals(stageId).delete();
-      await db.generatedAgents.where('stageId').equals(stageId).delete();
-      await db.agentEditSessions.where('stageId').equals(stageId).delete();
-    },
-  );
-  // Learner-runtime data lives in a separate IndexedDB database, so it is
-  // cascaded after the Dexie transaction: it cannot join it, and a runtime
-  // failure must not abort it (the helper warns instead of throwing).
-  await deleteStageRuntimeSafely(stageId);
+  await withRuntimeStorageExclusiveLock(async () => {
+    await db.transaction(
+      'rw',
+      [
+        db.stages,
+        db.scenes,
+        db.chatSessions,
+        db.playbackState,
+        db.stageOutlines,
+        db.mediaFiles,
+        db.generatedAgents,
+        db.agentEditSessions,
+      ],
+      async () => {
+        await db.stages.delete(stageId);
+        await db.scenes.where('stageId').equals(stageId).delete();
+        await db.chatSessions.where('stageId').equals(stageId).delete();
+        await db.playbackState.delete(stageId);
+        await db.stageOutlines.delete(stageId);
+        await db.mediaFiles.where('stageId').equals(stageId).delete();
+        await db.generatedAgents.where('stageId').equals(stageId).delete();
+        await db.agentEditSessions.where('stageId').equals(stageId).delete();
+      },
+    );
+    // Learner-runtime data lives in a separate IndexedDB database, so it is
+    // cascaded after the Dexie transaction: it cannot join it, and a runtime
+    // failure must not abort it (the helper warns instead of throwing).
+    await deleteStageRuntimeSafely(stageId);
+  });
 }
 
 /**

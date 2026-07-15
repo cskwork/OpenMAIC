@@ -31,13 +31,18 @@ vi.mock('@/lib/utils/playback-storage', () => ({
 vi.mock('@/lib/quiz/persistence', () => ({
   clearAllForScene: vi.fn(),
 }));
+vi.mock('@/lib/utils/chat-storage-lock', () => ({
+  withRuntimeStorageExclusiveLock: vi.fn(async (work: () => Promise<unknown>) => work()),
+}));
 
 import { deleteStageData } from '@/lib/utils/stage-storage';
 import { deleteStageRuntimeSafely } from '@/lib/runtime/store';
+import { withRuntimeStorageExclusiveLock } from '@/lib/utils/chat-storage-lock';
 
 describe('deleteStageData runtime cascade', () => {
   it('cascades into the runtime store with the deleted stageId', async () => {
     await deleteStageData('stage-7');
     expect(vi.mocked(deleteStageRuntimeSafely)).toHaveBeenCalledExactlyOnceWith('stage-7');
+    expect(vi.mocked(withRuntimeStorageExclusiveLock)).toHaveBeenCalledOnce();
   });
 });

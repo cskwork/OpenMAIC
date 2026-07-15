@@ -268,6 +268,52 @@ describe('chat RuntimeStore cutover', () => {
     ]);
   });
 
+  it('rebases an explicitly observed edit when another tab advances the conflict clock', async () => {
+    const indexedDB = new IDBFactory();
+    const firstTab = new BrowserRuntimeStore({ indexedDB, dbName: 'chat-clock-rollback' });
+    const secondTab = new BrowserRuntimeStore({ indexedDB, dbName: 'chat-clock-rollback' });
+    const legacyStore = new MemoryLegacyChatStore();
+
+    await saveChatSessions(STAGE_ID, [session({ updatedAt: 1_000 })], {
+      store: firstTab,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+    const [observed] = await loadChatSessions(STAGE_ID, {
+      store: firstTab,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+
+    await saveChatSessions(STAGE_ID, [session({ title: 'Other tab edit', updatedAt: 10_000 })], {
+      store: secondTab,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+    await saveChatSessions(
+      STAGE_ID,
+      [
+        {
+          ...observed,
+          title: 'Local edit after rollback',
+          messages: [...observed.messages, message('message-2', 'user', 'New edit', 900)],
+          updatedAt: nextChatUpdatedAt(observed, 900),
+        },
+      ],
+      { store: firstTab, learnerKey: LEARNER_KEY, legacyStore },
+    );
+
+    await expect(
+      loadChatSessions(STAGE_ID, { store: firstTab, learnerKey: LEARNER_KEY, legacyStore }),
+    ).resolves.toMatchObject([
+      {
+        title: 'Local edit after rollback',
+        messages: [{ id: 'message-1' }, { id: 'message-2' }],
+        updatedAt: 10_001,
+      },
+    ]);
+  });
+
   it('advances conflict order when completing or reactivating a session', () => {
     const completed = withChatSessionStatus(session({ updatedAt: 10_000 }), 'completed', 9_000);
     const reactivated = withChatSessionStatus(completed, 'active', 9_000);

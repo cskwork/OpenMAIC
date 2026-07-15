@@ -75,10 +75,10 @@ function isDeadlineExpired(deadline: PBLDrainDeadline): boolean {
 }
 
 /** Reject after `ms`, clearing the timer once the raced promise settles. */
-async function withTimeout(work: Promise<void>, ms: number): Promise<void> {
+async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([
+    return await Promise.race([
       work,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
@@ -326,11 +326,7 @@ async function waitForActiveDrainWork(key: string): Promise<void> {
   }
 }
 
-async function drainProjectRuntimeSerialized(
-  args: DrainProjectRuntimeArgs,
-  waitForActualCompletion = false,
-  runtimeLockHeld = false,
-): Promise<void> {
+async function drainProjectRuntimeSerialized(args: DrainProjectRuntimeArgs): Promise<void> {
   const kv = args.kv ?? getDefaultKv();
   const learnerKey = args.learnerKey ?? (await getLearnerKey(kv));
   const store = args.store ?? getRuntimeStore();
@@ -342,15 +338,7 @@ async function drainProjectRuntimeSerialized(
       // needs to re-read the watermark and make progress from the durable point.
     })
     .then(async () => {
-      if (waitForActualCompletion) {
-        await withTimeout(
-          waitForActiveDrainWork(inFlightKey),
-          PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS,
-        );
-      }
-      const deadline = createDrainDeadline(
-        waitForActualCompletion ? Number.POSITIVE_INFINITY : PBL_DRAIN_TIMEOUT_MS,
-      );
+      const deadline = createDrainDeadline(PBL_DRAIN_TIMEOUT_MS);
       const startDrain = () =>
         drainProjectRuntimeWork(
           {
@@ -363,11 +351,8 @@ async function drainProjectRuntimeSerialized(
         );
       // Hold the shared maintenance lock for the actual append work, even if
       // the bounded public caller times out and returns first.
-      const drainWork = runtimeLockHeld ? startDrain() : withRuntimeStorageSharedLock(startDrain);
+      const drainWork = withRuntimeStorageSharedLock(startDrain);
       trackActiveDrainWork(inFlightKey, drainWork);
-      if (waitForActualCompletion) {
-        return withTimeout(drainWork, PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS);
-      }
       // Safety invariant for releasing a stuck chain link: drain work checks
       // the cooperative deadline before each append and before watermark
       // writes. After that deadline, an overdue append may still complete, but
@@ -387,25 +372,58 @@ async function drainProjectRuntimeSerialized(
 }
 
 /**
- * Drain all currently visible events behind a bounded completion barrier.
- * Hydration and document persistence must either observe the completed drain
- * or abort; neither may fold or write a snapshot while an append is pending.
+ * Drain all currently visible events behind a bounded completion barrier, then
+ * keep the runtime-wide shared lock through the caller's fold/snapshot work.
+ * Waiting happens before lock acquisition, so an exclusive maintenance request
+ * cannot sit between a lock we hold and a drain lock we are waiting to acquire.
  */
-export async function drainProjectRuntimeFully(args: DrainProjectRuntimeArgs): Promise<void> {
-  const work = drainProjectRuntimeSerialized(args, true);
-  // The budget covers queueing behind prior saves as well as this drain's own
-  // work. A late rejection is observed here after the caller has fallen back.
-  work.catch(() => {});
-  await withTimeout(work, PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS);
-}
-
-/** Full drain for callers already holding the runtime-wide shared lock. */
-export async function drainProjectRuntimeFullyUnderLock(
+export async function withDrainedProjectRuntime<T>(
   args: DrainProjectRuntimeArgs,
-): Promise<void> {
-  const work = drainProjectRuntimeSerialized(args, true, true);
-  work.catch(() => {});
-  await withTimeout(work, PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS);
+  work: () => Promise<T>,
+): Promise<T> {
+  const kv = args.kv ?? getDefaultKv();
+  const learnerKey = args.learnerKey ?? (await getLearnerKey(kv));
+  const store = args.store ?? getRuntimeStore();
+  const inFlightKey = `${args.stageId}:${args.sceneId}:${learnerKey}`;
+  const previous = inFlightPblDrains.get(inFlightKey) ?? Promise.resolve();
+  const deadline = createDrainDeadline(PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS);
+  const operation = previous
+    .catch(() => {
+      // The earlier caller already observed its failure. Re-read the durable
+      // watermark after any actual late append work settles.
+    })
+    .then(async () => {
+      await withTimeout(
+        waitForActiveDrainWork(inFlightKey),
+        PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS,
+      );
+      return withRuntimeStorageSharedLock(async () => {
+        await drainProjectRuntimeWork(
+          {
+            ...args,
+            store,
+            kv,
+            learnerKey,
+          },
+          deadline,
+        );
+        if (isDeadlineExpired(deadline)) {
+          throw new Error(`timed out after ${PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS}ms`);
+        }
+        return work();
+      });
+    });
+  const chain = operation.then(() => undefined);
+  inFlightPblDrains.set(inFlightKey, chain);
+  void chain
+    .finally(() => {
+      if (inFlightPblDrains.get(inFlightKey) === chain) {
+        inFlightPblDrains.delete(inFlightKey);
+      }
+    })
+    .catch(() => {});
+  operation.catch(() => {});
+  return withTimeout(operation, PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS);
 }
 
 export async function drainProjectRuntime(args: DrainProjectRuntimeArgs): Promise<void> {

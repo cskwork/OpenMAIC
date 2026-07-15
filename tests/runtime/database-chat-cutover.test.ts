@@ -313,6 +313,57 @@ describe('database runtime chat integration', () => {
     ).resolves.toMatchObject([{ title: 'Persisted chat' }]);
   });
 
+  it('waits for an active runtime writer before deleting a stage cascade', async () => {
+    const { getRuntimeStore } = await import('@/lib/runtime/store');
+    const backing = getRuntimeStore() as BrowserRuntimeStore;
+    let writerStarted!: () => void;
+    const didStartWriter = new Promise<void>((resolve) => {
+      writerStarted = resolve;
+    });
+    let releaseWriter!: () => void;
+    const writerMayContinue = new Promise<void>((resolve) => {
+      releaseWriter = resolve;
+    });
+    const writerStore = new Proxy(backing, {
+      get(target, property) {
+        if (property === 'createSession') {
+          return async (...args: Parameters<BrowserRuntimeStore['createSession']>) => {
+            writerStarted();
+            await writerMayContinue;
+            return backing.createSession(...args);
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as BrowserRuntimeStore;
+    const { db, deleteStageWithRelatedData } = await import('@/lib/utils/database');
+    const { saveChatSessions } = await import('@/lib/utils/chat-storage');
+    await db.stages.put({
+      id: 'stage-delete-race',
+      name: 'Delete race',
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    });
+
+    const saving = saveChatSessions('stage-delete-race', [chatSession()], {
+      store: writerStore,
+      learnerKey,
+    });
+    await didStartWriter;
+    const deleting = deleteStageWithRelatedData('stage-delete-race');
+    const earlyOutcome = await Promise.race([
+      deleting.then(() => 'deleted' as const),
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 50)),
+    ]);
+
+    expect(earlyOutcome).toBe('blocked');
+    releaseWriter();
+    await saving;
+    await deleting;
+    await expect(backing.listSessions('stage-delete-race', learnerKey)).resolves.toEqual([]);
+  });
+
   it('acquires both the stage-wide and legacy partition Web Lock names', async () => {
     const requested: string[] = [];
     vi.stubGlobal('navigator', {

@@ -95,6 +95,7 @@ const dexieLegacyStore: LegacyChatStore = {
 // concurrency tests and non-browser adapters.
 const storeQueues = new WeakMap<RuntimeStore, Map<string, Promise<void>>>();
 const observedChatSessionIds = new WeakMap<RuntimeStore, Map<string, Set<string>>>();
+const observedChatSessions = new WeakMap<RuntimeStore, Map<string, Map<string, ChatSession>>>();
 
 export class ChatStorageLockUnavailableError extends Error {}
 
@@ -109,6 +110,26 @@ function rememberObservedIds(store: RuntimeStore, key: string, ids: Iterable<str
     observedChatSessionIds.set(store, partitions);
   }
   partitions.set(key, new Set(ids));
+}
+
+function observedSessions(store: RuntimeStore, key: string): Map<string, ChatSession> | undefined {
+  return observedChatSessions.get(store)?.get(key);
+}
+
+function rememberObservedSessions(
+  store: RuntimeStore,
+  key: string,
+  sessions: readonly ChatSession[],
+): void {
+  let partitions = observedChatSessions.get(store);
+  if (!partitions) {
+    partitions = new Map();
+    observedChatSessions.set(store, partitions);
+  }
+  partitions.set(
+    key,
+    new Map(sessions.map((session) => [session.id, structuredClone(normalizeSession(session))])),
+  );
 }
 
 function enqueue<T>(
@@ -576,6 +597,7 @@ async function syncOne(
   session: ChatSession,
   existingViews: ChatRuntimeView[],
   isolatedWrites: boolean,
+  observed: ChatSession | undefined,
 ): Promise<string> {
   let desired = normalizeSession(session);
   let views = existingViews;
@@ -585,7 +607,13 @@ async function syncOne(
     const candidates = chatRuntimeCandidates(views, stageId, desired.id);
     const source = newestRuntimeCandidate(candidates);
     if (source?.folded.session && source.folded.session.updatedAt > desired.updatedAt) {
-      desired = source.folded.session;
+      const localEditAdvanced =
+        observed !== undefined &&
+        desired.updatedAt > observed.updatedAt &&
+        !isEqual(desired, observed);
+      desired = localEditAdvanced
+        ? { ...desired, updatedAt: source.folded.session.updatedAt + 1 }
+        : source.folded.session;
     }
 
     const baseRuntimeId =
@@ -831,6 +859,7 @@ async function syncSessions(
   deleteOmitted: boolean,
   isolatedWrites: boolean,
   knownSessionIds: ReadonlySet<string> = new Set(),
+  observed: ReadonlyMap<string, ChatSession> = new Map(),
 ): Promise<ChatSession[]> {
   const existing = await runtimeViews(store, stageId, learnerKey);
   const desiredRuntimeIds = new Map<string, string>();
@@ -838,7 +867,15 @@ async function syncSessions(
   for (const session of sessions) {
     desiredRuntimeIds.set(
       session.id,
-      await syncOne(store, stageId, learnerKey, session, existing, isolatedWrites),
+      await syncOne(
+        store,
+        stageId,
+        learnerKey,
+        session,
+        existing,
+        isolatedWrites,
+        observed.get(session.id),
+      ),
     );
   }
   if (deleteOmitted) {
@@ -943,7 +980,8 @@ export async function saveChatSessions(
     resolved.requiresCrossRealmLock,
     async (isolatedWrites) => {
       const knownSessionIds = observedIds(resolved.store, queueKey);
-      await syncSessions(
+      const priorObservedSessions = observedSessions(resolved.store, queueKey);
+      const persisted = await syncSessions(
         resolved.store,
         stageId,
         resolved.learnerKey,
@@ -951,12 +989,16 @@ export async function saveChatSessions(
         true,
         isolatedWrites,
         knownSessionIds,
+        priorObservedSessions,
       );
       rememberObservedIds(
         resolved.store,
         queueKey,
         nextSessions.map((session) => session.id),
       );
+      if (priorObservedSessions) {
+        rememberObservedSessions(resolved.store, queueKey, persisted);
+      }
       await resolved.legacyStore.clear(stageId);
     },
   );
@@ -990,6 +1032,7 @@ export async function loadChatSessions(
             queueKey,
             loaded.map((session) => session.id),
           );
+          rememberObservedSessions(resolved.store, queueKey, loaded);
           return loaded;
         }
         const migrated = await syncSessions(
@@ -1006,6 +1049,7 @@ export async function loadChatSessions(
           queueKey,
           migrated.map((session) => session.id),
         );
+        rememberObservedSessions(resolved.store, queueKey, migrated);
         await resolved.legacyStore.clear(stageId);
         return migrated;
       },
@@ -1023,6 +1067,7 @@ export async function loadChatSessions(
         queueKey,
         readOnlyLegacy.map((session) => session.id),
       );
+      rememberObservedSessions(resolved.store, queueKey, readOnlyLegacy);
       console.warn(`Loaded legacy chat sessions without migration for stage ${stageId}:`, error);
       return readOnlyLegacy;
     }
@@ -1031,6 +1076,7 @@ export async function loadChatSessions(
     // legacy-clear failure happens after migration succeeded, so retain it.
     if (!runtimeReadSucceeded) {
       rememberObservedIds(resolved.store, queueKey, []);
+      rememberObservedSessions(resolved.store, queueKey, []);
     } else {
       // The fallback returns only the legacy rows. Runtime-only sessions that
       // were discovered during sync were not exposed to the caller, so their
@@ -1040,6 +1086,7 @@ export async function loadChatSessions(
         queueKey,
         legacy.map((session) => session.id),
       );
+      rememberObservedSessions(resolved.store, queueKey, legacy);
     }
     if (options.fallbackToLegacyOnError === false) throw error;
     if (legacy.length === 0) throw error;
@@ -1069,6 +1116,7 @@ async function clearRuntimeChatSessionsUnlocked(
   const views = await runtimeViews(store, stageId, learnerKey);
   await Promise.all(views.map((view) => store.deleteSession(view.runtimeSession.id)));
   rememberObservedIds(store, queueKey, []);
+  rememberObservedSessions(store, queueKey, []);
 }
 
 /** Stage legacy backup rows and clear their runtime partitions under the same locks. */
