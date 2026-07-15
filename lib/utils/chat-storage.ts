@@ -918,6 +918,10 @@ export async function loadChatSessions(
       return migrated;
     });
   } catch (error) {
+    // A failed read is not an authoritative empty snapshot. Forget the IDs
+    // previously observed by this store instance so a later stage save cannot
+    // retire them merely because the UI had to continue without chat data.
+    rememberObservedIds(resolved.store, queueKey, []);
     if (legacy.length === 0) throw error;
     console.warn(`Failed to migrate chat sessions for stage ${stageId}:`, error);
     return legacy;

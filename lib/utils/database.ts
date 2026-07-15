@@ -21,7 +21,7 @@ import type { VoiceDesign } from '@/lib/audio/voice-design';
 import type { UIMessage } from 'ai';
 import type { AgentEditSessionRecord } from '@/lib/agent/client/agent-edit-session-types';
 import { createLogger } from '@/lib/logger';
-import { deleteStageRuntimeSafely } from '@/lib/runtime/store';
+import { deleteStageRuntimeSafely, getRuntimeStore } from '@/lib/runtime/store';
 import type { RuntimeStore } from '@openmaic/storage';
 import type { ChatStorageOptions } from './chat-storage';
 
@@ -476,8 +476,10 @@ export async function initDatabase(): Promise<void> {
  * Use with caution: deletes all data
  */
 export async function clearDatabase(runtimeStore?: RuntimeStore): Promise<void> {
-  const stageIds = (await db.stages.toArray()).map((stage) => stage.id);
-  await Promise.all(stageIds.map((stageId) => deleteStageRuntimeSafely(stageId, runtimeStore)));
+  // Clear the whole runtime database first, including rows orphaned by an
+  // earlier best-effort stage deletion. This user-requested destructive action
+  // must fail loud: reporting success while runtime data remains is misleading.
+  await (runtimeStore ?? getRuntimeStore()).deleteAllRuntime();
   await db.delete();
   log.info('Database cleared');
 }

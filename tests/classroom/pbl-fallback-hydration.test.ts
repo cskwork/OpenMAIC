@@ -106,6 +106,7 @@ class MemoryRuntimeStore implements RuntimeStore {
 
   async deleteLearnerRuntime(): Promise<void> {}
   async deleteStageRuntime(): Promise<void> {}
+  async deleteAllRuntime(): Promise<void> {}
 }
 
 function makeProject(overrides: Partial<PBLProjectV2> = {}): PBLProjectV2 {

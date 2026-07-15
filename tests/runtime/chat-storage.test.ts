@@ -1174,6 +1174,45 @@ describe('chat RuntimeStore cutover', () => {
     ).rejects.toThrow('runtime unavailable');
   });
 
+  it('does not treat a failed reload as authority to delete previously observed chats', async () => {
+    const backing = makeRuntimeStore();
+    const legacyStore = new MemoryLegacyChatStore();
+    let failLists = false;
+    const store = new Proxy(backing, {
+      get(target, property) {
+        if (property === 'listSessions') {
+          return (...args: Parameters<RuntimeStore['listSessions']>) =>
+            failLists
+              ? Promise.reject(new Error('runtime unavailable'))
+              : backing.listSessions(...args);
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const persisted = session();
+
+    await saveChatSessions(STAGE_ID, [persisted], {
+      store,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+    await expect(
+      loadChatSessions(STAGE_ID, { store, learnerKey: LEARNER_KEY, legacyStore }),
+    ).resolves.toHaveLength(1);
+
+    failLists = true;
+    await expect(
+      loadChatSessions(STAGE_ID, { store, learnerKey: LEARNER_KEY, legacyStore }),
+    ).rejects.toThrow('runtime unavailable');
+    failLists = false;
+
+    await saveChatSessions(STAGE_ID, [], { store, learnerKey: LEARNER_KEY, legacyStore });
+    await expect(
+      loadChatSessions(STAGE_ID, { store, learnerKey: LEARNER_KEY, legacyStore }),
+    ).resolves.toMatchObject([{ id: persisted.id }]);
+  });
+
   it('deletes omitted chat sessions without touching other runtime kinds', async () => {
     const store = makeRuntimeStore();
     const legacyStore = new MemoryLegacyChatStore();

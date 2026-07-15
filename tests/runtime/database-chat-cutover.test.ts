@@ -46,6 +46,10 @@ describe('database runtime chat integration', () => {
       store: runtimeStore,
       learnerKey,
     });
+    await saveChatSessions('orphaned-runtime-stage', [{ ...chatSession(), id: 'orphaned-chat' }], {
+      store: runtimeStore,
+      learnerKey,
+    });
 
     const exported = await exportDatabase({
       store: runtimeStore,
@@ -70,5 +74,24 @@ describe('database runtime chat integration', () => {
 
     await clearDatabase(runtimeStore);
     await expect(runtimeStore.listSessions('stage-backup', learnerKey)).resolves.toEqual([]);
+    await expect(runtimeStore.listSessions('orphaned-runtime-stage', learnerKey)).resolves.toEqual(
+      [],
+    );
+  });
+
+  it('fails loud without deleting documents when the runtime-wide clear fails', async () => {
+    const { clearDatabase, db } = await import('@/lib/utils/database');
+    await db.stages.put({
+      id: 'stage-retained',
+      name: 'Retained stage',
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    });
+    const runtimeStore = {
+      deleteAllRuntime: vi.fn().mockRejectedValue(new Error('runtime clear failed')),
+    } as unknown as BrowserRuntimeStore;
+
+    await expect(clearDatabase(runtimeStore)).rejects.toThrow('runtime clear failed');
+    await expect(db.stages.get('stage-retained')).resolves.toMatchObject({ id: 'stage-retained' });
   });
 });

@@ -146,6 +146,7 @@ class MemoryRuntimeStore implements RuntimeStore {
   async deleteLearnerRuntime(): Promise<void> {}
 
   async deleteStageRuntime(): Promise<void> {}
+  async deleteAllRuntime(): Promise<void> {}
 }
 
 class AlreadyExistsRaceStore extends MemoryRuntimeStore {
