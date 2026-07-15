@@ -6,6 +6,7 @@ import {
   ALLOWED_EDIT_PROPS,
   buildElementInventory,
   mapProposalsToEditIntents,
+  revalidateIntentsAgainstElements,
   validateElementAgainstDslSchema,
   type ProposedElementUpdate,
 } from './edit-elements-gate';
@@ -438,16 +439,11 @@ export function mapElementJsonPatchToEditIntents(
 
   const intents: EditIntent[] = [];
   if (proposals.length > 0) {
-    const inventory = buildElementInventory(
-      applyContentChangesForValidation(elements, patched),
-    ).map((element) => {
-      const replacements = wholeObjectReplacementsById.get(element.id);
-      if (!replacements) return element;
-      const style = { ...element.style };
-      for (const key of replacements) delete style[key];
-      return { ...element, style };
+    const inventory = buildElementInventory(applyContentChangesForValidation(elements, patched));
+    const mapped = mapProposalsToEditIntents(proposals, inventory, {
+      replacedPropsById: wholeObjectReplacementsById,
+      additionalGroupTargetIds: new Set(targetIds),
     });
-    const mapped = mapProposalsToEditIntents(proposals, inventory);
     if (!mapped.ok) return mapped;
     const mappedProps = mappedPropsById(mapped.intents);
     const validatedUpdates: Array<{ id: string; props: Partial<PPTElement> }> = [];
@@ -519,5 +515,7 @@ export function mapElementJsonPatchToEditIntents(
   }
 
   if (intents.length === 0) return { ok: false, reason: 'patch does not change any element' };
+  const recheck = revalidateIntentsAgainstElements(elements, intents);
+  if (!recheck.ok) return recheck;
   return { ok: true, intents, targetIds };
 }

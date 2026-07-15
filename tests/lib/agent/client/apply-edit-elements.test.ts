@@ -339,6 +339,55 @@ describe('applyEditElementsIntents', () => {
     expect(commitContent).not.toHaveBeenCalled();
   });
 
+  it('revalidates group cohesion for content-only edits', async () => {
+    const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
+    const grouped = [
+      {
+        id: 'group-a',
+        type: 'text',
+        left: 10,
+        top: 10,
+        width: 200,
+        height: 60,
+        rotate: 0,
+        groupId: 'group-1',
+        content: '<p>A</p>',
+        defaultFontName: 'Inter',
+        defaultColor: '#111111',
+        lineHeight: 1.5,
+      },
+      {
+        id: 'group-b',
+        type: 'text',
+        left: 300,
+        top: 10,
+        width: 200,
+        height: 60,
+        rotate: 0,
+        groupId: 'group-1',
+        content: '<p>B</p>',
+        defaultFontName: 'Inter',
+        defaultColor: '#111111',
+        lineHeight: 1.5,
+      },
+    ] as PPTElement[];
+    mockSession.sceneId = 's1';
+    mockSession.history = { present: slideWith(grouped) };
+
+    const result = applyEditElementsIntents('s1', [
+      {
+        type: 'text.updateContent',
+        id: 'group-a',
+        content: '<p>Changed</p>',
+        target: 'text',
+      },
+    ]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toMatch(/group.*missing.*group-b/i);
+    expect(commitContent).not.toHaveBeenCalled();
+  });
+
   it('merges partial nested style patches without dropping existing values', async () => {
     const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
     const image = {
@@ -426,6 +475,16 @@ describe('applyEditElementsIntents', () => {
 
     expect(
       applyEditElementsIntents('s1', [
+        { type: 'element.removeProps', id: 'img1', props: ['filters'] },
+      ]),
+    ).toMatchObject({ ok: false });
+    expect(
+      applyEditElementsIntents('s1', [
+        {
+          type: 'element.update',
+          id: 'img1',
+          props: { filters: { brightness: '120' } } as Partial<PPTElement>,
+        },
         { type: 'element.removeProps', id: 'img1', props: ['filters'] },
       ]),
     ).toMatchObject({ ok: false });

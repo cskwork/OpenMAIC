@@ -168,8 +168,28 @@ export function applyEditElementsIntents(
 ): ApplyEditElementsResult {
   if (!intents.length) return { ok: false, reason: 'no element updates proposed' };
 
-  const updatedPropsById = new Map<string, Set<string>>();
+  const pendingReplacementProps = new Map<string, Set<string>>();
   for (const intent of intents) {
+    if (intent.type === 'element.removeProps') {
+      if (
+        intent.props.length === 0 ||
+        new Set(intent.props).size !== intent.props.length ||
+        intent.props.some((prop) => !MERGED_STYLE_PROPS.has(prop))
+      ) {
+        return { ok: false, reason: 'invalid structured-property replace marker' };
+      }
+      let pending = pendingReplacementProps.get(intent.id);
+      if (!pending) {
+        pending = new Set();
+        pendingReplacementProps.set(intent.id, pending);
+      }
+      if (intent.props.some((prop) => pending.has(prop))) {
+        return { ok: false, reason: 'invalid structured-property replace marker' };
+      }
+      for (const prop of intent.props) pending.add(prop);
+      continue;
+    }
+
     const updates =
       intent.type === 'element.update'
         ? [{ id: intent.id, props: intent.props }]
@@ -177,25 +197,21 @@ export function applyEditElementsIntents(
           ? intent.updates
           : [];
     for (const update of updates) {
-      let props = updatedPropsById.get(update.id);
-      if (!props) {
-        props = new Set();
-        updatedPropsById.set(update.id, props);
+      const pending = pendingReplacementProps.get(update.id);
+      if (!pending) continue;
+      for (const prop of Object.keys(update.props)) {
+        if (!pending.has(prop)) continue;
+        const value = (update.props as Record<string, unknown>)[prop];
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+          return { ok: false, reason: 'invalid structured-property replace marker' };
+        }
+        pending.delete(prop);
       }
-      for (const prop of Object.keys(update.props)) props.add(prop);
+      if (pending.size === 0) pendingReplacementProps.delete(update.id);
     }
   }
-  for (const intent of intents) {
-    if (intent.type !== 'element.removeProps') continue;
-    if (
-      intent.props.length === 0 ||
-      new Set(intent.props).size !== intent.props.length ||
-      intent.props.some(
-        (prop) => !MERGED_STYLE_PROPS.has(prop) || !updatedPropsById.get(intent.id)?.has(prop),
-      )
-    ) {
-      return { ok: false, reason: 'invalid structured-property replace marker' };
-    }
+  if (pendingReplacementProps.size > 0) {
+    return { ok: false, reason: 'invalid structured-property replace marker' };
   }
 
   const session = useSlideEditSession.getState();

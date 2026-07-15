@@ -98,6 +98,35 @@ describe('mapElementJsonPatchToEditIntents', () => {
     });
   });
 
+  it('enforces group cohesion for content-only and mixed content/style patches', () => {
+    const grouped = [
+      textElement({ id: 'group-a', groupId: 'group-1' }),
+      textElement({ id: 'group-b', groupId: 'group-1', left: 600 }),
+    ];
+
+    const partial = mapElementJsonPatchToEditIntents(
+      [
+        { op: 'test', path: '/elements/0/id', value: 'group-a' },
+        { op: 'replace', path: '/elements/0/content', value: '<p>Changed</p>' },
+      ],
+      grouped,
+    );
+    expect(partial.ok).toBe(false);
+    if (!partial.ok) expect(partial.reason).toMatch(/group.*missing.*group-b/i);
+
+    expect(
+      mapElementJsonPatchToEditIntents(
+        [
+          { op: 'test', path: '/elements/0/id', value: 'group-a' },
+          { op: 'replace', path: '/elements/0/content', value: '<p>Changed</p>' },
+          { op: 'test', path: '/elements/1/id', value: 'group-b' },
+          { op: 'replace', path: '/elements/1/defaultColor', value: '#2563eb' },
+        ],
+        grouped,
+      ),
+    ).toMatchObject({ ok: true, targetIds: ['group-a', 'group-b'] });
+  });
+
   it('supports nested replacement within an allowed structured style property', () => {
     const result = mapElementJsonPatchToEditIntents(
       [
@@ -214,7 +243,7 @@ describe('mapElementJsonPatchToEditIntents', () => {
     });
   });
 
-  it('accepts a whole-object replace whose only effective change is dropping a sibling', () => {
+  it('accepts identity replacements whose effect is clearing active structured styles', () => {
     const image = {
       id: 'image-1',
       type: 'image',
@@ -226,21 +255,41 @@ describe('mapElementJsonPatchToEditIntents', () => {
       fixedRatio: true,
       src: 'https://example.com/image.png',
       filters: { blur: '2', contrast: '90' },
+      outline: { width: 2, style: 'solid', color: '#ff0000' },
+      shadow: { h: 1, v: 2, blur: 3, color: '#000000' },
     } as PPTElement;
 
     expect(
       mapElementJsonPatchToEditIntents(
         [
           { op: 'test', path: '/elements/0/id', value: 'image-1' },
-          { op: 'replace', path: '/elements/0/filters', value: { blur: '2' } },
+          { op: 'replace', path: '/elements/0/filters', value: { brightness: '100' } },
+          { op: 'replace', path: '/elements/0/outline', value: { width: 0 } },
+          {
+            op: 'replace',
+            path: '/elements/0/shadow',
+            value: { h: 0, v: 0, blur: 0, color: 'transparent' },
+          },
         ],
         [image],
       ),
     ).toEqual({
       ok: true,
       intents: [
-        { type: 'element.removeProps', id: 'image-1', props: ['filters'] },
-        { type: 'element.update', id: 'image-1', props: { filters: { blur: '2' } } },
+        {
+          type: 'element.removeProps',
+          id: 'image-1',
+          props: ['filters', 'outline', 'shadow'],
+        },
+        {
+          type: 'element.update',
+          id: 'image-1',
+          props: {
+            filters: { brightness: '100' },
+            outline: { width: 0 },
+            shadow: { h: 0, v: 0, blur: 0, color: 'transparent' },
+          },
+        },
       ],
       targetIds: ['image-1'],
     });
