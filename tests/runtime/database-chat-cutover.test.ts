@@ -443,6 +443,35 @@ describe('database runtime chat integration', () => {
     ).rejects.toThrow(/Web Locks/);
   });
 
+  it('clears document and runtime databases without Web Locks', async () => {
+    vi.stubGlobal('navigator', {});
+    const runtimeStore = new BrowserRuntimeStore({
+      indexedDB: globalThis.indexedDB,
+      dbName: 'clear-without-web-locks',
+    });
+    const { clearDatabase, db } = await import('@/lib/utils/database');
+    await db.stages.put({
+      id: 'stage-clear-no-lock',
+      name: 'Clear without locks',
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    });
+    await runtimeStore.createSession({
+      id: 'runtime-clear-no-lock',
+      kind: 'chat',
+      stageId: 'stage-clear-no-lock',
+      learnerKey,
+      status: 'active',
+      createdAt: new Date(1_000).toISOString(),
+      updatedAt: new Date(2_000).toISOString(),
+    });
+
+    await expect(clearDatabase(runtimeStore)).resolves.toBeUndefined();
+    await expect(runtimeStore.listSessions('stage-clear-no-lock', learnerKey)).resolves.toEqual([]);
+    await db.open();
+    await expect(db.stages.count()).resolves.toBe(0);
+  });
+
   it('fails loud without deleting documents when the runtime-wide clear fails', async () => {
     const { clearDatabase, db } = await import('@/lib/utils/database');
     await db.stages.put({

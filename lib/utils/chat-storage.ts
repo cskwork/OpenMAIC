@@ -697,6 +697,21 @@ async function syncOne(
 
     const changes = changesForSession(desired, destination.folded);
     const appendCount = changes.changedMessages.length + (changes.stateChanged ? 1 : 0);
+    // Updating a message and its session state takes multiple RuntimeStore
+    // appends. Publish that snapshot through a fresh generation so a failure
+    // cannot make only the new message visible through the previous state.
+    if (
+      destination.folded.state &&
+      changes.changedMessages.length > 0 &&
+      destination.runtimeSession.status !== 'completed'
+    ) {
+      if (!(await completeRuntimeCandidate(store, destination, desired))) {
+        views = await runtimeViews(store, stageId, learnerKey);
+        continue;
+      }
+      views = await runtimeViews(store, stageId, learnerKey);
+      continue;
+    }
     const needsRollover =
       destination.records.length > MAX_RUNTIME_RECORDS_PER_CHAT_SESSION ||
       (appendCount > 0 &&
@@ -762,8 +777,45 @@ async function syncOne(
       if (latest && !matchesChatPartition(latest, runtimeId, stageId, learnerKey)) {
         throw error;
       }
-      if (latest?.status === 'active') throw error;
+      if (latest?.status === 'active') {
+        // A generation without a committed state is not externally visible.
+        // Remove its partial records before retrying instead of exposing them
+        // through a later state append or retaining an orphaned session.
+        if (!destination.folded.state) {
+          let latestFolded: FoldedChat;
+          try {
+            latestFolded = foldRecords(await store.listRecords(runtimeId));
+          } catch {
+            throw error;
+          }
+          if (latestFolded.state) throw error;
+          try {
+            await store.deleteSession(runtimeId);
+            views = await runtimeViews(store, stageId, learnerKey);
+            continue;
+          } catch {
+            throw error;
+          }
+        }
+        throw error;
+      }
       views = await runtimeViews(store, stageId, learnerKey);
+    }
+  }
+  if (!isolatedWrites) {
+    // A failed locked write may exhaust its retries immediately after
+    // creating the next generation. Such state-less generations are never a
+    // committed snapshot and no other partition writer can be active here.
+    try {
+      const unresolved = (await runtimeViews(store, stageId, learnerKey)).filter(
+        (view) =>
+          chatRuntimeIdentity(view.runtimeSession.id, stageId, desired.id) !== undefined &&
+          !view.folded.state,
+      );
+      await Promise.all(unresolved.map((view) => store.deleteSession(view.runtimeSession.id)));
+    } catch {
+      // Preserve the append failure that made the save fail; cleanup remains
+      // best-effort if the RuntimeStore itself is unavailable.
     }
   }
   throw (

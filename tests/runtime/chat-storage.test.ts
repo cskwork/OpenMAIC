@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { BrowserRuntimeStore, type RuntimeStore } from '@openmaic/storage';
 import type { RuntimeRecord } from '@openmaic/dsl';
@@ -136,6 +136,10 @@ async function runtimeChatRecords(store: RuntimeStore): Promise<RuntimeRecord[]>
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe('chat RuntimeStore cutover', () => {
@@ -866,6 +870,65 @@ describe('chat RuntimeStore cutover', () => {
         (candidate) => candidate.kind === 'chat',
       ),
     ).toHaveLength(0);
+  });
+
+  it('does not expose partially appended messages when a locked snapshot save fails', async () => {
+    vi.stubGlobal('navigator', {
+      locks: {
+        request: async (
+          _name: string,
+          optionsOrWork: LockOptions | (() => Promise<unknown>),
+          maybeWork?: () => Promise<unknown>,
+        ) => (typeof optionsOrWork === 'function' ? optionsOrWork : maybeWork!)(),
+      },
+    });
+    const backing = makeRuntimeStore();
+    const legacyStore = new MemoryLegacyChatStore();
+    const original = session({
+      title: 'Original title',
+      messages: [message('message-1', 'user', 'Original message', 1_000)],
+      updatedAt: 2_000,
+    });
+    await saveChatSessions(STAGE_ID, [original], {
+      store: backing,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+
+    const appendError = new Error('state append failed');
+    const failingStore = new Proxy(backing, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target) as unknown;
+        if (property === 'appendRecord') {
+          return async (...args: Parameters<RuntimeStore['appendRecord']>) => {
+            if ((args[0].payload as { kind?: string }).kind === 'chat_session_state') {
+              throw appendError;
+            }
+            return backing.appendRecord(...args);
+          };
+        }
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    await expect(
+      saveChatSessions(
+        STAGE_ID,
+        [
+          session({
+            title: 'Updated title',
+            messages: [message('message-1', 'user', 'Updated message', 2_000)],
+            updatedAt: 3_000,
+          }),
+        ],
+        { store: failingStore, learnerKey: LEARNER_KEY, legacyStore },
+      ),
+    ).rejects.toBe(appendError);
+
+    await expect(
+      loadChatSessions(STAGE_ID, { store: backing, learnerKey: LEARNER_KEY, legacyStore }),
+    ).resolves.toEqual([{ ...original, status: 'interrupted', pendingToolCalls: [] }]);
+    await expect(backing.listSessions(STAGE_ID, LEARNER_KEY)).resolves.toHaveLength(1);
   });
 
   it('retries an unchanged fallback save when a concurrent writer retires its destination', async () => {

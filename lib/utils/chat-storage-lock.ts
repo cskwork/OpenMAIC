@@ -21,8 +21,11 @@ export async function withChatStorageSharedLock<T>(work: () => Promise<T>): Prom
 /** Quiesce every cross-tab chat mutation before destructive whole-store work. */
 export async function withChatStorageExclusiveLock<T>(work: () => Promise<T>): Promise<T> {
   const manager = locks();
-  if (!manager) {
-    throw new Error('Clearing chat storage requires the Web Locks API in this browser');
+  if (manager) {
+    return manager.request(CHAT_STORAGE_GLOBAL_LOCK, work);
   }
-  return manager.request(CHAT_STORAGE_GLOBAL_LOCK, work);
+  // Default legacy-backed chat mutations already fail before touching runtime
+  // storage when Web Locks are unavailable. Preserve the pre-cutover ability
+  // to perform an explicit whole-database clear in those environments.
+  return work();
 }
