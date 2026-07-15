@@ -93,16 +93,15 @@ const PHASE_ORDER: Record<QuizAttemptPhase, number> = {
 };
 
 const queues = new WeakMap<RuntimeStore, Map<string, Promise<void>>>();
-const writerTails = new Map<string, Promise<void>>();
+const writerTails = new Map<string, Set<Promise<void>>>();
 
 async function awaitQueuedWriterLineage(attemptId: string): Promise<void> {
   let queueKey = attemptId;
   while (true) {
     while (true) {
       const pending = writerTails.get(queueKey);
-      if (!pending) break;
-      await pending;
-      if (writerTails.get(queueKey) === pending) writerTails.delete(queueKey);
+      if (!pending?.size) break;
+      await Promise.all(pending);
     }
     const parent = queueKey.replace(/:retry:\d+$/, '');
     if (parent === queueKey) return;
@@ -150,9 +149,17 @@ export function createQuizAttemptWriter(options: QuizAttemptWriterOptions = {}):
     void operation.catch(onError);
     const settled = operation.catch(() => {});
     tail = settled;
-    writerTails.set(input.attemptId, settled);
+    let attemptTails = writerTails.get(input.attemptId);
+    if (!attemptTails) {
+      attemptTails = new Set();
+      writerTails.set(input.attemptId, attemptTails);
+    }
+    attemptTails.add(settled);
     void settled.finally(() => {
-      if (writerTails.get(input.attemptId) === settled) writerTails.delete(input.attemptId);
+      attemptTails.delete(settled);
+      if (attemptTails.size === 0 && writerTails.get(input.attemptId) === attemptTails) {
+        writerTails.delete(input.attemptId);
+      }
     });
     return operation;
   };

@@ -164,6 +164,97 @@ describe('quiz attempt runtime persistence', () => {
     });
   });
 
+  it('waits for every writer tail targeting the same attempt', async () => {
+    const { deps } = makeHarness();
+    const attemptId = quizAttemptId('stage-1', 'scene-quiz', 'learner-1');
+    let slowStarted!: () => void;
+    const didStartSlow = new Promise<void>((resolve) => {
+      slowStarted = resolve;
+    });
+    let releaseSlow!: () => void;
+    const slowMayFinish = new Promise<void>((resolve) => {
+      releaseSlow = resolve;
+    });
+    const slowWriter = createQuizAttemptWriter({
+      write: async (input) => {
+        slowStarted();
+        await slowMayFinish;
+        await recordQuizAttempt(input, deps);
+      },
+    });
+    const fastWriter = createQuizAttemptWriter({
+      write: (input) => recordQuizAttempt(input, deps),
+    });
+    const base = {
+      stageId: 'stage-1',
+      sceneId: 'scene-quiz',
+      attemptId,
+      answers: { q1: 'A' },
+    };
+
+    const slowSubmission = slowWriter.recordPhase({ ...base, phase: 'submitted' });
+    await didStartSlow;
+    await fastWriter.recordPhase({ ...base, phase: 'draft' });
+    const reading = loadQuizAttemptState({ stageId: base.stageId, sceneId: base.sceneId }, deps);
+    const earlyOutcome = await Promise.race([
+      reading.then(() => 'read' as const),
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 50)),
+    ]);
+    expect(earlyOutcome).toBe('blocked');
+
+    releaseSlow();
+    await slowSubmission;
+    await expect(reading).resolves.toMatchObject({ state: { phase: 'submitted' } });
+  });
+
+  it('waits for a queued writer on the active retry child', async () => {
+    const { deps } = makeHarness();
+    const rootAttemptId = quizAttemptId('stage-1', 'scene-quiz', 'learner-1');
+    const base = {
+      stageId: 'stage-1',
+      sceneId: 'scene-quiz',
+      attemptId: rootAttemptId,
+      answers: { q1: 'A' },
+    };
+    await recordQuizAttempt({ ...base, phase: 'reviewed', results }, deps);
+    await recordQuizAttempt({ ...base, phase: 'draft', answers: {}, startNewAttempt: true }, deps);
+    const retryAttemptId = `${rootAttemptId}:retry:1`;
+    let submissionStarted!: () => void;
+    const didStartSubmission = new Promise<void>((resolve) => {
+      submissionStarted = resolve;
+    });
+    let releaseSubmission!: () => void;
+    const submissionMayFinish = new Promise<void>((resolve) => {
+      releaseSubmission = resolve;
+    });
+    const writer = createQuizAttemptWriter({
+      write: async (input) => {
+        submissionStarted();
+        await submissionMayFinish;
+        await recordQuizAttempt(input, deps);
+      },
+    });
+    const submitting = writer.recordPhase({
+      ...base,
+      attemptId: retryAttemptId,
+      phase: 'submitted',
+    });
+    await didStartSubmission;
+
+    const reading = loadQuizAttemptState({ stageId: base.stageId, sceneId: base.sceneId }, deps);
+    const earlyOutcome = await Promise.race([
+      reading.then(() => 'read' as const),
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 50)),
+    ]);
+    expect(earlyOutcome).toBe('blocked');
+
+    releaseSubmission();
+    await submitting;
+    await expect(reading).resolves.toMatchObject({
+      state: { sessionId: retryAttemptId, phase: 'submitted' },
+    });
+  });
+
   it('recovers when another tab wins the same session create race without Web Locks', async () => {
     const { store } = makeHarness();
     let missingReads = 0;
