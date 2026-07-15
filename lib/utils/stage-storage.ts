@@ -102,8 +102,16 @@ export async function loadStageData(stageId: string): Promise<StageStoreData | n
     // Load scenes
     const scenes = await db.scenes.where('stageId').equals(stageId).sortBy('order');
 
-    // Load learner chat sessions, migrating legacy Dexie rows on first access.
-    const chats = await loadChatSessions(stageId);
+    // Chat runtime data lives in a separate IndexedDB database. Keep the
+    // document available when that independent store is temporarily
+    // unavailable; a later chat load/save can recover without treating the
+    // already-loaded stage as missing.
+    let chats: ChatSession[] = [];
+    try {
+      chats = await loadChatSessions(stageId);
+    } catch (error) {
+      log.warn(`Failed to load chat sessions for stage ${stageId}:`, error);
+    }
 
     log.info(`Loaded stage: ${stageId}, scenes: ${scenes.length}, chats: ${chats.length}`);
 
