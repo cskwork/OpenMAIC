@@ -23,7 +23,7 @@ import type { AgentEditSessionRecord } from '@/lib/agent/client/agent-edit-sessi
 import { createLogger } from '@/lib/logger';
 import { deleteStageRuntimeSafely, getRuntimeStore } from '@/lib/runtime/store';
 import type { RuntimeStore } from '@openmaic/storage';
-import { withChatStorageExclusiveLock } from './chat-storage-lock';
+import { withRuntimeStorageExclusiveLock } from './chat-storage-lock';
 import type { ChatStorageOptions } from './chat-storage';
 
 const log = createLogger('Database');
@@ -500,7 +500,7 @@ export async function clearDatabase(runtimeStore?: RuntimeStore): Promise<void> 
   // Clear the whole runtime database first, including rows orphaned by an
   // earlier best-effort stage deletion. This user-requested destructive action
   // must fail loud: reporting success while runtime data remains is misleading.
-  await withChatStorageExclusiveLock(async () => {
+  await withRuntimeStorageExclusiveLock(async () => {
     await (runtimeStore ?? getRuntimeStore()).deleteAllRuntime();
     await db.delete();
   });

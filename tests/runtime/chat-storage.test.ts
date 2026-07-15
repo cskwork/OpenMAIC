@@ -7,6 +7,7 @@ import type { UIMessage } from 'ai';
 import {
   interruptActiveChatSessions,
   nextChatUpdatedAt,
+  withChatSegmentReveal,
   withChatSegmentSealed,
   withChatSessionStatus,
   type ChatMessageMetadata,
@@ -279,6 +280,14 @@ describe('chat RuntimeStore cutover', () => {
     expect(withChatSegmentSealed(session({ updatedAt: 10_000 }), 9_000)).toMatchObject({
       updatedAt: 10_001,
     });
+  });
+
+  it('advances streamed conflict order only after the segment is fully revealed', () => {
+    const partial = withChatSegmentReveal(session({ updatedAt: 10_000 }), false, 9_000);
+    const complete = withChatSegmentReveal(partial, true, 9_000);
+
+    expect(partial.updatedAt).toBe(10_000);
+    expect(complete.updatedAt).toBe(10_001);
   });
 
   it('advances conflict order when reload interrupts active sessions', () => {

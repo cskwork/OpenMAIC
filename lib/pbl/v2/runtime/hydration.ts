@@ -4,9 +4,10 @@ import { isEqual } from 'lodash';
 
 import { getLearnerKey } from '@/lib/runtime/learner-key';
 import { getRuntimeStore } from '@/lib/runtime/store';
+import { withRuntimeStorageSharedLock } from '@/lib/utils/chat-storage-lock';
 import type { Scene } from '@/lib/types/stage';
 import type { PBLProjectV2 } from '@/lib/pbl/v2/types';
-import { drainProjectRuntimeFully, ensurePBLRuntimeSession } from './drain';
+import { drainProjectRuntimeFullyUnderLock, ensurePBLRuntimeSession } from './drain';
 import { foldPBLRuntime, type PBLFoldDiagnostics } from './fold';
 import {
   applyLearnerState,
@@ -52,7 +53,7 @@ async function withPBLRuntimeTransaction<T>(
     inFlightPblRuntimeTransactions.set(store, storeTransactions);
   }
   const previous = storeTransactions.get(key) ?? Promise.resolve();
-  const current = previous.catch(() => {}).then(work);
+  const current = previous.catch(() => {}).then(() => withRuntimeStorageSharedLock(work));
   storeTransactions.set(key, current);
   try {
     return await current;
@@ -179,7 +180,7 @@ export async function synchronizePBLProjectRuntime(args: HydratePBLProjectArgs):
   const transactionKey = `${args.stageId}:${args.sceneId}:${learnerKey}`;
 
   await withPBLRuntimeTransaction(store, transactionKey, async () => {
-    await drainProjectRuntimeFully({
+    await drainProjectRuntimeFullyUnderLock({
       stageId: args.stageId,
       sceneId: args.sceneId,
       project: args.project,
@@ -226,7 +227,7 @@ export async function hydratePBLProjectFromRuntime(
   const transactionKey = `${args.stageId}:${args.sceneId}:${learnerKey}`;
 
   return withPBLRuntimeTransaction(store, transactionKey, async () => {
-    await drainProjectRuntimeFully({
+    await drainProjectRuntimeFullyUnderLock({
       stageId: args.stageId,
       sceneId: args.sceneId,
       project: args.project,

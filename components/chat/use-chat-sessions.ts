@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   interruptActiveChatSessions,
   nextChatUpdatedAt,
-  withChatSegmentSealed,
+  withChatSegmentReveal,
   withChatSessionStatus,
   type ChatSession,
   type SessionType,
@@ -317,12 +317,12 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             messageId: string,
             partId: string,
             revealedText: string,
-            _isComplete: boolean,
+            isComplete: boolean,
           ) {
             setSessions((prev) =>
               prev.map((s) => {
                 if (s.id !== sessionId) return s;
-                return {
+                const revealed = {
                   ...s,
                   messages: s.messages.map((m) => {
                     if (m.id !== messageId) return m;
@@ -348,6 +348,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
                   }),
                   // Don't update updatedAt on every tick — avoids thrashing persistence sync
                 };
+                return withChatSegmentReveal(revealed, isComplete);
               }),
             );
           },
@@ -445,11 +446,6 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             fullText: string,
             agentId: string | null,
           ) {
-            setSessions((prev) =>
-              prev.map((session) =>
-                session.id === sessionId ? withChatSegmentSealed(session) : session,
-              ),
-            );
             onSegmentSealedRef.current?.(messageId, partId, fullText, agentId);
           },
 

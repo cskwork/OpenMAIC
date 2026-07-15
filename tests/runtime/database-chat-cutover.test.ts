@@ -423,6 +423,24 @@ describe('database runtime chat integration', () => {
     });
   });
 
+  it('keeps legacy chats visible without Web Locks without migrating them', async () => {
+    vi.stubGlobal('navigator', {});
+    stubMemoryLocalStorage();
+    const { db } = await import('@/lib/utils/database');
+    const { loadChatSessions } = await import('@/lib/utils/chat-storage');
+    await db.chatSessions.put({
+      ...chatSession(),
+      stageId: 'stage-legacy-no-lock',
+    });
+
+    await expect(loadChatSessions('stage-legacy-no-lock')).resolves.toMatchObject([
+      { id: 'chat-backup', title: 'Persisted chat' },
+    ]);
+    await expect(
+      db.chatSessions.where('stageId').equals('stage-legacy-no-lock').count(),
+    ).resolves.toBe(1);
+  });
+
   it('still fails non-empty chat document saves without Web Locks', async () => {
     vi.stubGlobal('navigator', {});
     stubMemoryLocalStorage();

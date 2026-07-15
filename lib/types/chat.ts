@@ -80,6 +80,15 @@ export function withChatSegmentSealed(session: ChatSession, now = Date.now()): C
   return { ...session, updatedAt: nextChatUpdatedAt(session, now) };
 }
 
+/** Advance conflict order only when paced text has actually finished revealing. */
+export function withChatSegmentReveal(
+  session: ChatSession,
+  isComplete: boolean,
+  now = Date.now(),
+): ChatSession {
+  return isComplete ? withChatSegmentSealed(session, now) : session;
+}
+
 /** Mark streams that cannot survive a reload as interrupted without stale ordering. */
 export function interruptActiveChatSessions(
   sessions: ChatSession[],

@@ -1011,7 +1011,21 @@ export async function loadChatSessions(
       },
     );
   } catch (error) {
-    if (error instanceof ChatStorageLockUnavailableError) throw error;
+    if (error instanceof ChatStorageLockUnavailableError) {
+      // No-lock environments cannot safely migrate or clear the shared legacy
+      // table, but a read-only legacy snapshot keeps pre-cutover history
+      // visible. Strict callers such as backup export still fail loud.
+      if (options.fallbackToLegacyOnError === false) throw error;
+      const readOnlyLegacy = (await resolved.legacyStore.load(stageId)).map(normalizeSession);
+      if (readOnlyLegacy.length === 0) throw error;
+      rememberObservedIds(
+        resolved.store,
+        queueKey,
+        readOnlyLegacy.map((session) => session.id),
+      );
+      console.warn(`Loaded legacy chat sessions without migration for stage ${stageId}:`, error);
+      return readOnlyLegacy;
+    }
     // A failed runtime read is not an authoritative empty snapshot. Forget the
     // prior observation so a later stage save cannot retire unseen data. A
     // legacy-clear failure happens after migration succeeded, so retain it.

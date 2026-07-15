@@ -22,6 +22,7 @@ import { BrowserKVStore, type KVStore, type RuntimeStore } from '@openmaic/stora
 
 import { getLearnerKey } from '@/lib/runtime/learner-key';
 import { getRuntimeStore } from '@/lib/runtime/store';
+import { withRuntimeStorageSharedLock } from '@/lib/utils/chat-storage-lock';
 import type { PBLEngagementEvent, PBLProjectV2, PBLRuntimeEvent } from '@/lib/pbl/v2/types';
 import { enrichPBLRuntimeEvent, pblEngagementRecordPayload } from './record-payloads';
 
@@ -328,6 +329,7 @@ async function waitForActiveDrainWork(key: string): Promise<void> {
 async function drainProjectRuntimeSerialized(
   args: DrainProjectRuntimeArgs,
   waitForActualCompletion = false,
+  runtimeLockHeld = false,
 ): Promise<void> {
   const kv = args.kv ?? getDefaultKv();
   const learnerKey = args.learnerKey ?? (await getLearnerKey(kv));
@@ -349,15 +351,19 @@ async function drainProjectRuntimeSerialized(
       const deadline = createDrainDeadline(
         waitForActualCompletion ? Number.POSITIVE_INFINITY : PBL_DRAIN_TIMEOUT_MS,
       );
-      const drainWork = drainProjectRuntimeWork(
-        {
-          ...args,
-          store,
-          kv,
-          learnerKey,
-        },
-        deadline,
-      );
+      const startDrain = () =>
+        drainProjectRuntimeWork(
+          {
+            ...args,
+            store,
+            kv,
+            learnerKey,
+          },
+          deadline,
+        );
+      // Hold the shared maintenance lock for the actual append work, even if
+      // the bounded public caller times out and returns first.
+      const drainWork = runtimeLockHeld ? startDrain() : withRuntimeStorageSharedLock(startDrain);
       trackActiveDrainWork(inFlightKey, drainWork);
       if (waitForActualCompletion) {
         return withTimeout(drainWork, PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS);
@@ -389,6 +395,15 @@ export async function drainProjectRuntimeFully(args: DrainProjectRuntimeArgs): P
   const work = drainProjectRuntimeSerialized(args, true);
   // The budget covers queueing behind prior saves as well as this drain's own
   // work. A late rejection is observed here after the caller has fallen back.
+  work.catch(() => {});
+  await withTimeout(work, PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS);
+}
+
+/** Full drain for callers already holding the runtime-wide shared lock. */
+export async function drainProjectRuntimeFullyUnderLock(
+  args: DrainProjectRuntimeArgs,
+): Promise<void> {
+  const work = drainProjectRuntimeSerialized(args, true, true);
   work.catch(() => {});
   await withTimeout(work, PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS);
 }
