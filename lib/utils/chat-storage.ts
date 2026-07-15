@@ -912,6 +912,7 @@ export async function loadChatSessions(
   const resolved = await context(options);
   const queueKey = `${stageId}\0${resolved.learnerKey}`;
   let legacy: ChatSession[] = [];
+  let runtimeReadSucceeded = false;
   try {
     return await enqueue(
       resolved.store,
@@ -925,6 +926,7 @@ export async function loadChatSessions(
         legacy = (await resolved.legacyStore.load(stageId)).map(normalizeSession);
         if (legacy.length === 0) {
           const loaded = await loadRuntimeSessions(resolved.store, stageId, resolved.learnerKey);
+          runtimeReadSucceeded = true;
           rememberObservedIds(
             resolved.store,
             queueKey,
@@ -940,6 +942,7 @@ export async function loadChatSessions(
           false,
           isolatedWrites,
         );
+        runtimeReadSucceeded = true;
         rememberObservedIds(
           resolved.store,
           queueKey,
@@ -951,10 +954,10 @@ export async function loadChatSessions(
     );
   } catch (error) {
     if (error instanceof ChatStorageLockUnavailableError) throw error;
-    // A failed read is not an authoritative empty snapshot. Forget the IDs
-    // previously observed by this store instance so a later stage save cannot
-    // retire them merely because the UI had to continue without chat data.
-    rememberObservedIds(resolved.store, queueKey, []);
+    // A failed runtime read is not an authoritative empty snapshot. Forget the
+    // prior observation so a later stage save cannot retire unseen data. A
+    // legacy-clear failure happens after migration succeeded, so retain it.
+    if (!runtimeReadSucceeded) rememberObservedIds(resolved.store, queueKey, []);
     if (legacy.length === 0) throw error;
     console.warn(`Failed to migrate chat sessions for stage ${stageId}:`, error);
     return legacy;

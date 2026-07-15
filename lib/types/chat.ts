@@ -55,6 +55,18 @@ export interface ChatSession {
 }
 
 /**
+ * Advance the session's conflict-order clock without trusting wall time to be
+ * monotonic. Restored data may come from a clock ahead of this device, and the
+ * local clock itself can move backwards.
+ */
+export function nextChatUpdatedAt(
+  session: Pick<ChatSession, 'updatedAt'>,
+  now = Date.now(),
+): number {
+  return Math.max(now, session.updatedAt + 1);
+}
+
+/**
  * Session configuration
  */
 export interface SessionConfig {

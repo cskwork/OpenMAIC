@@ -4,7 +4,7 @@ import { BrowserRuntimeStore, type RuntimeStore } from '@openmaic/storage';
 import type { RuntimeRecord } from '@openmaic/dsl';
 import type { UIMessage } from 'ai';
 
-import type { ChatMessageMetadata, ChatSession } from '@/lib/types/chat';
+import { nextChatUpdatedAt, type ChatMessageMetadata, type ChatSession } from '@/lib/types/chat';
 import { loadChatSessions, saveChatSessions } from '@/lib/utils/chat-storage';
 
 if (!('IDBKeyRange' in globalThis)) {
@@ -46,6 +46,18 @@ class MemoryLegacyChatStore implements LegacyChatStore {
   async clear(): Promise<void> {
     this.clearCalls += 1;
     this.sessions = [];
+  }
+}
+
+class FailingClearLegacyChatStore extends MemoryLegacyChatStore {
+  failNextClear = true;
+
+  override async clear(): Promise<void> {
+    if (this.failNextClear) {
+      this.failNextClear = false;
+      throw new Error('legacy clear failed');
+    }
+    await super.clear();
   }
 }
 
@@ -208,6 +220,40 @@ describe('chat RuntimeStore cutover', () => {
     expect(
       await loadChatSessions(STAGE_ID, { store, learnerKey: LEARNER_KEY, legacyStore }),
     ).toMatchObject([{ title: 'Latest title', updatedAt: 2_000 }]);
+  });
+
+  it('preserves a real edit when the local wall clock moves behind persisted state', async () => {
+    const store = makeRuntimeStore();
+    const legacyStore = new MemoryLegacyChatStore();
+    const editedAt = nextChatUpdatedAt({ updatedAt: 10_000 }, 9_000);
+    expect(editedAt).toBe(10_001);
+    await saveChatSessions(
+      STAGE_ID,
+      [session({ title: 'Future persisted title', updatedAt: 10_000 })],
+      { store, learnerKey: LEARNER_KEY, legacyStore },
+    );
+
+    await saveChatSessions(
+      STAGE_ID,
+      [
+        session({
+          title: 'Edited after clock rollback',
+          messages: [message('message-2', 'user', 'New edit', 9_000)],
+          updatedAt: editedAt,
+        }),
+      ],
+      { store, learnerKey: LEARNER_KEY, legacyStore },
+    );
+
+    await expect(
+      loadChatSessions(STAGE_ID, { store, learnerKey: LEARNER_KEY, legacyStore }),
+    ).resolves.toMatchObject([
+      {
+        title: 'Edited after clock rollback',
+        messages: [{ id: 'message-2' }],
+        updatedAt: 10_001,
+      },
+    ]);
   });
 
   it('compares structured-clone tool results without losing Map or BigInt updates', async () => {
@@ -1155,6 +1201,19 @@ describe('chat RuntimeStore cutover', () => {
         (candidate) => candidate.kind === 'chat',
       ),
     ).toHaveLength(1);
+  });
+
+  it('retains migrated observations when clearing legacy rows fails', async () => {
+    const store = makeRuntimeStore();
+    const legacyStore = new FailingClearLegacyChatStore([session({ title: 'Legacy chat' })]);
+    const options = { store, learnerKey: LEARNER_KEY, legacyStore };
+
+    await expect(loadChatSessions(STAGE_ID, options)).resolves.toMatchObject([
+      { title: 'Legacy chat' },
+    ]);
+    await saveChatSessions(STAGE_ID, [], options);
+
+    await expect(loadChatSessions(STAGE_ID, options)).resolves.toEqual([]);
   });
 
   it('does not resurrect a legacy snapshot when a concurrent save removes it', async () => {
