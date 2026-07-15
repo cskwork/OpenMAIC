@@ -187,6 +187,33 @@ describe('mapElementJsonPatchToEditIntents', () => {
     });
   });
 
+  it('preserves siblings created by a whole structured add before a nested edit', () => {
+    expect(
+      mapElementJsonPatchToEditIntents(
+        [
+          { op: 'test', path: '/elements/0/id', value: 'title' },
+          {
+            op: 'add',
+            path: '/elements/0/shadow',
+            value: { h: 1, v: 2, blur: 3, color: '#000000' },
+          },
+          { op: 'replace', path: '/elements/0/shadow/blur', value: 4 },
+        ],
+        [textElement()],
+      ),
+    ).toEqual({
+      ok: true,
+      intents: [
+        {
+          type: 'element.update',
+          id: 'title',
+          props: { shadow: { h: 1, v: 2, blur: 4, color: '#000000' } },
+        },
+      ],
+      targetIds: ['title'],
+    });
+  });
+
   it('marks a whole structured-property replace so omitted siblings are removed', () => {
     const image = {
       id: 'image-1',

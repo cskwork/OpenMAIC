@@ -316,6 +316,7 @@ export function mapElementJsonPatchToEditIntents(
   const targetIds: string[] = [];
   const targeted = new Set<string>();
   const partialStructuredKeysById = new Map<string, Map<string, Set<string>>>();
+  const wholeObjectWritesById = new Map<string, Set<string>>();
   const wholeObjectReplacementsById = new Map<string, Set<string>>();
 
   for (let operationIndex = 0; operationIndex < operations.length; operationIndex++) {
@@ -406,17 +407,21 @@ export function mapElementJsonPatchToEditIntents(
         props.set(rootKey, keys);
       }
       keys.add(nestedKey);
-    } else if (
-      parsed.tail.length === 1 &&
-      operation.op === 'replace' &&
-      PARTIALLY_MERGED_STYLE_PROPS.has(rootKey)
-    ) {
-      let props = wholeObjectReplacementsById.get(element.id);
-      if (!props) {
-        props = new Set();
-        wholeObjectReplacementsById.set(element.id, props);
+    } else if (parsed.tail.length === 1 && PARTIALLY_MERGED_STYLE_PROPS.has(rootKey)) {
+      let writes = wholeObjectWritesById.get(element.id);
+      if (!writes) {
+        writes = new Set();
+        wholeObjectWritesById.set(element.id, writes);
       }
-      props.add(rootKey);
+      writes.add(rootKey);
+      if (operation.op === 'replace') {
+        let props = wholeObjectReplacementsById.get(element.id);
+        if (!props) {
+          props = new Set();
+          wholeObjectReplacementsById.set(element.id, props);
+        }
+        props.add(rootKey);
+      }
     }
     if (!targeted.has(element.id)) {
       targeted.add(element.id);
@@ -459,10 +464,10 @@ export function mapElementJsonPatchToEditIntents(
       for (const [key, requestedValue] of Object.entries(proposal.props)) {
         const normalizedValue = normalized[key];
         const partialKeys = partialStructuredKeysById.get(proposal.id)?.get(key);
-        const wholeReplacement = wholeObjectReplacementsById.get(proposal.id)?.has(key);
+        const wholeObjectWrite = wholeObjectWritesById.get(proposal.id)?.has(key);
         if (
           partialKeys &&
-          !wholeReplacement &&
+          !wholeObjectWrite &&
           isRecord(requestedValue) &&
           isRecord(normalizedValue)
         ) {
