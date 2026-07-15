@@ -477,10 +477,16 @@ export async function recordQuizAttempt(
           // A concurrent retry may already have created the first active child.
           // Reuse it instead of minting a second active branch whose newer
           // session ordering would hide writes that still resolve to this one.
-          if (sessionId !== input.attemptId && session.status === 'active') return;
-          rolloverIndex += 1;
-          sessionId = rolloverAttemptId(input.attemptId, rolloverIndex);
-          continue;
+          if (sessionId !== input.attemptId && session.status === 'active') {
+            // A child with a durable fact already represents the retry. An
+            // empty child can remain after create succeeds but append fails;
+            // fall through so this call writes the missing draft marker.
+            if (last) return;
+          } else {
+            rolloverIndex += 1;
+            sessionId = rolloverAttemptId(input.attemptId, rolloverIndex);
+            continue;
+          }
         }
 
         if (session.status === 'active') {

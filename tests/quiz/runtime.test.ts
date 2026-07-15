@@ -294,6 +294,42 @@ describe('quiz attempt runtime persistence', () => {
     ).toEqual([{ payloadVersion: 1, phase: 'draft', answers: {} }]);
   });
 
+  it('persists a retry marker after recovering an empty child from a failed append', async () => {
+    const { store, deps } = makeHarness();
+    const base = {
+      stageId: 'stage-1',
+      sceneId: 'scene-quiz',
+      attemptId: 'attempt-retry-recovery',
+      answers: {},
+    };
+    await recordQuizAttempt({ ...base, phase: 'reviewed', results: [] }, deps);
+    const failingStore = wrapStore(store, {
+      appendRecord: async () => {
+        throw new Error('storage unavailable');
+      },
+    });
+
+    await expect(
+      recordQuizAttempt(
+        { ...base, phase: 'draft', startNewAttempt: true },
+        { ...deps, store: failingStore },
+      ),
+    ).rejects.toThrow('storage unavailable');
+    expect(await store.listRecords(`${base.attemptId}:retry:1`)).toEqual([]);
+
+    await recordQuizAttempt({ ...base, phase: 'draft', startNewAttempt: true }, deps);
+
+    expect(
+      (await store.listRecords(`${base.attemptId}:retry:1`)).map((record) => record.payload),
+    ).toEqual([{ payloadVersion: 1, phase: 'draft', answers: {} }]);
+    await expect(
+      loadQuizAttemptState({ stageId: base.stageId, sceneId: base.sceneId }, deps),
+    ).resolves.toMatchObject({
+      attemptId: `${base.attemptId}:retry:1`,
+      state: { sessionId: `${base.attemptId}:retry:1`, phase: 'draft', answers: {} },
+    });
+  });
+
   it('reuses one active retry for concurrent retry requests across tabs', async () => {
     const { store, deps } = makeHarness();
     const base = {
