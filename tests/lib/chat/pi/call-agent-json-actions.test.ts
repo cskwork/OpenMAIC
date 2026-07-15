@@ -129,6 +129,59 @@ function mockChildWithJsonOutput(jsonOutput: string) {
   mocks.buildAgent.mockReturnValue(makeMockChildWithJsonOutput(jsonOutput));
 }
 
+// Deliver the assistant output as several text deltas, awaiting the subscriber
+// for each chunk before the next — mirroring pi-agent-core, which does
+// `await listener(event)` and only resolves waitForIdle once every delta has
+// been fully drained. This lets us exercise mid-token split boundaries that the
+// single-delta mock never hits.
+function mockChildWithChunks(chunks: string[], finalMessage?: string) {
+  let handler: ((event: unknown) => unknown) | null = null;
+  mocks.buildAgent.mockReturnValue({
+    subscribe: (h: (event: unknown) => unknown) => {
+      handler = h;
+      return () => {};
+    },
+    prompt: async () => {},
+    waitForIdle: async () => {
+      for (const chunk of chunks) {
+        await handler?.({
+          type: 'message_update',
+          assistantMessageEvent: { type: 'text_delta', delta: chunk },
+        });
+      }
+    },
+    state: {
+      messages: [
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: finalMessage ?? chunks.join('') }],
+        },
+      ],
+    },
+  });
+}
+
+function baseToolOpts(events: StatelessEvent[]) {
+  return {
+    body: makeBody(),
+    agentConfigs: [teacher],
+    send: async (event: StatelessEvent) => {
+      events.push(event);
+    },
+    languageModel: {} as never,
+    onAgentDone: vi.fn(),
+    onActionDone: vi.fn(),
+    thinkingConfig: { mode: 'disabled' as const, enabled: false },
+    abortSignal: new AbortController().signal,
+    maxAgentTurns: 6,
+    getAgentTurnCount: () => 0,
+    getAgentResponses: () => [],
+    getWhiteboardLedger: () => [],
+    maxActionsPerAgent: 8,
+    enableWhiteboardTools: true,
+  };
+}
+
 describe('Pi call_agent JSON action output', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -228,52 +281,246 @@ describe('Pi call_agent JSON action output', () => {
     });
 
     expect(events.filter((event) => event.type === 'text_delta')).toEqual([]);
+    expect(events.filter((event) => event.type === 'action')).toEqual([]);
+    // Suppression now happens in the structured parser, so no raw text ever
+    // reaches the downstream fallback filter (hence no warning is surfaced).
     expect(result.details).toMatchObject({
       agentId: teacher.id,
       text: '',
-      actionWarnings: [
-        {
-          reason: 'raw_structured_fallback',
-          message: 'Skipped malformed structured output fallback from visible speech.',
-        },
-      ],
     });
   });
 
-  it('does not surface a bare structured JSON object fallback as visible speech', async () => {
-    mockChildWithJsonOutput('{"type":"text","content":"这应该走结构化解析，不应该原样显示。"}');
+  it('extracts content from a bare {type:"text"} object instead of leaking raw JSON', async () => {
+    mockChildWithJsonOutput('{"type":"text","content":"这应该被结构化解析并显示。"}');
 
     const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
     const events: StatelessEvent[] = [];
-    const tool = buildCallAgentTool({
-      body: makeBody(),
-      agentConfigs: [teacher],
-      send: async (event) => {
-        events.push(event);
-      },
-      languageModel: {} as never,
-      onAgentDone: vi.fn(),
-      onActionDone: vi.fn(),
-      thinkingConfig: { mode: 'disabled', enabled: false },
-      abortSignal: new AbortController().signal,
-      maxAgentTurns: 6,
-      getAgentTurnCount: () => 0,
-      getAgentResponses: () => [],
-      getWhiteboardLedger: () => [],
-      maxActionsPerAgent: 8,
-      enableWhiteboardTools: true,
-    });
+    const tool = buildCallAgentTool(baseToolOpts(events));
 
     const result = await tool.execute('call-1', {
       agentId: teacher.id,
       instruction: 'Explain briefly.',
     });
 
-    expect(events.filter((event) => event.type === 'text_delta')).toEqual([]);
+    const visibleSpeech = events
+      .filter((event) => event.type === 'text_delta')
+      .map((event) => event.data.content)
+      .join('');
+    expect(visibleSpeech).toBe('这应该被结构化解析并显示。');
+    expect(visibleSpeech).not.toContain('"type"');
+    expect(visibleSpeech).not.toContain('"content"');
     expect(result.details).toMatchObject({
       agentId: teacher.id,
-      text: '',
+      text: '这应该被结构化解析并显示。',
     });
+  });
+
+  it('suppresses a bare action / unknown JSON object instead of showing raw JSON', async () => {
+    for (const bareObject of [
+      '{"type":"action","name":"wb_open","params":{}}',
+      '{"foo":"bar","note":"unknown structured object"}',
+    ]) {
+      mocks.buildAgent.mockReset();
+      mockChildWithJsonOutput(bareObject);
+
+      const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
+      const events: StatelessEvent[] = [];
+      const tool = buildCallAgentTool(baseToolOpts(events));
+
+      const result = await tool.execute('call-1', {
+        agentId: teacher.id,
+        instruction: 'Explain briefly.',
+      });
+
+      expect(events.filter((event) => event.type === 'text_delta')).toEqual([]);
+      expect(events.filter((event) => event.type === 'action')).toEqual([]);
+      expect(result.details).toMatchObject({ agentId: teacher.id, text: '' });
+    }
+  });
+
+  it('suppresses brace-less / truncated JSON fragments instead of leaking them', async () => {
+    for (const fragment of [
+      // missing the opening `{`
+      'type":"text","content":"半句话被截断',
+      // starts like an object but never closes — jsonrepair must not resurrect it
+      '{"type":"text","content":"内容没有闭合',
+    ]) {
+      mocks.buildAgent.mockReset();
+      mockChildWithJsonOutput(fragment);
+
+      const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
+      const events: StatelessEvent[] = [];
+      const tool = buildCallAgentTool(baseToolOpts(events));
+
+      const result = await tool.execute('call-1', {
+        agentId: teacher.id,
+        instruction: 'Explain briefly.',
+      });
+
+      const visibleSpeech = events
+        .filter((event) => event.type === 'text_delta')
+        .map((event) => event.data.content)
+        .join('');
+      expect(visibleSpeech).not.toContain('type"');
+      expect(visibleSpeech).not.toContain('"content"');
+      expect(result.details).toMatchObject({ agentId: teacher.id, text: '' });
+    }
+  });
+
+  it('assembles one clean message from a chunked JSON stream without leaking raw JSON', async () => {
+    // A valid array split at awkward mid-token boundaries across deltas.
+    mockChildWithChunks([
+      '[{"type":"acti',
+      'on","name":"wb_open","params":{}},{"type":"te',
+      'xt","content":"树荫挡住阳光，',
+      '地面升温更慢。"}]',
+    ]);
+
+    const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
+    const events: StatelessEvent[] = [];
+    const tool = buildCallAgentTool(baseToolOpts(events));
+
+    const result = await tool.execute('call-1', {
+      agentId: teacher.id,
+      instruction: 'Draw and explain briefly.',
+    });
+
+    const textEvents = events.filter((event) => event.type === 'text_delta');
+    const visibleSpeech = textEvents.map((event) => event.data.content).join('');
+    // Content is reassembled correctly regardless of chunk boundaries.
+    expect(visibleSpeech).toBe('树荫挡住阳光，地面升温更慢。');
+    // No raw structured tokens leak into the bubble.
+    expect(visibleSpeech).not.toContain('"type"');
+    expect(visibleSpeech).not.toContain('wb_open');
+    // All deltas belong to a single assistant message (not split into bubbles).
+    expect(new Set(textEvents.map((event) => event.data.messageId)).size).toBe(1);
+    // The whiteboard action still fires.
+    expect(
+      events.filter((event) => event.type === 'action').map((event) => event.data.actionName),
+    ).toEqual(['wb_open']);
+    expect(result.details).toMatchObject({
+      agentId: teacher.id,
+      text: '树荫挡住阳光，地面升温更慢。',
+    });
+  });
+
+  it('routes suppressed/weak child turns to the empty-turn guard', async () => {
+    const onAgentDone = vi.fn();
+    const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
+    const events: StatelessEvent[] = [];
+    const tool = buildCallAgentTool({ ...baseToolOpts(events), onAgentDone });
+
+    // Child emits a brace-less / truncated structured tail — the exact residue
+    // the old substring classifier missed and leaked as visible speech (and thus
+    // miscounted as a substantive turn). After suppression there is no visible
+    // text and no executed action — a weak turn.
+    const residue = 'type":"text","content":"半句话被截断';
+    mockChildWithJsonOutput(residue);
+    const first = await tool.execute('c1', { agentId: teacher.id, instruction: 'go' });
+    expect(first.details).toMatchObject({ text: '' });
+    // The summary handed to the director is non-substantive: empty preview + no
+    // actions, so isTeachingSubstantiveTurn() rejects it and cue_user is blocked.
+    expect(onAgentDone).toHaveBeenLastCalledWith(
+      expect.objectContaining({ contentPreview: '', actionCount: 0 }),
+    );
+
+    mocks.buildAgent.mockReset();
+    mockChildWithJsonOutput(residue);
+    await tool.execute('c2', { agentId: teacher.id, instruction: 'go' });
+
+    // Two consecutive weak turns trip the empty-turn guard: a third call is
+    // refused, so the director stops instead of treating scraps as teaching.
+    mocks.buildAgent.mockReset();
+    mockChildWithJsonOutput(residue);
+    const third = await tool.execute('c3', { agentId: teacher.id, instruction: 'go' });
+    expect(third.details).toMatchObject({ reason: 'consecutive_empty_turns' });
+  });
+
+  it('counts real speech that merely discusses JSON/brackets as a substantive turn', async () => {
+    // Regression for #4: the visible speech legitimately contains structured-output
+    // punctuation (`{"name":...}`, `[1,2]`). It was already streamed cleanly through
+    // the parser, so it must be trusted — NOT re-run through the residue classifier,
+    // which would flag it and misclassify a genuine teaching turn as empty.
+    const speech = '我们用花括号表示对象，例如 {"name":"树"}，也用方括号 [1,2] 表示数组。';
+    mockChildWithJsonOutput(JSON.stringify([{ type: 'text', content: speech }]));
+
+    const onAgentDone = vi.fn();
+    const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
+    const events: StatelessEvent[] = [];
+    const tool = buildCallAgentTool({ ...baseToolOpts(events), onAgentDone });
+
+    const result = await tool.execute('call-1', {
+      agentId: teacher.id,
+      instruction: 'Explain JSON notation.',
+    });
+
+    const visibleSpeech = events
+      .filter((event) => event.type === 'text_delta')
+      .map((event) => event.data.content)
+      .join('');
+    expect(visibleSpeech).toBe(speech);
+    expect(result.details).toMatchObject({ agentId: teacher.id, text: speech });
+    // The turn is substantive: non-empty contentPreview so isTeachingSubstantiveTurn
+    // accepts it and the director may legitimately cue_user afterwards.
+    expect(onAgentDone).toHaveBeenLastCalledWith(
+      expect.objectContaining({ contentPreview: speech, actionCount: 0 }),
+    );
+  });
+
+  it('accepts the raw-fallback path text unless it is whole structured residue', async () => {
+    // No `[` ever streams (sawStructuredOutput stays false), so call-agent falls back
+    // to the last assistant message. Genuine prose there is shown; whole JSON residue
+    // is still suppressed by the backstop.
+    mocks.buildAgent.mockReset();
+    mocks.buildAgent.mockReturnValue({
+      subscribe: () => () => {},
+      prompt: async () => {},
+      waitForIdle: async () => {},
+      state: {
+        messages: [
+          { role: 'assistant', content: [{ type: 'text', text: '同学们，我们开始上课。' }] },
+        ],
+      },
+    });
+    const onAgentDone = vi.fn();
+    const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
+    const events: StatelessEvent[] = [];
+    const tool = buildCallAgentTool({ ...baseToolOpts(events), onAgentDone });
+
+    const result = await tool.execute('call-1', { agentId: teacher.id, instruction: 'go' });
+    expect(result.details).toMatchObject({ text: '同学们，我们开始上课。' });
+    expect(onAgentDone).toHaveBeenLastCalledWith(
+      expect.objectContaining({ contentPreview: '同学们，我们开始上课。' }),
+    );
+  });
+
+  it('shows raw-fallback prose that merely contains an inline JSON example', async () => {
+    // Boundary for the residue classifier: the model never emits `[`, so this
+    // goes through the raw-fallback path. The prose legitimately embeds a JSON
+    // snippet mid-sentence (`{"name":"树"}`). The classifier must anchor its
+    // schema-key match to the START of the buffer, so this stays visible instead
+    // of being suppressed as residue and miscounted as an empty turn.
+    mocks.buildAgent.mockReset();
+    const speech = '我们用对象 {"name":"树"} 表示一棵树。';
+    mocks.buildAgent.mockReturnValue({
+      subscribe: () => () => {},
+      prompt: async () => {},
+      waitForIdle: async () => {},
+      state: {
+        messages: [{ role: 'assistant', content: [{ type: 'text', text: speech }] }],
+      },
+    });
+    const onAgentDone = vi.fn();
+    const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
+    const events: StatelessEvent[] = [];
+    const tool = buildCallAgentTool({ ...baseToolOpts(events), onAgentDone });
+
+    const result = await tool.execute('call-1', { agentId: teacher.id, instruction: 'go' });
+    expect(result.details).toMatchObject({ agentId: teacher.id, text: speech });
+    // Substantive turn: non-empty preview so the empty-turn guard is not tripped.
+    expect(onAgentDone).toHaveBeenLastCalledWith(
+      expect.objectContaining({ contentPreview: speech, actionCount: 0 }),
+    );
   });
 
   it('accepts play_video for a current-slide video element', async () => {

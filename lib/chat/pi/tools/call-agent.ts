@@ -7,6 +7,7 @@ import { createCallLlmStreamFn } from '@/lib/agent/runtime/stream-fn';
 import {
   createParserState,
   finalizeParser,
+  looksLikeStructuredFragment,
   parseStructuredChunk,
   type ParseResult,
 } from '@/lib/orchestration/stateless-generate';
@@ -89,15 +90,10 @@ async function emitTextDelta(opts: {
 }
 
 function isLikelyRawStructuredFallback(content: string): boolean {
-  const trimmed = content.trim();
-  return (
-    trimmed.startsWith('{') ||
-    trimmed.startsWith('[') ||
-    trimmed.includes('"type":"action"') ||
-    trimmed.includes('"type": "action"') ||
-    trimmed.includes('"type":"text"') ||
-    trimmed.includes('"type": "text"')
-  );
+  // Backstop only — the structured parser (finalizeParser) is the primary
+  // defense. Delegate to the shared structural classifier rather than the old
+  // brittle substring checks so brace-less JSON fragments are caught too.
+  return looksLikeStructuredFragment(content);
 }
 
 function requireString(
@@ -472,13 +468,10 @@ async function processParseResult(opts: {
     if (entry.type === 'text') {
       const content = opts.result.textChunks[entry.index];
       if (!content) continue;
-      if (isLikelyRawStructuredFallback(content)) {
-        opts.warn({
-          reason: 'raw_structured_fallback',
-          message: 'Skipped malformed structured output fallback from visible speech.',
-        });
-        continue;
-      }
+      // Text here already came out of the structured parser (extracted from a
+      // `"content"` field) or finalizeParser (which suppresses residue itself),
+      // so it is trusted speech. Do NOT re-run the residue classifier over it —
+      // legitimate speech that merely discusses JSON/brackets would be dropped.
       await emitTextDelta({
         content,
         messageId: opts.messageId,
@@ -497,13 +490,6 @@ async function processParseResult(opts: {
   for (let i = emittedOrderedTextCount; i < opts.result.textChunks.length; i += 1) {
     const content = opts.result.textChunks[i];
     if (!content) continue;
-    if (isLikelyRawStructuredFallback(content)) {
-      opts.warn({
-        reason: 'raw_structured_fallback',
-        message: 'Skipped malformed structured output fallback from visible speech.',
-      });
-      continue;
-    }
     await emitTextDelta({
       content,
       messageId: opts.messageId,
@@ -784,16 +770,31 @@ export function buildCallAgentTool(opts: {
         warn,
       });
 
+      const emittedText = text.trim();
       const fallbackText = sawStructuredOutput
         ? ''
         : sanitizeVisibleSpeech(extractLastAssistantText(child.state.messages)).trim();
-      const finalText =
-        text.trim() ||
-        (fallbackText && !isLikelyRawStructuredFallback(fallbackText) ? fallbackText : '');
-      if (finalText && !text.trim()) {
+      // Bug 2 guard: only count a turn as real teaching when it produced genuine
+      // visible speech. Two distinct sources need different trust levels:
+      //   - `emittedText`: already streamed through processParseResult, where every
+      //     chunk was structurally filtered (isLikelyRawStructuredFallback). It is
+      //     trusted speech — re-running the residue classifier over the whole
+      //     accumulated string would misjudge a real turn that merely *discusses*
+      //     JSON/code/brackets as empty, so we do NOT re-classify it.
+      //   - `fallbackText`: the raw last-assistant message, which bypassed the
+      //     parser entirely, so it still needs the structural backstop.
+      // A turn with no trusted speech falls through to the empty-turn guard so the
+      // director does not cue_user / switch agents on half a sentence. This does
+      // NOT touch the drain lifecycle (waitForIdle -> finalizeParser -> agent_end);
+      // it only classifies the already-drained result.
+      const safeFallback =
+        fallbackText && !isLikelyRawStructuredFallback(fallbackText) ? fallbackText : '';
+      const finalText = emittedText || safeFallback;
+      const hasVisibleText = finalText.length > 0;
+      if (finalText && !emittedText) {
         await opts.send({ type: 'text_delta', data: { content: finalText, messageId } });
       }
-      const isEmptyTurn = childErrored || (!finalText.trim() && actionCount === 0);
+      const isEmptyTurn = childErrored || (!hasVisibleText && actionCount === 0);
       consecutiveEmptyTurns = isEmptyTurn ? consecutiveEmptyTurns + 1 : 0;
       await opts.send({ type: 'agent_end', data: { messageId, agentId: agent.id } });
       opts.onAgentDone({
