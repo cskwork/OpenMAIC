@@ -14,6 +14,7 @@ import type {
   SessionConfig,
   ToolCallRecord,
   ToolCallRequest,
+  ChatSession,
 } from '@/lib/types/chat';
 import type { SceneOutline } from '@/lib/types/generation';
 import type { VoiceDesign } from '@/lib/audio/voice-design';
@@ -21,6 +22,8 @@ import type { UIMessage } from 'ai';
 import type { AgentEditSessionRecord } from '@/lib/agent/client/agent-edit-session-types';
 import { createLogger } from '@/lib/logger';
 import { deleteStageRuntimeSafely } from '@/lib/runtime/store';
+import type { RuntimeStore } from '@openmaic/storage';
+import type { ChatStorageOptions } from './chat-storage';
 
 const log = createLogger('Database');
 
@@ -472,24 +475,61 @@ export async function initDatabase(): Promise<void> {
  * Clear database (optional)
  * Use with caution: deletes all data
  */
-export async function clearDatabase(): Promise<void> {
+export async function clearDatabase(runtimeStore?: RuntimeStore): Promise<void> {
+  const stageIds = (await db.stages.toArray()).map((stage) => stage.id);
+  await Promise.all(stageIds.map((stageId) => deleteStageRuntimeSafely(stageId, runtimeStore)));
   await db.delete();
   log.info('Database cleared');
+}
+
+function toChatSessionRecord(stageId: string, session: ChatSession): ChatSessionRecord {
+  return {
+    id: session.id,
+    stageId,
+    type: session.type,
+    title: session.title,
+    status: session.status,
+    messages: session.messages,
+    config: session.config,
+    toolCalls: session.toolCalls,
+    pendingToolCalls: session.pendingToolCalls,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    sceneId: session.sceneId,
+    lastActionIndex: session.lastActionIndex,
+  };
 }
 
 /**
  * Export database contents (for backup)
  */
-export async function exportDatabase(): Promise<{
+export async function exportDatabase(chatOptions: ChatStorageOptions = {}): Promise<{
   stages: StageRecord[];
   scenes: SceneRecord[];
   chatSessions: ChatSessionRecord[];
   playbackState: PlaybackStateRecord[];
 }> {
+  const stages = await db.stages.toArray();
+  const legacyChats = await db.chatSessions.toArray();
+  const { loadChatSessions } = await import('./chat-storage');
+  const runtimeChats = (
+    await Promise.all(
+      stages.map(async (stage) =>
+        (await loadChatSessions(stage.id, chatOptions)).map((session) =>
+          toChatSessionRecord(stage.id, session),
+        ),
+      ),
+    )
+  ).flat();
+  const runtimeChatIds = new Set(runtimeChats.map((session) => session.id));
+
   return {
-    stages: await db.stages.toArray(),
+    stages,
     scenes: await db.scenes.toArray(),
-    chatSessions: await db.chatSessions.toArray(),
+    chatSessions: [
+      ...runtimeChats,
+      ...legacyChats.filter((session) => !runtimeChatIds.has(session.id)),
+    ],
     playbackState: await db.playbackState.toArray(),
   };
 }
