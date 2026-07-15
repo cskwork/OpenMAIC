@@ -93,6 +93,17 @@ const PHASE_ORDER: Record<QuizAttemptPhase, number> = {
 
 const queues = new WeakMap<RuntimeStore, Map<string, Promise<void>>>();
 
+async function awaitQueuedAttemptLineage(store: RuntimeStore, attemptId: string): Promise<void> {
+  let queueKey = attemptId;
+  while (true) {
+    const queued = queues.get(store)?.get(queueKey);
+    if (queued) await queued;
+    const parent = queueKey.replace(/:retry:\d+$/, '');
+    if (parent === queueKey) return;
+    queueKey = parent;
+  }
+}
+
 /**
  * Coalesce draft snapshots and serialize every phase through one local chain.
  * `recordPhase` synchronously queues a pending draft first, so submitted and
@@ -325,7 +336,7 @@ export async function loadQuizAttemptState(
   const attemptId = quizAttemptId(input.stageId, input.sceneId, learnerKey);
   // A UI transition can expose the next consumer while its fire-and-forget
   // writer is still queued. Wait for this tab's chain before opening a read.
-  await queues.get(store)?.get(attemptId);
+  await awaitQueuedAttemptLineage(store, attemptId);
   await migrateLegacyQuizState(input, store, learnerKey, deps);
   let state = await withAttemptLock(attemptId, () =>
     readLatestQuizAttemptState(input, store, learnerKey),
@@ -334,7 +345,7 @@ export async function loadQuizAttemptState(
     // Continue a shadow-written attempt whose legacy random id predates the
     // deterministic learner-scoped root. Its current writer queue/lock still
     // uses that session id, so drain it before returning the active attempt.
-    await queues.get(store)?.get(state.sessionId);
+    await awaitQueuedAttemptLineage(store, state.sessionId);
     state = await withAttemptLock(state.sessionId, () =>
       readLatestQuizAttemptState(input, store, learnerKey),
     );
