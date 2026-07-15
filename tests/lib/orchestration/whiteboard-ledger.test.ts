@@ -110,7 +110,10 @@ describe('buildVirtualWhiteboardContext', () => {
     ]);
 
     expect(context).toContain('Current whiteboard elements (1)');
-    expect(context).toContain('code block "main.py" (python, 1 lines): L1: x = 2');
+    // Element id and line id are now exposed so a later agent can target them.
+    expect(context).toContain('(id: code-1)');
+    expect(context).toContain('code block "main.py" (python, 1 lines)');
+    expect(context).toContain('L1: x = 2');
     expect(context).toContain('edited (replace_lines)');
   });
 
@@ -137,5 +140,111 @@ describe('buildVirtualWhiteboardContext', () => {
     expect(buildVirtualWhiteboardContext(initialStoreState, [record('wb_clear', {})])).toContain(
       'whiteboard is now empty',
     );
+  });
+
+  it('exposes element ids and all code line ids so later agents can target them', () => {
+    const context = buildVirtualWhiteboardContext(storeState, [
+      record('wb_draw_text', { elementId: 'note-1', content: 'a label', x: 0, y: 0 }),
+      record('wb_draw_code', {
+        elementId: 'code-9',
+        language: 'python',
+        code: 'a = 1\nb = 2\nc = 3',
+        lineIds: ['L1', 'L2', 'L3'],
+        x: 10,
+        y: 20,
+      }),
+    ]);
+
+    // Every element's id is visible for wb_delete targeting.
+    expect(context).toContain('(id: note-1)');
+    expect(context).toContain('(id: code-9)');
+    // All code line ids are visible for wb_edit_code targeting — not just a
+    // 3-line preview cut off mid-block.
+    expect(context).toContain('L1: a = 1');
+    expect(context).toContain('L2: b = 2');
+    expect(context).toContain('L3: c = 3');
+  });
+
+  it('bounds a very long code block to a deterministic prompt size', () => {
+    const lineCount = 5000;
+    const code = Array.from({ length: lineCount }, (_, i) => `line_${i + 1} = ${i + 1}`).join('\n');
+    const lineIds = Array.from({ length: lineCount }, (_, i) => `L${i + 1}`);
+
+    const context = buildVirtualWhiteboardContext(storeState, [
+      record('wb_draw_code', {
+        elementId: 'big-code',
+        language: 'python',
+        code,
+        lineIds,
+        x: 0,
+        y: 0,
+      }),
+    ]);
+
+    // The tail is reported as an omitted count, not dumped line-by-line.
+    expect(context).toContain('more line(s) omitted');
+    // A late line's content is NOT rendered — proving the content cap held.
+    expect(context).not.toContain('line_5000 = 5000');
+    // Deterministic upper bound regardless of the 5000-line source: the whole
+    // context stays within the two shared char budgets plus small overhead.
+    expect(context.length).toBeLessThan(2500);
+  });
+
+  it('bounds the context even when line ids themselves are very long', () => {
+    // No schema cap on id length — a pathological block of long ids must still
+    // not blow up the prompt (id-list tier is a char budget, not a count).
+    const lineCount = 500;
+    const longId = (i: number) => `line-identifier-${'x'.repeat(200)}-${i}`;
+    const code = Array.from({ length: lineCount }, (_, i) => `v${i} = ${i}`).join('\n');
+    const lineIds = Array.from({ length: lineCount }, (_, i) => longId(i));
+
+    const context = buildVirtualWhiteboardContext(storeState, [
+      record('wb_draw_code', {
+        elementId: 'huge-ids',
+        language: 'text',
+        code,
+        lineIds,
+        x: 0,
+        y: 0,
+      }),
+    ]);
+
+    expect(context).toContain('more line(s) omitted');
+    expect(context.length).toBeLessThan(2500);
+  });
+
+  it('shares the code-line budget across multiple code blocks', () => {
+    // A first block large enough to exhaust the shared content budget must
+    // leave the second block unable to render all of its content — proving the
+    // budget is shared, not per-block.
+    const bigCode = Array.from({ length: 400 }, (_, i) => `a_${i} = ${i}`).join('\n');
+    const bigIds = Array.from({ length: 400 }, (_, i) => `A${i}`);
+
+    const context = buildVirtualWhiteboardContext(storeState, [
+      record('wb_draw_code', {
+        elementId: 'block-1',
+        language: 'text',
+        code: bigCode,
+        lineIds: bigIds,
+        x: 0,
+        y: 0,
+      }),
+      record('wb_draw_code', {
+        elementId: 'block-2',
+        language: 'text',
+        code: 'later_line = 999',
+        lineIds: ['Z1'],
+        x: 10,
+        y: 10,
+      }),
+    ]);
+
+    // Both blocks are still announced (ids visible for targeting)...
+    expect(context).toContain('(id: block-1)');
+    expect(context).toContain('(id: block-2)');
+    // ...but the shared budget is already spent by block-1, so block-2's content
+    // line is not rendered in full.
+    expect(context).not.toContain('later_line = 999');
+    expect(context.length).toBeLessThan(2500);
   });
 });

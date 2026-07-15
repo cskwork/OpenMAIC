@@ -15,14 +15,75 @@ function getRecordElementId(record: WhiteboardActionRecord): string | undefined 
   return typeof elementId === 'string' && elementId ? elementId : undefined;
 }
 
+// Budget for rendering code lines in the whiteboard context. The context is
+// seeded from the request-start snapshot (getInitialWhiteboardElements), so it
+// can carry pre-existing code blocks — not just this round's code — and a naive
+// "list every line" (even ids-only) would let code-heavy boards grow the prompt
+// without bound, since neither line count nor id length has a schema cap.
+//
+// Both tiers below are CHARACTER budgets shared across all code blocks in one
+// context, giving a deterministic upper bound regardless of line count or id
+// length. The explicit trade-off: past the budget, tail lines are reported as a
+// count only and are NOT individually addressable for wb_edit_code. Normal code
+// (a few dozen short lines) fits entirely and stays fully editable.
+const MAX_LINE_CONTENT_CHARS = 80;
+const MAX_CODE_CONTENT_CHARS = 1200;
+const MAX_CODE_IDLIST_CHARS = 400;
+
+interface CodeRenderBudget {
+  content: number;
+  idList: number;
+}
+
+function truncateLineContent(content: string): string {
+  return content.length > MAX_LINE_CONTENT_CHARS
+    ? `${content.slice(0, MAX_LINE_CONTENT_CHARS)}…`
+    : content;
+}
+
+function renderCodeLines(
+  codeLines: Array<{ id: string; content: string }>,
+  budget: CodeRenderBudget,
+): { text: string; budget: CodeRenderBudget } {
+  const out: string[] = [];
+  let { content, idList } = budget;
+  let i = 0;
+
+  // Tier 1: lines shown with (truncated) content, until the content char budget
+  // can no longer fit the next line.
+  for (; i < codeLines.length; i += 1) {
+    const rendered = `     ${codeLines[i].id}: ${truncateLineContent(codeLines[i].content)}`;
+    if (rendered.length > content) break;
+    out.push(rendered);
+    content -= rendered.length;
+  }
+
+  // Tier 2: remaining lines listed as bare ids (cheaper, still editable), until
+  // the id-list char budget can no longer fit the next id.
+  const idOnly: string[] = [];
+  for (; i < codeLines.length; i += 1) {
+    const piece = idOnly.length === 0 ? codeLines[i].id : `, ${codeLines[i].id}`;
+    if (piece.length > idList) break;
+    idOnly.push(codeLines[i].id);
+    idList -= piece.length;
+  }
+  if (idOnly.length > 0) {
+    out.push(`     (ids only: ${idOnly.join(', ')})`);
+  }
+
+  // Anything still unrendered is reported as a count — bounded, not editable.
+  const omitted = codeLines.length - i;
+  if (omitted > 0) {
+    out.push(`     (… ${omitted} more line(s) omitted)`);
+  }
+
+  return { text: out.join('\n'), budget: { content, idList } };
+}
+
 function summarizeCodeElement(element: VirtualWhiteboardElement): string {
   const lines = element.codeLines ?? [];
   const fileName = element.codeFileName ? ` "${element.codeFileName}"` : '';
-  const preview = lines
-    .slice(0, 3)
-    .map((line) => `${line.id}: ${line.content}`)
-    .join(' | ');
-  return `code block${fileName} (${element.codeLanguage || 'text'}, ${lines.length} lines)${preview ? `: ${preview}` : ''}`;
+  return `code block${fileName} (${element.codeLanguage || 'text'}, ${lines.length} lines)`;
 }
 
 function getInitialWhiteboardElements(
@@ -241,8 +302,25 @@ The whiteboard is now empty after changes made during this discussion round.
 `;
   }
 
+  // Expose each element's id (and, for code, its line ids) so a later child
+  // agent can target them with wb_delete / wb_edit_code — the runtime validators
+  // require exact elementId/lineId, which were previously invisible in-prompt.
+  // The code-line budget is shared across all elements so the whole section is
+  // bounded, not just each block individually.
+  let codeBudget: CodeRenderBudget = {
+    content: MAX_CODE_CONTENT_CHARS,
+    idList: MAX_CODE_IDLIST_CHARS,
+  };
   const elementLines = elements
-    .map((element, index) => `  ${index + 1}. [by ${element.agentName}] ${element.summary}`)
+    .map((element, index) => {
+      const idTag = element.elementId ? ` (id: ${element.elementId})` : '';
+      const header = `  ${index + 1}. [by ${element.agentName}]${idTag} ${element.summary}`;
+      const codeLines = element.codeLines ?? [];
+      if (codeLines.length === 0) return header;
+      const { text, budget } = renderCodeLines(codeLines, codeBudget);
+      codeBudget = budget;
+      return `${header}\n${text}`;
+    })
     .join('\n');
   return `
 ## Whiteboard Changes This Round (IMPORTANT)

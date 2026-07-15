@@ -180,6 +180,47 @@ function mockDirectorWithAgentTurn(opts: { explicitlyCueUser: boolean; closeAfte
   });
 }
 
+// Director calls the teacher once; the teacher child streams a structured-output
+// array carrying a real whiteboard action, so this turn's ledger is non-empty.
+function mockDirectorWithWhiteboardTeacherTurn(actionJson: string) {
+  mocks.buildAgent.mockImplementation((agentOpts: MockAgentOptions) => {
+    const isDirector = agentOpts.tools.some((tool) => tool.name === 'cue_user');
+
+    if (isDirector) {
+      return {
+        prompt: async () => {
+          const callAgent = agentOpts.tools.find((tool) => tool.name === 'call_agent');
+          const cueUser = agentOpts.tools.find((tool) => tool.name === 'cue_user');
+          await callAgent?.execute('call-1', {
+            agentId: 'default-1',
+            instruction: 'Draw the key point on the whiteboard.',
+          });
+          await cueUser?.execute('cue-1', { prompt: 'Any follow-up?' });
+        },
+        waitForIdle: async () => {},
+        subscribe: () => () => {},
+        state: { messages: [] },
+      };
+    }
+
+    let handler: ((event: unknown) => unknown) | null = null;
+    return {
+      subscribe: (h: (event: unknown) => unknown) => {
+        handler = h;
+        return () => {};
+      },
+      prompt: async () => {
+        await handler?.({
+          type: 'message_update',
+          assistantMessageEvent: { type: 'text_delta', delta: actionJson },
+        });
+      },
+      waitForIdle: async () => {},
+      state: { messages: [] },
+    };
+  });
+}
+
 function mockDirectorWithTwoTeacherTurns() {
   mocks.buildAgent.mockImplementation((agentOpts: MockAgentOptions) => {
     const isDirector = agentOpts.tools.some((tool) => tool.name === 'cue_user');
@@ -604,5 +645,61 @@ describe('POST /api/chat/pi cue_user', () => {
     );
     expect(doneEvent?.data.directorState.turnCount).toBe(1);
     expect(doneEvent?.data.directorState.teacherWrapUpUsed).toBeUndefined();
+  });
+
+  it('returns only this turn whiteboard ledger, not the carried-forward history', async () => {
+    // This turn's teacher child streams a real wb_draw_text action, so the turn
+    // ledger is non-empty. A DIFFERENT historical action arrives in directorState.
+    // Cross-turn board state is carried by storeState's snapshot, and Pi child
+    // prompts replay only the current-turn ledger, so the returned ledger must
+    // contain this turn's action and drop the history — not grow unboundedly
+    // across requests (and not collapse to a constant []).
+    mockDirectorWithWhiteboardTeacherTurn(
+      '[{"type":"action","name":"wb_draw_text","params":{"content":"from this turn","x":10,"y":20}},{"type":"text","content":"Here is the key point."}]',
+    );
+
+    const body = makeBody();
+    const { POST } = await import('@/app/api/chat/pi/route');
+    const response = await POST(
+      makeRequest({
+        ...body,
+        config: {
+          ...body.config,
+          piEnableWhiteboardTools: true,
+          agentConfigs: [{ ...body.config.agentConfigs[0], allowedActions: ['wb_draw_text'] }],
+        },
+        directorState: {
+          turnCount: 3,
+          agentResponses: [],
+          whiteboardLedger: [
+            {
+              actionName: 'wb_draw_text',
+              agentId: 'default-1',
+              agentName: 'Teacher',
+              params: { content: 'from a previous turn', x: 0, y: 0 },
+            },
+          ],
+        },
+      }),
+    );
+    const events = await readSseEvents(response);
+    const doneEvent = events.find((event) => event.type === 'done');
+
+    expect(response.status).toBe(200);
+    const returnedLedger = doneEvent?.data.directorState.whiteboardLedger;
+    // Exactly this turn's action is kept...
+    expect(returnedLedger).toEqual([
+      expect.objectContaining({
+        actionName: 'wb_draw_text',
+        params: expect.objectContaining({ content: 'from this turn' }),
+      }),
+    ]);
+    // ...and the carried-forward history is dropped.
+    expect(
+      returnedLedger.some(
+        (record: { params?: { content?: string } }) =>
+          record.params?.content === 'from a previous turn',
+      ),
+    ).toBe(false);
   });
 });

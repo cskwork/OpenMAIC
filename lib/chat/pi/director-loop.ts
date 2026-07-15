@@ -162,10 +162,12 @@ export async function runPiDirectorLoop(opts: {
       directorState: {
         turnCount: getNormalTurnCount(),
         agentResponses: [...(opts.body.directorState?.agentResponses ?? []), ...piAgentResponses],
-        whiteboardLedger: [
-          ...(opts.body.directorState?.whiteboardLedger ?? []),
-          ...piWhiteboardLedger,
-        ],
+        // Return only this turn's whiteboard mutations. The cross-turn board
+        // state is carried by storeState's request-start snapshot, and Pi child
+        // prompts replay only the current-turn ledger (see getWhiteboardLedger
+        // above), so persisting the historical ledger just inflated session
+        // state and follow-up payloads without being read back.
+        whiteboardLedger: piWhiteboardLedger,
       },
     },
   });
