@@ -106,6 +106,28 @@ describe('database runtime chat integration', () => {
     );
   });
 
+  it('upgrades past the abandoned lease schema and deletes its table', async () => {
+    const { default: Dexie } = await import('dexie');
+    const intermediate = new Dexie('MAIC-Database', {
+      indexedDB: globalThis.indexedDB,
+      IDBKeyRange: globalThis.IDBKeyRange,
+    });
+    intermediate.version(13).stores({ chatStorageLocks: 'key, expiresAt' });
+    await intermediate.open();
+    await intermediate.table('chatStorageLocks').put({
+      key: 'stage-old-lock',
+      owner: 'old-tab',
+      expiresAt: Date.now() + 30_000,
+    });
+    intermediate.close();
+
+    const { db } = await import('@/lib/utils/database');
+    await db.open();
+
+    expect(db.verno).toBe(14);
+    expect([...db.backendDB().objectStoreNames]).not.toContain('chatStorageLocks');
+  });
+
   it('keeps backup staging and runtime clearing in the same cross-tab lock', async () => {
     const indexedDB = globalThis.indexedDB;
     const importingStore = new BrowserRuntimeStore({ indexedDB, dbName: 'restore-lock' });
