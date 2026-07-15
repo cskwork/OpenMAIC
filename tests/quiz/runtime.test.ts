@@ -544,6 +544,58 @@ describe('quiz attempt runtime persistence', () => {
     });
   });
 
+  it('keeps stale root and child callers on one canonical retry branch', async () => {
+    const { store, deps } = makeHarness();
+    const root = quizAttemptId('stage-1', 'scene-quiz', 'learner-1');
+    const firstRetry = `${root}:retry:1`;
+    const secondRetry = `${root}:retry:2`;
+    const base = {
+      stageId: 'stage-1',
+      sceneId: 'scene-quiz',
+      answers: { q1: 'A' },
+    };
+    await recordQuizAttempt({ ...base, attemptId: root, phase: 'reviewed', results }, deps);
+    await recordQuizAttempt(
+      { ...base, attemptId: root, phase: 'draft', answers: {}, startNewAttempt: true },
+      deps,
+    );
+    await recordQuizAttempt(
+      { ...base, attemptId: firstRetry, phase: 'reviewed', answers: {}, results: [] },
+      deps,
+    );
+
+    await Promise.all([
+      recordQuizAttempt(
+        { ...base, attemptId: root, phase: 'draft', answers: {}, startNewAttempt: true },
+        deps,
+      ),
+      recordQuizAttempt(
+        {
+          ...base,
+          attemptId: firstRetry,
+          phase: 'draft',
+          answers: {},
+          startNewAttempt: true,
+        },
+        deps,
+      ),
+    ]);
+    await recordQuizAttempt(
+      { ...base, attemptId: firstRetry, phase: 'draft', answers: { q1: 'latest' } },
+      deps,
+    );
+
+    expect((await store.listSessions('stage-1', 'learner-1')).map((session) => session.id)).toEqual(
+      [root, firstRetry, secondRetry],
+    );
+    await expect(
+      loadQuizAttemptState({ stageId: 'stage-1', sceneId: 'scene-quiz' }, deps),
+    ).resolves.toMatchObject({
+      attemptId: secondRetry,
+      state: { sessionId: secondRetry, phase: 'draft', answers: { q1: 'latest' } },
+    });
+  });
+
   it('does not disguise an unrelated append failure as a completion race', async () => {
     const { store } = makeHarness();
     await store.createSession({

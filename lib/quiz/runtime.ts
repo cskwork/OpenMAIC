@@ -422,6 +422,10 @@ function rolloverAttemptId(attemptId: string, index: number): string {
   return `${attemptId}:retry:${index}`;
 }
 
+function rootAttemptId(attemptId: string): string {
+  return attemptId.replace(/(?::retry:\d+)+$/, '');
+}
+
 function isInactiveSessionAppendError(error: unknown, sessionId: string): boolean {
   if (!(error instanceof Error)) return false;
   return error.message.includes(
@@ -454,9 +458,10 @@ export async function recordQuizAttempt(
   const learnerKey = deps.learnerKey ?? (await getLearnerKey());
   const now = deps.now ?? (() => new Date().toISOString());
   const mintRecordId = deps.mintRecordId ?? mintId;
+  const rootId = rootAttemptId(input.attemptId);
 
-  return enqueue(store, input.attemptId, () =>
-    withAttemptLock(input.attemptId, async () => {
+  return enqueue(store, rootId, () =>
+    withAttemptLock(rootId, async () => {
       const timestamp = now();
       const payload: QuizAttemptPayload = {
         payloadVersion: 1,
@@ -515,7 +520,7 @@ export async function recordQuizAttempt(
             if (last) return;
           } else {
             rolloverIndex += 1;
-            sessionId = rolloverAttemptId(input.attemptId, rolloverIndex);
+            sessionId = rolloverAttemptId(rootId, rolloverIndex);
             continue;
           }
         }
@@ -578,7 +583,7 @@ export async function recordQuizAttempt(
         }
 
         rolloverIndex += 1;
-        sessionId = rolloverAttemptId(input.attemptId, rolloverIndex);
+        sessionId = rolloverAttemptId(rootId, rolloverIndex);
       }
     }),
   );

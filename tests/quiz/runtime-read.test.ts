@@ -508,7 +508,7 @@ describe('quiz runtime authoritative reads', () => {
 
     expect(earlyOutcome).toBe('blocked');
     await expect(reading).resolves.toMatchObject({
-      attemptId: `${retry}:retry:1`,
+      attemptId: `${root}:retry:2`,
       state: { phase: 'draft', answers: { q1: 'latest' } },
     });
   });
@@ -525,12 +525,12 @@ describe('quiz runtime authoritative reads', () => {
     });
     const root = quizAttemptId('stage-1', 'quiz-1', 'learner-a');
     const retry = `${root}:retry:1`;
-    const nestedRetry = `${retry}:retry:1`;
+    const secondRetry = `${root}:retry:2`;
     const delayedStore = new Proxy(store, {
       get(target, property) {
         if (property === 'createSession') {
           return async (...args: Parameters<RuntimeStore['createSession']>) => {
-            if (args[0].id === nestedRetry) {
+            if (args[0].id === secondRetry) {
               createStarted();
               await createMayFinish;
             }
@@ -601,9 +601,9 @@ describe('quiz runtime authoritative reads', () => {
 
     expect(earlyOutcome).toBe('blocked');
     await expect(reading).resolves.toMatchObject({
-      attemptId: nestedRetry,
+      attemptId: secondRetry,
       state: {
-        sessionId: nestedRetry,
+        sessionId: secondRetry,
         phase: 'draft',
         status: 'active',
         answers: {},
