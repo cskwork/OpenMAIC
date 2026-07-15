@@ -55,6 +55,14 @@ describe('prepareWorkspaceLaunchProject', () => {
     );
   });
 
+  it('rejects a superseded launch even when the scene is unchanged', () => {
+    expect(isCurrentWorkspaceLaunch(4, { current: 5 }, 'pbl', { current: 'pbl' })).toBe(false);
+  });
+
+  it('accepts only the current launch for the current scene', () => {
+    expect(isCurrentWorkspaceLaunch(5, { current: 5 }, 'pbl', { current: 'pbl' })).toBe(true);
+  });
+
   it('enters workspace immediately and carries prior quiz results for the greeting', () => {
     const project = mkProject();
     const next = prepareWorkspaceLaunchProject(project, [quizResult]);
