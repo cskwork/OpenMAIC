@@ -8,6 +8,7 @@ import { useI18n } from '@/lib/hooks/use-i18n';
 import { useStageStore } from '@/lib/store';
 import type { Scene, SceneType } from '@/lib/types/stage';
 import {
+  completeSummaryForScenes,
   readSceneQuizAnswers,
   summarizeScenes,
   type CompleteSummary,
@@ -316,13 +317,11 @@ export function ClassroomCompletePage({ scenes, title }: ClassroomCompletePagePr
   const { t, locale } = useI18n();
   const prefersReducedMotion = useReducedMotion();
 
-  const [summary, setSummary] = useState<CompleteSummary>(() => ({
-    countsByType: scenes.reduce<CompleteSummary['countsByType']>((counts, scene) => {
-      counts[scene.type] = (counts[scene.type] ?? 0) + 1;
-      return counts;
-    }, {}),
-    quiz: null,
+  const [resolvedSummary, setResolvedSummary] = useState(() => ({
+    scenes,
+    summary: { countsByType: {}, quiz: null } as CompleteSummary,
   }));
+  const summary = completeSummaryForScenes(scenes, resolvedSummary);
 
   useEffect(() => {
     let cancelled = false;
@@ -335,7 +334,7 @@ export function ClassroomCompletePage({ scenes, title }: ClassroomCompletePagePr
         return undefined;
       }
     }).then((next) => {
-      if (!cancelled) setSummary(next);
+      if (!cancelled) setResolvedSummary({ scenes, summary: next });
     });
     return () => {
       cancelled = true;

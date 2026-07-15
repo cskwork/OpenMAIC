@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { readSceneQuizAnswers, summarizeScenes } from '@/lib/classroom/complete-summary';
+import {
+  completeSummaryForScenes,
+  readSceneQuizAnswers,
+  summarizeScenes,
+} from '@/lib/classroom/complete-summary';
 import type { Scene, QuizQuestion } from '@/lib/types/stage';
 
 function slide(id: string, order: number): Scene {
@@ -55,6 +59,20 @@ describe('summarizeScenes', () => {
 
     await expect(readSceneQuizAnswers(legacy, load)).resolves.toBeUndefined();
     expect(load).not.toHaveBeenCalled();
+  });
+
+  it('shows the new classroom baseline while its async summary is pending', () => {
+    const previousScenes = [quizScene('old', 0, [choiceQ('old-q', ['a'])])];
+    const nextScenes = [slide('new-1', 0), slide('new-2', 1)];
+    const previous = {
+      scenes: previousScenes,
+      summary: { countsByType: { quiz: 1 }, quiz: { correct: 1, total: 1, pct: 100 } },
+    };
+
+    expect(completeSummaryForScenes(nextScenes, previous)).toEqual({
+      countsByType: { slide: 2 },
+      quiz: null,
+    });
   });
 
   it('counts scenes by type and omits zeros', async () => {

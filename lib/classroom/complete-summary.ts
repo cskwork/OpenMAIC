@@ -6,6 +6,29 @@ export interface CompleteSummary {
   quiz: { correct: number; total: number; pct: number } | null;
 }
 
+export interface ResolvedCompleteSummary {
+  scenes: Scene[];
+  summary: CompleteSummary;
+}
+
+function pendingCompleteSummary(scenes: Scene[]): CompleteSummary {
+  return {
+    countsByType: scenes.reduce<CompleteSummary['countsByType']>((counts, scene) => {
+      counts[scene.type] = (counts[scene.type] ?? 0) + 1;
+      return counts;
+    }, {}),
+    quiz: null,
+  };
+}
+
+/** Never render a completed summary produced for a different scenes snapshot. */
+export function completeSummaryForScenes(
+  scenes: Scene[],
+  resolved: ResolvedCompleteSummary,
+): CompleteSummary {
+  return resolved.scenes === scenes ? resolved.summary : pendingCompleteSummary(scenes);
+}
+
 export type AnswerReader = (
   sceneId: string,
 ) => Promise<Record<string, string | string[]> | undefined>;

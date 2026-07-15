@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { prepareWorkspaceLaunchProject } from '@/lib/pbl/v2/operations/workspace-launch';
+import {
+  invalidatePendingWorkspaceLaunch,
+  prepareWorkspaceLaunchProject,
+} from '@/lib/pbl/v2/operations/workspace-launch';
 import type { PBLProjectV2, PriorQuizResult } from '@/lib/pbl/v2/types';
 
 function mkProject(overrides: Partial<PBLProjectV2> = {}): PBLProjectV2 {
@@ -35,6 +38,16 @@ const quizResult: PriorQuizResult = {
 };
 
 describe('prepareWorkspaceLaunchProject', () => {
+  it('invalidates a pending launch and clears its busy state on scene change', () => {
+    const epoch = { current: 4 };
+    const resetLaunching = vi.fn();
+
+    invalidatePendingWorkspaceLaunch(epoch, resetLaunching);
+
+    expect(epoch.current).toBe(5);
+    expect(resetLaunching).toHaveBeenCalledWith(false);
+  });
+
   it('enters workspace immediately and carries prior quiz results for the greeting', () => {
     const project = mkProject();
     const next = prepareWorkspaceLaunchProject(project, [quizResult]);

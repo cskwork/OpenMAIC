@@ -32,7 +32,10 @@ import { useStageStore } from '@/lib/store/stage';
 import { buildQuizSnapshot } from '@/lib/pbl/v2/operations/quiz-snapshot';
 import { hasStartedProject, resetProjectProgress } from '@/lib/pbl/v2/operations/progress';
 import { transitionProjectUiPhase } from '@/lib/pbl/v2/operations/runtime-events';
-import { prepareWorkspaceLaunchProject } from '@/lib/pbl/v2/operations/workspace-launch';
+import {
+  invalidatePendingWorkspaceLaunch,
+  prepareWorkspaceLaunchProject,
+} from '@/lib/pbl/v2/operations/workspace-launch';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import {
   AlertDialog,
@@ -101,12 +104,12 @@ export function PBLV2Hero({
 
   const [launching, setLaunching] = useState(false);
   const launchEpochRef = useRef(0);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    invalidatePendingWorkspaceLaunch(launchEpochRef, setLaunching);
+    return () => {
       launchEpochRef.current += 1;
-    },
-    [],
-  );
+    };
+  }, [sceneId]);
 
   const handleStart = async () => {
     // Build a snapshot of the learner's prior-quiz results from
