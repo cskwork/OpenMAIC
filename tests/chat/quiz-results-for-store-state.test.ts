@@ -4,7 +4,10 @@ vi.mock('@/lib/quiz/runtime', () => ({
   loadQuizAttemptState: vi.fn(),
 }));
 
-import { buildQuizResultsForStoreState } from '@/lib/chat/quiz-results-for-store-state';
+import {
+  buildQuizResultsForStoreState,
+  didActiveSceneRemainUnchanged,
+} from '@/lib/chat/quiz-results-for-store-state';
 import { loadQuizAttemptState } from '@/lib/quiz/runtime';
 
 describe('quiz results for chat store state', () => {
@@ -74,5 +77,36 @@ describe('quiz results for chat store state', () => {
     await vi.runAllTimersAsync();
 
     await expect(reading).resolves.toBeUndefined();
+  });
+
+  it('rejects quiz results when the active scene content changed during the read', () => {
+    const before = {
+      id: 'quiz-1',
+      type: 'quiz',
+      stageId: 'stage-1',
+      content: { questions: ['old'] },
+    };
+    const after = { ...before, content: { questions: ['new'] } };
+
+    expect(didActiveSceneRemainUnchanged([before], 'quiz-1', [after], 'quiz-1')).toBe(false);
+  });
+
+  it('retains quiz results when unrelated scenes changed during the read', () => {
+    const quiz = {
+      id: 'quiz-1',
+      type: 'quiz',
+      stageId: 'stage-1',
+      content: { questions: ['same'] },
+    };
+    const editedSlide = { id: 'slide-1', title: 'edited' };
+
+    expect(
+      didActiveSceneRemainUnchanged(
+        [quiz, { id: 'slide-1' }],
+        'quiz-1',
+        [quiz, editedSlide],
+        'quiz-1',
+      ),
+    ).toBe(true);
   });
 });

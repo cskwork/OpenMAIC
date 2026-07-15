@@ -12,6 +12,19 @@ export interface QuizResultsForStoreState {
   results: QuestionResult[];
 }
 
+export function didActiveSceneRemainUnchanged(
+  scenesBefore: readonly { id: string }[],
+  currentSceneIdBefore: string | null,
+  scenesAfter: readonly { id: string }[],
+  currentSceneIdAfter: string | null,
+): boolean {
+  if (!currentSceneIdBefore || currentSceneIdAfter !== currentSceneIdBefore) return false;
+  const sceneBefore = scenesBefore.find((scene) => scene.id === currentSceneIdBefore);
+  return (
+    !!sceneBefore && scenesAfter.find((scene) => scene.id === currentSceneIdAfter) === sceneBefore
+  );
+}
+
 /**
  * Hydrate graded quiz context for chat. An empty result list still marks the
  * QuizView as reviewed, but carries no feedback that the agent can use.

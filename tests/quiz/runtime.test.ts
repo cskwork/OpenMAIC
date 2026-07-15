@@ -568,6 +568,50 @@ describe('quiz attempt runtime persistence', () => {
     });
   });
 
+  it('skips a superseded active retry after a newer retry completed', async () => {
+    const { store, deps } = makeHarness();
+    const root = quizAttemptId('stage-1', 'scene-quiz', 'learner-1');
+    const firstRetry = `${root}:retry:1`;
+    const secondRetry = `${root}:retry:2`;
+    const thirdRetry = `${root}:retry:3`;
+    const base = { stageId: 'stage-1', sceneId: 'scene-quiz' };
+    await recordQuizAttempt(
+      { ...base, attemptId: root, phase: 'reviewed', answers: { q1: 'root' }, results },
+      deps,
+    );
+    await recordQuizAttempt(
+      { ...base, attemptId: root, phase: 'draft', answers: {}, startNewAttempt: true },
+      deps,
+    );
+    await recordQuizAttempt(
+      { ...base, attemptId: firstRetry, phase: 'draft', answers: { q1: 'older active' } },
+      deps,
+    );
+    await recordQuizAttempt(
+      { ...base, attemptId: firstRetry, phase: 'draft', answers: {}, startNewAttempt: true },
+      deps,
+    );
+    await recordQuizAttempt(
+      {
+        ...base,
+        attemptId: secondRetry,
+        phase: 'reviewed',
+        answers: { q1: 'newer completed' },
+        results,
+      },
+      deps,
+    );
+
+    await recordQuizAttempt(
+      { ...base, attemptId: root, phase: 'draft', answers: {}, startNewAttempt: true },
+      deps,
+    );
+
+    expect((await store.listRecords(thirdRetry)).map((record) => record.payload)).toEqual([
+      { payloadVersion: 1, phase: 'draft', answers: {} },
+    ]);
+  });
+
   it('keeps stale root and child callers on one canonical retry branch', async () => {
     const { store, deps } = makeHarness();
     const root = quizAttemptId('stage-1', 'scene-quiz', 'learner-1');

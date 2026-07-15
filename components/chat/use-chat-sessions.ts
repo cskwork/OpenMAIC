@@ -24,7 +24,10 @@ import { StreamBuffer } from '@/lib/buffer/stream-buffer';
 import type { AgentStartItem, ActionItem } from '@/lib/buffer/stream-buffer';
 import { runAgentLoop, type AgentLoopStoreState } from '@/lib/chat/agent-loop';
 import { ActionEngine } from '@/lib/action/engine';
-import { buildQuizResultsForStoreState } from '@/lib/chat/quiz-results-for-store-state';
+import {
+  buildQuizResultsForStoreState,
+  didActiveSceneRemainUnchanged,
+} from '@/lib/chat/quiz-results-for-store-state';
 import { toast } from 'sonner';
 import { createLogger } from '@/lib/logger';
 
@@ -492,23 +495,20 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               stateBeforeQuizRead.currentSceneId,
             );
             const freshState = useStageStore.getState();
-            const quizSceneBeforeRead = stateBeforeQuizRead.scenes.find(
-              (scene) => scene.id === stateBeforeQuizRead.currentSceneId,
-            );
-            const currentQuizScene = freshState.scenes.find(
-              (scene) => scene.id === freshState.currentSceneId,
-            );
             return {
               stage: freshState.stage,
               scenes: freshState.scenes,
               currentSceneId: freshState.currentSceneId,
               mode: freshState.mode,
               whiteboardOpen: useCanvasStore.getState().whiteboardOpen,
-              quizResults:
-                freshState.currentSceneId === stateBeforeQuizRead.currentSceneId &&
-                currentQuizScene?.stageId === quizSceneBeforeRead?.stageId
-                  ? quizResults
-                  : undefined,
+              quizResults: didActiveSceneRemainUnchanged(
+                stateBeforeQuizRead.scenes,
+                stateBeforeQuizRead.currentSceneId,
+                freshState.scenes,
+                freshState.currentSceneId,
+              )
+                ? quizResults
+                : undefined,
             };
           },
 

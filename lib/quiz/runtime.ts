@@ -473,6 +473,13 @@ export async function recordQuizAttempt(
   return enqueue(store, rootId, () =>
     withAttemptLock(rootId, async () => {
       const timestamp = now();
+      const latestState = input.startNewAttempt
+        ? await readLatestQuizAttemptState(input, store, learnerKey)
+        : undefined;
+      const authoritativeCompletedSession =
+        latestState?.status === 'completed'
+          ? await store.getSession(latestState.sessionId)
+          : undefined;
       const payload: QuizAttemptPayload = {
         payloadVersion: 1,
         phase: input.phase,
@@ -545,6 +552,16 @@ export async function recordQuizAttempt(
             // empty child can remain after create succeeds but append fails;
             // fall through so this call writes the missing draft marker.
             if (last?.phase === 'draft' && Object.keys(last.answers).length === 0) return;
+            if (
+              last &&
+              authoritativeCompletedSession &&
+              authoritativeCompletedSession.id !== sessionId &&
+              compareSessionCreationOrder(session, authoritativeCompletedSession) < 0
+            ) {
+              rolloverIndex += 1;
+              sessionId = rolloverAttemptId(rootId, rolloverIndex);
+              continue;
+            }
             if (last) throw new QuizRetryProgressedError(sessionId);
           } else {
             rolloverIndex += 1;
