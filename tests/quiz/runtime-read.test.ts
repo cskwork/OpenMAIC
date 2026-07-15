@@ -319,10 +319,13 @@ describe('quiz runtime authoritative reads', () => {
     expect(localStorageStub.getItem(ANSWERS_KEY_PREFIX + 'quiz-1')).toBeNull();
   });
 
-  it('discards malformed legacy submitted answers instead of retrying migration forever', async () => {
+  it.each([
+    ['an array container', []],
+    ['an invalid answer value', { q1: {} }],
+  ])('discards malformed legacy submitted answers with %s', async (_case, answers) => {
     const store = makeStore();
     const runtimeDeps = deps(store, 'learner-a');
-    localStorageStub.setItem(ANSWERS_KEY_PREFIX + 'quiz-1', JSON.stringify([]));
+    localStorageStub.setItem(ANSWERS_KEY_PREFIX + 'quiz-1', JSON.stringify(answers));
     localStorageStub.setItem(RESULTS_KEY_PREFIX + 'quiz-1', JSON.stringify(results));
 
     await expect(

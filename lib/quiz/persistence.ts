@@ -39,6 +39,19 @@ export interface LegacyQuizStateSnapshot {
   rawAttemptId: string | null;
 }
 
+function isQuizAnswers(value: unknown): value is QuizAnswers {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.values(value).every(
+      (answer) =>
+        typeof answer === 'string' ||
+        (Array.isArray(answer) && answer.every((item) => typeof item === 'string')),
+    )
+  );
+}
+
 export function hasLegacyQuizState(sceneId: string): boolean {
   return [DRAFT_KEY_PREFIX, ANSWERS_KEY_PREFIX, RESULTS_KEY_PREFIX, ATTEMPT_ID_KEY_PREFIX].some(
     (prefix) => safeGet(prefix + sceneId) !== null,
@@ -83,14 +96,14 @@ function parseSubmittedState(rawA: string | null, rawR: string | null): Submitte
   if (!rawA) return null;
   try {
     const answers = JSON.parse(rawA) as unknown;
-    if (typeof answers !== 'object' || answers === null || Array.isArray(answers)) return null;
+    if (!isQuizAnswers(answers)) return null;
     if (rawR) {
       const results = JSON.parse(rawR) as QuestionResult[];
       if (Array.isArray(results)) {
-        return { kind: 'reviewing', answers: answers as QuizAnswers, results };
+        return { kind: 'reviewing', answers, results };
       }
     }
-    return { kind: 'answering', answers: answers as QuizAnswers };
+    return { kind: 'answering', answers };
   } catch {
     return null;
   }
@@ -105,8 +118,7 @@ function parseDraftState(raw: string | null): QuizAnswers | null {
   if (!raw) return null;
   try {
     const answers = JSON.parse(raw) as unknown;
-    if (typeof answers !== 'object' || answers === null || Array.isArray(answers)) return null;
-    return answers as QuizAnswers;
+    return isQuizAnswers(answers) ? answers : null;
   } catch {
     return null;
   }
