@@ -94,6 +94,20 @@ function makeRuntimeStore(): RuntimeStore {
   return new BrowserRuntimeStore({ indexedDB: new IDBFactory() });
 }
 
+function withCreateRace(backing: RuntimeStore): RuntimeStore {
+  const createSession = vi.fn(async (init: Parameters<RuntimeStore['createSession']>[0]) => {
+    await backing.createSession(init);
+    throw new Error('session already exists');
+  });
+  return new Proxy(backing, {
+    get(target, property) {
+      if (property === 'createSession') return createSession;
+      const value = Reflect.get(target, property, target) as unknown;
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
 async function runtimeChatRecords(store: RuntimeStore): Promise<RuntimeRecord[]> {
   const sessions = (await store.listSessions(STAGE_ID, LEARNER_KEY)).filter(
     (candidate) => candidate.kind === 'chat',
@@ -181,6 +195,83 @@ describe('chat RuntimeStore cutover', () => {
     ).toMatchObject([{ title: 'Latest title', updatedAt: 2_000 }]);
   });
 
+  it('does not rescan the fallback partition for empty retirement sets', async () => {
+    const backing = makeRuntimeStore();
+    const legacyStore = new MemoryLegacyChatStore();
+    let listRecordCalls = 0;
+    const store = new Proxy(backing, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target) as unknown;
+        if (property === 'listRecords') {
+          return async (...args: Parameters<RuntimeStore['listRecords']>) => {
+            listRecordCalls += 1;
+            return backing.listRecords(...args);
+          };
+        }
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const sessions = [
+      session({ id: 'session-1' }),
+      session({ id: 'session-2', createdAt: 950, updatedAt: 1_300 }),
+    ];
+    await saveChatSessions(STAGE_ID, sessions, {
+      store,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+    listRecordCalls = 0;
+
+    await saveChatSessions(STAGE_ID, sessions, {
+      store,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+
+    expect(listRecordCalls).toBe(6);
+  });
+
+  it('recovers when another tab wins the deterministic session create race', async () => {
+    const backing = makeRuntimeStore();
+    const store = withCreateRace(backing);
+    const legacyStore = new MemoryLegacyChatStore();
+
+    await expect(
+      saveChatSessions(STAGE_ID, [session()], {
+        store,
+        learnerKey: LEARNER_KEY,
+        legacyStore,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(
+      await loadChatSessions(STAGE_ID, { store, learnerKey: LEARNER_KEY, legacyStore }),
+    ).toMatchObject([{ id: 'session-1', title: 'Q&A' }]);
+  });
+
+  it('does not hide a create failure when the re-read session belongs to another partition', async () => {
+    const createError = new Error('runtime unavailable');
+    const store = {
+      listSessions: vi.fn().mockResolvedValue([]),
+      createSession: vi.fn().mockRejectedValue(createError),
+      getSession: vi.fn().mockResolvedValue({
+        id: 'chat:stage-chat:anon%3Achat-test:session-1',
+        kind: 'chat',
+        stageId: 'another-stage',
+        learnerKey: LEARNER_KEY,
+      }),
+    } as unknown as RuntimeStore;
+    const legacyStore = new MemoryLegacyChatStore();
+
+    await expect(
+      saveChatSessions(STAGE_ID, [session()], {
+        store,
+        learnerKey: LEARNER_KEY,
+        legacyStore,
+      }),
+    ).rejects.toBe(createError);
+  });
+
   it('projects the newest logical state when a stale cross-tab record has a later seq', async () => {
     const store = makeRuntimeStore();
     const legacyStore = new MemoryLegacyChatStore();
@@ -244,6 +335,736 @@ describe('chat RuntimeStore cutover', () => {
     expect(loaded?.messages[0]?.id).toBe('message-2');
     expect(await runtimeChatRecords(store)).toHaveLength(firstRecordCount);
   });
+
+  it('bounds stored and scanned records across a long-lived chat session', async () => {
+    const store = makeRuntimeStore();
+    const legacyStore = new MemoryLegacyChatStore();
+    const listRecords = store.listRecords.bind(store);
+    let maxRecordsRead = 0;
+    vi.spyOn(store, 'listRecords').mockImplementation(async (...args) => {
+      const result = await listRecords(...args);
+      maxRecordsRead = Math.max(maxRecordsRead, result.length);
+      return result;
+    });
+
+    for (let index = 0; index < 300; index += 1) {
+      await saveChatSessions(
+        STAGE_ID,
+        [session({ title: `Q&A ${index}`, updatedAt: 2_000 + index })],
+        { store, learnerKey: LEARNER_KEY, legacyStore },
+      );
+    }
+
+    const runtimeSessions = (await store.listSessions(STAGE_ID, LEARNER_KEY)).filter(
+      (candidate) => candidate.kind === 'chat',
+    );
+    expect(runtimeSessions).toHaveLength(1);
+    expect((await store.listRecords(runtimeSessions[0]!.id)).length).toBeLessThanOrEqual(256);
+    expect(maxRecordsRead).toBeLessThanOrEqual(256);
+    expect(
+      await loadChatSessions(STAGE_ID, { store, learnerKey: LEARNER_KEY, legacyStore }),
+    ).toMatchObject([{ title: 'Q&A 299', updatedAt: 2_299 }]);
+  });
+
+  it('preserves the newer cross-tab write when another tab rolls the generation', async () => {
+    const indexedDB = new IDBFactory();
+    const firstTab = new BrowserRuntimeStore({ indexedDB, dbName: 'chat-rollover-race' });
+    const secondTab = new BrowserRuntimeStore({ indexedDB, dbName: 'chat-rollover-race' });
+    const legacyStore = new MemoryLegacyChatStore();
+
+    for (let index = 0; index < 255; index += 1) {
+      await saveChatSessions(
+        STAGE_ID,
+        [session({ title: `Base ${index}`, updatedAt: 1_000 + index })],
+        { store: firstTab, learnerKey: LEARNER_KEY, legacyStore },
+      );
+    }
+    const staleMessages = Array.from({ length: 10 }, (_, index) =>
+      message(`stale-${index}`, 'user', `Stale ${index}`, index),
+    );
+
+    await Promise.all([
+      saveChatSessions(STAGE_ID, [session({ title: 'Newer', updatedAt: 5_000 })], {
+        store: firstTab,
+        learnerKey: LEARNER_KEY,
+        legacyStore,
+      }),
+      saveChatSessions(
+        STAGE_ID,
+        [session({ title: 'Stale', messages: staleMessages, updatedAt: 4_000 })],
+        { store: secondTab, learnerKey: LEARNER_KEY, legacyStore },
+      ),
+    ]);
+
+    const runtimeSessions = (await firstTab.listSessions(STAGE_ID, LEARNER_KEY)).filter(
+      (candidate) => candidate.kind === 'chat',
+    );
+    const generations = await Promise.all(
+      runtimeSessions.map(async (candidate) => ({
+        records: await firstTab.listRecords(candidate.id),
+      })),
+    );
+    expect(runtimeSessions.some((candidate) => candidate.id.includes(':generation:'))).toBe(true);
+    expect(
+      Math.max(...generations.map((candidate) => candidate.records.length)),
+    ).toBeLessThanOrEqual(256);
+
+    expect(
+      await loadChatSessions(STAGE_ID, {
+        store: firstTab,
+        learnerKey: LEARNER_KEY,
+        legacyStore,
+      }),
+    ).toMatchObject([{ title: 'Newer', updatedAt: 5_000 }]);
+  });
+
+  it('keeps the record bound when two tabs roll the same full generation', async () => {
+    const indexedDB = new IDBFactory();
+    const firstTab = new BrowserRuntimeStore({ indexedDB, dbName: 'chat-double-rollover' });
+    const secondTab = new BrowserRuntimeStore({ indexedDB, dbName: 'chat-double-rollover' });
+    const legacyStore = new MemoryLegacyChatStore();
+    for (let index = 0; index < 254; index += 1) {
+      await saveChatSessions(
+        STAGE_ID,
+        [session({ title: `Base ${index}`, updatedAt: 1_000 + index })],
+        { store: firstTab, learnerKey: LEARNER_KEY, legacyStore },
+      );
+    }
+
+    await Promise.all([
+      saveChatSessions(STAGE_ID, [session({ title: 'First tab', updatedAt: 5_000 })], {
+        store: firstTab,
+        learnerKey: LEARNER_KEY,
+        legacyStore,
+      }),
+      saveChatSessions(STAGE_ID, [session({ title: 'Second tab', updatedAt: 6_000 })], {
+        store: secondTab,
+        learnerKey: LEARNER_KEY,
+        legacyStore,
+      }),
+    ]);
+
+    const runtimeSessions = (await firstTab.listSessions(STAGE_ID, LEARNER_KEY)).filter(
+      (candidate) => candidate.kind === 'chat',
+    );
+    const recordCounts = await Promise.all(
+      runtimeSessions.map(async (candidate) => (await firstTab.listRecords(candidate.id)).length),
+    );
+    expect(Math.max(...recordCounts)).toBeLessThanOrEqual(256);
+    expect(
+      await loadChatSessions(STAGE_ID, {
+        store: firstTab,
+        learnerKey: LEARNER_KEY,
+        legacyStore,
+      }),
+    ).toMatchObject([{ title: 'Second tab', updatedAt: 6_000 }]);
+  });
+
+  it('keeps the record bound when concurrent fallback writers append large batches', async () => {
+    const indexedDB = new IDBFactory();
+    const firstBacking = new BrowserRuntimeStore({ indexedDB, dbName: 'chat-batch-race' });
+    const secondBacking = new BrowserRuntimeStore({ indexedDB, dbName: 'chat-batch-race' });
+    const legacyStore = new MemoryLegacyChatStore();
+    for (let index = 0; index < 239; index += 1) {
+      await saveChatSessions(
+        STAGE_ID,
+        [session({ title: `Base ${index}`, updatedAt: 1_000 + index })],
+        { store: firstBacking, learnerKey: LEARNER_KEY, legacyStore },
+      );
+    }
+
+    let readers = 0;
+    let releaseReaders!: () => void;
+    const readersReleased = new Promise<void>((resolve) => {
+      releaseReaders = resolve;
+    });
+    function concurrentTab(backing: RuntimeStore): RuntimeStore {
+      let delayFirstRecordRead = true;
+      return new Proxy(backing, {
+        get(target, property) {
+          const value = Reflect.get(target, property, target) as unknown;
+          if (property === 'listRecords') {
+            return async (...args: Parameters<RuntimeStore['listRecords']>) => {
+              const records = await backing.listRecords(...args);
+              if (delayFirstRecordRead) {
+                delayFirstRecordRead = false;
+                readers += 1;
+                if (readers === 2) releaseReaders();
+                await readersReleased;
+              }
+              return records;
+            };
+          }
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    }
+    const firstTab = concurrentTab(firstBacking);
+    const secondTab = concurrentTab(secondBacking);
+    const firstMessages = Array.from({ length: 14 }, (_, index) =>
+      message(`first-${index}`, 'user', `First ${index}`, 5_000 + index),
+    );
+    const secondMessages = Array.from({ length: 14 }, (_, index) =>
+      message(`second-${index}`, 'user', `Second ${index}`, 6_000 + index),
+    );
+    vi.resetModules();
+    const secondRealm = await import('@/lib/utils/chat-storage');
+
+    await Promise.all([
+      secondRealm.saveChatSessions(
+        STAGE_ID,
+        [session({ title: 'First batch', messages: firstMessages, updatedAt: 5_000 })],
+        { store: firstTab, learnerKey: LEARNER_KEY, legacyStore },
+      ),
+      saveChatSessions(
+        STAGE_ID,
+        [session({ title: 'Second batch', messages: secondMessages, updatedAt: 6_000 })],
+        { store: secondTab, learnerKey: LEARNER_KEY, legacyStore },
+      ),
+    ]);
+
+    const runtimeSessions = (await firstBacking.listSessions(STAGE_ID, LEARNER_KEY)).filter(
+      (candidate) => candidate.kind === 'chat',
+    );
+    expect(runtimeSessions.length).toBeGreaterThan(0);
+    expect(runtimeSessions.every((candidate) => /:generation:\d+:[\w-]+$/.test(candidate.id))).toBe(
+      true,
+    );
+    const recordCounts = await Promise.all(
+      runtimeSessions.map(
+        async (candidate) => (await firstBacking.listRecords(candidate.id)).length,
+      ),
+    );
+    expect(Math.max(...recordCounts)).toBeLessThanOrEqual(256);
+    expect(
+      await loadChatSessions(STAGE_ID, {
+        store: firstBacking,
+        learnerKey: LEARNER_KEY,
+        legacyStore,
+      }),
+    ).toMatchObject([{ title: 'Second batch', updatedAt: 6_000 }]);
+  });
+
+  it('retires superseded fallback snapshots when streamed content keeps the same timestamp', async () => {
+    const store = makeRuntimeStore();
+    const legacyStore = new MemoryLegacyChatStore();
+
+    for (let index = 0; index < 20; index += 1) {
+      await saveChatSessions(
+        STAGE_ID,
+        [
+          session({
+            messages: [message('message-1', 'assistant', `Streamed ${index}`, 1_000)],
+            updatedAt: 2_000,
+          }),
+        ],
+        { store, learnerKey: LEARNER_KEY, legacyStore },
+      );
+    }
+
+    const runtimeSessions = (await store.listSessions(STAGE_ID, LEARNER_KEY)).filter(
+      (candidate) => candidate.kind === 'chat',
+    );
+    expect(runtimeSessions).toHaveLength(1);
+    expect(
+      await loadChatSessions(STAGE_ID, { store, learnerKey: LEARNER_KEY, legacyStore }),
+    ).toMatchObject([
+      {
+        messages: [{ parts: [{ type: 'text', text: 'Streamed 19' }] }],
+        updatedAt: 2_000,
+      },
+    ]);
+  });
+
+  it('uses the runtime id tie-break when loading concurrent equal-generation snapshots', async () => {
+    const indexedDB = new IDBFactory();
+    const initialStore = new BrowserRuntimeStore({ indexedDB, dbName: 'chat-equal-generation' });
+    const legacyStore = new MemoryLegacyChatStore();
+    await saveChatSessions(STAGE_ID, [session({ title: 'Base', updatedAt: 1_000 })], {
+      store: initialStore,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+
+    let readers = 0;
+    let releaseReaders!: () => void;
+    const readersReleased = new Promise<void>((resolve) => {
+      releaseReaders = resolve;
+    });
+    function concurrentTab(backing: RuntimeStore): RuntimeStore {
+      let delayFirstRecordRead = true;
+      return new Proxy(backing, {
+        get(target, property) {
+          const value = Reflect.get(target, property, target) as unknown;
+          if (property === 'listRecords') {
+            return async (...args: Parameters<RuntimeStore['listRecords']>) => {
+              const records = await backing.listRecords(...args);
+              if (delayFirstRecordRead) {
+                delayFirstRecordRead = false;
+                readers += 1;
+                if (readers === 2) releaseReaders();
+                await readersReleased;
+              }
+              return records;
+            };
+          }
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    }
+    const firstBacking = new BrowserRuntimeStore({
+      indexedDB,
+      dbName: 'chat-equal-generation',
+    });
+    const secondBacking = new BrowserRuntimeStore({
+      indexedDB,
+      dbName: 'chat-equal-generation',
+    });
+    vi.resetModules();
+    const secondRealm = await import('@/lib/utils/chat-storage');
+
+    await Promise.all([
+      saveChatSessions(STAGE_ID, [session({ title: 'First', updatedAt: 2_000 })], {
+        store: concurrentTab(firstBacking),
+        learnerKey: LEARNER_KEY,
+        legacyStore,
+      }),
+      secondRealm.saveChatSessions(STAGE_ID, [session({ title: 'Second', updatedAt: 2_000 })], {
+        store: concurrentTab(secondBacking),
+        learnerKey: LEARNER_KEY,
+        legacyStore,
+      }),
+    ]);
+
+    const runtimeSessions = (await initialStore.listSessions(STAGE_ID, LEARNER_KEY)).filter(
+      (candidate) => candidate.kind === 'chat',
+    );
+    expect(runtimeSessions).toHaveLength(2);
+    const winner = [...runtimeSessions].sort((left, right) => right.id.localeCompare(left.id))[0]!;
+    const winnerState = (await initialStore.listRecords(winner.id)).find(
+      (record) => (record.payload as { kind?: string }).kind === 'chat_session_state',
+    );
+
+    expect(
+      await loadChatSessions(STAGE_ID, {
+        store: initialStore,
+        learnerKey: LEARNER_KEY,
+        legacyStore,
+      }),
+    ).toMatchObject([{ title: (winnerState!.payload as { title: string }).title }]);
+  });
+
+  it('removes a partial isolated generation after a successful retry', async () => {
+    const backing = makeRuntimeStore();
+    const legacyStore = new MemoryLegacyChatStore();
+    let appendCalls = 0;
+    const store = new Proxy(backing, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target) as unknown;
+        if (property === 'appendRecord') {
+          return async (...args: Parameters<RuntimeStore['appendRecord']>) => {
+            appendCalls += 1;
+            if (appendCalls === 2) throw new Error('transient append failure');
+            return backing.appendRecord(...args);
+          };
+        }
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    await saveChatSessions(STAGE_ID, [session()], {
+      store,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+    await saveChatSessions(STAGE_ID, [session()], {
+      store,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+
+    const runtimeSessions = (await backing.listSessions(STAGE_ID, LEARNER_KEY)).filter(
+      (candidate) => candidate.kind === 'chat',
+    );
+    expect(runtimeSessions).toHaveLength(1);
+    expect(await backing.listRecords(runtimeSessions[0]!.id)).toHaveLength(2);
+  });
+
+  it('does not retain partial isolated generations when appends keep failing', async () => {
+    const backing = makeRuntimeStore();
+    const legacyStore = new MemoryLegacyChatStore();
+    const appendError = new Error('append storage unavailable');
+    const store = new Proxy(backing, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target) as unknown;
+        if (property === 'appendRecord') {
+          return async () => {
+            throw appendError;
+          };
+        }
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    await expect(
+      saveChatSessions(STAGE_ID, [session()], {
+        store,
+        learnerKey: LEARNER_KEY,
+        legacyStore,
+      }),
+    ).rejects.toBe(appendError);
+
+    expect(
+      (await backing.listSessions(STAGE_ID, LEARNER_KEY)).filter(
+        (candidate) => candidate.kind === 'chat',
+      ),
+    ).toHaveLength(0);
+  });
+
+  it('retries an unchanged fallback save when a concurrent writer retires its destination', async () => {
+    const indexedDB = new IDBFactory();
+    const initialStore = new BrowserRuntimeStore({
+      indexedDB,
+      dbName: 'chat-unchanged-retired-destination',
+    });
+    const legacyStore = new MemoryLegacyChatStore();
+    const completed = session({ status: 'completed', updatedAt: 2_000 });
+    await saveChatSessions(STAGE_ID, [completed], {
+      store: initialStore,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+    const [destination] = (await initialStore.listSessions(STAGE_ID, LEARNER_KEY)).filter(
+      (candidate) => candidate.kind === 'chat',
+    );
+    await initialStore.setSessionStatus(
+      destination!.id,
+      'active',
+      new Date(completed.updatedAt).toISOString(),
+    );
+
+    const delayedBacking = new BrowserRuntimeStore({
+      indexedDB,
+      dbName: 'chat-unchanged-retired-destination',
+    });
+    let releaseStatusWrite!: () => void;
+    const statusWriteGate = new Promise<void>((resolve) => {
+      releaseStatusWrite = resolve;
+    });
+    let statusWriteReached!: () => void;
+    const statusWriteReady = new Promise<void>((resolve) => {
+      statusWriteReached = resolve;
+    });
+    let delayed = false;
+    const delayedStore = new Proxy(delayedBacking, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target) as unknown;
+        if (property === 'setSessionStatus') {
+          return async (...args: Parameters<RuntimeStore['setSessionStatus']>) => {
+            if (!delayed && args[0] === destination!.id && args[1] === 'completed') {
+              delayed = true;
+              statusWriteReached();
+              await statusWriteGate;
+            }
+            return delayedBacking.setSessionStatus(...args);
+          };
+        }
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const unchangedSave = saveChatSessions(STAGE_ID, [completed], {
+      store: delayedStore,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+    await statusWriteReady;
+
+    const concurrentStore = new BrowserRuntimeStore({
+      indexedDB,
+      dbName: 'chat-unchanged-retired-destination',
+    });
+    const newer = session({
+      title: 'Concurrent newer',
+      status: 'completed',
+      updatedAt: 3_000,
+    });
+    await saveChatSessions(STAGE_ID, [newer], {
+      store: concurrentStore,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+    expect(await initialStore.getSession(destination!.id)).toBeUndefined();
+
+    releaseStatusWrite();
+    await expect(unchangedSave).resolves.toBeUndefined();
+    expect(
+      await loadChatSessions(STAGE_ID, {
+        store: initialStore,
+        learnerKey: LEARNER_KEY,
+        legacyStore,
+      }),
+    ).toMatchObject([{ title: 'Concurrent newer', updatedAt: 3_000 }]);
+  });
+
+  it('does not hide a real unchanged fallback status-write failure', async () => {
+    const backing = makeRuntimeStore();
+    const legacyStore = new MemoryLegacyChatStore();
+    const completed = session({ status: 'completed', updatedAt: 2_000 });
+    await saveChatSessions(STAGE_ID, [completed], {
+      store: backing,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+    const [destination] = (await backing.listSessions(STAGE_ID, LEARNER_KEY)).filter(
+      (candidate) => candidate.kind === 'chat',
+    );
+    await backing.setSessionStatus(
+      destination!.id,
+      'active',
+      new Date(completed.updatedAt).toISOString(),
+    );
+    const writeError = new Error('status storage unavailable');
+    const store = new Proxy(backing, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target) as unknown;
+        if (property === 'setSessionStatus') {
+          return async () => {
+            throw writeError;
+          };
+        }
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    await expect(
+      saveChatSessions(STAGE_ID, [completed], {
+        store,
+        learnerKey: LEARNER_KEY,
+        legacyStore,
+      }),
+    ).rejects.toBe(writeError);
+  });
+
+  it('does not let a stale isolated writer retire a newly completed newer snapshot', async () => {
+    const indexedDB = new IDBFactory();
+    const initialStore = new BrowserRuntimeStore({ indexedDB, dbName: 'chat-stale-retire' });
+    const legacyStore = new MemoryLegacyChatStore();
+    const chat = (title: string, updatedAt: number) =>
+      session({
+        title,
+        updatedAt,
+        messages: [message('message-1', 'assistant', title, updatedAt)],
+      });
+    await saveChatSessions(STAGE_ID, [chat('Base', 1_000)], {
+      store: initialStore,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+
+    const newerBacking = new BrowserRuntimeStore({
+      indexedDB,
+      dbName: 'chat-stale-retire',
+    });
+    let releaseNewerState!: () => void;
+    const newerStateGate = new Promise<void>((resolve) => {
+      releaseNewerState = resolve;
+    });
+    let newerStateReached!: () => void;
+    const newerStateReady = new Promise<void>((resolve) => {
+      newerStateReached = resolve;
+    });
+    const newerStore = new Proxy(newerBacking, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target) as unknown;
+        if (property === 'appendRecord') {
+          return async (...args: Parameters<RuntimeStore['appendRecord']>) => {
+            if ((args[0].payload as { kind?: string }).kind === 'chat_session_state') {
+              newerStateReached();
+              await newerStateGate;
+            }
+            return newerBacking.appendRecord(...args);
+          };
+        }
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const newerSave = saveChatSessions(STAGE_ID, [chat('Newer', 3_000)], {
+      store: newerStore,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+    await newerStateReady;
+
+    const staleBacking = new BrowserRuntimeStore({
+      indexedDB,
+      dbName: 'chat-stale-retire',
+    });
+    let releaseStaleSnapshot!: () => void;
+    const staleSnapshotGate = new Promise<void>((resolve) => {
+      releaseStaleSnapshot = resolve;
+    });
+    let staleSnapshotTaken!: () => void;
+    const staleSnapshotReady = new Promise<void>((resolve) => {
+      staleSnapshotTaken = resolve;
+    });
+    let delayedPartialSnapshot = false;
+    const staleStore = new Proxy(staleBacking, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target) as unknown;
+        if (property === 'listRecords') {
+          return async (...args: Parameters<RuntimeStore['listRecords']>) => {
+            const records = await staleBacking.listRecords(...args);
+            if (
+              !delayedPartialSnapshot &&
+              records.some((record) =>
+                ['chat_message'].includes((record.payload as { kind?: string }).kind ?? ''),
+              ) &&
+              !records.some(
+                (record) => (record.payload as { kind?: string }).kind === 'chat_session_state',
+              )
+            ) {
+              delayedPartialSnapshot = true;
+              staleSnapshotTaken();
+              await staleSnapshotGate;
+            }
+            return records;
+          };
+        }
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const staleSave = saveChatSessions(STAGE_ID, [chat('Stale', 2_000)], {
+      store: staleStore,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+    await staleSnapshotReady;
+
+    releaseNewerState();
+    await newerSave;
+    releaseStaleSnapshot();
+    await staleSave;
+
+    expect(
+      await loadChatSessions(STAGE_ID, {
+        store: initialStore,
+        learnerKey: LEARNER_KEY,
+        legacyStore,
+      }),
+    ).toMatchObject([{ title: 'Newer', updatedAt: 3_000 }]);
+  });
+
+  it('re-resolves the successor when a delayed writer targets a retired generation', async () => {
+    const indexedDB = new IDBFactory();
+    const firstTab = new BrowserRuntimeStore({ indexedDB, dbName: 'chat-retired-generation' });
+    const delayedBacking = new BrowserRuntimeStore({
+      indexedDB,
+      dbName: 'chat-retired-generation',
+    });
+    const legacyStore = new MemoryLegacyChatStore();
+    for (let index = 0; index < 254; index += 1) {
+      await saveChatSessions(
+        STAGE_ID,
+        [session({ title: `Base ${index}`, updatedAt: 1_000 + index })],
+        { store: firstTab, learnerKey: LEARNER_KEY, legacyStore },
+      );
+    }
+
+    let releaseSnapshot!: () => void;
+    const snapshotGate = new Promise<void>((resolve) => {
+      releaseSnapshot = resolve;
+    });
+    let snapshotTaken!: () => void;
+    const snapshotReady = new Promise<void>((resolve) => {
+      snapshotTaken = resolve;
+    });
+    let delayFirstRecordRead = true;
+    const delayedTab = new Proxy(delayedBacking, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target) as unknown;
+        if (property === 'listRecords') {
+          return async (...args: Parameters<RuntimeStore['listRecords']>) => {
+            const records = await delayedBacking.listRecords(...args);
+            if (delayFirstRecordRead) {
+              delayFirstRecordRead = false;
+              snapshotTaken();
+              await snapshotGate;
+            }
+            return records;
+          };
+        }
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const delayedSave = saveChatSessions(
+      STAGE_ID,
+      [session({ title: 'Delayed newer', updatedAt: 6_000 })],
+      { store: delayedTab, learnerKey: LEARNER_KEY, legacyStore },
+    );
+    await snapshotReady;
+
+    await saveChatSessions(STAGE_ID, [session({ title: 'Rollover', updatedAt: 5_000 })], {
+      store: firstTab,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+    await saveChatSessions(STAGE_ID, [session({ title: 'Cleanup', updatedAt: 5_001 })], {
+      store: firstTab,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+    releaseSnapshot();
+
+    await expect(delayedSave).resolves.toBeUndefined();
+    expect(
+      await loadChatSessions(STAGE_ID, {
+        store: firstTab,
+        learnerKey: LEARNER_KEY,
+        legacyStore,
+      }),
+    ).toMatchObject([{ title: 'Delayed newer', updatedAt: 6_000 }]);
+  });
+
+  it.each([
+    { label: 'base', updates: 1, generated: false },
+    { label: 'generated', updates: 260, generated: true },
+  ])(
+    'loads a $label runtime id after its learner partition is merged',
+    async ({ updates, generated }) => {
+      if (!generated) {
+        vi.stubGlobal('navigator', {
+          ...globalThis.navigator,
+          locks: {
+            request: async (_name: string, work: () => Promise<unknown>) => work(),
+          },
+        });
+      }
+      const store = makeRuntimeStore();
+      const legacyStore = new MemoryLegacyChatStore();
+      try {
+        for (let index = 0; index < updates; index += 1) {
+          await saveChatSessions(
+            STAGE_ID,
+            [session({ title: `Before merge ${index}`, updatedAt: 2_000 + index })],
+            { store, learnerKey: LEARNER_KEY, legacyStore },
+          );
+        }
+        const [beforeMerge] = (await store.listSessions(STAGE_ID, LEARNER_KEY)).filter(
+          (candidate) => candidate.kind === 'chat',
+        );
+        expect(beforeMerge?.id.includes(':generation:')).toBe(generated);
+
+        const accountLearnerKey = 'user:chat-test';
+        await store.mergeLearner(LEARNER_KEY, accountLearnerKey);
+
+        expect(
+          await loadChatSessions(STAGE_ID, { store, learnerKey: accountLearnerKey, legacyStore }),
+        ).toMatchObject([{ title: `Before merge ${updates - 1}` }]);
+      } finally {
+        if (!generated) vi.unstubAllGlobals();
+      }
+    },
+  );
 
   it('backfills legacy Dexie sessions before clearing the legacy rows', async () => {
     const store = makeRuntimeStore();
