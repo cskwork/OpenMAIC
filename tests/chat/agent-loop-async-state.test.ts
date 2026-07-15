@@ -60,9 +60,15 @@ describe('agent loop async store state', () => {
     );
 
     controller.abort();
-    pending.resolve(state);
 
-    await expect(running).resolves.toMatchObject({ reason: 'aborted' });
+    await expect(
+      Promise.race([
+        running,
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('abort remained blocked on store state')), 50),
+        ),
+      ]),
+    ).resolves.toMatchObject({ reason: 'aborted' });
     expect(fetchChat).not.toHaveBeenCalled();
   });
 });

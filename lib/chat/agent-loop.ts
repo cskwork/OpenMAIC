@@ -113,6 +113,33 @@ export interface AgentLoopOutcome {
 
 // ==================== Core Loop ====================
 
+function awaitOrAbort<T>(work: Promise<T>, signal: AbortSignal) {
+  if (signal.aborted) return Promise.resolve({ status: 'aborted' as const });
+  return new Promise<{ status: 'completed'; value: T } | { status: 'aborted' }>(
+    (resolve, reject) => {
+      let settled = false;
+      const finish = (result: { status: 'completed'; value: T } | { status: 'aborted' }) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener('abort', onAbort);
+        resolve(result);
+      };
+      const onAbort = () => finish({ status: 'aborted' });
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
+      void work.then(
+        (value) => finish({ status: 'completed', value }),
+        (error) => {
+          if (settled) return;
+          settled = true;
+          signal.removeEventListener('abort', onAbort);
+          reject(error);
+        },
+      );
+    },
+  );
+}
+
 /**
  * Run the agent loop — shared between frontend and eval.
  *
@@ -138,10 +165,14 @@ export async function runAgentLoop(
 
     // Refresh store state each iteration — agent actions may have changed
     // whiteboard, scene, or mode between turns
-    const freshStoreState = await callbacks.getStoreState();
-    if (signal.aborted) {
+    const stateRead = await awaitOrAbort(
+      Promise.resolve().then(() => callbacks.getStoreState()),
+      signal,
+    );
+    if (stateRead.status === 'aborted') {
       return { reason: 'aborted', directorState, turnCount };
     }
+    const freshStoreState = stateRead.value;
     const currentMessages = callbacks.getMessages();
 
     // Build request body
