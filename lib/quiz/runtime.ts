@@ -426,6 +426,12 @@ function rootAttemptId(attemptId: string): string {
   return attemptId.replace(/(?::retry:\d+)+$/, '');
 }
 
+function compareSessionCreationOrder(left: RuntimeSession, right: RuntimeSession): number {
+  return (
+    Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.id.localeCompare(right.id)
+  );
+}
+
 function isInactiveSessionAppendError(error: unknown, sessionId: string): boolean {
   if (!(error instanceof Error)) return false;
   return error.message.includes(
@@ -471,6 +477,7 @@ export async function recordQuizAttempt(
       };
       let rolloverIndex = 0;
       let sessionId = input.attemptId;
+      let originSession: RuntimeSession | undefined;
 
       while (true) {
         let session = await store.getSession(sessionId);
@@ -495,6 +502,21 @@ export async function recordQuizAttempt(
           }
         }
         assertPartition(session, input.stageId, learnerKey);
+        if (sessionId === input.attemptId) originSession = session;
+
+        // Canonical retry ids are scanned from one, but a stale caller may
+        // already point at a later flat retry or a newer nested legacy retry.
+        // Never move that caller backward onto an older active sibling.
+        if (
+          !created &&
+          sessionId !== input.attemptId &&
+          originSession &&
+          compareSessionCreationOrder(session, originSession) <= 0
+        ) {
+          rolloverIndex += 1;
+          sessionId = rolloverAttemptId(rootId, rolloverIndex);
+          continue;
+        }
 
         const records = await store.listRecords(sessionId);
         const foreignAnchor = records.find(

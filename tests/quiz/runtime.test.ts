@@ -596,6 +596,92 @@ describe('quiz attempt runtime persistence', () => {
     });
   });
 
+  it('moves stale high-index callers strictly forward past older active siblings', async () => {
+    const { store, deps } = makeHarness();
+    const root = quizAttemptId('stage-1', 'scene-quiz', 'learner-1');
+    const firstRetry = `${root}:retry:1`;
+    const secondRetry = `${root}:retry:2`;
+    const thirdRetry = `${root}:retry:3`;
+    const base = {
+      stageId: 'stage-1',
+      sceneId: 'scene-quiz',
+      answers: {},
+    };
+    await recordQuizAttempt({ ...base, attemptId: root, phase: 'reviewed', results: [] }, deps);
+    await recordQuizAttempt(
+      { ...base, attemptId: root, phase: 'draft', startNewAttempt: true },
+      deps,
+    );
+    await recordQuizAttempt(
+      { ...base, attemptId: firstRetry, phase: 'draft', startNewAttempt: true },
+      deps,
+    );
+    await recordQuizAttempt(
+      {
+        ...base,
+        attemptId: secondRetry,
+        phase: 'reviewed',
+        answers: { q1: 'A' },
+        results,
+      },
+      deps,
+    );
+
+    await recordQuizAttempt(
+      {
+        ...base,
+        attemptId: secondRetry,
+        phase: 'draft',
+        answers: { q1: 'latest' },
+      },
+      deps,
+    );
+
+    expect((await store.listRecords(firstRetry)).map((record) => record.payload)).toEqual([
+      { payloadVersion: 1, phase: 'draft', answers: {} },
+    ]);
+    expect((await store.listRecords(thirdRetry)).map((record) => record.payload)).toEqual([
+      { payloadVersion: 1, phase: 'draft', answers: { q1: 'latest' } },
+    ]);
+    await expect(
+      loadQuizAttemptState({ stageId: 'stage-1', sceneId: 'scene-quiz' }, deps),
+    ).resolves.toMatchObject({
+      attemptId: thirdRetry,
+      state: { sessionId: thirdRetry, phase: 'draft', answers: { q1: 'latest' } },
+    });
+  });
+
+  it('does not reuse a canonical sibling older than a completed nested legacy branch', async () => {
+    const { store, deps } = makeHarness();
+    const root = quizAttemptId('stage-1', 'scene-quiz', 'learner-1');
+    const firstRetry = `${root}:retry:1`;
+    const secondRetry = `${root}:retry:2`;
+    const nestedRetry = `${firstRetry}:retry:1`;
+    const thirdRetry = `${root}:retry:3`;
+    const base = { stageId: 'stage-1', sceneId: 'scene-quiz', answers: {} };
+    await recordQuizAttempt(
+      { ...base, attemptId: firstRetry, phase: 'reviewed', results: [] },
+      deps,
+    );
+    await recordQuizAttempt({ ...base, attemptId: secondRetry, phase: 'draft' }, deps);
+    await recordQuizAttempt(
+      { ...base, attemptId: nestedRetry, phase: 'reviewed', results: [] },
+      deps,
+    );
+
+    await recordQuizAttempt(
+      { ...base, attemptId: nestedRetry, phase: 'draft', startNewAttempt: true },
+      deps,
+    );
+
+    expect((await store.listRecords(secondRetry)).map((record) => record.payload)).toEqual([
+      { payloadVersion: 1, phase: 'draft', answers: {} },
+    ]);
+    expect((await store.listRecords(thirdRetry)).map((record) => record.payload)).toEqual([
+      { payloadVersion: 1, phase: 'draft', answers: {} },
+    ]);
+  });
+
   it('does not disguise an unrelated append failure as a completion race', async () => {
     const { store } = makeHarness();
     await store.createSession({
