@@ -69,7 +69,10 @@
     "videoQuality_draft": "ドラフト",
     "videoQuality_standard": "標準",
     "videoQuality_high": "高",
-    "videoRenderingProgress": "{{stage}} — {{percent}}%",
+    "videoProgress": "{{percent}}%",
+    "videoProgressWithEta": "{{percent}}% · 残り約 {{remaining}}",
+    "videoEtaMinSec": "{{min}} 分 {{sec}} 秒",
+    "videoEtaSec": "{{sec}} 秒",
     "videoRenderMp4": "MP4 をレンダリング",
     "videoDownloadZip": "プロジェクト ZIP をダウンロード",
     "videoServiceHint": "MP4 レンダリングにはレンダーサービスが必要です。ZIP をダウンロードしてローカルでレンダリングできます。"

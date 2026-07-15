@@ -20,6 +20,8 @@ import { useMediaGenerationStore } from '@/lib/store/media-generation';
 import { useExportPPTX } from '@/lib/export/use-export-pptx';
 import { useExportClassroom } from '@/lib/export/use-export-classroom';
 import { isVideoExportEnabled } from '@/lib/config/feature-flags';
+import { useVideoRenderStore } from '@/lib/store/video-render';
+import { CircularProgress } from '@/components/ui/circular-progress';
 import { VideoExportMenu } from './video-export-menu';
 import { LanguageSwitcher } from '../language-switcher';
 import { SettingsDialog } from '../settings';
@@ -80,6 +82,12 @@ export function HeaderControls({
   const { exporting: isExporting, exportPPTX, exportResourcePack } = useExportPPTX();
   const { exporting: isExportingZip, exportClassroomZip } = useExportClassroom();
   const videoExportEnabled = isVideoExportEnabled();
+  // Video render lives in a global store so its progress ring stays on the
+  // export button even after the menu closes / scenes switch mid-render.
+  const videoRendering = useVideoRenderStore(
+    (s) => s.status === 'compiling' || s.status === 'rendering',
+  );
+  const videoRenderPercent = useVideoRenderStore((s) => s.percent);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const exportRef = useRef<HTMLDivElement>(null);
 
@@ -265,6 +273,10 @@ export function HeaderControls({
         >
           {isExporting || isExportingZip ? (
             <Loader2 className="w-4 h-4 animate-spin" />
+          ) : videoRendering ? (
+            // Persistent ring: video render runs in the background; keep it
+            // visible on the button whether or not the menu is open.
+            <CircularProgress value={videoRenderPercent} size={20} className="text-primary" />
           ) : (
             <Download className="w-4 h-4" />
           )}

@@ -69,7 +69,10 @@
     "videoQuality_draft": "مسودة",
     "videoQuality_standard": "قياسي",
     "videoQuality_high": "عالية",
-    "videoRenderingProgress": "{{stage}} — {{percent}}%",
+    "videoProgress": "{{percent}}%",
+    "videoProgressWithEta": "{{percent}}% · يتبقّى ~{{remaining}}",
+    "videoEtaMinSec": "{{min}} د {{sec}} ث",
+    "videoEtaSec": "{{sec}} ث",
     "videoRenderMp4": "عرض MP4",
     "videoDownloadZip": "تنزيل ملف ZIP للمشروع",
     "videoServiceHint": "يتطلب عرض MP4 خدمة العرض. نزّل ملف ZIP للعرض محليًا."

@@ -69,7 +69,10 @@
     "videoQuality_draft": "Rascunho",
     "videoQuality_standard": "Padrão",
     "videoQuality_high": "Alta",
-    "videoRenderingProgress": "{{stage}} — {{percent}}%",
+    "videoProgress": "{{percent}}%",
+    "videoProgressWithEta": "{{percent}}% · ~{{remaining}} restante(s)",
+    "videoEtaMinSec": "{{min}} min {{sec}} s",
+    "videoEtaSec": "{{sec}} s",
     "videoRenderMp4": "Renderizar MP4",
     "videoDownloadZip": "Baixar ZIP do projeto",
     "videoServiceHint": "A renderização de MP4 requer o serviço de renderização. Baixe o ZIP para renderizar localmente."

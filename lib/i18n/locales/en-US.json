@@ -69,7 +69,10 @@
     "videoQuality_draft": "Draft",
     "videoQuality_standard": "Standard",
     "videoQuality_high": "High",
-    "videoRenderingProgress": "{{stage}} — {{percent}}%",
+    "videoProgress": "{{percent}}%",
+    "videoProgressWithEta": "{{percent}}% · about {{remaining}} left",
+    "videoEtaMinSec": "{{min}} min {{sec}} sec",
+    "videoEtaSec": "{{sec}} sec",
     "videoRenderMp4": "Render MP4",
     "videoDownloadZip": "Download project ZIP",
     "videoServiceHint": "MP4 rendering needs the render service. Download the ZIP to render locally."

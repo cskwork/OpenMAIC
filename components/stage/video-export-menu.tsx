@@ -32,6 +32,20 @@ import {
 
 const RESOLUTIONS = Object.keys(VIDEO_RESOLUTIONS) as VideoResolution[];
 
+/**
+ * Format an ETA (ms) as a short localized "about X min Y sec" / "about Y sec"
+ * string. Rounds seconds up so it never shows "0 sec" while still working.
+ */
+function formatRemaining(
+  ms: number,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  const totalSec = Math.max(1, Math.ceil(ms / 1000));
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return min > 0 ? t('export.videoEtaMinSec', { min, sec }) : t('export.videoEtaSec', { sec });
+}
+
 /** A row of mutually-exclusive small pill buttons. */
 function OptionRow<T extends string | number>({
   label,
@@ -75,7 +89,7 @@ function OptionRow<T extends string | number>({
 export function VideoExportMenu({ onClose }: { onClose: () => void }) {
   const { t } = useI18n();
   const { exporting: isExportingVideo, exportVideo } = useExportVideo();
-  const { rendering, progress, renderVideo } = useRenderVideo();
+  const { rendering, percent, etaMs, renderVideo } = useRenderVideo();
 
   const [resolution, setResolution] = useState<VideoResolution>('1080p');
   const [fps, setFps] = useState<VideoFps>(30);
@@ -143,14 +157,16 @@ export function VideoExportMenu({ onClose }: { onClose: () => void }) {
         </>
       )}
 
-      {rendering && progress && (
+      {rendering && (
         <div className="px-4 pb-2">
-          <Progress value={progress.percent} />
+          <Progress value={percent} />
           <div className="mt-1 text-[11px] text-gray-400 dark:text-gray-500">
-            {t('export.videoRenderingProgress', {
-              percent: progress.percent,
-              stage: progress.stage,
-            })}
+            {etaMs != null
+              ? t('export.videoProgressWithEta', {
+                  percent,
+                  remaining: formatRemaining(etaMs, t),
+                })
+              : t('export.videoProgress', { percent })}
           </div>
         </div>
       )}

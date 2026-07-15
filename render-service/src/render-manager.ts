@@ -115,9 +115,13 @@ export class RenderManager {
         outputPath,
         async (j) => {
           // Producer mutates the same `job` object; mirror the fields we expose.
+          // Producer's `progress` is 0..100; our HTTP contract is 0..1, so
+          // normalize here (clamped) — success is set to 1 below.
+          const progress =
+            typeof j.progress === 'number' ? Math.max(0, Math.min(1, j.progress / 100)) : 0;
           await this.jobs.update(id, {
             status: 'running',
-            progress: typeof j.progress === 'number' ? j.progress : 0,
+            progress,
             currentStage: j.currentStage || j.status,
             ...(typeof j.framesRendered === 'number' ? { framesRendered: j.framesRendered } : {}),
             ...(typeof j.totalFrames === 'number' ? { totalFrames: j.totalFrames } : {}),

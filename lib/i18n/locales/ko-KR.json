@@ -69,7 +69,10 @@
     "videoQuality_draft": "초안",
     "videoQuality_standard": "표준",
     "videoQuality_high": "고품질",
-    "videoRenderingProgress": "{{stage}} — {{percent}}%",
+    "videoProgress": "{{percent}}%",
+    "videoProgressWithEta": "{{percent}}% · 약 {{remaining}} 남음",
+    "videoEtaMinSec": "{{min}}분 {{sec}}초",
+    "videoEtaSec": "{{sec}}초",
     "videoRenderMp4": "MP4 렌더링",
     "videoDownloadZip": "프로젝트 ZIP 다운로드",
     "videoServiceHint": "MP4 렌더링에는 렌더 서비스가 필요합니다. ZIP을 다운로드하여 로컬에서 렌더링하세요."

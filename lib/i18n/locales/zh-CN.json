@@ -69,7 +69,10 @@
     "videoQuality_draft": "草稿",
     "videoQuality_standard": "标准",
     "videoQuality_high": "高",
-    "videoRenderingProgress": "{{stage}} —— {{percent}}%",
+    "videoProgress": "{{percent}}%",
+    "videoProgressWithEta": "{{percent}}% · 预计剩余 {{remaining}}",
+    "videoEtaMinSec": "{{min}} 分 {{sec}} 秒",
+    "videoEtaSec": "{{sec}} 秒",
     "videoRenderMp4": "渲染 MP4",
     "videoDownloadZip": "下载项目 ZIP",
     "videoServiceHint": "渲染 MP4 需要渲染服务。可下载 ZIP 在本地渲染。"

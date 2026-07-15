@@ -69,7 +69,10 @@
     "videoQuality_draft": "草稿",
     "videoQuality_standard": "標準",
     "videoQuality_high": "高",
-    "videoRenderingProgress": "{{stage}} —— {{percent}}%",
+    "videoProgress": "{{percent}}%",
+    "videoProgressWithEta": "{{percent}}% · 預計剩餘 {{remaining}}",
+    "videoEtaMinSec": "{{min}} 分 {{sec}} 秒",
+    "videoEtaSec": "{{sec}} 秒",
     "videoRenderMp4": "算圖 MP4",
     "videoDownloadZip": "下載專案 ZIP",
     "videoServiceHint": "算圖 MP4 需要算圖服務。可下載 ZIP 在本機算圖。"
