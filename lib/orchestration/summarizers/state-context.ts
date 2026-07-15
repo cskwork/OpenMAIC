@@ -1,5 +1,6 @@
 import type { StatelessChatRequest } from '@/lib/types/chat';
 import { buildWhiteboardConflicts } from './whiteboard-conflicts';
+import { type CodeRenderBudget, createCodeRenderBudget, renderCodeLines } from './code-line-budget';
 
 // ==================== Element Summarization ====================
 
@@ -11,10 +12,15 @@ function stripHtml(html: string): string {
 }
 
 /**
- * Summarize a single PPT element into a one-line description
+ * Summarize a single PPT element into a one-line description.
+ *
+ * `budgetRef` carries a code-line render budget shared across every element in
+ * one summarizeElements() pass, so a code-heavy board cannot dump unbounded raw
+ * lines into the child prompt (see code-line-budget.ts). It is only consumed by
+ * code elements; other element types ignore it.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PPTElement variants have heterogeneous shapes
-function summarizeElement(el: any): string {
+function summarizeElement(el: any, budgetRef?: { current: CodeRenderBudget }): string {
   const id = el.id ? `[id:${el.id}]` : '';
   const pos = `at (${Math.round(el.left)},${Math.round(el.top)})`;
   const size =
@@ -60,13 +66,14 @@ function summarizeElement(el: any): string {
       const lang = el.language || 'unknown';
       const lineCount = el.lines?.length || 0;
       const codeFn = el.fileName ? ` "${el.fileName}"` : '';
-      const linePreview = (el.lines || [])
-        .slice(0, 10)
+      const header = `${id} code${codeFn} (${lang}, ${lineCount} lines) ${pos}${size}`;
+      const codeLines = (el.lines || [])
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .map((l: any) => `    ${l.id}: ${l.content}`)
-        .join('\n');
-      const moreLines = lineCount > 10 ? `\n    ... and ${lineCount - 10} more lines` : '';
-      return `${id} code${codeFn} (${lang}, ${lineCount} lines) ${pos}${size}\n${linePreview}${moreLines}`;
+        .map((l: any) => ({ id: String(l.id ?? ''), content: String(l.content ?? '') }));
+      const budget = budgetRef?.current ?? createCodeRenderBudget();
+      const { text, budget: next } = renderCodeLines(codeLines, budget);
+      if (budgetRef) budgetRef.current = next;
+      return text ? `${header}\n${text}` : header;
     }
     case 'video':
       return `${id} video ${pos}${size}`;
@@ -78,13 +85,16 @@ function summarizeElement(el: any): string {
 }
 
 /**
- * Summarize an array of elements into line descriptions
+ * Summarize an array of elements into line descriptions. Code blocks share a
+ * single render budget across the whole array so the summary stays bounded even
+ * for a code-heavy whiteboard.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PPTElement variants have heterogeneous shapes
 export function summarizeElements(elements: any[]): string {
   if (elements.length === 0) return '  (empty)';
 
-  const lines = elements.map((el, i) => `  ${i + 1}. ${summarizeElement(el)}`);
+  const budgetRef = { current: createCodeRenderBudget() };
+  const lines = elements.map((el, i) => `  ${i + 1}. ${summarizeElement(el, budgetRef)}`);
 
   return lines.join('\n');
 }

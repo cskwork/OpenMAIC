@@ -1,5 +1,6 @@
 import type { StatelessChatRequest } from '@/lib/types/chat';
 import type { WhiteboardActionRecord } from '../types';
+import { createCodeRenderBudget, renderCodeLines } from './code-line-budget';
 
 interface VirtualWhiteboardElement {
   agentName: string;
@@ -8,76 +9,19 @@ interface VirtualWhiteboardElement {
   codeLines?: Array<{ id: string; content: string }>;
   codeLanguage?: string;
   codeFileName?: string;
+  // The mutation sequence number of the last wb_draw_code / wb_edit_code that
+  // touched this element during the current round; null for elements seeded
+  // from the request-start snapshot and for non-code draws (which do not
+  // compete for the code-line budget). Budget is allocated most-recently-
+  // touched first, so when several code blocks are drawn this round the one a
+  // later child agent is most likely to edit keeps its line ids even if an
+  // earlier, larger block would otherwise exhaust the shared budget.
+  lastTouchedSequence: number | null;
 }
 
 function getRecordElementId(record: WhiteboardActionRecord): string | undefined {
   const elementId = record.params.elementId;
   return typeof elementId === 'string' && elementId ? elementId : undefined;
-}
-
-// Budget for rendering code lines in the whiteboard context. The context is
-// seeded from the request-start snapshot (getInitialWhiteboardElements), so it
-// can carry pre-existing code blocks — not just this round's code — and a naive
-// "list every line" (even ids-only) would let code-heavy boards grow the prompt
-// without bound, since neither line count nor id length has a schema cap.
-//
-// Both tiers below are CHARACTER budgets shared across all code blocks in one
-// context, giving a deterministic upper bound regardless of line count or id
-// length. The explicit trade-off: past the budget, tail lines are reported as a
-// count only and are NOT individually addressable for wb_edit_code. Normal code
-// (a few dozen short lines) fits entirely and stays fully editable.
-const MAX_LINE_CONTENT_CHARS = 80;
-const MAX_CODE_CONTENT_CHARS = 1200;
-const MAX_CODE_IDLIST_CHARS = 400;
-
-interface CodeRenderBudget {
-  content: number;
-  idList: number;
-}
-
-function truncateLineContent(content: string): string {
-  return content.length > MAX_LINE_CONTENT_CHARS
-    ? `${content.slice(0, MAX_LINE_CONTENT_CHARS)}…`
-    : content;
-}
-
-function renderCodeLines(
-  codeLines: Array<{ id: string; content: string }>,
-  budget: CodeRenderBudget,
-): { text: string; budget: CodeRenderBudget } {
-  const out: string[] = [];
-  let { content, idList } = budget;
-  let i = 0;
-
-  // Tier 1: lines shown with (truncated) content, until the content char budget
-  // can no longer fit the next line.
-  for (; i < codeLines.length; i += 1) {
-    const rendered = `     ${codeLines[i].id}: ${truncateLineContent(codeLines[i].content)}`;
-    if (rendered.length > content) break;
-    out.push(rendered);
-    content -= rendered.length;
-  }
-
-  // Tier 2: remaining lines listed as bare ids (cheaper, still editable), until
-  // the id-list char budget can no longer fit the next id.
-  const idOnly: string[] = [];
-  for (; i < codeLines.length; i += 1) {
-    const piece = idOnly.length === 0 ? codeLines[i].id : `, ${codeLines[i].id}`;
-    if (piece.length > idList) break;
-    idOnly.push(codeLines[i].id);
-    idList -= piece.length;
-  }
-  if (idOnly.length > 0) {
-    out.push(`     (ids only: ${idOnly.join(', ')})`);
-  }
-
-  // Anything still unrendered is reported as a count — bounded, not editable.
-  const omitted = codeLines.length - i;
-  if (omitted > 0) {
-    out.push(`     (… ${omitted} more line(s) omitted)`);
-  }
-
-  return { text: out.join('\n'), budget: { content, idList } };
 }
 
 function summarizeCodeElement(element: VirtualWhiteboardElement): string {
@@ -110,6 +54,7 @@ function getInitialWhiteboardElements(
           agentName: 'Before this round',
           elementId: candidate.id,
           summary: `existing ${String(candidate.type || 'element')} [id:${candidate.id}]`,
+          lastTouchedSequence: null,
         },
       ];
     }
@@ -118,6 +63,7 @@ function getInitialWhiteboardElements(
       agentName: 'Before this round',
       elementId: candidate.id,
       summary: '',
+      lastTouchedSequence: null,
       codeLines: Array.isArray(candidate.lines)
         ? candidate.lines.flatMap((line) => {
             if (!line || typeof line !== 'object') return [];
@@ -135,7 +81,11 @@ function getInitialWhiteboardElements(
   });
 }
 
-function applyCodeEdit(target: VirtualWhiteboardElement, record: WhiteboardActionRecord): void {
+function applyCodeEdit(
+  target: VirtualWhiteboardElement,
+  record: WhiteboardActionRecord,
+  sequence: number,
+): void {
   if (!target.codeLines) return;
   const operation = record.params.operation;
   const contentLines = String(record.params.content ?? '').split('\n');
@@ -177,6 +127,7 @@ function applyCodeEdit(target: VirtualWhiteboardElement, record: WhiteboardActio
   }
 
   target.agentName = record.agentName;
+  target.lastTouchedSequence = sequence;
   target.summary = `${summarizeCodeElement(target)}; edited (${String(operation || 'edit')})`;
 }
 
@@ -189,6 +140,10 @@ export function buildVirtualWhiteboardContext(
 
   const elements = getInitialWhiteboardElements(storeState);
   let hasContentMutation = false;
+  // Monotonic counter incremented on each wb_draw_code / successful
+  // wb_edit_code, recorded on the target element so budget allocation can
+  // prefer the most recently touched code block this round.
+  let touchSequence = 0;
 
   for (const record of ledger) {
     const elementId = getRecordElementId(record);
@@ -209,6 +164,7 @@ export function buildVirtualWhiteboardContext(
         elements.push({
           agentName: record.agentName,
           elementId,
+          lastTouchedSequence: null,
           summary: `text: "${content}${content.length >= 40 ? '...' : ''}" at (${record.params.x ?? '?'},${record.params.y ?? '?'}), size ~${record.params.width ?? 400}x${record.params.height ?? 100}`,
         });
         break;
@@ -218,6 +174,7 @@ export function buildVirtualWhiteboardContext(
         elements.push({
           agentName: record.agentName,
           elementId,
+          lastTouchedSequence: null,
           summary: `shape(${record.params.type || record.params.shape || 'rectangle'}) at (${record.params.x ?? '?'},${record.params.y ?? '?'}), size ${record.params.width ?? 100}x${record.params.height ?? 100}`,
         });
         break;
@@ -229,6 +186,7 @@ export function buildVirtualWhiteboardContext(
         elements.push({
           agentName: record.agentName,
           elementId,
+          lastTouchedSequence: null,
           summary: `chart(${record.params.chartType || record.params.type || 'bar'})${labels ? `: labels=[${(labels as string[]).slice(0, 4).join(',')}]` : ''} at (${record.params.x ?? '?'},${record.params.y ?? '?'}), size ${record.params.width ?? 350}x${record.params.height ?? 250}`,
         });
         break;
@@ -239,6 +197,7 @@ export function buildVirtualWhiteboardContext(
         elements.push({
           agentName: record.agentName,
           elementId,
+          lastTouchedSequence: null,
           summary: `latex: "${latex}${latex.length >= 40 ? '...' : ''}" at (${record.params.x ?? '?'},${record.params.y ?? '?'}), size ~${record.params.width ?? 400}x${record.params.height ?? 80}`,
         });
         break;
@@ -251,6 +210,7 @@ export function buildVirtualWhiteboardContext(
         elements.push({
           agentName: record.agentName,
           elementId,
+          lastTouchedSequence: null,
           summary: `table(${rows}×${cols}) at (${record.params.x ?? '?'},${record.params.y ?? '?'}), size ${record.params.width ?? 400}x${record.params.height ?? rows * 40 + 20}`,
         });
         break;
@@ -260,6 +220,7 @@ export function buildVirtualWhiteboardContext(
         elements.push({
           agentName: record.agentName,
           elementId,
+          lastTouchedSequence: null,
           summary: `line${(record.params.points as string[] | undefined)?.includes('arrow') ? ' (arrow)' : ''}: (${record.params.startX ?? '?'},${record.params.startY ?? '?'}) → (${record.params.endX ?? '?'},${record.params.endY ?? '?'})`,
         });
         break;
@@ -273,6 +234,7 @@ export function buildVirtualWhiteboardContext(
           agentName: record.agentName,
           elementId,
           summary: '',
+          lastTouchedSequence: (touchSequence += 1),
           codeLines: code
             .split('\n')
             .map((content, index) => ({ id: suppliedIds[index] ?? `L${index + 1}`, content })),
@@ -286,7 +248,7 @@ export function buildVirtualWhiteboardContext(
       case 'wb_edit_code': {
         hasContentMutation = true;
         const target = elements.find((element) => element.elementId === elementId);
-        if (target) applyCodeEdit(target, record);
+        if (target) applyCodeEdit(target, record, (touchSequence += 1));
         break;
       }
       default:
@@ -305,21 +267,42 @@ The whiteboard is now empty after changes made during this discussion round.
   // Expose each element's id (and, for code, its line ids) so a later child
   // agent can target them with wb_delete / wb_edit_code — the runtime validators
   // require exact elementId/lineId, which were previously invisible in-prompt.
+  //
   // The code-line budget is shared across all elements so the whole section is
-  // bounded, not just each block individually.
-  let codeBudget: CodeRenderBudget = {
-    content: MAX_CODE_CONTENT_CHARS,
-    idList: MAX_CODE_IDLIST_CHARS,
-  };
+  // bounded. It is spent in PRIORITY order — this round's code blocks first
+  // (most recently drawn/edited first), pre-existing snapshot blocks last — so
+  // neither a large stale block nor a large earlier block drawn this round can
+  // exhaust the budget before the block a later child is most likely to edit
+  // gets its line ids rendered (a later child needs those ids to edit it this
+  // loop). The displayed list stays in board order; only budget allocation is
+  // reordered.
+  let codeBudget = createCodeRenderBudget();
+  const renderedCodeByIndex = new Map<number, string>();
+  const budgetOrder = elements
+    .map((_, index) => index)
+    .sort((a, b) => {
+      const sa = elements[a].lastTouchedSequence;
+      const sb = elements[b].lastTouchedSequence;
+      // Snapshot elements (null) sort last; among this-round code, higher
+      // sequence (more recent) sorts first.
+      if (sa === null && sb === null) return 0;
+      if (sa === null) return 1;
+      if (sb === null) return -1;
+      return sb - sa;
+    });
+  for (const index of budgetOrder) {
+    const codeLines = elements[index].codeLines ?? [];
+    if (codeLines.length === 0) continue;
+    const { text, budget } = renderCodeLines(codeLines, codeBudget);
+    codeBudget = budget;
+    renderedCodeByIndex.set(index, text);
+  }
   const elementLines = elements
     .map((element, index) => {
       const idTag = element.elementId ? ` (id: ${element.elementId})` : '';
       const header = `  ${index + 1}. [by ${element.agentName}]${idTag} ${element.summary}`;
-      const codeLines = element.codeLines ?? [];
-      if (codeLines.length === 0) return header;
-      const { text, budget } = renderCodeLines(codeLines, codeBudget);
-      codeBudget = budget;
-      return `${header}\n${text}`;
+      const codeText = renderedCodeByIndex.get(index);
+      return codeText ? `${header}\n${codeText}` : header;
     })
     .join('\n');
   return `

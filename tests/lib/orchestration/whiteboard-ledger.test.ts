@@ -213,10 +213,12 @@ describe('buildVirtualWhiteboardContext', () => {
     expect(context.length).toBeLessThan(2500);
   });
 
-  it('shares the code-line budget across multiple code blocks', () => {
-    // A first block large enough to exhaust the shared content budget must
-    // leave the second block unable to render all of its content — proving the
-    // budget is shared, not per-block.
+  it('gives the most recently drawn code block budget priority over an earlier large block', () => {
+    // The budget is shared across blocks (not per-block), AND it is spent
+    // most-recently-touched first. A large block drawn first must NOT starve a
+    // small block drawn later: the later block is the one a child is most
+    // likely to edit next, so it keeps its line ids/content while the earlier
+    // large block is squeezed to the omitted tail.
     const bigCode = Array.from({ length: 400 }, (_, i) => `a_${i} = ${i}`).join('\n');
     const bigIds = Array.from({ length: 400 }, (_, i) => `A${i}`);
 
@@ -239,12 +241,68 @@ describe('buildVirtualWhiteboardContext', () => {
       }),
     ]);
 
-    // Both blocks are still announced (ids visible for targeting)...
+    // Both blocks are announced (ids visible for targeting)...
     expect(context).toContain('(id: block-1)');
     expect(context).toContain('(id: block-2)');
-    // ...but the shared budget is already spent by block-1, so block-2's content
-    // line is not rendered in full.
-    expect(context).not.toContain('later_line = 999');
+    // ...the later-drawn small block wins the shared budget, so its content and
+    // line id ARE rendered even though it appears second on the board.
+    expect(context).toContain('Z1: later_line = 999');
+    // ...while the earlier large block is squeezed to the omitted tail, proving
+    // the budget is shared, not per-block.
+    expect(context).toContain('more line(s) omitted');
+    expect(context.length).toBeLessThan(2500);
+  });
+
+  it('renders this-round code before a large pre-existing snapshot block', () => {
+    // A big code block that existed BEFORE this round must not starve the
+    // budget for a block drawn THIS round: a later child agent needs the new
+    // block's element id and line ids visible to edit it in the same Pi loop.
+    const bigLines = Array.from({ length: 400 }, (_, i) => ({
+      id: `OLD${i}`,
+      content: `old_${i} = ${i}`,
+    }));
+    const initialStoreState = {
+      ...storeState,
+      stage: {
+        id: 'stage-1',
+        name: 'Code lesson',
+        whiteboard: [
+          {
+            id: 'whiteboard-1',
+            elements: [
+              {
+                id: 'old-code',
+                type: 'code',
+                language: 'python',
+                fileName: 'old.py',
+                lines: bigLines,
+              },
+            ],
+          },
+        ],
+      },
+    } as StatelessChatRequest['storeState'];
+
+    const context = buildVirtualWhiteboardContext(initialStoreState, [
+      record('wb_draw_code', {
+        elementId: 'new-code',
+        language: 'python',
+        code: 'fresh = 1\nfresh = 2',
+        lineIds: ['N1', 'N2'],
+        x: 10,
+        y: 20,
+      }),
+    ]);
+
+    // The new block is fully editable: element id, both line ids, and content
+    // are visible even though a much larger stale block is on the board.
+    expect(context).toContain('(id: new-code)');
+    expect(context).toContain('N1: fresh = 1');
+    expect(context).toContain('N2: fresh = 2');
+    // The stale block still appears (id visible) but its content is squeezed to
+    // the omitted tail, so the whole section stays bounded.
+    expect(context).toContain('(id: old-code)');
+    expect(context).toContain('more line(s) omitted');
     expect(context.length).toBeLessThan(2500);
   });
 });

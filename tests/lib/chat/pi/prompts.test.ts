@@ -306,3 +306,96 @@ describe('Pi child prompt structured output', () => {
     expect(prompt).toContain('If your response is as long as the teacher response, it is wrong');
   });
 });
+
+describe('buildChildPrompt whiteboard code is bounded end-to-end', () => {
+  function bodyWithLargeSnapshotCode(snapshotLineCount: number): StatelessChatRequest {
+    const snapshotLines = Array.from({ length: snapshotLineCount }, (_, i) => ({
+      id: `SNAP${i}`,
+      content: `snap_line_${i} = ${i}`,
+    }));
+    return makeBody({
+      storeState: {
+        stage: {
+          id: 'stage-1',
+          name: 'Code lesson',
+          whiteboard: [
+            {
+              id: 'whiteboard-1',
+              elements: [
+                {
+                  id: 'old-code',
+                  type: 'code',
+                  language: 'python',
+                  fileName: 'legacy.py',
+                  lines: snapshotLines,
+                },
+              ],
+            },
+          ],
+        },
+        scenes: [],
+        currentSceneId: null,
+        whiteboardOpen: true,
+      },
+    } as unknown as Partial<StatelessChatRequest>);
+  }
+
+  const thisRoundLedger = [
+    {
+      actionName: 'wb_draw_code',
+      agentId: 'default-1',
+      agentName: 'AI teacher',
+      params: {
+        elementId: 'new-code',
+        language: 'python',
+        code: 'fresh = 1\nfresh = 2',
+        lineIds: ['N1', 'N2'],
+        x: 10,
+        y: 20,
+      },
+    },
+  ];
+
+  it('caps the full child prompt and keeps this-round code editable', () => {
+    const body = bodyWithLargeSnapshotCode(5000);
+
+    const prompt = buildChildPrompt(body, agents[0], [], thisRoundLedger as never, [
+      'wb_draw_code',
+      'wb_edit_code',
+    ]);
+
+    // Both prompt paths that render the board (buildStateContext and
+    // buildVirtualWhiteboardContext) are bounded, so a 5000-line stale block
+    // cannot blow up the child prompt.
+    expect(prompt).not.toContain('snap_line_4999 = 4999');
+    expect(prompt).toContain('more line(s) omitted');
+
+    // This round's newly drawn block is still fully editable: its element id and
+    // line ids survive the shared budget despite the large stale block.
+    expect(prompt).toContain('(id: new-code)');
+    expect(prompt).toContain('N1: fresh = 1');
+    expect(prompt).toContain('N2: fresh = 2');
+  });
+
+  it('grows only by the omitted-count width when the snapshot grows 10x', () => {
+    const build = (lineCount: number) =>
+      buildChildPrompt(
+        bodyWithLargeSnapshotCode(lineCount),
+        agents[0],
+        [],
+        thisRoundLedger as never,
+        ['wb_draw_code', 'wb_edit_code'],
+      );
+
+    const small = build(5000);
+    const large = build(50000);
+
+    // A 10x larger snapshot must not multiply the prompt: the only thing that
+    // may grow is the omitted-count number itself (e.g. "4998" -> "49998"),
+    // which differs by a handful of characters across both bounded render
+    // paths. Anything larger means an unbounded dump slipped through.
+    expect(large.length - small.length).toBeLessThan(20);
+    // Loose absolute cap regardless of the 50k-line source.
+    expect(large.length).toBeLessThan(12000);
+  });
+});
