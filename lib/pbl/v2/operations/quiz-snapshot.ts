@@ -42,7 +42,7 @@ const log = createLogger('PBLQuizSnapshot');
 export async function buildQuizSnapshot(scenesBeforePbl: Scene[]): Promise<PriorQuizResult[]> {
   const out: PriorQuizResult[] = [];
   for (const scene of scenesBeforePbl) {
-    if (scene.type !== 'quiz' || scene.content.type !== 'quiz') continue;
+    if (scene.type !== 'quiz' || scene.content.type !== 'quiz' || !scene.stageId) continue;
     let state: QuizAttemptState | undefined;
     try {
       ({ state } = await loadQuizAttemptState({ stageId: scene.stageId, sceneId: scene.id }));

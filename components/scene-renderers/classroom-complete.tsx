@@ -324,7 +324,7 @@ export function ClassroomCompletePage({ scenes, title }: ClassroomCompletePagePr
     let cancelled = false;
     void summarizeScenes(scenes, async (sceneId) => {
       const scene = scenes.find((candidate) => candidate.id === sceneId);
-      if (!scene) return {};
+      if (!scene?.stageId) return undefined;
       try {
         const { state } = await loadQuizAttemptState({ stageId: scene.stageId, sceneId });
         return state?.answers ?? {};

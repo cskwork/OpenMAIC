@@ -91,6 +91,13 @@ describe('buildQuizSnapshot', () => {
     await expect(buildQuizSnapshot([mkSlideScene('s1'), mkSlideScene('s2')])).resolves.toEqual([]);
   });
 
+  it('skips legacy quiz scenes that do not have a stage id', async () => {
+    const { stageId: _stageId, ...legacy } = mkQuizScene('legacy', 1);
+
+    await expect(buildQuizSnapshot([legacy as Scene])).resolves.toEqual([]);
+    expect(loadQuizAttemptState).not.toHaveBeenCalled();
+  });
+
   it('skips quizzes the learner has not been reviewed', async () => {
     vi.mocked(loadQuizAttemptState).mockResolvedValue({
       attemptId: 'attempt-1',

@@ -28,6 +28,17 @@ export type SubmittedState =
   | { kind: 'answering'; answers: QuizAnswers }
   | null;
 
+export interface LegacyQuizStateSnapshot {
+  hasState: boolean;
+  draft: QuizAnswers | null;
+  submitted: SubmittedState;
+  attemptId: string | null;
+  rawDraft: string | null;
+  rawAnswers: string | null;
+  rawResults: string | null;
+  rawAttemptId: string | null;
+}
+
 export function hasLegacyQuizState(sceneId: string): boolean {
   return [DRAFT_KEY_PREFIX, ANSWERS_KEY_PREFIX, RESULTS_KEY_PREFIX, ATTEMPT_ID_KEY_PREFIX].some(
     (prefix) => safeGet(prefix + sceneId) !== null,
@@ -64,10 +75,14 @@ function safeRemove(key: string): void {
 /** Parse legacy post-submit state: answers + optional graded results. */
 export function readSubmittedState(sceneId: string): SubmittedState {
   const rawA = safeGet(ANSWERS_KEY_PREFIX + sceneId);
+  const rawR = safeGet(RESULTS_KEY_PREFIX + sceneId);
+  return parseSubmittedState(rawA, rawR);
+}
+
+function parseSubmittedState(rawA: string | null, rawR: string | null): SubmittedState {
   if (!rawA) return null;
   try {
     const answers = JSON.parse(rawA) as QuizAnswers;
-    const rawR = safeGet(RESULTS_KEY_PREFIX + sceneId);
     if (rawR) {
       const results = JSON.parse(rawR) as QuestionResult[];
       if (Array.isArray(results)) {
@@ -82,6 +97,10 @@ export function readSubmittedState(sceneId: string): SubmittedState {
 
 export function readDraftState(sceneId: string): QuizAnswers | null {
   const raw = safeGet(DRAFT_KEY_PREFIX + sceneId);
+  return parseDraftState(raw);
+}
+
+function parseDraftState(raw: string | null): QuizAnswers | null {
   if (!raw) return null;
   try {
     const answers = JSON.parse(raw) as unknown;
@@ -98,6 +117,24 @@ export function readLegacyAttemptId(sceneId: string): string | null {
   return attemptId && attemptId.trim().length > 0 ? attemptId : null;
 }
 
+/** Capture one coherent cleanup token for a one-time legacy migration. */
+export function readLegacyQuizStateSnapshot(sceneId: string): LegacyQuizStateSnapshot {
+  const rawDraft = safeGet(DRAFT_KEY_PREFIX + sceneId);
+  const rawAnswers = safeGet(ANSWERS_KEY_PREFIX + sceneId);
+  const rawResults = safeGet(RESULTS_KEY_PREFIX + sceneId);
+  const rawAttemptId = safeGet(ATTEMPT_ID_KEY_PREFIX + sceneId);
+  return {
+    hasState: [rawDraft, rawAnswers, rawResults, rawAttemptId].some((value) => value !== null),
+    draft: parseDraftState(rawDraft),
+    submitted: parseSubmittedState(rawAnswers, rawResults),
+    attemptId: rawAttemptId && rawAttemptId.trim().length > 0 ? rawAttemptId : null,
+    rawDraft,
+    rawAnswers,
+    rawResults,
+    rawAttemptId,
+  };
+}
+
 /** Synchronously journal the latest draft before its async RuntimeStore write. */
 export function writeDraftRecovery(sceneId: string, attemptId: string, answers: QuizAnswers): void {
   safeSet(DRAFT_KEY_PREFIX + sceneId, JSON.stringify(answers));
@@ -110,6 +147,26 @@ export function clearDraftRecovery(sceneId: string, attemptId: string, answers: 
   if (safeGet(DRAFT_KEY_PREFIX + sceneId) !== JSON.stringify(answers)) return;
   safeRemove(DRAFT_KEY_PREFIX + sceneId);
   safeRemove(ATTEMPT_ID_KEY_PREFIX + sceneId);
+}
+
+/** Retire only the legacy values captured by one completed migration. */
+export function clearLegacyQuizStateSnapshot(
+  sceneId: string,
+  snapshot: LegacyQuizStateSnapshot,
+): void {
+  const draftKey = DRAFT_KEY_PREFIX + sceneId;
+  const attemptKey = ATTEMPT_ID_KEY_PREFIX + sceneId;
+  if (safeGet(draftKey) === snapshot.rawDraft && safeGet(attemptKey) === snapshot.rawAttemptId) {
+    safeRemove(draftKey);
+    safeRemove(attemptKey);
+  }
+
+  const answersKey = ANSWERS_KEY_PREFIX + sceneId;
+  const resultsKey = RESULTS_KEY_PREFIX + sceneId;
+  if (safeGet(answersKey) === snapshot.rawAnswers && safeGet(resultsKey) === snapshot.rawResults) {
+    safeRemove(answersKey);
+    safeRemove(resultsKey);
+  }
 }
 
 /** Retire every legacy key after migration or during stage deletion. */

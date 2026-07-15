@@ -8,11 +8,8 @@ import { RuntimeAppendConflictError, type RuntimeStore } from '@openmaic/storage
 import type { QuestionResult } from '@/lib/quiz/grading';
 import {
   clearDraftRecovery,
-  clearAllForScene,
-  hasLegacyQuizState,
-  readDraftState,
-  readLegacyAttemptId,
-  readSubmittedState,
+  clearLegacyQuizStateSnapshot,
+  readLegacyQuizStateSnapshot,
   type QuizAnswers,
 } from '@/lib/quiz/persistence';
 import { getLearnerKey } from '@/lib/runtime/learner-key';
@@ -285,12 +282,11 @@ async function migrateLegacyQuizState(
   learnerKey: string,
   deps: QuizAttemptRuntimeDeps,
 ): Promise<void> {
-  if (!hasLegacyQuizState(input.sceneId)) return;
+  const legacySnapshot = readLegacyQuizStateSnapshot(input.sceneId);
+  if (!legacySnapshot.hasState) return;
 
   const existing = await readLatestQuizAttemptState(input, store, learnerKey);
-  const submitted = readSubmittedState(input.sceneId);
-  const draft = readDraftState(input.sceneId);
-  const legacyAttemptId = readLegacyAttemptId(input.sceneId);
+  const { submitted, draft, attemptId: legacyAttemptId } = legacySnapshot;
   const legacyPhase: QuizAttemptPhase | undefined =
     submitted?.kind === 'reviewing'
       ? 'reviewed'
@@ -356,8 +352,9 @@ async function migrateLegacyQuizState(
   }
 
   // Legacy state is deleted only after every required runtime write succeeds.
-  // Corrupt/unusable blobs are retired too, so later reads never dual-source.
-  clearAllForScene(input.sceneId);
+  // Delete only the values this migration read; a newer recovery journal may
+  // have arrived while its RuntimeStore writes were in flight.
+  clearLegacyQuizStateSnapshot(input.sceneId, legacySnapshot);
 }
 
 /** Load the learner's latest quiz state, migrating legacy localStorage once. */
@@ -383,7 +380,7 @@ export async function loadQuizAttemptState(
     // Drain that lineage before choosing the authoritative latest attempt.
     await awaitQueuedWriterLineage(state.sessionId);
     await awaitQueuedAttemptLineage(store, state.sessionId);
-    state = await withAttemptLock(state.sessionId, () =>
+    state = await withAttemptLock(rootAttemptId(state.sessionId), () =>
       readLatestQuizAttemptState(input, store, learnerKey),
     );
   }

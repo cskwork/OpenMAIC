@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { BrowserRuntimeStore, type RuntimeStore } from '@openmaic/storage';
 import {
@@ -12,6 +12,7 @@ import {
   ATTEMPT_ID_KEY_PREFIX,
   DRAFT_KEY_PREFIX,
   RESULTS_KEY_PREFIX,
+  writeDraftRecovery,
 } from '@/lib/quiz/persistence';
 import type { QuestionResult } from '@/lib/quiz/grading';
 
@@ -48,6 +49,27 @@ function deps(store: RuntimeStore, learnerKey: string): QuizAttemptRuntimeDeps {
   };
 }
 
+function serialLockManager(): Pick<LockManager, 'request'> {
+  const tails = new Map<string, Promise<void>>();
+  return {
+    async request<T>(name: string, callback: () => Promise<T> | T): Promise<T> {
+      const previous = tails.get(name) ?? Promise.resolve();
+      let release!: () => void;
+      const current = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      tails.set(name, current);
+      await previous;
+      try {
+        return await callback();
+      } finally {
+        release();
+        if (tails.get(name) === current) tails.delete(name);
+      }
+    },
+  } as Pick<LockManager, 'request'>;
+}
+
 describe('quiz runtime authoritative reads', () => {
   beforeEach(() => {
     values.clear();
@@ -57,6 +79,10 @@ describe('quiz runtime authoritative reads', () => {
       configurable: true,
       value: IDBKeyRange,
     });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('isolates the same quiz scene by learner', async () => {
@@ -190,6 +216,34 @@ describe('quiz runtime authoritative reads', () => {
     ]) {
       expect(localStorageStub.getItem(prefix + 'quiz-1')).toBeNull();
     }
+  });
+
+  it('does not clear a newer recovery journal written while migration commits', async () => {
+    const store = makeStore();
+    const migratingStore = new Proxy(store, {
+      get(target, property) {
+        if (property === 'appendRecord') {
+          return async (...args: Parameters<RuntimeStore['appendRecord']>) => {
+            const result = await store.appendRecord(...args);
+            writeDraftRecovery('quiz-1', 'legacy-attempt', { q1: 'newer' });
+            return result;
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as RuntimeStore;
+    writeDraftRecovery('quiz-1', 'legacy-attempt', { q1: 'migrating' });
+
+    await loadQuizAttemptState(
+      { stageId: 'stage-1', sceneId: 'quiz-1' },
+      deps(migratingStore, 'learner-a'),
+    );
+
+    expect(localStorageStub.getItem(DRAFT_KEY_PREFIX + 'quiz-1')).toBe(
+      JSON.stringify({ q1: 'newer' }),
+    );
+    expect(localStorageStub.getItem(ATTEMPT_ID_KEY_PREFIX + 'quiz-1')).toBe('legacy-attempt');
   });
 
   it('keeps a stronger runtime submission over a stale legacy draft', async () => {
@@ -608,6 +662,106 @@ describe('quiz runtime authoritative reads', () => {
         status: 'active',
         answers: {},
       },
+    });
+  });
+
+  it('uses the canonical root Web Lock when rereading a retry session', async () => {
+    vi.stubGlobal('navigator', { locks: serialLockManager() });
+    const indexedDB = new IDBFactory();
+    const dbName = 'quiz-runtime-root-lock';
+    const setupStore = new BrowserRuntimeStore({ indexedDB, dbName });
+    const readerBacking = new BrowserRuntimeStore({ indexedDB, dbName });
+    const writerBacking = new BrowserRuntimeStore({ indexedDB, dbName });
+    const root = quizAttemptId('stage-1', 'quiz-1', 'learner-a');
+    const retry = `${root}:retry:1`;
+    await recordQuizAttempt(
+      {
+        stageId: 'stage-1',
+        sceneId: 'quiz-1',
+        attemptId: root,
+        phase: 'reviewed',
+        answers: { q1: 'first' },
+        results,
+      },
+      deps(setupStore, 'learner-a'),
+    );
+    await recordQuizAttempt(
+      {
+        stageId: 'stage-1',
+        sceneId: 'quiz-1',
+        attemptId: root,
+        phase: 'draft',
+        answers: { q1: 'old' },
+        startNewAttempt: true,
+      },
+      deps(setupStore, 'learner-a'),
+    );
+
+    let appendStarted!: () => void;
+    const didStartAppend = new Promise<void>((resolve) => {
+      appendStarted = resolve;
+    });
+    let releaseAppend!: () => void;
+    const appendMayFinish = new Promise<void>((resolve) => {
+      releaseAppend = resolve;
+    });
+    const writerStore = new Proxy(writerBacking, {
+      get(target, property) {
+        if (property === 'appendRecord') {
+          return async (...args: Parameters<RuntimeStore['appendRecord']>) => {
+            appendStarted();
+            await appendMayFinish;
+            return writerBacking.appendRecord(...args);
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as RuntimeStore;
+    let writing: Promise<void> | undefined;
+    let triggered = false;
+    const readerStore = new Proxy(readerBacking, {
+      get(target, property) {
+        if (property === 'listSessions') {
+          return async (...args: Parameters<RuntimeStore['listSessions']>) => {
+            const sessions = await readerBacking.listSessions(...args);
+            if (!triggered) {
+              triggered = true;
+              writing = recordQuizAttempt(
+                {
+                  stageId: 'stage-1',
+                  sceneId: 'quiz-1',
+                  attemptId: retry,
+                  phase: 'draft',
+                  answers: { q1: 'latest' },
+                },
+                deps(writerStore, 'learner-a'),
+              );
+            }
+            return sessions;
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as RuntimeStore;
+
+    const reading = loadQuizAttemptState(
+      { stageId: 'stage-1', sceneId: 'quiz-1' },
+      deps(readerStore, 'learner-a'),
+    );
+    await didStartAppend;
+    const earlyOutcome = await Promise.race([
+      reading.then(() => 'read' as const),
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 50)),
+    ]);
+
+    expect(earlyOutcome).toBe('blocked');
+    releaseAppend();
+    await writing;
+    await expect(reading).resolves.toMatchObject({
+      attemptId: retry,
+      state: { sessionId: retry, phase: 'draft', answers: { q1: 'latest' } },
     });
   });
 });
