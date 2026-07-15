@@ -398,4 +398,67 @@ describe('buildChildPrompt whiteboard code is bounded end-to-end', () => {
     // Loose absolute cap regardless of the 50k-line source.
     expect(large.length).toBeLessThan(12000);
   });
+
+  it('keeps a newer persisted code block editable across requests with no ledger', () => {
+    // A fresh Pi request has no current-turn ledger, so the board is rendered
+    // only from the persisted snapshot via buildStateContext. Persisted
+    // elements are stored in creation order: a large OLD block sits before a
+    // newer small one. The newer block must still expose its element id, line
+    // ids, and content so a later agent can edit it this request, while the
+    // old block is squeezed to the omitted tail.
+    const oldLines = Array.from({ length: 5000 }, (_, i) => ({
+      id: `OLD${i}`,
+      content: `old_line_${i} = ${i}`,
+    }));
+    const body = makeBody({
+      storeState: {
+        stage: {
+          id: 'stage-1',
+          name: 'Code lesson',
+          whiteboard: [
+            {
+              id: 'whiteboard-1',
+              elements: [
+                {
+                  id: 'old-code',
+                  type: 'code',
+                  language: 'python',
+                  fileName: 'legacy.py',
+                  lines: oldLines,
+                },
+                {
+                  id: 'new-code',
+                  type: 'code',
+                  language: 'python',
+                  fileName: 'fresh.py',
+                  lines: [
+                    { id: 'N1', content: 'fresh = 1' },
+                    { id: 'N2', content: 'fresh = 2' },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        scenes: [],
+        currentSceneId: null,
+        whiteboardOpen: true,
+      },
+    } as unknown as Partial<StatelessChatRequest>);
+
+    // No ledger: buildVirtualWhiteboardContext is skipped, so only the
+    // persisted-snapshot path (buildStateContext) renders the board.
+    const prompt = buildChildPrompt(body, agents[0], [], [] as never, [
+      'wb_draw_code',
+      'wb_edit_code',
+    ]);
+
+    expect(prompt).toContain('[id:new-code]');
+    expect(prompt).toContain('N1: fresh = 1');
+    expect(prompt).toContain('N2: fresh = 2');
+    expect(prompt).toContain('[id:old-code]');
+    expect(prompt).toContain('more line(s) omitted');
+    expect(prompt).not.toContain('old_line_4999 = 4999');
+    expect(prompt.length).toBeLessThan(12000);
+  });
 });

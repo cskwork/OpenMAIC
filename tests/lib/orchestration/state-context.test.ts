@@ -80,4 +80,39 @@ describe('buildStateContext whiteboard code summary', () => {
     expect(context).toContain('L2: y = 2');
     expect(context).not.toContain('more line(s) omitted');
   });
+
+  it('gives a newer persisted code block budget priority over an older large one', () => {
+    // stage.whiteboard elements are appended in creation order, so an OLD large
+    // block sits before a NEWER small one. With source-order budgeting the old
+    // block would starve the new one; newest-first budgeting must let the newer
+    // persisted block keep its element id, line ids, and content so a later
+    // agent can edit it — while the display order stays board order.
+    const context = buildStateContext(
+      makeStoreState([
+        bigCodeBlock('old', 2000),
+        {
+          id: 'new',
+          type: 'code',
+          language: 'python',
+          lines: [
+            { id: 'N1', content: 'fresh = 1' },
+            { id: 'N2', content: 'fresh = 2' },
+          ],
+        },
+      ]),
+    );
+
+    // The newer small block is fully editable despite being created after a
+    // much larger block.
+    expect(context).toContain('[id:new]');
+    expect(context).toContain('N1: fresh = 1');
+    expect(context).toContain('N2: fresh = 2');
+    // The older large block is announced but squeezed to the omitted tail.
+    expect(context).toContain('[id:old]');
+    expect(context).toContain('more line(s) omitted');
+    expect(context).not.toContain('old_line_1999 = 1999');
+
+    // Display order is unchanged: the old block still renders before the new one.
+    expect(context.indexOf('[id:old]')).toBeLessThan(context.indexOf('[id:new]'));
+  });
 });

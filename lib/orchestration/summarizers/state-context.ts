@@ -1,6 +1,6 @@
 import type { StatelessChatRequest } from '@/lib/types/chat';
 import { buildWhiteboardConflicts } from './whiteboard-conflicts';
-import { type CodeRenderBudget, createCodeRenderBudget, renderCodeLines } from './code-line-budget';
+import { type CodeLine, createCodeRenderBudget, renderCodeLines } from './code-line-budget';
 
 // ==================== Element Summarization ====================
 
@@ -11,16 +11,25 @@ function stripHtml(html: string): string {
   return html.replace(/<[^>]*>/g, '').trim();
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- PPTElement variants have heterogeneous shapes
+function extractCodeLines(el: any): CodeLine[] {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (el.lines || []).map((l: any) => ({
+    id: String(l.id ?? ''),
+    content: String(l.content ?? ''),
+  }));
+}
+
 /**
  * Summarize a single PPT element into a one-line description.
  *
- * `budgetRef` carries a code-line render budget shared across every element in
- * one summarizeElements() pass, so a code-heavy board cannot dump unbounded raw
- * lines into the child prompt (see code-line-budget.ts). It is only consumed by
- * code elements; other element types ignore it.
+ * For code elements, `codeText` is the already-budget-rendered line block (see
+ * summarizeElements / code-line-budget.ts). It is precomputed by the caller so
+ * budget allocation order can differ from display order; when omitted (no code
+ * lines fit the shared budget) only the header is returned.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PPTElement variants have heterogeneous shapes
-function summarizeElement(el: any, budgetRef?: { current: CodeRenderBudget }): string {
+function summarizeElement(el: any, codeText?: string): string {
   const id = el.id ? `[id:${el.id}]` : '';
   const pos = `at (${Math.round(el.left)},${Math.round(el.top)})`;
   const size =
@@ -67,13 +76,7 @@ function summarizeElement(el: any, budgetRef?: { current: CodeRenderBudget }): s
       const lineCount = el.lines?.length || 0;
       const codeFn = el.fileName ? ` "${el.fileName}"` : '';
       const header = `${id} code${codeFn} (${lang}, ${lineCount} lines) ${pos}${size}`;
-      const codeLines = (el.lines || [])
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .map((l: any) => ({ id: String(l.id ?? ''), content: String(l.content ?? '') }));
-      const budget = budgetRef?.current ?? createCodeRenderBudget();
-      const { text, budget: next } = renderCodeLines(codeLines, budget);
-      if (budgetRef) budgetRef.current = next;
-      return text ? `${header}\n${text}` : header;
+      return codeText ? `${header}\n${codeText}` : header;
     }
     case 'video':
       return `${id} video ${pos}${size}`;
@@ -87,14 +90,40 @@ function summarizeElement(el: any, budgetRef?: { current: CodeRenderBudget }): s
 /**
  * Summarize an array of elements into line descriptions. Code blocks share a
  * single render budget across the whole array so the summary stays bounded even
- * for a code-heavy whiteboard.
+ * for a code-heavy board.
+ *
+ * `budgetOrder` decouples budget ALLOCATION order from DISPLAY order (which is
+ * always source order). Slides pass 'source'. The stage whiteboard passes
+ * 'newest-first' because its elements are appended in creation order, so a
+ * large OLD code block would otherwise consume the shared budget before a newer
+ * persisted block gets its line ids rendered — the same starvation the
+ * per-round ledger avoids. Newest-first gives the most recently created code
+ * block first claim on the budget while the rendered list stays in board order.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- PPTElement variants have heterogeneous shapes
-export function summarizeElements(elements: any[]): string {
+export function summarizeElements(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PPTElement variants have heterogeneous shapes
+  elements: any[],
+  budgetOrder: 'source' | 'newest-first' = 'source',
+): string {
   if (elements.length === 0) return '  (empty)';
 
-  const budgetRef = { current: createCodeRenderBudget() };
-  const lines = elements.map((el, i) => `  ${i + 1}. ${summarizeElement(el, budgetRef)}`);
+  const order = elements.map((_, i) => i);
+  if (budgetOrder === 'newest-first') order.reverse();
+
+  let budget = createCodeRenderBudget();
+  const renderedCodeByIndex = new Map<number, string>();
+  for (const i of order) {
+    if (elements[i]?.type !== 'code') continue;
+    const codeLines = extractCodeLines(elements[i]);
+    if (codeLines.length === 0) continue;
+    const { text, budget: next } = renderCodeLines(codeLines, budget);
+    budget = next;
+    renderedCodeByIndex.set(i, text);
+  }
+
+  const lines = elements.map(
+    (el, i) => `  ${i + 1}. ${summarizeElement(el, renderedCodeByIndex.get(i))}`,
+  );
 
   return lines.join('\n');
 }
@@ -232,7 +261,7 @@ export function buildStateContext(storeState: StatelessChatRequest['storeState']
     const lastWb = stage.whiteboard[stage.whiteboard.length - 1];
     const wbElements = lastWb.elements || [];
     lines.push(
-      `Whiteboard (last of ${stage.whiteboard.length}, ${wbElements.length} elements):\n${summarizeElements(wbElements)}`,
+      `Whiteboard (last of ${stage.whiteboard.length}, ${wbElements.length} elements):\n${summarizeElements(wbElements, 'newest-first')}`,
     );
     const conflictsText = buildWhiteboardConflicts(wbElements);
     if (conflictsText) lines.push(conflictsText);
