@@ -89,6 +89,20 @@ const dexieLegacyStore: LegacyChatStore = {
 // Locks, each write uses an isolated snapshot generation instead of appending
 // to shared capacity.
 const storeQueues = new WeakMap<RuntimeStore, Map<string, Promise<void>>>();
+const observedChatSessionIds = new WeakMap<RuntimeStore, Map<string, Set<string>>>();
+
+function observedIds(store: RuntimeStore, key: string): Set<string> {
+  return observedChatSessionIds.get(store)?.get(key) ?? new Set();
+}
+
+function rememberObservedIds(store: RuntimeStore, key: string, ids: Iterable<string>): void {
+  let partitions = observedChatSessionIds.get(store);
+  if (!partitions) {
+    partitions = new Map();
+    observedChatSessionIds.set(store, partitions);
+  }
+  partitions.set(key, new Set(ids));
+}
 
 function enqueue<T>(
   store: RuntimeStore,
@@ -746,6 +760,7 @@ async function syncSessions(
   sessions: ChatSession[],
   deleteOmitted: boolean,
   isolatedWrites: boolean,
+  knownSessionIds: ReadonlySet<string> = new Set(),
 ): Promise<ChatSession[]> {
   const existing = await runtimeViews(store, stageId, learnerKey);
   const desiredRuntimeIds = new Map<string, string>();
@@ -764,13 +779,17 @@ async function syncSessions(
         const chatSessionId = view.folded.session?.id;
         const desiredRuntimeId = chatSessionId ? desiredRuntimeIds.get(chatSessionId) : undefined;
         const current = afterSyncById.get(view.runtimeSession.id);
-        if (!chatSessionId) {
-          const mayBeInFlight = sessions.some((session) =>
-            chatRuntimeIdentity(view.runtimeSession.id, stageId, session.id),
-          );
-          return mayBeInFlight ? [] : [store.deleteSession(view.runtimeSession.id)];
+        // A full snapshot may have been captured in another tab before this
+        // runtime session existed. Only treat omission as deletion for chat
+        // IDs this RuntimeStore instance has actually observed; otherwise a
+        // stale snapshot could erase a newer tab's session. State-less views
+        // may still be in flight, so leave them to their writer's retry path.
+        if (!chatSessionId) return [];
+        if (!desiredRuntimeId) {
+          return knownSessionIds.has(chatSessionId)
+            ? [store.deleteSession(view.runtimeSession.id)]
+            : [];
         }
-        if (!desiredRuntimeId) return [store.deleteSession(view.runtimeSession.id)];
         if (
           desiredRuntimeId === view.runtimeSession.id ||
           !current ||
@@ -847,6 +866,7 @@ export async function saveChatSessions(
   const resolved = await context(options);
   const queueKey = `${stageId}\0${resolved.learnerKey}`;
   await enqueue(resolved.store, queueKey, async (isolatedWrites) => {
+    const knownSessionIds = observedIds(resolved.store, queueKey);
     await syncSessions(
       resolved.store,
       stageId,
@@ -854,6 +874,12 @@ export async function saveChatSessions(
       sessions ?? [],
       true,
       isolatedWrites,
+      knownSessionIds,
+    );
+    rememberObservedIds(
+      resolved.store,
+      queueKey,
+      sessions.map((session) => session.id),
     );
     await resolved.legacyStore.clear(stageId);
   });
@@ -870,7 +896,13 @@ export async function loadChatSessions(
   try {
     return await enqueue(resolved.store, queueKey, async (isolatedWrites) => {
       if (legacy.length === 0) {
-        return loadRuntimeSessions(resolved.store, stageId, resolved.learnerKey);
+        const loaded = await loadRuntimeSessions(resolved.store, stageId, resolved.learnerKey);
+        rememberObservedIds(
+          resolved.store,
+          queueKey,
+          loaded.map((session) => session.id),
+        );
+        return loaded;
       }
       const migrated = await syncSessions(
         resolved.store,
@@ -879,6 +911,11 @@ export async function loadChatSessions(
         legacy,
         false,
         isolatedWrites,
+      );
+      rememberObservedIds(
+        resolved.store,
+        queueKey,
+        migrated.map((session) => session.id),
       );
       await resolved.legacyStore.clear(stageId);
       return migrated;

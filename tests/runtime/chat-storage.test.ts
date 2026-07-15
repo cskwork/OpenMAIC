@@ -1150,4 +1150,33 @@ describe('chat RuntimeStore cutover', () => {
     expect(runtimeSessions.filter((candidate) => candidate.kind === 'chat')).toHaveLength(1);
     expect(runtimeSessions.filter((candidate) => candidate.kind === 'pbl')).toHaveLength(1);
   });
+
+  it('does not let an unobserved stale snapshot delete a newer tab session', async () => {
+    const sharedIndexedDB = new IDBFactory();
+    const staleStore = new BrowserRuntimeStore({ indexedDB: sharedIndexedDB });
+    const freshStore = new BrowserRuntimeStore({ indexedDB: sharedIndexedDB });
+    const staleLegacy = new MemoryLegacyChatStore();
+    const freshLegacy = new MemoryLegacyChatStore();
+    const fresh = session({ id: 'fresh-session', updatedAt: 2_000 });
+
+    await saveChatSessions(STAGE_ID, [fresh], {
+      store: freshStore,
+      learnerKey: LEARNER_KEY,
+      legacyStore: freshLegacy,
+    });
+
+    await saveChatSessions(STAGE_ID, [], {
+      store: staleStore,
+      learnerKey: LEARNER_KEY,
+      legacyStore: staleLegacy,
+    });
+
+    await expect(
+      loadChatSessions(STAGE_ID, {
+        store: freshStore,
+        learnerKey: LEARNER_KEY,
+        legacyStore: freshLegacy,
+      }),
+    ).resolves.toEqual([{ ...fresh, status: 'interrupted', pendingToolCalls: [] }]);
+  });
 });
