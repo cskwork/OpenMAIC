@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { summarizeScenes } from '@/lib/classroom/complete-summary';
+import { describe, it, expect, vi } from 'vitest';
+import { readSceneQuizAnswers, summarizeScenes } from '@/lib/classroom/complete-summary';
 import type { Scene, QuizQuestion } from '@/lib/types/stage';
 
 function slide(id: string, order: number): Scene {
@@ -49,6 +49,14 @@ const choiceQ = (id: string, answer: string[]): QuizQuestion => ({
 });
 
 describe('summarizeScenes', () => {
+  it('skips a legacy scene without stageId before loading runtime answers', async () => {
+    const { stageId: _stageId, ...legacy } = quizScene('legacy', 0, [choiceQ('qa', ['a'])]);
+    const load = vi.fn();
+
+    await expect(readSceneQuizAnswers(legacy, load)).resolves.toBeUndefined();
+    expect(load).not.toHaveBeenCalled();
+  });
+
   it('counts scenes by type and omits zeros', async () => {
     const scenes = [slide('s1', 0), slide('s2', 1), interactive('i1', 2)];
     const result = await summarizeScenes(scenes, async () => ({}));

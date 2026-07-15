@@ -7,7 +7,11 @@ import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { useStageStore } from '@/lib/store';
 import type { Scene, SceneType } from '@/lib/types/stage';
-import { summarizeScenes, type CompleteSummary } from '@/lib/classroom/complete-summary';
+import {
+  readSceneQuizAnswers,
+  summarizeScenes,
+  type CompleteSummary,
+} from '@/lib/classroom/complete-summary';
 import { loadQuizAttemptState } from '@/lib/quiz/runtime';
 import { createLogger } from '@/lib/logger';
 
@@ -324,10 +328,8 @@ export function ClassroomCompletePage({ scenes, title }: ClassroomCompletePagePr
     let cancelled = false;
     void summarizeScenes(scenes, async (sceneId) => {
       const scene = scenes.find((candidate) => candidate.id === sceneId);
-      if (!scene?.stageId) return undefined;
       try {
-        const { state } = await loadQuizAttemptState({ stageId: scene.stageId, sceneId });
-        return state?.answers ?? {};
+        return await readSceneQuizAnswers(scene, loadQuizAttemptState);
       } catch (error) {
         log.warn(`Failed to load quiz summary for scene ${sceneId}:`, error);
         return undefined;

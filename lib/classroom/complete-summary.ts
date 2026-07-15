@@ -10,6 +10,21 @@ export type AnswerReader = (
   sceneId: string,
 ) => Promise<Record<string, string | string[]> | undefined>;
 
+type QuizAnswerLoader = (input: {
+  stageId: string;
+  sceneId: string;
+}) => Promise<{ state?: { answers: Record<string, string | string[]> } }>;
+
+/** Skip malformed legacy scenes before opening their RuntimeStore partition. */
+export async function readSceneQuizAnswers(
+  scene: { id: string; stageId?: string } | undefined,
+  load: QuizAnswerLoader,
+): Promise<Record<string, string | string[]> | undefined> {
+  if (!scene?.stageId) return undefined;
+  const { state } = await load({ stageId: scene.stageId, sceneId: scene.id });
+  return state?.answers ?? {};
+}
+
 export async function summarizeScenes(
   scenes: Scene[],
   readAnswers: AnswerReader,
