@@ -82,14 +82,15 @@ export function readSubmittedState(sceneId: string): SubmittedState {
 function parseSubmittedState(rawA: string | null, rawR: string | null): SubmittedState {
   if (!rawA) return null;
   try {
-    const answers = JSON.parse(rawA) as QuizAnswers;
+    const answers = JSON.parse(rawA) as unknown;
+    if (typeof answers !== 'object' || answers === null || Array.isArray(answers)) return null;
     if (rawR) {
       const results = JSON.parse(rawR) as QuestionResult[];
       if (Array.isArray(results)) {
-        return { kind: 'reviewing', answers, results };
+        return { kind: 'reviewing', answers: answers as QuizAnswers, results };
       }
     }
-    return { kind: 'answering', answers };
+    return { kind: 'answering', answers: answers as QuizAnswers };
   } catch {
     return null;
   }

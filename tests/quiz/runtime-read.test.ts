@@ -319,6 +319,19 @@ describe('quiz runtime authoritative reads', () => {
     expect(localStorageStub.getItem(ANSWERS_KEY_PREFIX + 'quiz-1')).toBeNull();
   });
 
+  it('discards malformed legacy submitted answers instead of retrying migration forever', async () => {
+    const store = makeStore();
+    const runtimeDeps = deps(store, 'learner-a');
+    localStorageStub.setItem(ANSWERS_KEY_PREFIX + 'quiz-1', JSON.stringify([]));
+    localStorageStub.setItem(RESULTS_KEY_PREFIX + 'quiz-1', JSON.stringify(results));
+
+    await expect(
+      loadQuizAttemptState({ stageId: 'stage-1', sceneId: 'quiz-1' }, runtimeDeps),
+    ).resolves.toMatchObject({ state: undefined });
+    expect(localStorageStub.getItem(ANSWERS_KEY_PREFIX + 'quiz-1')).toBeNull();
+    expect(localStorageStub.getItem(RESULTS_KEY_PREFIX + 'quiz-1')).toBeNull();
+  });
+
   it('preserves a newer legacy retry over an older reviewed runtime attempt', async () => {
     const store = makeStore();
     const runtimeDeps = deps(store, 'learner-a');
