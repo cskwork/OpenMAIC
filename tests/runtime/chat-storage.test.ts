@@ -4,7 +4,12 @@ import { BrowserRuntimeStore, type RuntimeStore } from '@openmaic/storage';
 import type { RuntimeRecord } from '@openmaic/dsl';
 import type { UIMessage } from 'ai';
 
-import { nextChatUpdatedAt, type ChatMessageMetadata, type ChatSession } from '@/lib/types/chat';
+import {
+  nextChatUpdatedAt,
+  withChatSessionStatus,
+  type ChatMessageMetadata,
+  type ChatSession,
+} from '@/lib/types/chat';
 import { loadChatSessions, saveChatSessions } from '@/lib/utils/chat-storage';
 
 if (!('IDBKeyRange' in globalThis)) {
@@ -254,6 +259,14 @@ describe('chat RuntimeStore cutover', () => {
         updatedAt: 10_001,
       },
     ]);
+  });
+
+  it('advances conflict order when completing or reactivating a session', () => {
+    const completed = withChatSessionStatus(session({ updatedAt: 10_000 }), 'completed', 9_000);
+    const reactivated = withChatSessionStatus(completed, 'active', 9_000);
+
+    expect(completed).toMatchObject({ status: 'completed', updatedAt: 10_001 });
+    expect(reactivated).toMatchObject({ status: 'active', updatedAt: 10_002 });
   });
 
   it('compares structured-clone tool results without losing Map or BigInt updates', async () => {

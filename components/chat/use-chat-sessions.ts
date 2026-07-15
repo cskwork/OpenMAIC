@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   nextChatUpdatedAt,
+  withChatSessionStatus,
   type ChatSession,
   type SessionType,
   type SessionStatus,
@@ -786,7 +787,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
                 break;
               }
             }
-            return { ...s, messages, status: 'completed' as SessionStatus };
+            return { ...withChatSessionStatus(s, 'completed'), messages };
           }),
         );
         // Clear roundtable state via callbacks
@@ -794,9 +795,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         onThinkingRef.current?.(null);
       } else {
         setSessions((prev) =>
-          prev.map((s) =>
-            s.id === sessionId ? { ...s, status: 'completed' as SessionStatus } : s,
-          ),
+          prev.map((s) => (s.id === sessionId ? withChatSessionStatus(s, 'completed') : s)),
         );
       }
 
@@ -1384,9 +1383,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         // Actions won't be re-appended because lastActionIndex already covers them.
         if (existing.status === 'completed') {
           setSessions((prev) =>
-            prev.map((s) =>
-              s.id === existing.id ? { ...s, status: 'active' as SessionStatus } : s,
-            ),
+            prev.map((s) => (s.id === existing.id ? withChatSessionStatus(s, 'active') : s)),
           );
           // Restore lecture tracking refs (cleared by endSession)
           const messageId = existing.messages[0]?.id;

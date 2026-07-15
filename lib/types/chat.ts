@@ -66,6 +66,15 @@ export function nextChatUpdatedAt(
   return Math.max(now, session.updatedAt + 1);
 }
 
+/** Apply a lifecycle transition and advance the same conflict-order clock. */
+export function withChatSessionStatus(
+  session: ChatSession,
+  status: SessionStatus,
+  now = Date.now(),
+): ChatSession {
+  return { ...session, status, updatedAt: nextChatUpdatedAt(session, now) };
+}
+
 /**
  * Session configuration
  */
