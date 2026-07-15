@@ -195,6 +195,61 @@ describe('chat RuntimeStore cutover', () => {
     ).toMatchObject([{ title: 'Latest title', updatedAt: 2_000 }]);
   });
 
+  it('compares structured-clone tool results without losing Map or BigInt updates', async () => {
+    const store = makeRuntimeStore();
+    const legacyStore = new MemoryLegacyChatStore();
+    const withResult = (result: unknown) =>
+      session({
+        toolCalls: [
+          {
+            toolCallId: 'tool-1',
+            toolName: 'grade',
+            args: {},
+            agentId: 'default-1',
+            result,
+            status: 'completed',
+            requestedAt: 1_000,
+            completedAt: 1_100,
+          },
+        ],
+      });
+
+    await saveChatSessions(STAGE_ID, [withResult(new Map([['score', BigInt(1)]]))], {
+      store,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+    const initialRecordCount = (await runtimeChatRecords(store)).length;
+
+    const updated = {
+      ...withResult(new Map([['score', BigInt(2)]])),
+      updatedAt: 1_300,
+    };
+    await saveChatSessions(STAGE_ID, [updated], {
+      store,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+    const updatedRecordCount = (await runtimeChatRecords(store)).length;
+    expect(updatedRecordCount).toBe(initialRecordCount);
+    expect(
+      (
+        await loadChatSessions(STAGE_ID, {
+          store,
+          learnerKey: LEARNER_KEY,
+          legacyStore,
+        })
+      )[0].toolCalls[0].result,
+    ).toEqual(new Map([['score', BigInt(2)]]));
+
+    await saveChatSessions(STAGE_ID, [updated], {
+      store,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+    expect(await runtimeChatRecords(store)).toHaveLength(updatedRecordCount);
+  });
+
   it('does not rescan the fallback partition for empty retirement sets', async () => {
     const backing = makeRuntimeStore();
     const legacyStore = new MemoryLegacyChatStore();

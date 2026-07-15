@@ -9,6 +9,7 @@
 import type { ChatMessageSkeleton, RuntimeRecord, RuntimeSession } from '@openmaic/dsl';
 import type { KVStore, RuntimeStore } from '@openmaic/storage';
 import type { UIMessage } from 'ai';
+import { isEqual } from 'lodash';
 import { nanoid } from 'nanoid';
 
 import { getLearnerKey } from '@/lib/runtime/learner-key';
@@ -359,10 +360,6 @@ function foldRecords(records: RuntimeRecord[]): FoldedChat {
   };
 }
 
-function sameValue(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
 function matchesChatPartition(
   session: RuntimeSession,
   id: string,
@@ -410,9 +407,9 @@ function changesForSession(
     nextState,
     changedMessages: normalized.messages.filter((message) => {
       const current = folded.messages.get(message.id);
-      return !current || !sameValue(current.message, message);
+      return !current || !isEqual(current.message, message);
     }),
-    stateChanged: !folded.state || !sameValue(folded.state, nextState),
+    stateChanged: !folded.state || !isEqual(folded.state, nextState),
   };
 }
 
