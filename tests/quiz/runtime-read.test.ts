@@ -512,4 +512,102 @@ describe('quiz runtime authoritative reads', () => {
       state: { phase: 'draft', answers: { q1: 'latest' } },
     });
   });
+
+  it('awaits a completed retry queue before its next rollover session exists', async () => {
+    const store = makeStore();
+    let createStarted!: () => void;
+    const didStartCreate = new Promise<void>((resolve) => {
+      createStarted = resolve;
+    });
+    let releaseCreate!: () => void;
+    const createMayFinish = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const root = quizAttemptId('stage-1', 'quiz-1', 'learner-a');
+    const retry = `${root}:retry:1`;
+    const nestedRetry = `${retry}:retry:1`;
+    const delayedStore = new Proxy(store, {
+      get(target, property) {
+        if (property === 'createSession') {
+          return async (...args: Parameters<RuntimeStore['createSession']>) => {
+            if (args[0].id === nestedRetry) {
+              createStarted();
+              await createMayFinish;
+            }
+            return store.createSession(...args);
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as RuntimeStore;
+    const runtimeDeps = deps(delayedStore, 'learner-a');
+
+    await recordQuizAttempt(
+      {
+        stageId: 'stage-1',
+        sceneId: 'quiz-1',
+        attemptId: root,
+        phase: 'reviewed',
+        answers: { q1: 'first' },
+        results,
+      },
+      runtimeDeps,
+    );
+    await recordQuizAttempt(
+      {
+        stageId: 'stage-1',
+        sceneId: 'quiz-1',
+        attemptId: root,
+        phase: 'draft',
+        answers: {},
+        startNewAttempt: true,
+      },
+      runtimeDeps,
+    );
+    await recordQuizAttempt(
+      {
+        stageId: 'stage-1',
+        sceneId: 'quiz-1',
+        attemptId: retry,
+        phase: 'reviewed',
+        answers: {},
+        results: [],
+      },
+      runtimeDeps,
+    );
+
+    const writing = recordQuizAttempt(
+      {
+        stageId: 'stage-1',
+        sceneId: 'quiz-1',
+        attemptId: retry,
+        phase: 'draft',
+        answers: {},
+        startNewAttempt: true,
+      },
+      runtimeDeps,
+    );
+    await didStartCreate;
+    const reading = loadQuizAttemptState({ stageId: 'stage-1', sceneId: 'quiz-1' }, runtimeDeps);
+    const earlyOutcome = await Promise.race([
+      reading.then(() => 'read' as const),
+      new Promise<'blocked'>((resolve) => {
+        setTimeout(() => resolve('blocked'), 50);
+      }),
+    ]);
+    releaseCreate();
+    await writing;
+
+    expect(earlyOutcome).toBe('blocked');
+    await expect(reading).resolves.toMatchObject({
+      attemptId: nestedRetry,
+      state: {
+        sessionId: nestedRetry,
+        phase: 'draft',
+        status: 'active',
+        answers: {},
+      },
+    });
+  });
 });

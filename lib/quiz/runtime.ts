@@ -341,10 +341,10 @@ export async function loadQuizAttemptState(
   let state = await withAttemptLock(attemptId, () =>
     readLatestQuizAttemptState(input, store, learnerKey),
   );
-  if (state?.status === 'active' && state.sessionId !== attemptId) {
-    // Continue a shadow-written attempt whose legacy random id predates the
-    // deterministic learner-scoped root. Its current writer queue/lock still
-    // uses that session id, so drain it before returning the active attempt.
+  if (state && state.sessionId !== attemptId) {
+    // A shadow-written or rolled-over attempt can queue its next write under
+    // this non-root session id, even after the session itself is completed.
+    // Drain that lineage before choosing the authoritative latest attempt.
     await awaitQueuedAttemptLineage(store, state.sessionId);
     state = await withAttemptLock(state.sessionId, () =>
       readLatestQuizAttemptState(input, store, learnerKey),
