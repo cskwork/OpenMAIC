@@ -121,29 +121,26 @@ function enqueue<T>(
     storeQueues.set(store, queues);
   }
   const previous = queues.get(key) ?? Promise.resolve();
-  const current = previous
-    .catch(() => undefined)
-    .then(() => {
-      const run = () => {
-        if (typeof navigator !== 'undefined' && navigator.locks) {
-          const locks = navigator.locks;
-          return locks.request<Promise<T>>(
-            `openmaic:chat-storage:${encodeURIComponent(crossRealmKey)}`,
-            () =>
-              locks.request<Promise<T>>(`openmaic:chat-storage:${encodeURIComponent(key)}`, () =>
-                work(false),
-              ) as unknown as Promise<T>,
-          ) as unknown as Promise<T>;
-        }
-        if (requiresCrossRealmLock) {
-          throw new ChatStorageLockUnavailableError(
-            'Chat storage requires the Web Locks API in this browser',
-          );
-        }
-        return work(true);
-      };
-      return globalLockHeld ? run() : withChatStorageSharedLock(run);
-    });
+  const run = () => {
+    if (typeof navigator !== 'undefined' && navigator.locks) {
+      const locks = navigator.locks;
+      return locks.request<Promise<T>>(
+        `openmaic:chat-storage:${encodeURIComponent(crossRealmKey)}`,
+        () =>
+          locks.request<Promise<T>>(`openmaic:chat-storage:${encodeURIComponent(key)}`, () =>
+            work(false),
+          ) as unknown as Promise<T>,
+      ) as unknown as Promise<T>;
+    }
+    if (requiresCrossRealmLock) {
+      throw new ChatStorageLockUnavailableError(
+        'Chat storage requires the Web Locks API in this browser',
+      );
+    }
+    return work(true);
+  };
+  const runQueued = () => previous.catch(() => undefined).then(run);
+  const current = globalLockHeld ? runQueued() : withChatStorageSharedLock(runQueued);
   const settled = current.then(
     () => undefined,
     () => undefined,

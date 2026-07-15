@@ -1,4 +1,4 @@
-const CHAT_STORAGE_GLOBAL_LOCK = 'openmaic:chat-storage:all';
+const CHAT_STORAGE_GLOBAL_LOCK = 'openmaic:chat-storage';
 
 function locks(): LockManager | undefined {
   return typeof navigator !== 'undefined' ? navigator.locks : undefined;

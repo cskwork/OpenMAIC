@@ -133,7 +133,7 @@ describe('database runtime chat integration', () => {
     expect([...db.backendDB().objectStoreNames]).not.toContain('chatStorageLocks');
   });
 
-  it('waits for an active cross-tab chat writer before clearing all runtime data', async () => {
+  it('waits for active and locally queued chat writers before clearing all runtime data', async () => {
     const indexedDB = globalThis.indexedDB;
     const dbName = 'clear-writer-lock';
     const writerBacking = new BrowserRuntimeStore({ indexedDB, dbName });
@@ -162,11 +162,20 @@ describe('database runtime chat integration', () => {
     const { clearDatabase } = await import('@/lib/utils/database');
     const { saveChatSessions } = await import('@/lib/utils/chat-storage');
 
-    const saving = saveChatSessions('stage-clear-race', [chatSession()], {
+    const firstSave = saveChatSessions('stage-clear-race', [chatSession()], {
       store: writerStore,
       learnerKey,
     });
     await didStartWriter;
+    const secondSave = saveChatSessions(
+      'stage-clear-race',
+      [{ ...chatSession(), title: 'Queued chat save', updatedAt: 3_000 }],
+      {
+        store: writerStore,
+        learnerKey,
+      },
+    );
+    await Promise.resolve();
     const clearing = clearDatabase(clearingStore);
     const earlyOutcome = await Promise.race([
       clearing.then(() => 'cleared' as const),
@@ -175,8 +184,9 @@ describe('database runtime chat integration', () => {
 
     expect(earlyOutcome).toBe('blocked');
     releaseWriter();
-    await saving;
-    await clearing;
+    await expect(firstSave).resolves.toBeUndefined();
+    await expect(secondSave).resolves.toBeUndefined();
+    await expect(clearing).resolves.toBeUndefined();
     await expect(clearingStore.listSessions('stage-clear-race', learnerKey)).resolves.toEqual([]);
   });
 
@@ -287,10 +297,27 @@ describe('database runtime chat integration', () => {
     await loadChatSessions('stage-compatible-lock', { store: runtimeStore, learnerKey });
 
     expect(requested).toEqual([
-      'openmaic:chat-storage:all',
+      'openmaic:chat-storage',
       `openmaic:chat-storage:${encodeURIComponent('stage-compatible-lock')}`,
       `openmaic:chat-storage:${encodeURIComponent(`stage-compatible-lock\0${learnerKey}`)}`,
     ]);
+  });
+
+  it('keeps the global maintenance lock disjoint from a stage named all', async () => {
+    const runtimeStore = new BrowserRuntimeStore({
+      indexedDB: globalThis.indexedDB,
+      dbName: 'stage-all-lock',
+    });
+    const { saveChatSessions } = await import('@/lib/utils/chat-storage');
+
+    const outcome = await Promise.race([
+      saveChatSessions('all', [chatSession()], { store: runtimeStore, learnerKey }).then(
+        () => 'saved' as const,
+      ),
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 50)),
+    ]);
+
+    expect(outcome).toBe('saved');
   });
 
   it('fails before mutating backup data when the default legacy store has no Web Locks', async () => {
