@@ -1157,6 +1157,35 @@ describe('chat RuntimeStore cutover', () => {
     ).toHaveLength(1);
   });
 
+  it('does not resurrect a legacy snapshot when a concurrent save removes it', async () => {
+    const store = makeRuntimeStore();
+    const legacyStore = new MemoryLegacyChatStore([session({ status: 'completed' })]);
+    let captured!: () => void;
+    const didCapture = new Promise<void>((resolve) => {
+      captured = resolve;
+    });
+    let release!: () => void;
+    const mayReturn = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    legacyStore.load = async () => {
+      const snapshot = structuredClone(legacyStore.sessions);
+      captured();
+      await mayReturn;
+      return snapshot;
+    };
+    const options = { store, learnerKey: LEARNER_KEY, legacyStore };
+
+    const loading = loadChatSessions(STAGE_ID, options);
+    await didCapture;
+    const saving = saveChatSessions(STAGE_ID, [], options);
+    release();
+    await Promise.all([loading, saving]);
+
+    expect(legacyStore.sessions).toEqual([]);
+    expect(await loadChatSessions(STAGE_ID, options)).toEqual([]);
+  });
+
   it('keeps legacy rows authoritative when the first RuntimeStore migration attempt fails', async () => {
     const legacy = session({ status: 'completed' });
     const legacyStore = new MemoryLegacyChatStore([legacy]);

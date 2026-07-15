@@ -889,10 +889,14 @@ export async function loadChatSessions(
   options: ChatStorageOptions = {},
 ): Promise<ChatSession[]> {
   const resolved = await context(options);
-  const legacy = (await resolved.legacyStore.load(stageId)).map(normalizeSession);
   const queueKey = `${stageId}\0${resolved.learnerKey}`;
+  let legacy: ChatSession[] = [];
   try {
     return await enqueue(resolved.store, queueKey, async (isolatedWrites) => {
+      // Read legacy rows only after entering the same partition queue/lock as
+      // saves. Otherwise a delayed migration can replay a snapshot captured
+      // before a concurrent save cleared it and resurrect deleted chats.
+      legacy = (await resolved.legacyStore.load(stageId)).map(normalizeSession);
       if (legacy.length === 0) {
         const loaded = await loadRuntimeSessions(resolved.store, stageId, resolved.learnerKey);
         rememberObservedIds(
