@@ -93,6 +93,22 @@ const PHASE_ORDER: Record<QuizAttemptPhase, number> = {
 };
 
 const queues = new WeakMap<RuntimeStore, Map<string, Promise<void>>>();
+const writerTails = new Map<string, Promise<void>>();
+
+async function awaitQueuedWriterLineage(attemptId: string): Promise<void> {
+  let queueKey = attemptId;
+  while (true) {
+    while (true) {
+      const pending = writerTails.get(queueKey);
+      if (!pending) break;
+      await pending;
+      if (writerTails.get(queueKey) === pending) writerTails.delete(queueKey);
+    }
+    const parent = queueKey.replace(/:retry:\d+$/, '');
+    if (parent === queueKey) return;
+    queueKey = parent;
+  }
+}
 
 async function awaitQueuedAttemptLineage(store: RuntimeStore, attemptId: string): Promise<void> {
   let queueKey = attemptId;
@@ -132,7 +148,12 @@ export function createQuizAttemptWriter(options: QuizAttemptWriterOptions = {}):
   const run = (input: QuizAttemptRecordInput): Promise<void> => {
     const operation = tail.then(() => write(input));
     void operation.catch(onError);
-    tail = operation.catch(() => {});
+    const settled = operation.catch(() => {});
+    tail = settled;
+    writerTails.set(input.attemptId, settled);
+    void settled.finally(() => {
+      if (writerTails.get(input.attemptId) === settled) writerTails.delete(input.attemptId);
+    });
     return operation;
   };
 
@@ -341,7 +362,9 @@ export async function loadQuizAttemptState(
   const learnerKey = deps.learnerKey ?? (await getLearnerKey());
   const attemptId = quizAttemptId(input.stageId, input.sceneId, learnerKey);
   // A UI transition can expose the next consumer while its fire-and-forget
-  // writer is still queued. Wait for this tab's chain before opening a read.
+  // writer is still queued. Wait for both its private phase tail and the
+  // RuntimeStore queue before opening a read.
+  await awaitQueuedWriterLineage(attemptId);
   await awaitQueuedAttemptLineage(store, attemptId);
   await migrateLegacyQuizState(input, store, learnerKey, deps);
   let state = await withAttemptLock(attemptId, () =>
@@ -351,6 +374,7 @@ export async function loadQuizAttemptState(
     // A shadow-written or rolled-over attempt can queue its next write under
     // this non-root session id, even after the session itself is completed.
     // Drain that lineage before choosing the authoritative latest attempt.
+    await awaitQueuedWriterLineage(state.sessionId);
     await awaitQueuedAttemptLineage(store, state.sessionId);
     state = await withAttemptLock(state.sessionId, () =>
       readLatestQuizAttemptState(input, store, learnerKey),

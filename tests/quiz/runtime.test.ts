@@ -5,6 +5,7 @@ import {
   backfillQuizAttempt,
   createQuizAttemptWriter,
   loadQuizAttemptState,
+  quizAttemptId,
   recordQuizAttempt,
   type QuizAttemptRuntimeDeps,
 } from '@/lib/quiz/runtime';
@@ -104,6 +105,63 @@ describe('quiz attempt runtime persistence', () => {
     await submitted;
 
     expect(order).toEqual(['start:draft', 'end:draft', 'start:submitted', 'end:submitted']);
+  });
+
+  it('keeps authoritative reads behind phases waiting in the writer tail', async () => {
+    const { deps } = makeHarness();
+    let draftStarted!: () => void;
+    const didStartDraft = new Promise<void>((resolve) => {
+      draftStarted = resolve;
+    });
+    let releaseDraft!: () => void;
+    const draftMayFinish = new Promise<void>((resolve) => {
+      releaseDraft = resolve;
+    });
+    let submissionStarted!: () => void;
+    const didStartSubmission = new Promise<void>((resolve) => {
+      submissionStarted = resolve;
+    });
+    let releaseSubmission!: () => void;
+    const submissionMayFinish = new Promise<void>((resolve) => {
+      releaseSubmission = resolve;
+    });
+    const writer = createQuizAttemptWriter({
+      write: async (input) => {
+        if (input.phase === 'draft') {
+          draftStarted();
+          await draftMayFinish;
+        } else if (input.phase === 'submitted') {
+          submissionStarted();
+          await submissionMayFinish;
+        }
+        await recordQuizAttempt(input, deps);
+      },
+    });
+    const base = {
+      stageId: 'stage-1',
+      sceneId: 'scene-quiz',
+      attemptId: quizAttemptId('stage-1', 'scene-quiz', 'learner-1'),
+      answers: { q1: 'A' },
+    };
+
+    writer.scheduleDraft(base);
+    const submitting = writer.recordPhase({ ...base, phase: 'submitted' });
+    await didStartDraft;
+    const reading = loadQuizAttemptState({ stageId: base.stageId, sceneId: base.sceneId }, deps);
+    releaseDraft();
+    await didStartSubmission;
+
+    const earlyOutcome = await Promise.race([
+      reading.then(() => 'read' as const),
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 50)),
+    ]);
+    expect(earlyOutcome).toBe('blocked');
+
+    releaseSubmission();
+    await submitting;
+    await expect(reading).resolves.toMatchObject({
+      state: { phase: 'submitted', answers: { q1: 'A' } },
+    });
   });
 
   it('recovers when another tab wins the same session create race without Web Locks', async () => {
