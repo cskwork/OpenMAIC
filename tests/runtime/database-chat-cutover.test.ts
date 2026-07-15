@@ -52,6 +52,20 @@ function chatSession(): ChatSession {
   };
 }
 
+function stubMemoryLocalStorage(): void {
+  const values = new Map<string, string>();
+  vi.stubGlobal('localStorage', {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    getItem: (key: string) => values.get(key) ?? null,
+    key: (index: number) => [...values.keys()][index] ?? null,
+    removeItem: (key: string) => void values.delete(key),
+    setItem: (key: string, value: string) => void values.set(key, String(value)),
+  } satisfies Storage);
+}
+
 describe('database runtime chat integration', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -383,6 +397,50 @@ describe('database runtime chat integration', () => {
     await expect(
       db.chatSessions.where('stageId').equals('stage-no-lock').toArray(),
     ).resolves.toEqual([]);
+  });
+
+  it('keeps empty-chat document saves available without Web Locks', async () => {
+    vi.stubGlobal('navigator', {});
+    stubMemoryLocalStorage();
+    const { db } = await import('@/lib/utils/database');
+    const { saveStageData } = await import('@/lib/utils/stage-storage');
+
+    await expect(
+      saveStageData('stage-no-chat', {
+        stage: {
+          id: 'stage-no-chat',
+          name: 'No chat stage',
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+        scenes: [],
+        currentSceneId: null,
+        chats: [],
+      }),
+    ).resolves.toBeUndefined();
+    await expect(db.stages.get('stage-no-chat')).resolves.toMatchObject({
+      name: 'No chat stage',
+    });
+  });
+
+  it('still fails non-empty chat document saves without Web Locks', async () => {
+    vi.stubGlobal('navigator', {});
+    stubMemoryLocalStorage();
+    const { saveStageData } = await import('@/lib/utils/stage-storage');
+
+    await expect(
+      saveStageData('stage-with-chat', {
+        stage: {
+          id: 'stage-with-chat',
+          name: 'Chat stage',
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+        scenes: [],
+        currentSceneId: null,
+        chats: [chatSession()],
+      }),
+    ).rejects.toThrow(/Web Locks/);
   });
 
   it('fails loud without deleting documents when the runtime-wide clear fails', async () => {

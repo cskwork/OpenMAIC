@@ -96,7 +96,7 @@ const dexieLegacyStore: LegacyChatStore = {
 const storeQueues = new WeakMap<RuntimeStore, Map<string, Promise<void>>>();
 const observedChatSessionIds = new WeakMap<RuntimeStore, Map<string, Set<string>>>();
 
-class ChatStorageLockUnavailableError extends Error {}
+export class ChatStorageLockUnavailableError extends Error {}
 
 function observedIds(store: RuntimeStore, key: string): Set<string> {
   return observedChatSessionIds.get(store)?.get(key) ?? new Set();
