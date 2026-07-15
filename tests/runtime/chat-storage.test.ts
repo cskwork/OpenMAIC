@@ -152,6 +152,21 @@ describe('chat RuntimeStore cutover', () => {
     ]);
   });
 
+  it('finishes an empty save when a JavaScript caller passes no session array', async () => {
+    const store = makeRuntimeStore();
+    const legacyStore = new MemoryLegacyChatStore([session()]);
+
+    await saveChatSessions(STAGE_ID, undefined as unknown as ChatSession[], {
+      store,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+
+    expect(await store.listSessions(STAGE_ID, LEARNER_KEY)).toEqual([]);
+    expect(legacyStore.sessions).toEqual([]);
+    expect(legacyStore.clearCalls).toBe(1);
+  });
+
   it('keeps the lecture not-started sentinel out of runtime action anchors', async () => {
     const store = makeRuntimeStore();
     const legacyStore = new MemoryLegacyChatStore();

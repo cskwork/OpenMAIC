@@ -862,13 +862,14 @@ export async function saveChatSessions(
 ): Promise<void> {
   const resolved = await context(options);
   const queueKey = `${stageId}\0${resolved.learnerKey}`;
+  const nextSessions = sessions ?? [];
   await enqueue(resolved.store, queueKey, async (isolatedWrites) => {
     const knownSessionIds = observedIds(resolved.store, queueKey);
     await syncSessions(
       resolved.store,
       stageId,
       resolved.learnerKey,
-      sessions ?? [],
+      nextSessions,
       true,
       isolatedWrites,
       knownSessionIds,
@@ -876,7 +877,7 @@ export async function saveChatSessions(
     rememberObservedIds(
       resolved.store,
       queueKey,
-      sessions.map((session) => session.id),
+      nextSessions.map((session) => session.id),
     );
     await resolved.legacyStore.clear(stageId);
   });
