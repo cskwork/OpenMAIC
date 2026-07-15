@@ -75,6 +75,16 @@ export function withChatSessionStatus(
   return { ...session, status, updatedAt: nextChatUpdatedAt(session, now) };
 }
 
+/** Mark streams that cannot survive a reload as interrupted without stale ordering. */
+export function interruptActiveChatSessions(
+  sessions: ChatSession[],
+  now = Date.now(),
+): ChatSession[] {
+  return sessions.map((session) =>
+    session.status === 'active' ? withChatSessionStatus(session, 'interrupted', now) : session,
+  );
+}
+
 /**
  * Session configuration
  */

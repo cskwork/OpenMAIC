@@ -13,7 +13,12 @@ const learnerKey = 'anon:database-cutover';
 function serialLockManager(): Pick<LockManager, 'request'> {
   const tails = new Map<string, Promise<void>>();
   const manager = {
-    async request<T>(name: string, callback: () => Promise<T> | T): Promise<T> {
+    async request<T>(
+      name: string,
+      optionsOrCallback: LockOptions | (() => Promise<T> | T),
+      maybeCallback?: () => Promise<T> | T,
+    ): Promise<T> {
+      const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback!;
       const previous = tails.get(name) ?? Promise.resolve();
       let release!: () => void;
       const current = new Promise<void>((resolve) => {
@@ -128,6 +133,53 @@ describe('database runtime chat integration', () => {
     expect([...db.backendDB().objectStoreNames]).not.toContain('chatStorageLocks');
   });
 
+  it('waits for an active cross-tab chat writer before clearing all runtime data', async () => {
+    const indexedDB = globalThis.indexedDB;
+    const dbName = 'clear-writer-lock';
+    const writerBacking = new BrowserRuntimeStore({ indexedDB, dbName });
+    const clearingStore = new BrowserRuntimeStore({ indexedDB, dbName });
+    let writerStarted!: () => void;
+    const didStartWriter = new Promise<void>((resolve) => {
+      writerStarted = resolve;
+    });
+    let releaseWriter!: () => void;
+    const writerMayContinue = new Promise<void>((resolve) => {
+      releaseWriter = resolve;
+    });
+    const writerStore = new Proxy(writerBacking, {
+      get(target, property) {
+        if (property === 'createSession') {
+          return async (...args: Parameters<BrowserRuntimeStore['createSession']>) => {
+            writerStarted();
+            await writerMayContinue;
+            return writerBacking.createSession(...args);
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as BrowserRuntimeStore;
+    const { clearDatabase } = await import('@/lib/utils/database');
+    const { saveChatSessions } = await import('@/lib/utils/chat-storage');
+
+    const saving = saveChatSessions('stage-clear-race', [chatSession()], {
+      store: writerStore,
+      learnerKey,
+    });
+    await didStartWriter;
+    const clearing = clearDatabase(clearingStore);
+    const earlyOutcome = await Promise.race([
+      clearing.then(() => 'cleared' as const),
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 50)),
+    ]);
+
+    expect(earlyOutcome).toBe('blocked');
+    releaseWriter();
+    await saving;
+    await clearing;
+    await expect(clearingStore.listSessions('stage-clear-race', learnerKey)).resolves.toEqual([]);
+  });
+
   it('keeps backup staging and runtime clearing in the same cross-tab lock', async () => {
     const indexedDB = globalThis.indexedDB;
     const importingStore = new BrowserRuntimeStore({ indexedDB, dbName: 'restore-lock' });
@@ -214,8 +266,14 @@ describe('database runtime chat integration', () => {
     const requested: string[] = [];
     vi.stubGlobal('navigator', {
       locks: {
-        async request<T>(name: string, callback: () => Promise<T> | T): Promise<T> {
+        async request<T>(
+          name: string,
+          optionsOrCallback: LockOptions | (() => Promise<T> | T),
+          maybeCallback?: () => Promise<T> | T,
+        ): Promise<T> {
           requested.push(name);
+          const callback =
+            typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback!;
           return callback();
         },
       },
@@ -229,6 +287,7 @@ describe('database runtime chat integration', () => {
     await loadChatSessions('stage-compatible-lock', { store: runtimeStore, learnerKey });
 
     expect(requested).toEqual([
+      'openmaic:chat-storage:all',
       `openmaic:chat-storage:${encodeURIComponent('stage-compatible-lock')}`,
       `openmaic:chat-storage:${encodeURIComponent(`stage-compatible-lock\0${learnerKey}`)}`,
     ]);

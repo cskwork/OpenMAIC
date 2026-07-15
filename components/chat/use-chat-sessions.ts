@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import {
+  interruptActiveChatSessions,
   nextChatUpdatedAt,
   withChatSessionStatus,
   type ChatSession,
@@ -126,9 +127,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
     // Restore sessions from store (loaded from IndexedDB)
     const stored = useStageStore.getState().chats;
-    return stored.map((s) =>
-      s.status === 'active' ? { ...s, status: 'interrupted' as SessionStatus } : s,
-    );
+    return interruptActiveChatSessions(stored);
   });
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [expandedSessionIds, setExpandedSessionIds] = useState<Set<string>>(new Set());
@@ -156,11 +155,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     stageIdRef.current = stageId;
     // Stage changed — reload sessions from store (already populated by loadFromStorage)
     const stored = useStageStore.getState().chats;
-    setSessions(
-      stored.map((s) =>
-        s.status === 'active' ? { ...s, status: 'interrupted' as SessionStatus } : s,
-      ),
-    );
+    setSessions(interruptActiveChatSessions(stored));
     setActiveSessionId(null);
     setExpandedSessionIds(new Set());
   }, [stageId]);

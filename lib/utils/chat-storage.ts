@@ -16,6 +16,7 @@ import { getLearnerKey } from '@/lib/runtime/learner-key';
 import { getRuntimeStore } from '@/lib/runtime/store';
 import type { ChatMessageMetadata, ChatSession, SessionStatus } from '@/lib/types/chat';
 import { db, type ChatSessionRecord } from './database';
+import { withChatStorageSharedLock } from './chat-storage-lock';
 
 const MAX_MESSAGES_PER_SESSION = 200;
 const MAX_RUNTIME_RECORDS_PER_CHAT_SESSION = 256;
@@ -112,6 +113,7 @@ function enqueue<T>(
   crossRealmKey: string,
   requiresCrossRealmLock: boolean,
   work: (isolatedWrites: boolean) => Promise<T>,
+  globalLockHeld = false,
 ): Promise<T> {
   let queues = storeQueues.get(store);
   if (!queues) {
@@ -122,22 +124,25 @@ function enqueue<T>(
   const current = previous
     .catch(() => undefined)
     .then(() => {
-      if (typeof navigator !== 'undefined' && navigator.locks) {
-        const locks = navigator.locks;
-        return locks.request<Promise<T>>(
-          `openmaic:chat-storage:${encodeURIComponent(crossRealmKey)}`,
-          () =>
-            locks.request<Promise<T>>(`openmaic:chat-storage:${encodeURIComponent(key)}`, () =>
-              work(false),
-            ) as unknown as Promise<T>,
-        ) as unknown as Promise<T>;
-      }
-      if (requiresCrossRealmLock) {
-        throw new ChatStorageLockUnavailableError(
-          'Chat storage requires the Web Locks API in this browser',
-        );
-      }
-      return work(true);
+      const run = () => {
+        if (typeof navigator !== 'undefined' && navigator.locks) {
+          const locks = navigator.locks;
+          return locks.request<Promise<T>>(
+            `openmaic:chat-storage:${encodeURIComponent(crossRealmKey)}`,
+            () =>
+              locks.request<Promise<T>>(`openmaic:chat-storage:${encodeURIComponent(key)}`, () =>
+                work(false),
+              ) as unknown as Promise<T>,
+          ) as unknown as Promise<T>;
+        }
+        if (requiresCrossRealmLock) {
+          throw new ChatStorageLockUnavailableError(
+            'Chat storage requires the Web Locks API in this browser',
+          );
+        }
+        return work(true);
+      };
+      return globalLockHeld ? run() : withChatStorageSharedLock(run);
     });
   const settled = current.then(
     () => undefined,
@@ -1011,8 +1016,13 @@ export async function restoreChatSessionsFromBackup(
     if (index < orderedStageIds.length) {
       const stageId = orderedStageIds[index]!;
       const queueKey = `${stageId}\0${resolved.learnerKey}`;
-      await enqueue(resolved.store, queueKey, stageId, resolved.requiresCrossRealmLock, async () =>
-        withStageLock(index + 1),
+      await enqueue(
+        resolved.store,
+        queueKey,
+        stageId,
+        resolved.requiresCrossRealmLock,
+        async () => withStageLock(index + 1),
+        true,
       );
       return;
     }
@@ -1029,7 +1039,7 @@ export async function restoreChatSessionsFromBackup(
     }
   }
 
-  await withStageLock(0);
+  await withChatStorageSharedLock(() => withStageLock(0));
 }
 
 /** Clear the legacy table during stage deletion; RuntimeStore cascades separately. */

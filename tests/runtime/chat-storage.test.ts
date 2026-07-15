@@ -5,6 +5,7 @@ import type { RuntimeRecord } from '@openmaic/dsl';
 import type { UIMessage } from 'ai';
 
 import {
+  interruptActiveChatSessions,
   nextChatUpdatedAt,
   withChatSessionStatus,
   type ChatMessageMetadata,
@@ -267,6 +268,16 @@ describe('chat RuntimeStore cutover', () => {
 
     expect(completed).toMatchObject({ status: 'completed', updatedAt: 10_001 });
     expect(reactivated).toMatchObject({ status: 'active', updatedAt: 10_002 });
+  });
+
+  it('advances conflict order when reload interrupts active sessions', () => {
+    const active = session({ id: 'active', status: 'active', updatedAt: 10_000 });
+    const completed = session({ id: 'completed', status: 'completed', updatedAt: 20_000 });
+
+    expect(interruptActiveChatSessions([active, completed], 9_000)).toMatchObject([
+      { id: 'active', status: 'interrupted', updatedAt: 10_001 },
+      { id: 'completed', status: 'completed', updatedAt: 20_000 },
+    ]);
   });
 
   it('compares structured-clone tool results without losing Map or BigInt updates', async () => {
@@ -1164,7 +1175,11 @@ describe('chat RuntimeStore cutover', () => {
         vi.stubGlobal('navigator', {
           ...globalThis.navigator,
           locks: {
-            request: async (_name: string, work: () => Promise<unknown>) => work(),
+            request: async (
+              _name: string,
+              optionsOrWork: LockOptions | (() => Promise<unknown>),
+              maybeWork?: () => Promise<unknown>,
+            ) => (typeof optionsOrWork === 'function' ? optionsOrWork : maybeWork!)(),
           },
         });
       }
