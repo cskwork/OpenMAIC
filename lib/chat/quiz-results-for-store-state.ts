@@ -4,6 +4,7 @@ import { loadQuizAttemptState, type QuizAttemptState } from '@/lib/quiz/runtime'
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('ChatQuizContext');
+const QUIZ_CONTEXT_TIMEOUT_MS = 1500;
 
 export interface QuizResultsForStoreState {
   sceneId: string;
@@ -23,14 +24,25 @@ export async function buildQuizResultsForStoreState(
   const scene = scenes.find((candidate) => candidate.id === currentSceneId);
   if (!scene || scene.type !== 'quiz' || !scene.stageId) return undefined;
   let state: QuizAttemptState | undefined;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    ({ state } = await loadQuizAttemptState({
-      stageId: scene.stageId,
-      sceneId: currentSceneId,
-    }));
+    ({ state } = await Promise.race([
+      loadQuizAttemptState({
+        stageId: scene.stageId,
+        sceneId: currentSceneId,
+      }),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error('Timed out loading quiz context from RuntimeStore')),
+          QUIZ_CONTEXT_TIMEOUT_MS,
+        );
+      }),
+    ]));
   } catch (error) {
     log.warn('Failed to load quiz context:', error);
     return undefined;
+  } finally {
+    clearTimeout(timeout);
   }
   if (state?.phase !== 'reviewed' || !state.results || state.results.length === 0) {
     return undefined;

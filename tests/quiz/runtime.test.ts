@@ -544,6 +544,30 @@ describe('quiz attempt runtime persistence', () => {
     });
   });
 
+  it('rejects a clean retry when the shared active child already progressed', async () => {
+    const { deps } = makeHarness();
+    const base = {
+      stageId: 'stage-1',
+      sceneId: 'scene-quiz',
+      attemptId: 'attempt-progressed-retry',
+    };
+    await recordQuizAttempt(
+      { ...base, phase: 'reviewed', answers: { q1: 'first' }, results },
+      deps,
+    );
+    await recordQuizAttempt({ ...base, phase: 'draft', answers: {}, startNewAttempt: true }, deps);
+    await recordQuizAttempt({ ...base, phase: 'submitted', answers: { q1: 'second' } }, deps);
+
+    await expect(
+      recordQuizAttempt({ ...base, phase: 'draft', answers: {}, startNewAttempt: true }, deps),
+    ).rejects.toThrow(/retry.*progressed/i);
+    await expect(
+      loadQuizAttemptState({ stageId: base.stageId, sceneId: base.sceneId }, deps),
+    ).resolves.toMatchObject({
+      state: { phase: 'submitted', answers: { q1: 'second' } },
+    });
+  });
+
   it('keeps stale root and child callers on one canonical retry branch', async () => {
     const { store, deps } = makeHarness();
     const root = quizAttemptId('stage-1', 'scene-quiz', 'learner-1');

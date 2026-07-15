@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/quiz/runtime', () => ({
   loadQuizAttemptState: vi.fn(),
@@ -10,6 +10,10 @@ import { loadQuizAttemptState } from '@/lib/quiz/runtime';
 describe('quiz results for chat store state', () => {
   beforeEach(() => {
     vi.mocked(loadQuizAttemptState).mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('omits an explicitly reviewed quiz when the grader returned no results', async () => {
@@ -57,5 +61,18 @@ describe('quiz results for chat store state', () => {
     await expect(
       buildQuizResultsForStoreState([{ id: 'quiz-1', type: 'quiz', stageId: 'stage-1' }], 'quiz-1'),
     ).resolves.toBeUndefined();
+  });
+
+  it('times out a stalled RuntimeStore read instead of blocking chat', async () => {
+    vi.useFakeTimers();
+    vi.mocked(loadQuizAttemptState).mockReturnValue(new Promise(() => {}));
+
+    const reading = buildQuizResultsForStoreState(
+      [{ id: 'quiz-1', type: 'quiz', stageId: 'stage-1' }],
+      'quiz-1',
+    );
+    await vi.runAllTimersAsync();
+
+    await expect(reading).resolves.toBeUndefined();
   });
 });

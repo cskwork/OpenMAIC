@@ -38,3 +38,11 @@ export function prepareWorkspaceLaunchProject(
   }
   return next;
 }
+
+/** Apply a delayed launch to the latest project rendered for the scene. */
+export function prepareCurrentWorkspaceLaunchProject(
+  currentProject: { current: PBLProjectV2 },
+  priorQuizResults: PriorQuizResult[],
+): PBLProjectV2 {
+  return prepareWorkspaceLaunchProject(currentProject.current, priorQuizResults);
+}

@@ -27,6 +27,7 @@ import { writeDraftRecovery } from '@/lib/quiz/persistence';
 import {
   createQuizAttemptWriter,
   loadQuizAttemptState,
+  QuizRetryProgressedError,
   type QuizAttemptWriter,
 } from '@/lib/quiz/runtime';
 import {
@@ -858,6 +859,10 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
       (error) => {
         log.warn('Failed to persist quiz retry:', error);
         setRetrying(false);
+        if (error instanceof QuizRetryProgressedError) {
+          setHydrationVersion((version) => version + 1);
+          return;
+        }
         setRuntimeGate({ status: 'error' });
       },
     );

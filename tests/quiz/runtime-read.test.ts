@@ -301,6 +301,24 @@ describe('quiz runtime authoritative reads', () => {
     expect(localStorageStub.getItem(RESULTS_KEY_PREFIX + 'quiz-1')).toBeNull();
   });
 
+  it('migrates legacy submitted answers without graded results', async () => {
+    const store = makeStore();
+    const runtimeDeps = deps(store, 'learner-a');
+    localStorageStub.setItem(ANSWERS_KEY_PREFIX + 'quiz-1', JSON.stringify({ q1: 'A' }));
+
+    const loaded = await loadQuizAttemptState(
+      { stageId: 'stage-1', sceneId: 'quiz-1' },
+      runtimeDeps,
+    );
+
+    expect(loaded.state).toMatchObject({
+      phase: 'submitted',
+      status: 'active',
+      answers: { q1: 'A' },
+    });
+    expect(localStorageStub.getItem(ANSWERS_KEY_PREFIX + 'quiz-1')).toBeNull();
+  });
+
   it('preserves a newer legacy retry over an older reviewed runtime attempt', async () => {
     const store = makeStore();
     const runtimeDeps = deps(store, 'learner-a');

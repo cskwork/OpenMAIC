@@ -49,6 +49,13 @@ export interface QuizAttemptRuntimeDeps {
   mintRecordId?: () => string;
 }
 
+export class QuizRetryProgressedError extends Error {
+  constructor(sessionId: string) {
+    super(`Quiz retry ${JSON.stringify(sessionId)} already progressed in another tab`);
+    this.name = 'QuizRetryProgressedError';
+  }
+}
+
 export interface QuizAttemptState {
   sessionId: string;
   status: RuntimeSession['status'];
@@ -537,7 +544,8 @@ export async function recordQuizAttempt(
             // A child with a durable fact already represents the retry. An
             // empty child can remain after create succeeds but append fails;
             // fall through so this call writes the missing draft marker.
-            if (last) return;
+            if (last?.phase === 'draft' && Object.keys(last.answers).length === 0) return;
+            if (last) throw new QuizRetryProgressedError(sessionId);
           } else {
             rolloverIndex += 1;
             sessionId = rolloverAttemptId(rootId, rolloverIndex);

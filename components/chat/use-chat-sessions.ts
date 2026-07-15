@@ -486,17 +486,29 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         },
         {
           getStoreState: async (): Promise<AgentLoopStoreState> => {
+            const stateBeforeQuizRead = useStageStore.getState();
+            const quizResults = await buildQuizResultsForStoreState(
+              stateBeforeQuizRead.scenes,
+              stateBeforeQuizRead.currentSceneId,
+            );
             const freshState = useStageStore.getState();
+            const quizSceneBeforeRead = stateBeforeQuizRead.scenes.find(
+              (scene) => scene.id === stateBeforeQuizRead.currentSceneId,
+            );
+            const currentQuizScene = freshState.scenes.find(
+              (scene) => scene.id === freshState.currentSceneId,
+            );
             return {
               stage: freshState.stage,
               scenes: freshState.scenes,
               currentSceneId: freshState.currentSceneId,
               mode: freshState.mode,
               whiteboardOpen: useCanvasStore.getState().whiteboardOpen,
-              quizResults: await buildQuizResultsForStoreState(
-                freshState.scenes,
-                freshState.currentSceneId,
-              ),
+              quizResults:
+                freshState.currentSceneId === stateBeforeQuizRead.currentSceneId &&
+                currentQuizScene?.stageId === quizSceneBeforeRead?.stageId
+                  ? quizResults
+                  : undefined,
             };
           },
 

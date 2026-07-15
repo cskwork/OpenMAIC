@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   invalidatePendingWorkspaceLaunch,
   isCurrentWorkspaceLaunch,
+  prepareCurrentWorkspaceLaunchProject,
   prepareWorkspaceLaunchProject,
 } from '@/lib/pbl/v2/operations/workspace-launch';
 import type { PBLProjectV2, PriorQuizResult } from '@/lib/pbl/v2/types';
@@ -61,6 +62,18 @@ describe('prepareWorkspaceLaunchProject', () => {
 
   it('accepts only the current launch for the current scene', () => {
     expect(isCurrentWorkspaceLaunch(5, { current: 5 }, 'pbl', { current: 'pbl' })).toBe(true);
+  });
+
+  it('applies an async launch to the latest project snapshot', () => {
+    const project = { current: mkProject({ description: 'Initial', language: 'zh-CN' }) };
+    project.current = { ...project.current, description: 'Updated', language: 'en-US' };
+
+    expect(prepareCurrentWorkspaceLaunchProject(project, [quizResult])).toMatchObject({
+      uiPhase: 'workspace',
+      description: 'Updated',
+      language: 'en-US',
+      pendingOpenTaskPriorQuizResults: [quizResult],
+    });
   });
 
   it('enters workspace immediately and carries prior quiz results for the greeting', () => {

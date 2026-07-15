@@ -35,7 +35,7 @@ import { transitionProjectUiPhase } from '@/lib/pbl/v2/operations/runtime-events
 import {
   invalidatePendingWorkspaceLaunch,
   isCurrentWorkspaceLaunch,
-  prepareWorkspaceLaunchProject,
+  prepareCurrentWorkspaceLaunchProject,
 } from '@/lib/pbl/v2/operations/workspace-launch';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import {
@@ -106,7 +106,9 @@ export function PBLV2Hero({
   const [launching, setLaunching] = useState(false);
   const launchEpochRef = useRef(0);
   const currentSceneIdRef = useRef(sceneId);
+  const currentProjectRef = useRef(project);
   currentSceneIdRef.current = sceneId;
+  currentProjectRef.current = project;
   useEffect(() => {
     invalidatePendingWorkspaceLaunch(launchEpochRef, setLaunching);
     return () => {
@@ -132,7 +134,7 @@ export function PBLV2Hero({
       const priorQuizResults = await buildQuizSnapshot(priorScenes);
       if (!isCurrentWorkspaceLaunch(epoch, launchEpochRef, launchSceneId, currentSceneIdRef))
         return;
-      const ready = prepareWorkspaceLaunchProject(project, priorQuizResults);
+      const ready = prepareCurrentWorkspaceLaunchProject(currentProjectRef, priorQuizResults);
       if (onLaunchReady) onLaunchReady(ready);
       else onProjectChange(ready);
     } finally {
