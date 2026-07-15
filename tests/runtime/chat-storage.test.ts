@@ -290,6 +290,14 @@ describe('chat RuntimeStore cutover', () => {
       learnerKey: LEARNER_KEY,
       legacyStore,
     });
+    // A normal stage autosave still carries the caller-visible old snapshot.
+    // It may preserve the newer runtime value, but must not pretend the caller
+    // observed that value or the next deliberate local edit will look stale.
+    await saveChatSessions(STAGE_ID, [observed], {
+      store: firstTab,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
     await saveChatSessions(
       STAGE_ID,
       [

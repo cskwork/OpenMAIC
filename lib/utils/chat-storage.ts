@@ -981,7 +981,7 @@ export async function saveChatSessions(
     async (isolatedWrites) => {
       const knownSessionIds = observedIds(resolved.store, queueKey);
       const priorObservedSessions = observedSessions(resolved.store, queueKey);
-      const persisted = await syncSessions(
+      await syncSessions(
         resolved.store,
         stageId,
         resolved.learnerKey,
@@ -997,7 +997,10 @@ export async function saveChatSessions(
         nextSessions.map((session) => session.id),
       );
       if (priorObservedSessions) {
-        rememberObservedSessions(resolved.store, queueKey, persisted);
+        // saveChatSessions does not return a reconciled snapshot to its caller.
+        // Keep conflict observations aligned with the state the caller really
+        // saw, even when this save silently preserved a newer cross-tab value.
+        rememberObservedSessions(resolved.store, queueKey, nextSessions);
       }
       await resolved.legacyStore.clear(stageId);
     },
