@@ -9,9 +9,9 @@ import { useStageStore } from '@/lib/store';
 import type { Scene, SceneType } from '@/lib/types/stage';
 import {
   completeSummaryForScenes,
+  pendingCompleteSummary,
   readSceneQuizAnswers,
   summarizeScenes,
-  type CompleteSummary,
 } from '@/lib/classroom/complete-summary';
 import { loadQuizAttemptState } from '@/lib/quiz/runtime';
 import { createLogger } from '@/lib/logger';
@@ -319,7 +319,7 @@ export function ClassroomCompletePage({ scenes, title }: ClassroomCompletePagePr
 
   const [resolvedSummary, setResolvedSummary] = useState(() => ({
     scenes,
-    summary: { countsByType: {}, quiz: null } as CompleteSummary,
+    summary: pendingCompleteSummary(scenes),
   }));
   const summary = completeSummaryForScenes(scenes, resolvedSummary);
 

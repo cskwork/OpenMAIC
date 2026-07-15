@@ -34,6 +34,7 @@ import { hasStartedProject, resetProjectProgress } from '@/lib/pbl/v2/operations
 import { transitionProjectUiPhase } from '@/lib/pbl/v2/operations/runtime-events';
 import {
   invalidatePendingWorkspaceLaunch,
+  isCurrentWorkspaceLaunch,
   prepareWorkspaceLaunchProject,
 } from '@/lib/pbl/v2/operations/workspace-launch';
 import { useI18n } from '@/lib/hooks/use-i18n';
@@ -104,6 +105,8 @@ export function PBLV2Hero({
 
   const [launching, setLaunching] = useState(false);
   const launchEpochRef = useRef(0);
+  const currentSceneIdRef = useRef(sceneId);
+  currentSceneIdRef.current = sceneId;
   useEffect(() => {
     invalidatePendingWorkspaceLaunch(launchEpochRef, setLaunching);
     return () => {
@@ -120,13 +123,15 @@ export function PBLV2Hero({
     // contribute; anything after (or this scene itself) is ignored.
     //
     const epoch = ++launchEpochRef.current;
+    const launchSceneId = sceneId;
     setLaunching(true);
     const allScenes = useStageStore.getState().scenes;
     const selfIdx = allScenes.findIndex((s) => s.id === sceneId);
     const priorScenes = selfIdx >= 0 ? allScenes.slice(0, selfIdx) : [];
     try {
       const priorQuizResults = await buildQuizSnapshot(priorScenes);
-      if (epoch !== launchEpochRef.current) return;
+      if (!isCurrentWorkspaceLaunch(epoch, launchEpochRef, launchSceneId, currentSceneIdRef))
+        return;
       const ready = prepareWorkspaceLaunchProject(project, priorQuizResults);
       if (onLaunchReady) onLaunchReady(ready);
       else onProjectChange(ready);

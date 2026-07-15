@@ -10,6 +10,16 @@ export function invalidatePendingWorkspaceLaunch(
   setLaunching(false);
 }
 
+/** Reject async launch work after either a newer launch or a scene render. */
+export function isCurrentWorkspaceLaunch(
+  epoch: number,
+  currentEpoch: { current: number },
+  sceneId: string,
+  currentSceneId: { current: string },
+): boolean {
+  return epoch === currentEpoch.current && sceneId === currentSceneId.current;
+}
+
 /** Prepare the project state written by the Hero when the learner starts.
  *
  * The Workspace mounts immediately; its Chat consumes

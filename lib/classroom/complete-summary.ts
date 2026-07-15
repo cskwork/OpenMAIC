@@ -11,7 +11,7 @@ export interface ResolvedCompleteSummary {
   summary: CompleteSummary;
 }
 
-function pendingCompleteSummary(scenes: Scene[]): CompleteSummary {
+export function pendingCompleteSummary(scenes: Scene[]): CompleteSummary {
   return {
     countsByType: scenes.reduce<CompleteSummary['countsByType']>((counts, scene) => {
       counts[scene.type] = (counts[scene.type] ?? 0) + 1;

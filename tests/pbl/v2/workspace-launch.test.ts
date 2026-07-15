@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   invalidatePendingWorkspaceLaunch,
+  isCurrentWorkspaceLaunch,
   prepareWorkspaceLaunchProject,
 } from '@/lib/pbl/v2/operations/workspace-launch';
 import type { PBLProjectV2, PriorQuizResult } from '@/lib/pbl/v2/types';
@@ -46,6 +47,12 @@ describe('prepareWorkspaceLaunchProject', () => {
 
     expect(epoch.current).toBe(5);
     expect(resetLaunching).toHaveBeenCalledWith(false);
+  });
+
+  it('rejects a launch when the scene changed before passive effects run', () => {
+    expect(isCurrentWorkspaceLaunch(5, { current: 5 }, 'pbl-old', { current: 'pbl-new' })).toBe(
+      false,
+    );
   });
 
   it('enters workspace immediately and carries prior quiz results for the greeting', () => {

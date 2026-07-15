@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   completeSummaryForScenes,
+  pendingCompleteSummary,
   readSceneQuizAnswers,
   summarizeScenes,
 } from '@/lib/classroom/complete-summary';
@@ -71,6 +72,15 @@ describe('summarizeScenes', () => {
 
     expect(completeSummaryForScenes(nextScenes, previous)).toEqual({
       countsByType: { slide: 2 },
+      quiz: null,
+    });
+  });
+
+  it('seeds a new completion page with its synchronous scene-count baseline', () => {
+    const scenes = [slide('new-1', 0), slide('new-2', 1), interactive('new-3', 2)];
+
+    expect(pendingCompleteSummary(scenes)).toEqual({
+      countsByType: { slide: 2, interactive: 1 },
       quiz: null,
     });
   });
