@@ -112,20 +112,45 @@ describe('database runtime chat integration', () => {
     const { db, exportDatabase, importDatabase } = await import('@/lib/utils/database');
     const { loadChatSessions, saveChatSessions } = await import('@/lib/utils/chat-storage');
     vi.stubGlobal('navigator', { locks: serialLockManager() });
-    await db.stages.put({
-      id: 'stage-backup',
-      name: 'Backup stage',
-      createdAt: 1_000,
-      updatedAt: 2_000,
-    });
+    await db.stages.bulkPut([
+      {
+        id: 'stage-backup',
+        name: 'Backup stage',
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+      {
+        id: 'stage-z-backup',
+        name: 'Later backup stage',
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    ]);
     await saveChatSessions('stage-backup', [chatSession()], {
       store: importingStore,
       learnerKey,
     });
+    await saveChatSessions(
+      'stage-z-backup',
+      [{ ...chatSession(), id: 'chat-z-backup', title: 'Later persisted chat' }],
+      { store: importingStore, learnerKey },
+    );
     const exported = await exportDatabase({ store: importingStore, learnerKey });
     await saveChatSessions(
       'stage-backup',
       [{ ...chatSession(), title: 'Newer local chat', updatedAt: 3_000 }],
+      { store: importingStore, learnerKey },
+    );
+    await saveChatSessions(
+      'stage-z-backup',
+      [
+        {
+          ...chatSession(),
+          id: 'chat-z-backup',
+          title: 'Later newer local chat',
+          updatedAt: 3_000,
+        },
+      ],
       { store: importingStore, learnerKey },
     );
 
@@ -147,7 +172,7 @@ describe('database runtime chat integration', () => {
 
     const importing = importDatabase(exported, { store: importingStore, learnerKey });
     await didCommit;
-    const loading = loadChatSessions('stage-backup', { store: loadingStore, learnerKey });
+    const loading = loadChatSessions('stage-z-backup', { store: loadingStore, learnerKey });
     const earlyOutcome = await Promise.race([
       loading.then(() => 'read' as const),
       new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 50)),
@@ -156,7 +181,10 @@ describe('database runtime chat integration', () => {
 
     releaseImport();
     await importing;
-    await expect(loading).resolves.toMatchObject([{ title: 'Persisted chat' }]);
+    await expect(loading).resolves.toMatchObject([{ title: 'Later persisted chat' }]);
+    await expect(
+      loadChatSessions('stage-backup', { store: loadingStore, learnerKey }),
+    ).resolves.toMatchObject([{ title: 'Persisted chat' }]);
   });
 
   it('fails loud without deleting documents when the runtime-wide clear fails', async () => {
