@@ -4,6 +4,7 @@ import { BrowserRuntimeStore, type RuntimeStore } from '@openmaic/storage';
 import {
   backfillQuizAttempt,
   createQuizAttemptWriter,
+  loadQuizAttemptState,
   recordQuizAttempt,
   type QuizAttemptRuntimeDeps,
 } from '@/lib/quiz/runtime';
@@ -291,6 +292,71 @@ describe('quiz attempt runtime persistence', () => {
     expect(
       (await store.listRecords('attempt-empty:retry:1')).map((record) => record.payload),
     ).toEqual([{ payloadVersion: 1, phase: 'draft', answers: {} }]);
+  });
+
+  it('reuses one active retry for concurrent retry requests across tabs', async () => {
+    const { store, deps } = makeHarness();
+    const base = {
+      stageId: 'stage-1',
+      sceneId: 'scene-quiz',
+      attemptId: 'attempt-concurrent-retry',
+    };
+    await recordQuizAttempt(
+      { ...base, phase: 'reviewed', answers: { q1: 'first' }, results },
+      deps,
+    );
+
+    let missingReads = 0;
+    let releaseBoth!: () => void;
+    const bothMissing = new Promise<void>((resolve) => {
+      releaseBoth = resolve;
+    });
+    const retryId = `${base.attemptId}:retry:1`;
+    const racingGet: RuntimeStore['getSession'] = async (sessionId) => {
+      const session = await store.getSession(sessionId);
+      if (session || sessionId !== retryId) return session;
+      missingReads += 1;
+      if (missingReads === 2) releaseBoth();
+      await bothMissing;
+      return undefined;
+    };
+    const tabA = wrapStore(store, { getSession: racingGet });
+    const tabB = wrapStore(store, { getSession: racingGet });
+    const retryInput = {
+      ...base,
+      phase: 'draft' as const,
+      answers: {},
+      startNewAttempt: true,
+    };
+
+    await Promise.all([
+      recordQuizAttempt(retryInput, {
+        store: tabA,
+        learnerKey: 'learner-1',
+        now: () => '2026-07-14T12:00:01.000Z',
+        mintRecordId: () => 'retry-record-a',
+      }),
+      recordQuizAttempt(retryInput, {
+        store: tabB,
+        learnerKey: 'learner-1',
+        now: () => '2026-07-14T12:00:01.001Z',
+        mintRecordId: () => 'retry-record-b',
+      }),
+    ]);
+    await recordQuizAttempt({ ...base, phase: 'draft', answers: { q1: 'latest' } }, deps);
+
+    const sessions = await store.listSessions('stage-1', 'learner-1');
+    expect(sessions).toHaveLength(2);
+    await expect(
+      loadQuizAttemptState({ stageId: 'stage-1', sceneId: 'scene-quiz' }, deps),
+    ).resolves.toMatchObject({
+      attemptId: retryId,
+      state: {
+        sessionId: retryId,
+        phase: 'draft',
+        answers: { q1: 'latest' },
+      },
+    });
   });
 
   it('does not disguise an unrelated append failure as a completion race', async () => {
