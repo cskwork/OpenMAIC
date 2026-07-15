@@ -371,6 +371,73 @@ describe('applyEditElementsIntents', () => {
     });
   });
 
+  it('replaces a whole structured style after its removeProps marker', async () => {
+    const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
+    const image = {
+      id: 'img1',
+      type: 'image',
+      left: 10,
+      top: 10,
+      width: 100,
+      height: 80,
+      rotate: 0,
+      fixedRatio: true,
+      src: 'https://example.com/image.png',
+      filters: { blur: '2px', contrast: '90%' },
+    } as PPTElement;
+    mockSession.sceneId = 's1';
+    mockSession.history = { present: slideWith([image]) };
+
+    const result = applyEditElementsIntents('s1', [
+      { type: 'element.removeProps', id: 'img1', props: ['filters'] },
+      {
+        type: 'element.update',
+        id: 'img1',
+        props: { filters: { brightness: '120' } } as Partial<PPTElement>,
+      },
+    ]);
+
+    expect(result).toEqual({ ok: true });
+    const next = commitContent.mock.calls[0][0] as SlideContent;
+    expect(next.canvas.elements[0]).toMatchObject({
+      filters: { brightness: '120' },
+    });
+    expect((next.canvas.elements[0] as { filters?: unknown }).filters).toEqual({
+      brightness: '120',
+    });
+  });
+
+  it('refuses unpaired or out-of-contract removeProps markers', async () => {
+    const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
+    const image = {
+      id: 'img1',
+      type: 'image',
+      left: 10,
+      top: 10,
+      width: 100,
+      height: 80,
+      rotate: 0,
+      fixedRatio: true,
+      src: 'https://example.com/image.png',
+      filters: { blur: '2px' },
+    } as PPTElement;
+    mockSession.sceneId = 's1';
+    mockSession.history = { present: slideWith([image]) };
+
+    expect(
+      applyEditElementsIntents('s1', [
+        { type: 'element.removeProps', id: 'img1', props: ['filters'] },
+      ]),
+    ).toMatchObject({ ok: false });
+    expect(
+      applyEditElementsIntents('s1', [
+        { type: 'element.removeProps', id: 'img1', props: ['src'] },
+        { type: 'element.update', id: 'img1', props: { src: 'https://example.com/new.png' } },
+      ]),
+    ).toMatchObject({ ok: false });
+    expect(commitContent).not.toHaveBeenCalled();
+  });
+
   it('clears higher-priority shape paints when applying a solid fill', async () => {
     const { applyEditElementsIntents } = await import('@/lib/agent/client/apply-edit-elements');
     const shape = {

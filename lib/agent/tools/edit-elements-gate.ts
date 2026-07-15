@@ -2233,6 +2233,8 @@ export function collectIntentTargetIds(intents: EditIntent[]): string[] {
     if (intent.type === 'element.update') ids.push(intent.id);
     else if (intent.type === 'element.updateMany') {
       for (const u of intent.updates) ids.push(u.id);
+    } else if (intent.type === 'element.removeProps') {
+      ids.push(intent.id);
     } else if (intent.type === 'text.updateContent') {
       ids.push(intent.id);
     }

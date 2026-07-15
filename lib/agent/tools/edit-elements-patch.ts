@@ -28,6 +28,8 @@ const SHAPE_TEXT_PATH_TO_INTENT_PROP = new Map([
   ['align', 'vAlign'],
 ]);
 
+const PARTIALLY_MERGED_STYLE_PROPS = new Set(['outline', 'shadow', 'filters']);
+
 const SAFE_CSS_VALUE =
   /^(?!.*(?:\\|\/\*|@|url\s*\(|expression\s*\(|javascript\s*:|data\s*:|[{}]))[\s\S]+$/i;
 const SAFE_LAYOUT_VALUE =
@@ -312,6 +314,8 @@ export function mapElementJsonPatchToEditIntents(
   const guarded = new Map<number, string>();
   const targetIds: string[] = [];
   const targeted = new Set<string>();
+  const partialStructuredKeysById = new Map<string, Map<string, Set<string>>>();
+  const wholeObjectReplacementsById = new Map<string, Set<string>>();
 
   for (let operationIndex = 0; operationIndex < operations.length; operationIndex++) {
     const operation = operations[operationIndex];
@@ -388,6 +392,31 @@ export function mapElementJsonPatchToEditIntents(
     }
     const writeError = writeProperty(element, parsed.tail, operation.value, operation.op);
     if (writeError) return { ok: false, reason: `${operation.path}: ${writeError}` };
+    const [rootKey, nestedKey] = parsed.tail;
+    if (nestedKey && PARTIALLY_MERGED_STYLE_PROPS.has(rootKey)) {
+      let props = partialStructuredKeysById.get(element.id);
+      if (!props) {
+        props = new Map();
+        partialStructuredKeysById.set(element.id, props);
+      }
+      let keys = props.get(rootKey);
+      if (!keys) {
+        keys = new Set();
+        props.set(rootKey, keys);
+      }
+      keys.add(nestedKey);
+    } else if (
+      parsed.tail.length === 1 &&
+      operation.op === 'replace' &&
+      PARTIALLY_MERGED_STYLE_PROPS.has(rootKey)
+    ) {
+      let props = wholeObjectReplacementsById.get(element.id);
+      if (!props) {
+        props = new Set();
+        wholeObjectReplacementsById.set(element.id, props);
+      }
+      props.add(rootKey);
+    }
     if (!targeted.has(element.id)) {
       targeted.add(element.id);
       targetIds.push(element.id);
@@ -409,19 +438,79 @@ export function mapElementJsonPatchToEditIntents(
 
   const intents: EditIntent[] = [];
   if (proposals.length > 0) {
-    const inventory = buildElementInventory(applyContentChangesForValidation(elements, patched));
+    const inventory = buildElementInventory(
+      applyContentChangesForValidation(elements, patched),
+    ).map((element) => {
+      const replacements = wholeObjectReplacementsById.get(element.id);
+      if (!replacements) return element;
+      const style = { ...element.style };
+      for (const key of replacements) delete style[key];
+      return { ...element, style };
+    });
     const mapped = mapProposalsToEditIntents(proposals, inventory);
     if (!mapped.ok) return mapped;
     const mappedProps = mappedPropsById(mapped.intents);
+    const validatedUpdates: Array<{ id: string; props: Partial<PPTElement> }> = [];
     for (const proposal of proposals) {
-      if (!deepEqual(mappedProps.get(proposal.id), proposal.props)) {
+      const normalized = mappedProps.get(proposal.id);
+      if (!normalized) {
         return {
           ok: false,
-          reason: `patch values for element ${JSON.stringify(proposal.id)} would be normalized; submit canonical values already within renderer bounds and units`,
+          reason: `validated update missing for element ${JSON.stringify(proposal.id)}`,
         };
       }
+      const narrowed: Record<string, unknown> = {};
+      for (const [key, requestedValue] of Object.entries(proposal.props)) {
+        const normalizedValue = normalized[key];
+        const partialKeys = partialStructuredKeysById.get(proposal.id)?.get(key);
+        const wholeReplacement = wholeObjectReplacementsById.get(proposal.id)?.has(key);
+        if (
+          partialKeys &&
+          !wholeReplacement &&
+          isRecord(requestedValue) &&
+          isRecord(normalizedValue)
+        ) {
+          const partial = Object.fromEntries(
+            [...partialKeys].map((partialKey) => [partialKey, normalizedValue[partialKey]]),
+          );
+          const requestedPartial = Object.fromEntries(
+            [...partialKeys].map((partialKey) => [partialKey, requestedValue[partialKey]]),
+          );
+          if (!deepEqual(partial, requestedPartial)) {
+            return {
+              ok: false,
+              reason: `patch values for element ${JSON.stringify(proposal.id)} would be normalized; submit canonical values already within renderer bounds and units`,
+            };
+          }
+          narrowed[key] = partial;
+        } else {
+          if (!deepEqual(normalizedValue, requestedValue)) {
+            return {
+              ok: false,
+              reason: `patch values for element ${JSON.stringify(proposal.id)} would be normalized; submit canonical values already within renderer bounds and units`,
+            };
+          }
+          narrowed[key] = normalizedValue;
+        }
+      }
+      validatedUpdates.push({ id: proposal.id, props: narrowed as Partial<PPTElement> });
     }
-    intents.push(...mapped.intents);
+    for (const proposal of proposals) {
+      const replacements = wholeObjectReplacementsById.get(proposal.id);
+      const props = replacements
+        ? [...replacements].filter((key) =>
+            Object.prototype.hasOwnProperty.call(proposal.props, key),
+          )
+        : [];
+      if (props.length > 0) {
+        intents.push({ type: 'element.removeProps', id: proposal.id, props });
+      }
+    }
+    intents.push(
+      validatedUpdates.length === 1
+        ? { type: 'element.update', ...validatedUpdates[0] }
+        : { type: 'element.updateMany', updates: validatedUpdates },
+    );
   }
   for (const id of targetIds) {
     const index = elements.findIndex((element) => element.id === id);

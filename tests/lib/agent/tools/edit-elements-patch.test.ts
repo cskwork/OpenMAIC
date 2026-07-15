@@ -117,9 +117,132 @@ describe('mapElementJsonPatchToEditIntents', () => {
         {
           type: 'element.update',
           id: 'title',
-          props: { shadow: { h: 1, v: 2, blur: 3, color: '#ff0000' } },
+          props: { shadow: { color: '#ff0000' } },
         },
       ],
+    });
+  });
+
+  it('patches one filter leaf without normalizing untouched legacy-unit siblings', () => {
+    const image = {
+      id: 'image-1',
+      type: 'image',
+      left: 10,
+      top: 20,
+      width: 300,
+      height: 200,
+      rotate: 0,
+      fixedRatio: true,
+      src: 'https://example.com/image.png',
+      filters: { blur: '2px', contrast: '90%' },
+    } as PPTElement;
+
+    expect(
+      mapElementJsonPatchToEditIntents(
+        [
+          { op: 'test', path: '/elements/0/id', value: 'image-1' },
+          { op: 'add', path: '/elements/0/filters/brightness', value: '120' },
+        ],
+        [image],
+      ),
+    ).toEqual({
+      ok: true,
+      intents: [
+        {
+          type: 'element.update',
+          id: 'image-1',
+          props: { filters: { brightness: '120' } },
+        },
+      ],
+      targetIds: ['image-1'],
+    });
+  });
+
+  it('marks a whole structured-property replace so omitted siblings are removed', () => {
+    const image = {
+      id: 'image-1',
+      type: 'image',
+      left: 10,
+      top: 20,
+      width: 300,
+      height: 200,
+      rotate: 0,
+      fixedRatio: true,
+      src: 'https://example.com/image.png',
+      filters: { blur: '2', contrast: '90' },
+      outline: { width: 1, style: 'solid', color: '#000000' },
+      shadow: { h: 1, v: 2, blur: 3, color: '#000000' },
+    } as PPTElement;
+
+    expect(
+      mapElementJsonPatchToEditIntents(
+        [
+          { op: 'test', path: '/elements/0/id', value: 'image-1' },
+          { op: 'replace', path: '/elements/0/filters', value: { brightness: '120' } },
+          {
+            op: 'replace',
+            path: '/elements/0/outline',
+            value: { width: 2, color: '#ff0000' },
+          },
+          {
+            op: 'replace',
+            path: '/elements/0/shadow',
+            value: { h: 4, v: 5, blur: 6, color: '#00ff00' },
+          },
+        ],
+        [image],
+      ),
+    ).toEqual({
+      ok: true,
+      intents: [
+        {
+          type: 'element.removeProps',
+          id: 'image-1',
+          props: ['filters', 'outline', 'shadow'],
+        },
+        {
+          type: 'element.update',
+          id: 'image-1',
+          props: {
+            filters: { brightness: '120' },
+            outline: { width: 2, color: '#ff0000' },
+            shadow: { h: 4, v: 5, blur: 6, color: '#00ff00' },
+          },
+        },
+      ],
+      targetIds: ['image-1'],
+    });
+  });
+
+  it('accepts a whole-object replace whose only effective change is dropping a sibling', () => {
+    const image = {
+      id: 'image-1',
+      type: 'image',
+      left: 10,
+      top: 20,
+      width: 300,
+      height: 200,
+      rotate: 0,
+      fixedRatio: true,
+      src: 'https://example.com/image.png',
+      filters: { blur: '2', contrast: '90' },
+    } as PPTElement;
+
+    expect(
+      mapElementJsonPatchToEditIntents(
+        [
+          { op: 'test', path: '/elements/0/id', value: 'image-1' },
+          { op: 'replace', path: '/elements/0/filters', value: { blur: '2' } },
+        ],
+        [image],
+      ),
+    ).toEqual({
+      ok: true,
+      intents: [
+        { type: 'element.removeProps', id: 'image-1', props: ['filters'] },
+        { type: 'element.update', id: 'image-1', props: { filters: { blur: '2' } } },
+      ],
+      targetIds: ['image-1'],
     });
   });
 

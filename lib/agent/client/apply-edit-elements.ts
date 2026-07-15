@@ -135,6 +135,11 @@ function applyIntentsToContent(content: SlideContent, intents: EditIntent[]): Sl
           if (!el) continue;
           applyPropsToElement(el, u.props as Partial<PPTElement>);
         }
+      } else if (intent.type === 'element.removeProps') {
+        const el = draft.canvas.elements.find((e) => e.id === intent.id);
+        if (!el) continue;
+        const target = el as unknown as Record<string, unknown>;
+        for (const prop of intent.props) delete target[prop];
       } else if (intent.type === 'text.updateContent') {
         const el = draft.canvas.elements.find((element) => element.id === intent.id);
         if (!el) continue;
@@ -162,6 +167,36 @@ export function applyEditElementsIntents(
   inventoryFingerprint?: string,
 ): ApplyEditElementsResult {
   if (!intents.length) return { ok: false, reason: 'no element updates proposed' };
+
+  const updatedPropsById = new Map<string, Set<string>>();
+  for (const intent of intents) {
+    const updates =
+      intent.type === 'element.update'
+        ? [{ id: intent.id, props: intent.props }]
+        : intent.type === 'element.updateMany'
+          ? intent.updates
+          : [];
+    for (const update of updates) {
+      let props = updatedPropsById.get(update.id);
+      if (!props) {
+        props = new Set();
+        updatedPropsById.set(update.id, props);
+      }
+      for (const prop of Object.keys(update.props)) props.add(prop);
+    }
+  }
+  for (const intent of intents) {
+    if (intent.type !== 'element.removeProps') continue;
+    if (
+      intent.props.length === 0 ||
+      new Set(intent.props).size !== intent.props.length ||
+      intent.props.some(
+        (prop) => !MERGED_STYLE_PROPS.has(prop) || !updatedPropsById.get(intent.id)?.has(prop),
+      )
+    ) {
+      return { ok: false, reason: 'invalid structured-property replace marker' };
+    }
+  }
 
   const session = useSlideEditSession.getState();
   if (session.sceneId !== sceneId || !session.history) {
