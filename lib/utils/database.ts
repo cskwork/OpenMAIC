@@ -537,22 +537,45 @@ export async function exportDatabase(chatOptions: ChatStorageOptions = {}): Prom
 /**
  * Import database contents (for restoring backups)
  */
-export async function importDatabase(data: {
-  stages?: StageRecord[];
-  scenes?: SceneRecord[];
-  chatSessions?: ChatSessionRecord[];
-  playbackState?: PlaybackStateRecord[];
-}): Promise<void> {
+export async function importDatabase(
+  data: {
+    stages?: StageRecord[];
+    scenes?: SceneRecord[];
+    chatSessions?: ChatSessionRecord[];
+    playbackState?: PlaybackStateRecord[];
+  },
+  chatOptions: ChatStorageOptions = {},
+): Promise<void> {
+  const restoredChatStageIds =
+    data.chatSessions === undefined
+      ? []
+      : [
+          ...new Set([
+            ...(data.stages ?? []).map((stage) => stage.id),
+            ...data.chatSessions.map((session) => session.stageId),
+          ]),
+        ];
   await db.transaction(
     'rw',
     [db.stages, db.scenes, db.chatSessions, db.playbackState],
     async () => {
       if (data.stages) await db.stages.bulkPut(data.stages);
       if (data.scenes) await db.scenes.bulkPut(data.scenes);
-      if (data.chatSessions) await db.chatSessions.bulkPut(data.chatSessions);
+      if (data.chatSessions) {
+        for (const stageId of restoredChatStageIds) {
+          await db.chatSessions.where('stageId').equals(stageId).delete();
+        }
+        await db.chatSessions.bulkPut(data.chatSessions);
+      }
       if (data.playbackState) await db.playbackState.bulkPut(data.playbackState);
     },
   );
+  if (data.chatSessions !== undefined) {
+    const { clearRuntimeChatSessions } = await import('./chat-storage');
+    await Promise.all(
+      restoredChatStageIds.map((stageId) => clearRuntimeChatSessions(stageId, chatOptions)),
+    );
+  }
   log.info('Database imported successfully');
 }
 

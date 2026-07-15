@@ -33,12 +33,9 @@ describe('database runtime chat integration', () => {
 
   it('exports RuntimeStore chats and clears them with the main database', async () => {
     const runtimeStore = new BrowserRuntimeStore({ indexedDB: globalThis.indexedDB });
-    const legacyStore = {
-      load: vi.fn().mockResolvedValue([]),
-      clear: vi.fn().mockResolvedValue(undefined),
-    };
-    const { db, clearDatabase, exportDatabase } = await import('@/lib/utils/database');
-    const { saveChatSessions } = await import('@/lib/utils/chat-storage');
+    const { db, clearDatabase, exportDatabase, importDatabase } =
+      await import('@/lib/utils/database');
+    const { loadChatSessions, saveChatSessions } = await import('@/lib/utils/chat-storage');
     await db.stages.put({
       id: 'stage-backup',
       name: 'Backup stage',
@@ -48,17 +45,28 @@ describe('database runtime chat integration', () => {
     await saveChatSessions('stage-backup', [chatSession()], {
       store: runtimeStore,
       learnerKey,
-      legacyStore,
     });
 
     const exported = await exportDatabase({
       store: runtimeStore,
       learnerKey,
-      legacyStore,
     });
     expect(exported.chatSessions).toMatchObject([
       { id: 'chat-backup', stageId: 'stage-backup', title: 'Persisted chat' },
     ]);
+
+    await saveChatSessions(
+      'stage-backup',
+      [
+        { ...chatSession(), title: 'Newer local chat', updatedAt: 3_000 },
+        { ...chatSession(), id: 'chat-not-in-backup', title: 'Not in backup', updatedAt: 3_100 },
+      ],
+      { store: runtimeStore, learnerKey },
+    );
+    await importDatabase(exported, { store: runtimeStore, learnerKey });
+    await expect(
+      loadChatSessions('stage-backup', { store: runtimeStore, learnerKey }),
+    ).resolves.toMatchObject([{ id: 'chat-backup', title: 'Persisted chat' }]);
 
     await clearDatabase(runtimeStore);
     await expect(runtimeStore.listSessions('stage-backup', learnerKey)).resolves.toEqual([]);

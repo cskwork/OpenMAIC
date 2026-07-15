@@ -924,6 +924,20 @@ export async function loadChatSessions(
   }
 }
 
+/** Remove this learner's runtime chat partition before restoring a backup. */
+export async function clearRuntimeChatSessions(
+  stageId: string,
+  options: ChatStorageOptions = {},
+): Promise<void> {
+  const resolved = await context(options);
+  const queueKey = `${stageId}\0${resolved.learnerKey}`;
+  await enqueue(resolved.store, queueKey, async () => {
+    const views = await runtimeViews(resolved.store, stageId, resolved.learnerKey);
+    await Promise.all(views.map((view) => resolved.store.deleteSession(view.runtimeSession.id)));
+    rememberObservedIds(resolved.store, queueKey, []);
+  });
+}
+
 /** Clear the legacy table during stage deletion; RuntimeStore cascades separately. */
 export async function deleteChatSessions(stageId: string): Promise<void> {
   await dexieLegacyStore.clear(stageId);
