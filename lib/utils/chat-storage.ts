@@ -21,9 +21,6 @@ const MAX_MESSAGES_PER_SESSION = 200;
 const MAX_RUNTIME_RECORDS_PER_CHAT_SESSION = 256;
 const CHAT_PAYLOAD_VERSION = 1;
 const RUNTIME_GENERATION_SEPARATOR = ':generation:';
-const FALLBACK_LEASE_MS = 30_000;
-const FALLBACK_LEASE_RENEW_MS = 10_000;
-const FALLBACK_LEASE_RETRY_MS = 25;
 
 interface LegacyChatStore {
   load(stageId: string): Promise<ChatSession[]>;
@@ -88,76 +85,13 @@ const dexieLegacyStore: LegacyChatStore = {
 };
 
 // Stage saves are debounced but can overlap. Keep each RuntimeStore partition
-// sequential locally. Across realms, use Web Locks or a shared IndexedDB lease
-// for the stage-wide legacy table; injected legacy stores retain the isolated
-// generation fallback used by concurrency tests and non-browser adapters.
+// sequential locally. The shared legacy table requires Web Locks across realms;
+// injected legacy stores retain the isolated generation fallback used by
+// concurrency tests and non-browser adapters.
 const storeQueues = new WeakMap<RuntimeStore, Map<string, Promise<void>>>();
 const observedChatSessionIds = new WeakMap<RuntimeStore, Map<string, Set<string>>>();
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function acquireFallbackLease(key: string, owner: string): Promise<void> {
-  while (true) {
-    let acquired = false;
-    await db.transaction('rw', db.chatStorageLocks, async () => {
-      const now = Date.now();
-      const current = await db.chatStorageLocks.get(key);
-      if (!current || current.expiresAt <= now || current.owner === owner) {
-        await db.chatStorageLocks.put({ key, owner, expiresAt: now + FALLBACK_LEASE_MS });
-        acquired = true;
-      }
-    });
-    if (acquired) return;
-    await delay(FALLBACK_LEASE_RETRY_MS);
-  }
-}
-
-async function renewFallbackLease(key: string, owner: string): Promise<boolean> {
-  let renewed = false;
-  await db.transaction('rw', db.chatStorageLocks, async () => {
-    const current = await db.chatStorageLocks.get(key);
-    if (current?.owner !== owner) return;
-    await db.chatStorageLocks.put({ key, owner, expiresAt: Date.now() + FALLBACK_LEASE_MS });
-    renewed = true;
-  });
-  return renewed;
-}
-
-async function releaseFallbackLease(key: string, owner: string): Promise<void> {
-  await db.transaction('rw', db.chatStorageLocks, async () => {
-    if ((await db.chatStorageLocks.get(key))?.owner === owner) {
-      await db.chatStorageLocks.delete(key);
-    }
-  });
-}
-
-async function withFallbackLease<T>(key: string, work: () => Promise<T>): Promise<T> {
-  const owner = nanoid();
-  await acquireFallbackLease(key, owner);
-  let leaseLost = false;
-  let renewal = Promise.resolve();
-  const timer = setInterval(() => {
-    renewal = renewal
-      .then(async () => {
-        if (!(await renewFallbackLease(key, owner))) leaseLost = true;
-      })
-      .catch(() => {
-        leaseLost = true;
-      });
-  }, FALLBACK_LEASE_RENEW_MS);
-  try {
-    const result = await work();
-    await renewal;
-    if (leaseLost) throw new Error(`Lost chat storage lease for ${JSON.stringify(key)}`);
-    return result;
-  } finally {
-    clearInterval(timer);
-    await renewal;
-    await releaseFallbackLease(key, owner);
-  }
-}
+class ChatStorageLockUnavailableError extends Error {}
 
 function observedIds(store: RuntimeStore, key: string): Set<string> {
   return observedChatSessionIds.get(store)?.get(key) ?? new Set();
@@ -176,7 +110,7 @@ function enqueue<T>(
   store: RuntimeStore,
   key: string,
   crossRealmKey: string,
-  useSharedFallbackLease: boolean,
+  requiresCrossRealmLock: boolean,
   work: (isolatedWrites: boolean) => Promise<T>,
 ): Promise<T> {
   let queues = storeQueues.get(store);
@@ -189,13 +123,19 @@ function enqueue<T>(
     .catch(() => undefined)
     .then(() => {
       if (typeof navigator !== 'undefined' && navigator.locks) {
-        return navigator.locks.request<Promise<T>>(
+        const locks = navigator.locks;
+        return locks.request<Promise<T>>(
           `openmaic:chat-storage:${encodeURIComponent(crossRealmKey)}`,
-          () => work(false),
+          () =>
+            locks.request<Promise<T>>(`openmaic:chat-storage:${encodeURIComponent(key)}`, () =>
+              work(false),
+            ) as unknown as Promise<T>,
         ) as unknown as Promise<T>;
       }
-      if (useSharedFallbackLease) {
-        return withFallbackLease(crossRealmKey, () => work(false));
+      if (requiresCrossRealmLock) {
+        throw new ChatStorageLockUnavailableError(
+          'Chat storage requires the Web Locks API in this browser',
+        );
       }
       return work(true);
     });
@@ -214,14 +154,14 @@ async function context(options: ChatStorageOptions): Promise<{
   store: RuntimeStore;
   learnerKey: string;
   legacyStore: LegacyChatStore;
-  useSharedFallbackLease: boolean;
+  requiresCrossRealmLock: boolean;
 }> {
   const legacyStore = options.legacyStore ?? dexieLegacyStore;
   return {
     store: options.store ?? getRuntimeStore(),
     learnerKey: options.learnerKey ?? (await getLearnerKey(options.kv)),
     legacyStore,
-    useSharedFallbackLease: legacyStore === dexieLegacyStore,
+    requiresCrossRealmLock: legacyStore === dexieLegacyStore,
   };
 }
 
@@ -942,7 +882,7 @@ export async function saveChatSessions(
     resolved.store,
     queueKey,
     stageId,
-    resolved.useSharedFallbackLease,
+    resolved.requiresCrossRealmLock,
     async (isolatedWrites) => {
       const knownSessionIds = observedIds(resolved.store, queueKey);
       await syncSessions(
@@ -977,7 +917,7 @@ export async function loadChatSessions(
       resolved.store,
       queueKey,
       stageId,
-      resolved.useSharedFallbackLease,
+      resolved.requiresCrossRealmLock,
       async (isolatedWrites) => {
         // Read legacy rows only after entering the same partition queue/lock as
         // saves. Otherwise a delayed migration can replay a snapshot captured
@@ -1010,6 +950,7 @@ export async function loadChatSessions(
       },
     );
   } catch (error) {
+    if (error instanceof ChatStorageLockUnavailableError) throw error;
     // A failed read is not an authoritative empty snapshot. Forget the IDs
     // previously observed by this store instance so a later stage save cannot
     // retire them merely because the UI had to continue without chat data.
@@ -1027,7 +968,7 @@ export async function clearRuntimeChatSessions(
 ): Promise<void> {
   const resolved = await context(options);
   const queueKey = `${stageId}\0${resolved.learnerKey}`;
-  await enqueue(resolved.store, queueKey, stageId, resolved.useSharedFallbackLease, async () => {
+  await enqueue(resolved.store, queueKey, stageId, resolved.requiresCrossRealmLock, async () => {
     await clearRuntimeChatSessionsUnlocked(resolved.store, stageId, resolved.learnerKey, queueKey);
   });
 }
@@ -1056,7 +997,7 @@ export async function restoreChatSessionsFromBackup(
     if (index < orderedStageIds.length) {
       const stageId = orderedStageIds[index]!;
       const queueKey = `${stageId}\0${resolved.learnerKey}`;
-      await enqueue(resolved.store, queueKey, stageId, resolved.useSharedFallbackLease, async () =>
+      await enqueue(resolved.store, queueKey, stageId, resolved.requiresCrossRealmLock, async () =>
         withStageLock(index + 1),
       );
       return;
