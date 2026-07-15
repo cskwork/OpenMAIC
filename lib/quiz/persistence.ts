@@ -10,9 +10,10 @@ import type { QuestionResult } from '@/lib/quiz/grading';
  *   quizResults:<sceneId>
  *   quizAttemptId:<sceneId>
  *
- * RuntimeStore is the only live read/write source. `loadQuizAttemptState`
- * consumes these keys once, commits the strongest valid state to the current
- * learner partition, then deletes all four keys. No UI consumer reads here.
+ * RuntimeStore is the only live read source. The draft key also acts as a
+ * synchronous crash-recovery journal while an async RuntimeStore write is in
+ * flight; `loadQuizAttemptState` consumes it, commits the strongest valid state
+ * to the current learner partition, then deletes all four keys.
  */
 
 export const DRAFT_KEY_PREFIX = 'quizDraft:';
@@ -39,6 +40,15 @@ function safeGet(key: string): string | null {
     return localStorage.getItem(key);
   } catch {
     return null;
+  }
+}
+
+function safeSet(key: string, value: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Best-effort recovery journal; RuntimeStore remains the authority.
   }
 }
 
@@ -86,6 +96,20 @@ export function readDraftState(sceneId: string): QuizAnswers | null {
 export function readLegacyAttemptId(sceneId: string): string | null {
   const attemptId = safeGet(ATTEMPT_ID_KEY_PREFIX + sceneId);
   return attemptId && attemptId.trim().length > 0 ? attemptId : null;
+}
+
+/** Synchronously journal the latest draft before its async RuntimeStore write. */
+export function writeDraftRecovery(sceneId: string, attemptId: string, answers: QuizAnswers): void {
+  safeSet(DRAFT_KEY_PREFIX + sceneId, JSON.stringify(answers));
+  safeSet(ATTEMPT_ID_KEY_PREFIX + sceneId, attemptId);
+}
+
+/** Retire only the recovery snapshot proven durable by this exact write. */
+export function clearDraftRecovery(sceneId: string, attemptId: string, answers: QuizAnswers): void {
+  if (safeGet(ATTEMPT_ID_KEY_PREFIX + sceneId) !== attemptId) return;
+  if (safeGet(DRAFT_KEY_PREFIX + sceneId) !== JSON.stringify(answers)) return;
+  safeRemove(DRAFT_KEY_PREFIX + sceneId);
+  safeRemove(ATTEMPT_ID_KEY_PREFIX + sceneId);
 }
 
 /** Retire every legacy key after migration or during stage deletion. */

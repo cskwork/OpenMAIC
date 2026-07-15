@@ -23,9 +23,11 @@ import {
   DRAFT_KEY_PREFIX,
   RESULTS_KEY_PREFIX,
   clearAllForScene,
+  clearDraftRecovery,
   hasLegacyQuizState,
   readDraftState,
   readSubmittedState,
+  writeDraftRecovery,
 } from '@/lib/quiz/persistence';
 import type { QuestionResult } from '@/lib/quiz/grading';
 
@@ -61,6 +63,20 @@ describe('legacy quiz persistence compatibility', () => {
 
     localStorageStub.setItem(DRAFT_KEY_PREFIX + 's1', '{corrupt');
     expect(readDraftState('s1')).toBeNull();
+  });
+
+  it('keeps a synchronous draft recovery until the matching runtime write commits', () => {
+    writeDraftRecovery('s1', 'attempt-1', { q1: 'latest' });
+
+    expect(readDraftState('s1')).toEqual({ q1: 'latest' });
+    expect(localStorageStub.getItem(ATTEMPT_ID_KEY_PREFIX + 's1')).toBe('attempt-1');
+
+    clearDraftRecovery('s1', 'attempt-1', { q1: 'older' });
+    expect(readDraftState('s1')).toEqual({ q1: 'latest' });
+
+    clearDraftRecovery('s1', 'attempt-1', { q1: 'latest' });
+    expect(readDraftState('s1')).toBeNull();
+    expect(localStorageStub.getItem(ATTEMPT_ID_KEY_PREFIX + 's1')).toBeNull();
   });
 
   it('detects an unscoped legacy attempt pointer even without answers', () => {

@@ -7,6 +7,7 @@ import type {
 import { RuntimeAppendConflictError, type RuntimeStore } from '@openmaic/storage';
 import type { QuestionResult } from '@/lib/quiz/grading';
 import {
+  clearDraftRecovery,
   clearAllForScene,
   hasLegacyQuizState,
   readDraftState,
@@ -112,7 +113,12 @@ async function awaitQueuedAttemptLineage(store: RuntimeStore, attemptId: string)
  */
 export function createQuizAttemptWriter(options: QuizAttemptWriterOptions = {}): QuizAttemptWriter {
   const debounceMs = options.debounceMs ?? 500;
-  const write = options.write ?? ((input) => recordQuizAttempt(input));
+  const write =
+    options.write ??
+    (async (input) => {
+      await recordQuizAttempt(input);
+      clearDraftRecovery(input.sceneId, input.attemptId, input.answers);
+    });
   const onError = options.onError ?? (() => {});
   let pendingDraft: QuizDraftInput | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;

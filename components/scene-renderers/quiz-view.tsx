@@ -23,6 +23,7 @@ import type { QuizQuestion } from '@/lib/types/stage';
 import { SpeechButton } from '@/components/audio/speech-button';
 import { gradeChoiceQuestions, isShortAnswer, type QuestionResult } from '@/lib/quiz/grading';
 import { renderQuizMathText } from '@/lib/quiz/math-text';
+import { writeDraftRecovery } from '@/lib/quiz/persistence';
 import {
   createQuizAttemptWriter,
   loadQuizAttemptState,
@@ -738,8 +739,9 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
     return () => {
       cancelled = true;
       viewLifetime.invalidate();
+      void runtimeWriter.flushDraft();
     };
-  }, [hydrationVersion, sceneId, stageId, viewLifetime]);
+  }, [hydrationVersion, runtimeWriter, sceneId, stageId, viewLifetime]);
 
   const attemptId = isQuizRuntimeReady(runtimeGate) ? runtimeGate.attemptId : null;
 
@@ -762,6 +764,7 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
       setAnswers((prev) => {
         const next = { ...prev, [questionId]: value };
         if (attemptId) {
+          writeDraftRecovery(sceneId, attemptId, next);
           runtimeWriter.scheduleDraft({
             stageId,
             sceneId,
