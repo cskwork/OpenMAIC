@@ -297,7 +297,7 @@ describe('database runtime chat integration', () => {
     await loadChatSessions('stage-compatible-lock', { store: runtimeStore, learnerKey });
 
     expect(requested).toEqual([
-      'openmaic:chat-storage',
+      'openmaic:chat-storage:all',
       `openmaic:chat-storage:${encodeURIComponent('stage-compatible-lock')}`,
       `openmaic:chat-storage:${encodeURIComponent(`stage-compatible-lock\0${learnerKey}`)}`,
     ]);

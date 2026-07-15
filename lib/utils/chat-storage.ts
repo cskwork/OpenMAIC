@@ -16,7 +16,7 @@ import { getLearnerKey } from '@/lib/runtime/learner-key';
 import { getRuntimeStore } from '@/lib/runtime/store';
 import type { ChatMessageMetadata, ChatSession, SessionStatus } from '@/lib/types/chat';
 import { db, type ChatSessionRecord } from './database';
-import { withChatStorageSharedLock } from './chat-storage-lock';
+import { chatStoragePartitionLockName, withChatStorageSharedLock } from './chat-storage-lock';
 
 const MAX_MESSAGES_PER_SESSION = 200;
 const MAX_RUNTIME_RECORDS_PER_CHAT_SESSION = 256;
@@ -125,9 +125,9 @@ function enqueue<T>(
     if (typeof navigator !== 'undefined' && navigator.locks) {
       const locks = navigator.locks;
       return locks.request<Promise<T>>(
-        `openmaic:chat-storage:${encodeURIComponent(crossRealmKey)}`,
+        chatStoragePartitionLockName(crossRealmKey),
         () =>
-          locks.request<Promise<T>>(`openmaic:chat-storage:${encodeURIComponent(key)}`, () =>
+          locks.request<Promise<T>>(chatStoragePartitionLockName(key), () =>
             work(false),
           ) as unknown as Promise<T>,
       ) as unknown as Promise<T>;

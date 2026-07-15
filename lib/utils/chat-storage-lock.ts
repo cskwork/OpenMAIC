@@ -1,4 +1,9 @@
-const CHAT_STORAGE_GLOBAL_LOCK = 'openmaic:chat-storage';
+const CHAT_STORAGE_GLOBAL_LOCK = 'openmaic:chat-storage:all';
+
+export function chatStoragePartitionLockName(key: string): string {
+  const name = `openmaic:chat-storage:${encodeURIComponent(key)}`;
+  return name === CHAT_STORAGE_GLOBAL_LOCK ? `${name}:partition` : name;
+}
 
 function locks(): LockManager | undefined {
   return typeof navigator !== 'undefined' ? navigator.locks : undefined;
