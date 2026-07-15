@@ -60,7 +60,19 @@
     "videoPackaging": "جارٍ تحزيم مشروع الفيديو...",
     "videoSuccess": "تم تصدير مشروع الفيديو",
     "videoFailed": "فشل تصدير الفيديو",
-    "videoWarnings": "{{assets}} من الموارد مفقودة و {{diagnostics}} من المشكلات في تقرير التصدير."
+    "videoWarnings": "{{assets}} من الموارد مفقودة و {{diagnostics}} من المشكلات في تقرير التصدير.",
+    "videoMp4Success": "تم عرض الفيديو",
+    "videoServiceUnavailable": "خدمة العرض غير مُهيأة — تم تنزيل ملف ZIP للمشروع للعرض محليًا.",
+    "videoResolution": "الدقة",
+    "videoFps": "معدل الإطارات",
+    "videoQuality": "الجودة",
+    "videoQuality_draft": "مسودة",
+    "videoQuality_standard": "قياسي",
+    "videoQuality_high": "عالية",
+    "videoRenderingProgress": "{{stage}} — {{percent}}%",
+    "videoRenderMp4": "عرض MP4",
+    "videoDownloadZip": "تنزيل ملف ZIP للمشروع",
+    "videoServiceHint": "يتطلب عرض MP4 خدمة العرض. نزّل ملف ZIP للعرض محليًا."
   },
   "import": {
     "classroom": "استيراد فصل",

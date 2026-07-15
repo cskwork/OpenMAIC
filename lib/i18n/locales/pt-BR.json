@@ -60,7 +60,19 @@
     "videoPackaging": "Empacotando o projeto de vídeo...",
     "videoSuccess": "Projeto de vídeo exportado",
     "videoFailed": "Falha na exportação do vídeo",
-    "videoWarnings": "{{assets}} recurso(s) ausente(s) e {{diagnostics}} problema(s) no relatório de exportação."
+    "videoWarnings": "{{assets}} recurso(s) ausente(s) e {{diagnostics}} problema(s) no relatório de exportação.",
+    "videoMp4Success": "Vídeo renderizado",
+    "videoServiceUnavailable": "Serviço de renderização não configurado — o ZIP do projeto foi baixado para renderização local.",
+    "videoResolution": "Resolução",
+    "videoFps": "Taxa de quadros",
+    "videoQuality": "Qualidade",
+    "videoQuality_draft": "Rascunho",
+    "videoQuality_standard": "Padrão",
+    "videoQuality_high": "Alta",
+    "videoRenderingProgress": "{{stage}} — {{percent}}%",
+    "videoRenderMp4": "Renderizar MP4",
+    "videoDownloadZip": "Baixar ZIP do projeto",
+    "videoServiceHint": "A renderização de MP4 requer o serviço de renderização. Baixe o ZIP para renderizar localmente."
   },
   "import": {
     "classroom": "Importar Sala de Aula",

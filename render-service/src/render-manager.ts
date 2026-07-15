@@ -1,0 +1,167 @@
+/**
+ * RenderManager — owns a render job's whole lifecycle: admission (concurrency
+ * + per-user guards), the FIFO queue, driving `@hyperframes/producer`, feeding
+ * progress into the JobStore, registering the artifact, and cleanup.
+ *
+ * The server routes stay thin: they parse HTTP, call into the manager, and read
+ * back through the stores. All the producer-specific glue lives here.
+ */
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { createRenderJob, executeRenderJob } from '@hyperframes/producer';
+import type { JobStore } from './job-store.js';
+import type { ArtifactStore } from './artifact-store.js';
+import type { RenderJobRecord, RenderOptions } from './types.js';
+import { config } from './config.js';
+
+/** Thrown when admission control rejects a submission (mapped to HTTP 429). */
+export class RenderRejectedError extends Error {}
+
+interface QueuedJob {
+  record: RenderJobRecord;
+  options: RenderOptions;
+  abort: AbortController;
+}
+
+export class RenderManager {
+  private running = 0;
+  private readonly queue: QueuedJob[] = [];
+  /** Live AbortControllers for queued/running jobs, keyed by jobId (for cancel). */
+  private readonly controllers = new Map<string, AbortController>();
+
+  constructor(
+    private readonly jobs: JobStore,
+    private readonly artifacts: ArtifactStore,
+  ) {}
+
+  /**
+   * Admit and enqueue a render. `projectDir` already contains the unzipped
+   * project (with index.html). Returns the new jobId. Throws
+   * {@link RenderRejectedError} if the per-user guard is tripped.
+   */
+  async submit(projectDir: string, options: RenderOptions, userId?: string): Promise<string> {
+    if (userId && config.maxJobsPerUser > 0) {
+      const active = await this.jobs.countActiveForUser(userId);
+      if (active >= config.maxJobsPerUser) {
+        throw new RenderRejectedError(
+          `A render is already in progress for this user (limit ${config.maxJobsPerUser}).`,
+        );
+      }
+    }
+
+    const id = randomUUID();
+    const now = Date.now();
+    const record: RenderJobRecord = {
+      id,
+      ...(userId ? { userId } : {}),
+      status: 'queued',
+      progress: 0,
+      currentStage: 'queued',
+      createdAtMs: now,
+      updatedAtMs: now,
+      projectDir,
+    };
+    await this.jobs.create(record);
+
+    const abort = new AbortController();
+    this.controllers.set(id, abort);
+    this.queue.push({ record, options, abort });
+    this.pump();
+    return id;
+  }
+
+  /** Cancel a queued or running job. */
+  async cancel(id: string): Promise<boolean> {
+    const controller = this.controllers.get(id);
+    if (!controller) return false;
+    controller.abort();
+    // If still queued (not yet running), drop it and finalize now.
+    const queuedIdx = this.queue.findIndex((q) => q.record.id === id);
+    if (queuedIdx >= 0) {
+      const [q] = this.queue.splice(queuedIdx, 1);
+      this.controllers.delete(id);
+      await this.jobs.update(id, { status: 'cancelled', currentStage: 'cancelled' });
+      await this.cleanupProject(q.record.projectDir);
+    }
+    return true;
+  }
+
+  /** Start as many queued jobs as the concurrency budget allows. */
+  private pump(): void {
+    while (this.running < config.maxConcurrency && this.queue.length > 0) {
+      const next = this.queue.shift()!;
+      this.running++;
+      // Fire-and-forget: run() owns its own error handling and always decrements.
+      void this.run(next);
+    }
+  }
+
+  private async run({ record, options, abort }: QueuedJob): Promise<void> {
+    const { id, projectDir } = record;
+    const outputPath = join(projectDir, 'output.mp4');
+    try {
+      await this.jobs.update(id, { status: 'running', currentStage: 'preparing' });
+
+      const job = createRenderJob({
+        fps: options.fps,
+        quality: options.quality,
+        format: options.format,
+      });
+
+      await executeRenderJob(
+        job,
+        projectDir,
+        outputPath,
+        async (j) => {
+          // Producer mutates the same `job` object; mirror the fields we expose.
+          await this.jobs.update(id, {
+            status: 'running',
+            progress: typeof j.progress === 'number' ? j.progress : 0,
+            currentStage: j.currentStage || j.status,
+            ...(typeof j.framesRendered === 'number' ? { framesRendered: j.framesRendered } : {}),
+            ...(typeof j.totalFrames === 'number' ? { totalFrames: j.totalFrames } : {}),
+          });
+        },
+        abort.signal,
+      );
+
+      if (abort.signal.aborted) {
+        await this.jobs.update(id, { status: 'cancelled', currentStage: 'cancelled' });
+        await this.cleanupProject(projectDir);
+        return;
+      }
+
+      await this.artifacts.put(id, outputPath);
+      await this.jobs.update(id, {
+        status: 'succeeded',
+        progress: 1,
+        currentStage: 'complete',
+        outputPath,
+      });
+    } catch (error) {
+      const aborted = abort.signal.aborted;
+      await this.jobs.update(id, {
+        status: aborted ? 'cancelled' : 'failed',
+        currentStage: aborted ? 'cancelled' : 'failed',
+        error: error instanceof Error ? error.message : String(error),
+      });
+      // On failure/cancel the artifact is worthless — reclaim the project dir now.
+      await this.cleanupProject(projectDir);
+    } finally {
+      this.controllers.delete(id);
+      this.running--;
+      this.pump();
+    }
+  }
+
+  /** Best-effort recursive delete of a job's unzipped project dir. */
+  async cleanupProject(dir: string): Promise<void> {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/** Create a fresh, empty per-render project directory under the configured tmp root. */
+export async function makeProjectDir(): Promise<string> {
+  return mkdtemp(join(config.tmpDir, 'render-'));
+}

@@ -60,7 +60,19 @@
     "videoPackaging": "正在打包视频工程...",
     "videoSuccess": "视频工程已导出",
     "videoFailed": "视频导出失败",
-    "videoWarnings": "有 {{assets}} 个素材缺失，导出报告中有 {{diagnostics}} 个问题。"
+    "videoWarnings": "有 {{assets}} 个素材缺失，导出报告中有 {{diagnostics}} 个问题。",
+    "videoMp4Success": "视频已渲染",
+    "videoServiceUnavailable": "未配置渲染服务 —— 已下载项目 ZIP 供本地渲染。",
+    "videoResolution": "分辨率",
+    "videoFps": "帧率",
+    "videoQuality": "质量",
+    "videoQuality_draft": "草稿",
+    "videoQuality_standard": "标准",
+    "videoQuality_high": "高",
+    "videoRenderingProgress": "{{stage}} —— {{percent}}%",
+    "videoRenderMp4": "渲染 MP4",
+    "videoDownloadZip": "下载项目 ZIP",
+    "videoServiceHint": "渲染 MP4 需要渲染服务。可下载 ZIP 在本地渲染。"
   },
   "import": {
     "classroom": "导入课堂",

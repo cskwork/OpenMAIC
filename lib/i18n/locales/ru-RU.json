@@ -60,7 +60,19 @@
     "videoPackaging": "Упаковка видеопроекта...",
     "videoSuccess": "Видеопроект экспортирован",
     "videoFailed": "Ошибка экспорта видео",
-    "videoWarnings": "Отсутствует ресурсов: {{assets}}; проблем в отчёте об экспорте: {{diagnostics}}."
+    "videoWarnings": "Отсутствует ресурсов: {{assets}}; проблем в отчёте об экспорте: {{diagnostics}}.",
+    "videoMp4Success": "Видео отрендерено",
+    "videoServiceUnavailable": "Сервис рендеринга не настроен — ZIP проекта загружен для локального рендеринга.",
+    "videoResolution": "Разрешение",
+    "videoFps": "Частота кадров",
+    "videoQuality": "Качество",
+    "videoQuality_draft": "Черновик",
+    "videoQuality_standard": "Стандарт",
+    "videoQuality_high": "Высокое",
+    "videoRenderingProgress": "{{stage}} — {{percent}}%",
+    "videoRenderMp4": "Рендерить MP4",
+    "videoDownloadZip": "Скачать ZIP проекта",
+    "videoServiceHint": "Для рендеринга MP4 нужен сервис рендеринга. Скачайте ZIP для локального рендеринга."
   },
   "import": {
     "classroom": "Импорт класса",

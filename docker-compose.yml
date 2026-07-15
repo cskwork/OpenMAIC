@@ -5,10 +5,34 @@ services:
       - "3000:3000"
     env_file:
       - .env.local
+    environment:
+      # Point the app at the render service when it's running. This wins over any
+      # RENDER_SERVICE_URL in .env.local; the service only starts under the
+      # "video-export" profile, so without that profile the app degrades to the
+      # ZIP-download path regardless of this value.
+      - RENDER_SERVICE_URL=http://render-service:9000
     volumes:
       # Optional: mount server-providers.yml for provider config
       # - ./server-providers.yml:/app/server-providers.yml:ro
       - openmaic-data:/app/data
+    restart: unless-stopped
+
+  # Isolated MP4 render service (Node 22 + Chromium + FFmpeg) for classroom video
+  # export (issue #866). Opt-in: only starts with `--profile video-export`, since
+  # the image is heavy (bundles Chromium + FFmpeg) and the capability is optional.
+  #
+  #   docker compose --profile video-export up --build
+  #
+  render-service:
+    build: ./render-service
+    profiles:
+      - video-export
+    expose:
+      - "9000"
+    environment:
+      - PORT=9000
+      # Tune for the host; each concurrent render drives a full Chromium + FFmpeg.
+      - RENDER_MAX_CONCURRENCY=2
     restart: unless-stopped
 
 volumes:
