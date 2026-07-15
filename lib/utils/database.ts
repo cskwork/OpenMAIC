@@ -557,10 +557,8 @@ export async function importDatabase(
             ...data.chatSessions.map((session) => session.stageId),
           ]),
         ];
-  await db.transaction(
-    'rw',
-    [db.stages, db.scenes, db.chatSessions, db.playbackState],
-    async () => {
+  const restoreRows = () =>
+    db.transaction('rw', [db.stages, db.scenes, db.chatSessions, db.playbackState], async () => {
       if (data.stages) await db.stages.bulkPut(data.stages);
       if (data.scenes) await db.scenes.bulkPut(data.scenes);
       if (data.chatSessions) {
@@ -570,13 +568,12 @@ export async function importDatabase(
         await db.chatSessions.bulkPut(data.chatSessions);
       }
       if (data.playbackState) await db.playbackState.bulkPut(data.playbackState);
-    },
-  );
+    });
   if (data.chatSessions !== undefined) {
-    const { clearRuntimeChatSessions } = await import('./chat-storage');
-    await Promise.all(
-      restoredChatStageIds.map((stageId) => clearRuntimeChatSessions(stageId, chatOptions)),
-    );
+    const { restoreChatSessionsFromBackup } = await import('./chat-storage');
+    await restoreChatSessionsFromBackup(restoredChatStageIds, restoreRows, chatOptions);
+  } else {
+    await restoreRows();
   }
   log.info('Database imported successfully');
 }

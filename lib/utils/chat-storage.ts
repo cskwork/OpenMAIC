@@ -941,10 +941,51 @@ export async function clearRuntimeChatSessions(
   const resolved = await context(options);
   const queueKey = `${stageId}\0${resolved.learnerKey}`;
   await enqueue(resolved.store, queueKey, async () => {
-    const views = await runtimeViews(resolved.store, stageId, resolved.learnerKey);
-    await Promise.all(views.map((view) => resolved.store.deleteSession(view.runtimeSession.id)));
-    rememberObservedIds(resolved.store, queueKey, []);
+    await clearRuntimeChatSessionsUnlocked(resolved.store, stageId, resolved.learnerKey, queueKey);
   });
+}
+
+async function clearRuntimeChatSessionsUnlocked(
+  store: RuntimeStore,
+  stageId: string,
+  learnerKey: string,
+  queueKey: string,
+): Promise<void> {
+  const views = await runtimeViews(store, stageId, learnerKey);
+  await Promise.all(views.map((view) => store.deleteSession(view.runtimeSession.id)));
+  rememberObservedIds(store, queueKey, []);
+}
+
+/** Stage legacy backup rows and clear their runtime partitions under the same locks. */
+export async function restoreChatSessionsFromBackup(
+  stageIds: string[],
+  restoreLegacyRows: () => Promise<void>,
+  options: ChatStorageOptions = {},
+): Promise<void> {
+  const resolved = await context(options);
+  const orderedStageIds = [...new Set(stageIds)].sort();
+
+  async function withStageLock(index: number): Promise<void> {
+    if (index < orderedStageIds.length) {
+      const stageId = orderedStageIds[index]!;
+      const queueKey = `${stageId}\0${resolved.learnerKey}`;
+      await enqueue(resolved.store, queueKey, async () => withStageLock(index + 1));
+      return;
+    }
+
+    await restoreLegacyRows();
+    for (const stageId of orderedStageIds) {
+      const queueKey = `${stageId}\0${resolved.learnerKey}`;
+      await clearRuntimeChatSessionsUnlocked(
+        resolved.store,
+        stageId,
+        resolved.learnerKey,
+        queueKey,
+      );
+    }
+  }
+
+  await withStageLock(0);
 }
 
 /** Clear the legacy table during stage deletion; RuntimeStore cascades separately. */

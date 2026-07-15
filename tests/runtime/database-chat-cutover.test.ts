@@ -1,5 +1,5 @@
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserRuntimeStore } from '@openmaic/storage';
 
 import type { ChatSession } from '@/lib/types/chat';
@@ -9,6 +9,28 @@ if (!('IDBKeyRange' in globalThis)) {
 }
 
 const learnerKey = 'anon:database-cutover';
+
+function serialLockManager(): Pick<LockManager, 'request'> {
+  const tails = new Map<string, Promise<void>>();
+  const manager = {
+    async request<T>(name: string, callback: () => Promise<T> | T): Promise<T> {
+      const previous = tails.get(name) ?? Promise.resolve();
+      let release!: () => void;
+      const current = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      tails.set(name, current);
+      await previous;
+      try {
+        return await callback();
+      } finally {
+        release();
+        if (tails.get(name) === current) tails.delete(name);
+      }
+    },
+  };
+  return manager as unknown as Pick<LockManager, 'request'>;
+}
 
 function chatSession(): ChatSession {
   return {
@@ -29,6 +51,10 @@ describe('database runtime chat integration', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.stubGlobal('indexedDB', new IDBFactory());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('exports RuntimeStore chats and clears them with the main database', async () => {
@@ -77,6 +103,60 @@ describe('database runtime chat integration', () => {
     await expect(runtimeStore.listSessions('orphaned-runtime-stage', learnerKey)).resolves.toEqual(
       [],
     );
+  });
+
+  it('keeps backup staging and runtime clearing in the same cross-tab lock', async () => {
+    const indexedDB = globalThis.indexedDB;
+    const importingStore = new BrowserRuntimeStore({ indexedDB, dbName: 'restore-lock' });
+    const loadingStore = new BrowserRuntimeStore({ indexedDB, dbName: 'restore-lock' });
+    const { db, exportDatabase, importDatabase } = await import('@/lib/utils/database');
+    const { loadChatSessions, saveChatSessions } = await import('@/lib/utils/chat-storage');
+    vi.stubGlobal('navigator', { locks: serialLockManager() });
+    await db.stages.put({
+      id: 'stage-backup',
+      name: 'Backup stage',
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    });
+    await saveChatSessions('stage-backup', [chatSession()], {
+      store: importingStore,
+      learnerKey,
+    });
+    const exported = await exportDatabase({ store: importingStore, learnerKey });
+    await saveChatSessions(
+      'stage-backup',
+      [{ ...chatSession(), title: 'Newer local chat', updatedAt: 3_000 }],
+      { store: importingStore, learnerKey },
+    );
+
+    const originalTransaction = db.transaction.bind(db) as (...args: unknown[]) => Promise<unknown>;
+    let transactionCommitted!: () => void;
+    const didCommit = new Promise<void>((resolve) => {
+      transactionCommitted = resolve;
+    });
+    let releaseImport!: () => void;
+    const importMayContinue = new Promise<void>((resolve) => {
+      releaseImport = resolve;
+    });
+    vi.spyOn(db, 'transaction').mockImplementation(((...args: unknown[]) =>
+      originalTransaction(...args).then(async (result) => {
+        transactionCommitted();
+        await importMayContinue;
+        return result;
+      })) as typeof db.transaction);
+
+    const importing = importDatabase(exported, { store: importingStore, learnerKey });
+    await didCommit;
+    const loading = loadChatSessions('stage-backup', { store: loadingStore, learnerKey });
+    const earlyOutcome = await Promise.race([
+      loading.then(() => 'read' as const),
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 50)),
+    ]);
+    expect(earlyOutcome).toBe('blocked');
+
+    releaseImport();
+    await importing;
+    await expect(loading).resolves.toMatchObject([{ title: 'Persisted chat' }]);
   });
 
   it('fails loud without deleting documents when the runtime-wide clear fails', async () => {
