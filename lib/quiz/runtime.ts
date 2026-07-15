@@ -504,6 +504,17 @@ export async function recordQuizAttempt(
         assertPartition(session, input.stageId, learnerKey);
         if (sessionId === input.attemptId) originSession = session;
 
+        const records = await store.listRecords(sessionId);
+        const foreignAnchor = records.find(
+          (record) => record.sceneId !== undefined && record.sceneId !== input.sceneId,
+        );
+        if (foreignAnchor) {
+          throw new Error(
+            `Quiz attempt ${JSON.stringify(sessionId)} is already anchored to scene ` +
+              `${JSON.stringify(foreignAnchor.sceneId)}`,
+          );
+        }
+
         // Canonical retry ids are scanned from one, but a stale caller may
         // already point at a later flat retry or a newer nested legacy retry.
         // Never move that caller backward onto an older active sibling.
@@ -518,16 +529,6 @@ export async function recordQuizAttempt(
           continue;
         }
 
-        const records = await store.listRecords(sessionId);
-        const foreignAnchor = records.find(
-          (record) => record.sceneId !== undefined && record.sceneId !== input.sceneId,
-        );
-        if (foreignAnchor) {
-          throw new Error(
-            `Quiz attempt ${JSON.stringify(sessionId)} is already anchored to scene ` +
-              `${JSON.stringify(foreignAnchor.sceneId)}`,
-          );
-        }
         const lastRecord = records.at(-1);
         const last = asQuizPayload(lastRecord);
 

@@ -682,6 +682,47 @@ describe('quiz attempt runtime persistence', () => {
     ]);
   });
 
+  it('rejects an older retry sibling anchored to another scene before skipping it', async () => {
+    const { deps } = makeHarness();
+    const root = quizAttemptId('stage-1', 'scene-quiz', 'learner-1');
+    const firstRetry = `${root}:retry:1`;
+    const secondRetry = `${root}:retry:2`;
+    await recordQuizAttempt(
+      {
+        stageId: 'stage-1',
+        sceneId: 'scene-other',
+        attemptId: firstRetry,
+        phase: 'draft',
+        answers: {},
+      },
+      deps,
+    );
+    await recordQuizAttempt(
+      {
+        stageId: 'stage-1',
+        sceneId: 'scene-quiz',
+        attemptId: secondRetry,
+        phase: 'reviewed',
+        answers: {},
+        results: [],
+      },
+      deps,
+    );
+
+    await expect(
+      recordQuizAttempt(
+        {
+          stageId: 'stage-1',
+          sceneId: 'scene-quiz',
+          attemptId: secondRetry,
+          phase: 'draft',
+          answers: { q1: 'latest' },
+        },
+        deps,
+      ),
+    ).rejects.toThrow(/anchored to scene "scene-other"/);
+  });
+
   it('does not disguise an unrelated append failure as a completion race', async () => {
     const { store } = makeHarness();
     await store.createSession({
