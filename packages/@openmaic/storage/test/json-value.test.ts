@@ -76,6 +76,14 @@ describe('cross-realm and shared-predicate behavior', () => {
     expect(() => assertJsonValue(foreign, 'payload')).toThrow(/non-Array prototype/);
   });
 
+  test('rejects values whose prototype smuggles a toJSON hook', () => {
+    const proto = Object.create(null) as { toJSON?: () => unknown };
+    proto.toJSON = () => 'different';
+    const crafted = Object.create(proto as object) as Record<string, unknown>;
+    crafted.real = 1;
+    expect(() => assertJsonValue(crafted, 'payload')).toThrow(/toJSON/);
+  });
+
   test('isLosslessJsonString mirrors the string gate', () => {
     expect(isLosslessJsonString('plain text')).toBe(true);
     expect(isLosslessJsonString('a\u0000b')).toBe(false);

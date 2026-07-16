@@ -81,6 +81,12 @@ function findNonJsonValue(
     return { pointer, reason: `${typeof value} is not a JSON value` };
   }
   if (seen.has(value)) return { pointer, reason: 'circular reference' };
+  // toJSON is the one channel through which a prototype can alter JSON output
+  // (prototype properties themselves never serialize, and own accessors are
+  // rejected below), so refusing it closes prototype influence entirely.
+  if (typeof (value as { toJSON?: unknown }).toJSON === 'function') {
+    return { pointer, reason: 'value defines toJSON (would serialize differently than validated)' };
+  }
   seen.add(value);
   try {
     if (Array.isArray(value)) {
