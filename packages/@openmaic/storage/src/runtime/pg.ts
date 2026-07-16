@@ -29,7 +29,7 @@ import type {
   RuntimeSessionStatus,
 } from '@openmaic/dsl';
 import type { RuntimePayloadValidator, RuntimeSessionInit, RuntimeStore } from './types.js';
-import { assertJsonValue } from './json-value.js';
+import { assertJsonValue, isLosslessJsonString } from './json-value.js';
 
 export interface QueryResult<TRow extends Record<string, unknown> = Record<string, unknown>> {
   rows: TRow[];
@@ -195,12 +195,11 @@ function isUniqueViolation(error: unknown): boolean {
 }
 
 // PostgreSQL text parameters reject NUL and unpaired UTF-16 surrogates before
-// SQL can apply absence semantics. In Unicode mode, a valid surrogate pair is
-// consumed as one astral code point, so this class matches only lone halves.
-const PG_UNQUERYABLE_KEY = /\u0000|[\uD800-\uDFFF]/u;
-
+// SQL can apply absence semantics.
 function isPgQueryableKey(value: string): boolean {
-  return !PG_UNQUERYABLE_KEY.test(value);
+  // Shared with the write gate: a key the gate refuses can never be stored,
+  // so treating it as absent on the read/delete side is provably sound.
+  return isLosslessJsonString(value);
 }
 
 // 40001 is not reachable under the READ COMMITTED isolation this store assumes,
@@ -390,6 +389,10 @@ export class PgRuntimeStore implements RuntimeStore {
       `runtime record ${JSON.stringify(init.id)}`,
     );
     assertJsonValue(init.payload, `runtime record ${JSON.stringify(init.id)} payload`);
+    if (!isPgQueryableKey(init.sessionId)) {
+      // A text column can never hold such a key, so no session can exist.
+      throw new Error(`@openmaic/storage: no session ${JSON.stringify(init.sessionId)}`);
+    }
 
     // The session-row lock serializes appenders for one session. Computing
     // MAX(seq)+1 and inserting happen in that same transaction, so rollback
@@ -430,9 +433,11 @@ export class PgRuntimeStore implements RuntimeStore {
           const seq = Number(last.rows[0]?.last_seq ?? -1) + 1;
           const record: RuntimeRecord<TPayload> = { ...init, seq };
           assertValid(validateRuntimeRecord(record), `runtime record ${JSON.stringify(init.id)}`);
+          // Only the DSL-declared optional anchors get omitted-value treatment;
+          // any other undefined member still fails the JSON gate loud.
           const jsonRecord = { ...record } as Record<string, unknown>;
-          for (const [key, value] of Object.entries(jsonRecord)) {
-            if (value === undefined) delete jsonRecord[key];
+          for (const key of ['sceneId', 'actionIndex', 'subAnchor']) {
+            if (jsonRecord[key] === undefined) delete jsonRecord[key];
           }
           assertJsonValue(jsonRecord, `runtime record ${JSON.stringify(record.id)}`);
           await queryable.query(

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { assertJsonValue } from '../src/runtime/json-value.js';
+import { runInNewContext } from 'node:vm';
+import { assertJsonValue, isLosslessJsonString } from '../src/runtime/json-value.js';
 
 describe('assertJsonValue string guards', () => {
   test('rejects an object key containing NUL', () => {
@@ -61,5 +62,23 @@ describe('assertJsonValue structural guards', () => {
 
     expect(thrown).toBeInstanceOf(Error);
     expect((thrown as Error).message).toMatch(/sparse array hole/i);
+  });
+});
+
+describe('cross-realm and shared-predicate behavior', () => {
+  test('accepts plain arrays and objects created in another realm', () => {
+    const foreign = runInNewContext('[1, { nested: true }]') as unknown;
+    expect(() => assertJsonValue(foreign, 'payload')).not.toThrow();
+  });
+
+  test('rejects an Array subclass created in another realm', () => {
+    const foreign = runInNewContext('new (class Sub extends Array {})()') as unknown;
+    expect(() => assertJsonValue(foreign, 'payload')).toThrow(/non-Array prototype/);
+  });
+
+  test('isLosslessJsonString mirrors the string gate', () => {
+    expect(isLosslessJsonString('plain text')).toBe(true);
+    expect(isLosslessJsonString('a\u0000b')).toBe(false);
+    expect(isLosslessJsonString('\uD800')).toBe(false);
   });
 });

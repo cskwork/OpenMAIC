@@ -177,6 +177,13 @@ describe('PgRuntimeStore Postgres behavior', () => {
     expect(listed[1]).not.toHaveProperty('sceneId');
   });
 
+  test('rejects an unknown top-level record field that is explicitly undefined', async () => {
+    await store.createSession(makeSession({ kind: 'playback' }));
+    await expect(
+      store.appendRecord({ ...makeRecordInit('sess-1'), ext: undefined } as never),
+    ).rejects.toThrow(/undefined member/);
+  });
+
   test.each([
     ['NUL', 'bad\u0000key'],
     ['lone surrogate', 'bad\uD800key'],
@@ -201,6 +208,11 @@ describe('PgRuntimeStore Postgres behavior', () => {
       await expect(statusRejection).rejects.toThrow(/no session/i);
       await expect(statusRejection).rejects.not.toMatchObject({ code: '22021' });
       await expect(statusRejection).rejects.not.toMatchObject({ code: '22P05' });
+
+      const appendRejection = store.appendRecord(makeRecordInit(key));
+      await expect(appendRejection).rejects.toThrow(/no session/i);
+      await expect(appendRejection).rejects.not.toMatchObject({ code: '22021' });
+      await expect(appendRejection).rejects.not.toMatchObject({ code: '22P05' });
 
       expect(await store.getSession('sess-1')).toBeDefined();
       expect(await store.listRecords('sess-1')).toHaveLength(1);
