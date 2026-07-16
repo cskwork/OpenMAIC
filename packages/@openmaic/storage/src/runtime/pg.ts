@@ -2,6 +2,14 @@
  * PostgreSQL RuntimeStore backend over an injected query interface. The module
  * deliberately imports no PostgreSQL driver: node-postgres, PGlite, and host
  * adapters can all supply the small Queryable surface below.
+ *
+ * `withTransaction` must check out a fresh connection and open a transaction
+ * for every call, pin every query in `body` to it, then commit or roll back and
+ * release it. READ COMMITTED isolation is assumed. A shortcut such as
+ * `(body) => body(sharedClient)` is unsafe because concurrent calls can
+ * interleave in one transaction. Payloads are narrowed to plain JSON values
+ * that round-trip losslessly through JSONB; values such as Date, Map, nested
+ * undefined, non-finite numbers, and strings containing NUL are rejected.
  */
 import {
   RUNTIME_DSL_VERSION,
@@ -21,6 +29,7 @@ import type {
   RuntimeSessionStatus,
 } from '@openmaic/dsl';
 import type { RuntimePayloadValidator, RuntimeSessionInit, RuntimeStore } from './types.js';
+import { assertJsonValue } from './json-value.js';
 
 export interface QueryResult<TRow extends Record<string, unknown> = Record<string, unknown>> {
   rows: TRow[];
@@ -38,12 +47,12 @@ export type WithTransaction = <T>(body: (queryable: Queryable) => Promise<T>) =>
 
 export interface PgRuntimeStoreOptions {
   /**
-   * Pins every query in `body` to one SQL transaction. A node-postgres Pool
-   * supplies this by checking out a Client; PGlite supplies it with
-   * `db.transaction`. If omitted, the injected Queryable itself must be a
-   * connection-pinned client on which BEGIN/COMMIT are meaningful.
+   * On every call, checks out a fresh connection, opens a transaction, pins
+   * every query in `body` to it, then commits or rolls back and releases it.
+   * READ COMMITTED isolation is assumed. `(body) => body(sharedClient)` is not
+   * valid because concurrent calls would interleave within one transaction.
    */
-  withTransaction?: WithTransaction;
+  withTransaction: WithTransaction;
   /** Replaces the default chat / quizAttempt skeleton validator map. */
   payloadValidators?: Record<string, RuntimePayloadValidator>;
 }
@@ -65,8 +74,6 @@ CREATE INDEX IF NOT EXISTS runtime_sessions_stage_learner_idx
   ON runtime_sessions (stage_id, learner_key);
 CREATE INDEX IF NOT EXISTS runtime_sessions_learner_idx
   ON runtime_sessions (learner_key);
-CREATE INDEX IF NOT EXISTS runtime_sessions_stage_idx
-  ON runtime_sessions (stage_id);
 
 CREATE TABLE IF NOT EXISTS runtime_records (
   id TEXT NOT NULL,
@@ -82,10 +89,15 @@ CREATE INDEX IF NOT EXISTS runtime_records_session_scene_idx
   ON runtime_records (session_id, scene_id);
 `;
 
-/** Create or upgrade the tables owned by this backend. Safe to call repeatedly. */
+/**
+ * Create the tables owned by this backend when absent. Safe to call repeatedly;
+ * changing an existing table requires a real migration.
+ */
 export async function ensureSchema(queryable: Queryable): Promise<void> {
   // Keep Queryable minimal: PGlite's query() intentionally accepts one
   // statement at a time, while node-postgres also accepts each statement.
+  // This split is deliberately simple and would break on semicolons inside SQL
+  // string literals; replace it with a migration runner before adding such SQL.
   for (const sql of RUNTIME_PG_SCHEMA.split(';')) {
     const statement = sql.trim();
     if (statement !== '') await queryable.query(statement);
@@ -176,36 +188,32 @@ function isUniqueViolation(error: unknown): boolean {
   );
 }
 
+function isRetryableAppendError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return false;
+  const code = (error as { code?: unknown }).code;
+  return code === '23505' || code === '40001' || code === '40P01';
+}
+
 export class PgRuntimeStore implements RuntimeStore {
   private readonly queryable: Queryable;
-  private readonly transactionHook?: WithTransaction;
+  private readonly transactionHook: WithTransaction;
   private readonly payloadValidators: Record<string, RuntimePayloadValidator>;
 
-  constructor(queryable: Queryable, options: PgRuntimeStoreOptions = {}) {
+  constructor(queryable: Queryable, options: PgRuntimeStoreOptions) {
+    if (typeof options?.withTransaction !== 'function') {
+      throw new Error(
+        '@openmaic/storage: withTransaction is required and must pin a fresh connection and ' +
+          'transaction for every call; reusing a shared client lets concurrent transactions ' +
+          'interleave',
+      );
+    }
     this.queryable = queryable;
     this.transactionHook = options.withTransaction;
     this.payloadValidators = options.payloadValidators ?? DEFAULT_PAYLOAD_VALIDATORS;
   }
 
   private async transaction<T>(body: (queryable: Queryable) => Promise<T>): Promise<T> {
-    if (this.transactionHook) return this.transactionHook(body);
-
-    // This fallback is for a connection-pinned Queryable (pg Client, not a
-    // Pool). Pool users must inject withTransaction so BEGIN/body/COMMIT all
-    // execute on the same checked-out Client.
-    await this.queryable.query('BEGIN');
-    try {
-      const result = await body(this.queryable);
-      await this.queryable.query('COMMIT');
-      return result;
-    } catch (error) {
-      try {
-        await this.queryable.query('ROLLBACK');
-      } catch {
-        // Preserve the operation's original error if rollback itself fails.
-      }
-      throw error;
-    }
+    return this.transactionHook(body);
   }
 
   private validatorFor(kind: string): RuntimePayloadValidator | undefined {
@@ -333,9 +341,7 @@ export class PgRuntimeStore implements RuntimeStore {
   }
 
   async deleteSession(sessionId: string): Promise<void> {
-    await this.transaction(async (queryable) => {
-      await queryable.query('DELETE FROM runtime_sessions WHERE id = $1', [sessionId]);
-    });
+    await this.queryable.query('DELETE FROM runtime_sessions WHERE id = $1', [sessionId]);
   }
 
   async appendRecord<TPayload extends RuntimePayload>(
@@ -345,6 +351,7 @@ export class PgRuntimeStore implements RuntimeStore {
       validateRuntimeRecord({ ...init, seq: 0 }),
       `runtime record ${JSON.stringify(init.id)}`,
     );
+    assertJsonValue(init.payload, `runtime record ${JSON.stringify(init.id)} payload`);
 
     // The session-row lock serializes appenders for one session. Computing
     // MAX(seq)+1 and inserting happen in that same transaction, so rollback
@@ -401,7 +408,11 @@ export class PgRuntimeStore implements RuntimeStore {
           return record;
         });
       } catch (error) {
-        if (!isUniqueViolation(error) || attempt === 4) throw error;
+        // Under the assumed READ COMMITTED isolation, each retry starts a fresh
+        // transaction and repeats the locked read, MAX(seq), and INSERT. A
+        // failed attempt cannot commit partial effects, so retrying uniqueness,
+        // serialization, and deadlock aborts preserves monotonic sequences.
+        if (!isRetryableAppendError(error) || attempt === 4) throw error;
       }
     }
     throw new Error('@openmaic/storage: unreachable append retry state');
@@ -462,17 +473,13 @@ export class PgRuntimeStore implements RuntimeStore {
   }
 
   async deleteLearnerRuntime(stageId: string, learnerKey: string): Promise<void> {
-    await this.transaction(async (queryable) => {
-      await queryable.query(
-        'DELETE FROM runtime_sessions WHERE stage_id = $1 AND learner_key = $2',
-        [stageId, learnerKey],
-      );
-    });
+    await this.queryable.query(
+      'DELETE FROM runtime_sessions WHERE stage_id = $1 AND learner_key = $2',
+      [stageId, learnerKey],
+    );
   }
 
   async deleteStageRuntime(stageId: string): Promise<void> {
-    await this.transaction(async (queryable) => {
-      await queryable.query('DELETE FROM runtime_sessions WHERE stage_id = $1', [stageId]);
-    });
+    await this.queryable.query('DELETE FROM runtime_sessions WHERE stage_id = $1', [stageId]);
   }
 }

@@ -4,6 +4,7 @@ import {
   PgRuntimeStore,
   ensureSchema,
   type PgRuntimeStoreOptions,
+  type QueryResult,
   type Queryable,
 } from '../src/runtime/pg.js';
 import type { RuntimeStore } from '../src/runtime/types.js';
@@ -12,6 +13,19 @@ import { makeRecordInit, makeSession, runRuntimeStoreContract } from './runtime-
 function transactionOptions(db: PGlite): PgRuntimeStoreOptions {
   return {
     withTransaction: (body) => db.transaction((tx: Queryable) => body(tx)),
+  };
+}
+
+function makeBarrier(parties: number): () => Promise<void> {
+  let arrived = 0;
+  let release!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return async () => {
+    arrived += 1;
+    if (arrived === parties) release();
+    await ready;
   };
 }
 
@@ -63,6 +77,115 @@ describe('PgRuntimeStore Postgres behavior', () => {
       'runtime_records',
       'runtime_sessions',
     ]);
+  });
+
+  test('requires a transaction hook at construction time', () => {
+    expect(() => new PgRuntimeStore(db, {} as PgRuntimeStoreOptions)).toThrow(
+      /withTransaction.*fresh.*connection.*transaction/i,
+    );
+  });
+
+  test.each([
+    ['Date', new Date('2026-01-01T00:00:00.000Z'), /plain JSON value.*Date/i],
+    ['Map', new Map([['key', 'value']]), /plain JSON value.*Map/i],
+    ['nested undefined', { nested: { missing: undefined } }, /undefined member.*dropped by JSON/i],
+    ['NaN', { value: Number.NaN }, /non-finite number NaN/i],
+    ['NUL string', { value: 'before\u0000after' }, /NUL code point/i],
+  ])(
+    'appendRecord rejects a %s payload with an actionable error',
+    async (_name, payload, error) => {
+      await store.createSession(makeSession({ kind: 'playback' }));
+
+      await expect(store.appendRecord(makeRecordInit('sess-1', { payload }))).rejects.toThrow(
+        error,
+      );
+    },
+  );
+
+  test('single-statement deletes do not invoke the transaction hook', async () => {
+    let transactionCalls = 0;
+    const directDeleteStore = new PgRuntimeStore(db, {
+      withTransaction: (body) => {
+        transactionCalls += 1;
+        return db.transaction((tx: Queryable) => body(tx));
+      },
+    });
+    await directDeleteStore.createSession(makeSession({ id: 'by-id' }));
+    await directDeleteStore.createSession(makeSession({ id: 'by-learner' }));
+    await directDeleteStore.createSession(makeSession({ id: 'by-stage', learnerKey: 'user:42' }));
+
+    await directDeleteStore.deleteSession('by-id');
+    await directDeleteStore.deleteLearnerRuntime('stage-1', 'anon:device-1');
+    await directDeleteStore.deleteStageRuntime('stage-1');
+
+    expect(transactionCalls).toBe(0);
+  });
+
+  test('deterministically retries two appends interleaved between MAX(seq) and INSERT', async () => {
+    const afterMax = makeBarrier(2);
+    const beforeInsert = makeBarrier(2);
+    let maxReads = 0;
+    let inserts = 0;
+    const instrumented: Queryable = {
+      async query<TRow extends Record<string, unknown> = Record<string, unknown>>(
+        text: string,
+        params?: unknown[],
+      ): Promise<QueryResult<TRow>> {
+        if (text.includes('SELECT COALESCE(MAX(seq)')) {
+          const result = (await db.query(text, params)) as QueryResult<TRow>;
+          maxReads += 1;
+          if (maxReads <= 2) await afterMax();
+          return result;
+        }
+        if (text.includes('INSERT INTO runtime_records')) {
+          inserts += 1;
+          if (inserts <= 2) await beforeInsert();
+        }
+        return (await db.query(text, params)) as QueryResult<TRow>;
+      },
+    };
+    const interleavedStore = new PgRuntimeStore(instrumented, {
+      withTransaction: (body) => body(instrumented),
+    });
+    await interleavedStore.createSession(makeSession({ kind: 'playback' }));
+
+    const appended = await Promise.all([
+      interleavedStore.appendRecord(
+        makeRecordInit('sess-1', { id: 'interleaved-a', payload: { caller: 'a' } }),
+      ),
+      interleavedStore.appendRecord(
+        makeRecordInit('sess-1', { id: 'interleaved-b', payload: { caller: 'b' } }),
+      ),
+    ]);
+
+    expect(appended.map((record) => record.seq).sort()).toEqual([0, 1]);
+    expect(inserts).toBe(3);
+  });
+
+  test.each(['40001', '40P01'])('retries append after PostgreSQL error %s', async (code) => {
+    let failed = false;
+    const retryableErrorStore = new PgRuntimeStore(db, {
+      withTransaction: (body) =>
+        db.transaction((tx: Queryable) =>
+          body({
+            async query<TRow extends Record<string, unknown> = Record<string, unknown>>(
+              text: string,
+              params?: unknown[],
+            ): Promise<QueryResult<TRow>> {
+              if (!failed && text.includes('INSERT INTO runtime_records')) {
+                failed = true;
+                throw Object.assign(new Error(`injected PostgreSQL error ${code}`), { code });
+              }
+              return tx.query<TRow>(text, params);
+            },
+          }),
+        ),
+    });
+    await retryableErrorStore.createSession(makeSession({ kind: 'playback' }));
+
+    await expect(
+      retryableErrorStore.appendRecord(makeRecordInit('sess-1', { payload: { code } })),
+    ).resolves.toMatchObject({ seq: 0 });
   });
 
   test('concurrent appends assign a gapless, duplicate-free per-session seq', async () => {
