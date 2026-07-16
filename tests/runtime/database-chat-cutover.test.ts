@@ -375,9 +375,19 @@ describe('database runtime chat integration', () => {
       snapshot: { sessions: [], restoreMarker: undefined },
     });
 
+    await saveChatSessions(
+      'stage-failed-load',
+      [{ ...chatSession(), id: 'chat-created-after-recovery', title: 'Created after recovery' }],
+      {
+        store: savingStore,
+        learnerKey,
+        snapshot: { sessions: [], restoreMarker: undefined },
+      },
+    );
+
     await expect(
       loadChatSessions('stage-failed-load', { store: savingStore, learnerKey }),
-    ).resolves.toMatchObject([{ title: 'Persisted chat' }]);
+    ).resolves.toMatchObject([{ title: 'Persisted chat' }, { title: 'Created after recovery' }]);
   });
 
   it('fails backup export instead of returning legacy-only chats after a runtime read error', async () => {

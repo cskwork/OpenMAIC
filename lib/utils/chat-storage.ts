@@ -27,6 +27,8 @@ const MAX_RUNTIME_RECORDS_PER_CHAT_SESSION = 256;
 const CHAT_PAYLOAD_VERSION = 1;
 const RUNTIME_GENERATION_SEPARATOR = ':generation:';
 const RESTORE_MARKER_PREFIX = 'chat-restore-marker:';
+const DELETION_MARKER_PREFIX = 'chat-deletion:';
+const CHAT_DELETION_KIND = 'chat-deletion';
 
 interface LegacyChatStore {
   load(stageId: string): Promise<ChatSession[]>;
@@ -114,6 +116,7 @@ const observedChatSessions = new WeakMap<RuntimeStore, Map<string, Map<string, C
 
 export class ChatStorageLockUnavailableError extends Error {}
 export class ChatStorageSnapshotInvalidatedByRestoreError extends Error {}
+export class ChatStorageSnapshotInvalidatedByDeletionError extends Error {}
 
 function observedIds(store: RuntimeStore, key: string): Set<string> {
   return observedChatSessionIds.get(store)?.get(key) ?? new Set();
@@ -296,6 +299,42 @@ function generationRuntimeSessionId(
 
 function restoreMarkerPrefix(stageId: string): string {
   return `${RESTORE_MARKER_PREFIX}${encodeURIComponent(stageId)}:`;
+}
+
+function deletionMarkerPrefix(stageId: string): string {
+  return `${DELETION_MARKER_PREFIX}${encodeURIComponent(stageId)}:`;
+}
+
+function deletionMarkerId(stageId: string, learnerKey: string, chatSessionId: string): string {
+  return `${deletionMarkerPrefix(stageId)}${encodeURIComponent(chatSessionId)}:${encodeURIComponent(learnerKey)}`;
+}
+
+function deletionMarkerChatId(view: ChatRuntimeView, stageId: string): string | undefined {
+  if (view.runtimeSession.kind !== CHAT_DELETION_KIND) return undefined;
+  const prefix = deletionMarkerPrefix(stageId);
+  if (!view.runtimeSession.id.startsWith(prefix)) return undefined;
+  const encodedChatId = view.runtimeSession.id.slice(prefix.length).split(':', 1)[0];
+  if (!encodedChatId) return undefined;
+  try {
+    return decodeURIComponent(encodedChatId);
+  } catch {
+    return undefined;
+  }
+}
+
+function deletionMarkersByChatId(
+  views: readonly ChatRuntimeView[],
+  stageId: string,
+): Map<string, ChatRuntimeView[]> {
+  const markers = new Map<string, ChatRuntimeView[]>();
+  for (const view of views) {
+    const chatSessionId = deletionMarkerChatId(view, stageId);
+    if (!chatSessionId) continue;
+    const current = markers.get(chatSessionId) ?? [];
+    current.push(view);
+    markers.set(chatSessionId, current);
+  }
+  return markers;
 }
 
 function currentRestoreMarker(
@@ -519,6 +558,41 @@ async function createOrGetRuntimeSession(
   }
 }
 
+async function ensureDeletionMarker(
+  store: RuntimeStore,
+  stageId: string,
+  learnerKey: string,
+  chatSessionId: string,
+  existingMarkers: readonly ChatRuntimeView[],
+): Promise<void> {
+  if (existingMarkers.some((view) => deletionMarkerChatId(view, stageId) === chatSessionId)) {
+    return;
+  }
+  const id = deletionMarkerId(stageId, learnerKey, chatSessionId);
+  const now = new Date().toISOString();
+  try {
+    await store.createSession({
+      id,
+      kind: CHAT_DELETION_KIND,
+      stageId,
+      learnerKey,
+      status: 'completed',
+      createdAt: now,
+      updatedAt: now,
+    });
+  } catch (error) {
+    const raced = await store.getSession(id).catch(() => undefined);
+    if (
+      !raced ||
+      raced.kind !== CHAT_DELETION_KIND ||
+      raced.stageId !== stageId ||
+      raced.learnerKey !== learnerKey
+    ) {
+      throw error;
+    }
+  }
+}
+
 function changesForSession(
   normalized: ChatSession,
   folded: FoldedChat,
@@ -544,7 +618,7 @@ async function runtimeViews(
   learnerKey: string,
 ): Promise<ChatRuntimeView[]> {
   const sessions = (await store.listSessions(stageId, learnerKey)).filter(
-    (session) => session.kind === 'chat',
+    (session) => session.kind === 'chat' || session.kind === CHAT_DELETION_KIND,
   );
   return Promise.all(
     sessions.map(async (runtimeSession) => {
@@ -963,6 +1037,21 @@ async function syncSessions(
     );
   }
   if (deleteOmitted) {
+    const omittedKnownIds = new Set(
+      existing.flatMap((view) => {
+        const chatSessionId = view.folded.session?.id;
+        return chatSessionId &&
+          knownSessionIds.has(chatSessionId) &&
+          !desiredRuntimeIds.has(chatSessionId)
+          ? [chatSessionId]
+          : [];
+      }),
+    );
+    await Promise.all(
+      [...omittedKnownIds].map((chatSessionId) =>
+        ensureDeletionMarker(store, stageId, learnerKey, chatSessionId, existing),
+      ),
+    );
     const afterSync = await runtimeViews(store, stageId, learnerKey);
     const afterSyncById = new Map(afterSync.map((view) => [view.runtimeSession.id, view]));
     await Promise.all(
@@ -1022,10 +1111,15 @@ async function loadRuntimeSessions(
   stageId: string,
   learnerKey: string,
 ): Promise<ChatSession[]> {
+  const views = await runtimeViews(store, stageId, learnerKey);
+  const deletedChatSessionIds = new Set(deletionMarkersByChatId(views, stageId).keys());
   const newestByChatSession = new Map<string, ChatRuntimeView>();
-  for (const view of await runtimeViews(store, stageId, learnerKey)) {
+  for (const view of views) {
     const chatSession = view.folded.session;
     if (!chatSession) continue;
+    // The marker is committed before destructive cleanup. It remains the
+    // authoritative deletion intent if removing an old generation fails.
+    if (deletedChatSessionIds.has(chatSession.id)) continue;
     const identity = chatRuntimeIdentity(view.runtimeSession.id, stageId, chatSession.id);
     if (!identity) continue;
     const current = newestByChatSession.get(chatSession.id);
@@ -1069,8 +1163,8 @@ export async function saveChatSessions(
         const callerSnapshot = options.snapshot;
         if (
           callerSnapshot &&
-          (callerSnapshot.restoreMarker === undefined ||
-            callerSnapshot.restoreMarker !== restoreMarker)
+          callerSnapshot.restoreMarker !== undefined &&
+          callerSnapshot.restoreMarker !== restoreMarker
         ) {
           // Restore invalidates snapshots captured by already-mounted callers.
           // Unchanged stage autosaves are harmless no-ops; real chat mutations
@@ -1085,6 +1179,61 @@ export async function saveChatSessions(
             `Chat snapshot for stage ${JSON.stringify(stageId)} must be reloaded after backup restore`,
           );
         }
+        if (
+          callerSnapshot?.restoreMarker === undefined &&
+          callerSnapshot !== undefined &&
+          matchesSnapshot(callerSnapshot, nextSessions)
+        ) {
+          return;
+        }
+        let effectiveNextSessions = nextSessions;
+        if (
+          callerSnapshot !== undefined &&
+          callerSnapshot.restoreMarker === undefined &&
+          !matchesSnapshot(callerSnapshot, nextSessions)
+        ) {
+          // The caller loaded no authoritative runtime snapshot. Once storage
+          // recovers, preserve any still-staged legacy rows while merging the
+          // caller's new chats; clearing legacy below is safe only after both
+          // sets have reached RuntimeStore.
+          const recoveredLegacy = (await resolved.legacyStore.load(stageId)).map(normalizeSession);
+          if (recoveredLegacy.length > 0) {
+            const recoveredById = new Map(recoveredLegacy.map((session) => [session.id, session]));
+            for (const session of nextSessions) recoveredById.set(session.id, session);
+            effectiveNextSessions = [...recoveredById.values()];
+          }
+        }
+        const deletionMarkers = deletionMarkersByChatId(beforeSave, stageId);
+        const callerBaseline = callerSnapshot ? sessionMap(callerSnapshot.sessions) : undefined;
+        const ignoredStaleSessionIds = new Set<string>();
+        const supersededMarkerViews: ChatRuntimeView[] = [];
+        for (const session of nextSessions) {
+          const markers = deletionMarkers.get(session.id);
+          if (!markers?.length) continue;
+          const baseline = callerBaseline?.get(session.id);
+          if (baseline) {
+            if (isEqual(baseline, normalizeSession(session))) {
+              ignoredStaleSessionIds.add(session.id);
+              continue;
+            }
+            throw new ChatStorageSnapshotInvalidatedByDeletionError(
+              `Chat ${JSON.stringify(session.id)} was deleted by another caller`,
+            );
+          }
+          if (!callerSnapshot) {
+            throw new ChatStorageSnapshotInvalidatedByDeletionError(
+              `Chat ${JSON.stringify(session.id)} must be reloaded after deletion`,
+            );
+          }
+          // The caller did not observe the deleted chat, so this is a new
+          // creation that deliberately reuses the id. Retire the tombstone.
+          supersededMarkerViews.push(...markers);
+        }
+        if (ignoredStaleSessionIds.size > 0) {
+          effectiveNextSessions = effectiveNextSessions.filter(
+            (session) => !ignoredStaleSessionIds.has(session.id),
+          );
+        }
         const knownSessionIds = callerSnapshot
           ? new Set(callerSnapshot.sessions.map((session) => session.id))
           : observedIds(resolved.store, queueKey);
@@ -1095,12 +1244,18 @@ export async function saveChatSessions(
           resolved.store,
           stageId,
           resolved.learnerKey,
-          nextSessions,
+          effectiveNextSessions,
           true,
           isolatedWrites,
           knownSessionIds,
           priorObservedSessions,
           beforeSave,
+        );
+        // Keep the tombstone authoritative until the deliberately reused chat
+        // id has been durably synced. If marker cleanup fails, this save fails
+        // and readers continue to hide both stale and partially replaced data.
+        await Promise.all(
+          supersededMarkerViews.map((view) => resolved.store.deleteSession(view.runtimeSession.id)),
         );
         rememberObservedIds(
           resolved.store,

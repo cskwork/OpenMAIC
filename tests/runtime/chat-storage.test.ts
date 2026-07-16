@@ -1565,6 +1565,133 @@ describe('chat RuntimeStore cutover', () => {
     expect(runtimeSessions.filter((candidate) => candidate.kind === 'pbl')).toHaveLength(1);
   });
 
+  it('does not let a stale tab resurrect a chat deleted by another tab', async () => {
+    const indexedDB = new IDBFactory();
+    const deletingStore = new BrowserRuntimeStore({ indexedDB, dbName: 'chat-delete-tombstone' });
+    const staleStore = new BrowserRuntimeStore({ indexedDB, dbName: 'chat-delete-tombstone' });
+    const freshStore = new BrowserRuntimeStore({ indexedDB, dbName: 'chat-delete-tombstone' });
+    const deletingLegacy = new MemoryLegacyChatStore();
+    const staleLegacy = new MemoryLegacyChatStore();
+    const original = session({ status: 'completed' });
+    await saveChatSessions(STAGE_ID, [original], {
+      store: deletingStore,
+      learnerKey: LEARNER_KEY,
+      legacyStore: deletingLegacy,
+    });
+
+    let deletingSnapshot: ChatStorageSnapshot | undefined;
+    let staleSnapshot: ChatStorageSnapshot | undefined;
+    await loadChatSessions(STAGE_ID, {
+      store: deletingStore,
+      learnerKey: LEARNER_KEY,
+      legacyStore: deletingLegacy,
+      onSnapshot: (snapshot) => {
+        deletingSnapshot = snapshot;
+      },
+    });
+    const staleSessions = await loadChatSessions(STAGE_ID, {
+      store: staleStore,
+      learnerKey: LEARNER_KEY,
+      legacyStore: staleLegacy,
+      onSnapshot: (snapshot) => {
+        staleSnapshot = snapshot;
+      },
+    });
+
+    await saveChatSessions(STAGE_ID, [], {
+      store: deletingStore,
+      learnerKey: LEARNER_KEY,
+      legacyStore: deletingLegacy,
+      snapshot: deletingSnapshot,
+    });
+    await saveChatSessions(STAGE_ID, staleSessions, {
+      store: staleStore,
+      learnerKey: LEARNER_KEY,
+      legacyStore: staleLegacy,
+      snapshot: staleSnapshot,
+    });
+    await expect(
+      saveChatSessions(
+        STAGE_ID,
+        [{ ...staleSessions[0]!, title: 'Edited stale chat', updatedAt: 5_000 }],
+        {
+          store: staleStore,
+          learnerKey: LEARNER_KEY,
+          legacyStore: staleLegacy,
+          snapshot: staleSnapshot,
+        },
+      ),
+    ).rejects.toThrow(/deleted by another caller/);
+
+    await expect(
+      loadChatSessions(STAGE_ID, {
+        store: freshStore,
+        learnerKey: LEARNER_KEY,
+        legacyStore: new MemoryLegacyChatStore(),
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it('honors a deletion tombstone when deleting the old runtime session fails', async () => {
+    const backing = makeRuntimeStore();
+    const legacyStore = new MemoryLegacyChatStore();
+    await saveChatSessions(STAGE_ID, [session()], {
+      store: backing,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+    const [runtimeChat] = (await backing.listSessions(STAGE_ID, LEARNER_KEY)).filter(
+      (candidate) => candidate.kind === 'chat',
+    );
+    let snapshot: ChatStorageSnapshot | undefined;
+    const failingDeleteStore = new Proxy(backing, {
+      get(target, property) {
+        if (property === 'deleteSession') {
+          return async (runtimeSessionId: string) => {
+            if (runtimeSessionId === runtimeChat?.id) throw new Error('chat delete failed');
+            return target.deleteSession(runtimeSessionId);
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    await loadChatSessions(STAGE_ID, {
+      store: failingDeleteStore,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+      onSnapshot: (loaded) => {
+        snapshot = loaded;
+      },
+    });
+
+    await expect(
+      saveChatSessions(STAGE_ID, [], {
+        store: failingDeleteStore,
+        learnerKey: LEARNER_KEY,
+        legacyStore,
+        snapshot,
+      }),
+    ).rejects.toThrow('chat delete failed');
+    await expect(
+      loadChatSessions(STAGE_ID, {
+        store: backing,
+        learnerKey: LEARNER_KEY,
+        legacyStore,
+      }),
+    ).resolves.toEqual([]);
+
+    const accountLearnerKey = 'user:deleted-chat-test';
+    await backing.mergeLearner(LEARNER_KEY, accountLearnerKey);
+    await expect(
+      loadChatSessions(STAGE_ID, {
+        store: backing,
+        learnerKey: accountLearnerKey,
+        legacyStore,
+      }),
+    ).resolves.toEqual([]);
+  });
+
   it('does not let an unobserved stale snapshot delete a newer tab session', async () => {
     const sharedIndexedDB = new IDBFactory();
     const staleStore = new BrowserRuntimeStore({ indexedDB: sharedIndexedDB });
