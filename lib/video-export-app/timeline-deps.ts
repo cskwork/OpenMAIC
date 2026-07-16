@@ -74,6 +74,35 @@ function probeVideoDurationMs(blob: Blob): Promise<number | null> {
 }
 
 /**
+ * Probe a narration audio blob's natural duration (ms) via an off-document
+ * `<audio>`. Symmetric to {@link probeVideoDurationMs}. Resolves `null` when
+ * metadata never loads.
+ *
+ * This is the source of truth for narration timing: the TTS-time
+ * `AudioFileRecord.duration` was only recorded for classrooms generated after
+ * #861, so most existing courses have it unset and would otherwise fall back to
+ * text-length *estimates* — which run short and truncate the narration / advance
+ * the timeline early. Reading the real bytes makes the scheduled dwell match the
+ * clip for every classroom that actually has audio.
+ */
+function probeAudioDurationMs(blob: Blob): Promise<number | null> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(blob);
+    const audio = document.createElement('audio');
+    audio.preload = 'metadata';
+    const done = (value: number | null) => {
+      URL.revokeObjectURL(url);
+      audio.removeAttribute('src');
+      resolve(value);
+    };
+    audio.onloadedmetadata = () =>
+      done(Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : null);
+    audio.onerror = () => done(null);
+    audio.src = url;
+  });
+}
+
+/**
  * Load the Dexie-backed records for a classroom and build the synchronous
  * compiler deps over them. Audio durations come from the stored records
  * (seconds → ms); video durations are probed from the media blobs here so the
@@ -100,6 +129,18 @@ export async function createVideoTimelineDeps(input: {
     if (record) audioById.set(audioId, record);
   }
 
+  // Probe real audio durations from the local blobs up front, so the compiler's
+  // sync `audioDurationMs` is an accurate table lookup rather than a text-length
+  // estimate. Only local blobs can be probed here; an ossKey-only (evicted)
+  // record has no bytes to read, so it falls back to the stored duration (or
+  // estimate) — the same asymmetry the video probe accepts.
+  const audioDurationMsByAudioId = new Map<string, number>();
+  for (const [audioId, record] of audioById) {
+    if (record.blob.size === 0) continue;
+    const ms = await probeAudioDurationMs(record.blob);
+    if (ms !== null) audioDurationMsByAudioId.set(audioId, ms);
+  }
+
   // Media: all generated media for this stage, keyed by elementId.
   const mediaRecords = await db.mediaFiles.where('stageId').equals(stage.id).toArray();
   const mediaByElementId = new Map<string, MediaFileRecord>();
@@ -121,7 +162,12 @@ export async function createVideoTimelineDeps(input: {
 
   const timing: TimingProbe = {
     audioDurationMs(action: SpeechAction): number | null {
-      const record = action.audioId ? audioById.get(action.audioId) : undefined;
+      if (!action.audioId) return null;
+      // Prefer the real probed duration; fall back to the stored TTS duration
+      // (older records), then null (→ compiler estimates from text length).
+      const probed = audioDurationMsByAudioId.get(action.audioId);
+      if (probed != null) return probed;
+      const record = audioById.get(action.audioId);
       if (!record || typeof record.duration !== 'number') return null;
       return Math.round(record.duration * 1000);
     },
@@ -135,11 +181,13 @@ export async function createVideoTimelineDeps(input: {
       if (!action.audioId) return null;
       const record = audioById.get(action.audioId);
       if (!record) return { id: action.audioId, present: false };
+      const probed = audioDurationMsByAudioId.get(action.audioId);
       return {
         id: action.audioId,
         mimeType: record.blob.type || undefined,
         format: record.format || 'mp3',
-        durationMs: typeof record.duration === 'number' ? record.duration * 1000 : undefined,
+        durationMs:
+          probed ?? (typeof record.duration === 'number' ? record.duration * 1000 : undefined),
         // Present when locally held or fetchable from its CDN ossKey at collect time.
         present: record.blob.size > 0 || !!record.ossKey,
       };

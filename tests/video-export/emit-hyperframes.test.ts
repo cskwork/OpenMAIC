@@ -86,6 +86,18 @@ describe('emitHyperframes', () => {
     expect(html).toContain('#00ff88'); // authored laser color survives into the DOM
   });
 
+  it('burns in a subtitle overlay driven by the timeline', () => {
+    // A caption container plus one cue div per non-empty speech action.
+    expect(html).toContain('id="subtitles"');
+    expect(html).toContain('id="subtitle-cue-0"');
+    // Cues start hidden and are toggled visible/hidden by the paused timeline.
+    expect(html).toMatch(/id="subtitle-cue-0"[^>]*visibility:hidden/);
+    expect(html).toMatch(/tl\.set\('#subtitle-cue-0',\{visibility:'visible'\},[\d.]+\);/);
+    expect(html).toMatch(/tl\.set\('#subtitle-cue-0',\{visibility:'hidden'\},[\d.]+\);/);
+    // Narration text is rendered into the caption.
+    expect(html).toContain('Welcome to the lesson');
+  });
+
   it('references vendored GSAP, never a CDN', () => {
     expect(html).toContain('<script src="assets/vendor/gsap.min.js"></script>');
     expect(project.gsapVendorPath).toBe('assets/vendor/gsap.min.js');
