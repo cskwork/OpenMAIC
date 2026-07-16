@@ -670,6 +670,53 @@ describe('database runtime chat integration', () => {
     await Promise.all([saving, maintenance]);
   });
 
+  it('does not wait inside a shared epoch for a partition read queued after maintenance', async () => {
+    vi.stubGlobal('navigator', { locks: fairLockManager() });
+    stubMemoryLocalStorage();
+    const { db } = await import('@/lib/utils/database');
+    const { loadChatSessions } = await import('@/lib/utils/chat-storage');
+    const { withRuntimeStorageExclusiveLock } = await import('@/lib/utils/chat-storage-lock');
+    const { saveStageData } = await import('@/lib/utils/stage-storage');
+    const originalPut = db.stages.put.bind(db.stages);
+    let documentWriteStarted!: () => void;
+    const didStartDocumentWrite = new Promise<void>((resolve) => {
+      documentWriteStarted = resolve;
+    });
+    let releaseDocumentWrite!: () => void;
+    const documentWriteMayContinue = new Promise<void>((resolve) => {
+      releaseDocumentWrite = resolve;
+    });
+    vi.spyOn(db.stages, 'put').mockImplementation((async (record, key) => {
+      documentWriteStarted();
+      await documentWriteMayContinue;
+      return originalPut(record, key);
+    }) as typeof db.stages.put);
+
+    const saving = saveStageData('stage-epoch-order', {
+      stage: {
+        id: 'stage-epoch-order',
+        name: 'Epoch ordering',
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+      scenes: [],
+      currentSceneId: null,
+      chats: [chatSession()],
+    });
+    await didStartDocumentWrite;
+    const boundedExclusive = withRuntimeStorageExclusiveLock as <T>(
+      work: () => Promise<T>,
+      options: { acquireTimeoutMs: number },
+    ) => Promise<T>;
+    const maintenance = boundedExclusive(async () => {}, { acquireTimeoutMs: 50 });
+    await Promise.resolve();
+    const loading = loadChatSessions('stage-epoch-order');
+
+    releaseDocumentWrite();
+    const [, , loaded] = await Promise.all([saving, maintenance, loading]);
+    expect(loaded).toMatchObject([{ id: 'chat-backup' }]);
+  });
+
   it('bounds maintenance lock acquisition without running delayed destructive work', async () => {
     vi.useFakeTimers();
     vi.stubGlobal('navigator', { locks: fairLockManager() });

@@ -214,24 +214,31 @@ function enqueue<T>(
   work: (isolatedWrites: boolean) => Promise<T>,
   globalLockHeld = false,
 ): Promise<T> {
-  let queues = storeQueues.get(store);
-  if (!queues) {
-    queues = new Map();
-    storeQueues.set(store, queues);
-  }
-  const previous = queues.get(key) ?? Promise.resolve();
-  const run = () => withPartitionLocks(crossRealmKey, key, requiresCrossRealmLock, work);
-  const runQueued = () => previous.catch(() => undefined).then(run);
-  const current = globalLockHeld ? runQueued() : withChatStorageSharedLock(runQueued);
-  const settled = current.then(
-    () => undefined,
-    () => undefined,
-  );
-  queues.set(key, settled);
-  void settled.finally(() => {
-    if (queues?.get(key) === settled) queues.delete(key);
-  });
-  return current;
+  const enqueueInGlobalEpoch = (): Promise<T> => {
+    let queues = storeQueues.get(store);
+    if (!queues) {
+      queues = new Map();
+      storeQueues.set(store, queues);
+    }
+    const previous = queues.get(key) ?? Promise.resolve();
+    const run = () => withPartitionLocks(crossRealmKey, key, requiresCrossRealmLock, work);
+    const current = previous.catch(() => undefined).then(run);
+    const settled = current.then(
+      () => undefined,
+      () => undefined,
+    );
+    queues.set(key, settled);
+    void settled.finally(() => {
+      if (queues?.get(key) === settled) queues.delete(key);
+    });
+    return current;
+  };
+
+  // Register in the local partition queue only after this operation's global
+  // shared lock is granted. Otherwise a caller already holding a shared lock
+  // can wait for a later operation queued behind maintenance, creating a
+  // shared -> later shared -> exclusive -> shared inversion.
+  return globalLockHeld ? enqueueInGlobalEpoch() : withChatStorageSharedLock(enqueueInGlobalEpoch);
 }
 
 async function context(options: ChatStorageOptions): Promise<{
