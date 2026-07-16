@@ -41,6 +41,15 @@ function isCanonicalIndex(key: string, length: number): boolean {
 // class matches exactly the unpaired surrogates.
 const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
 
+function definesToJson(value: object): boolean {
+  let current: object | null = value;
+  while (current !== null) {
+    if (Object.getOwnPropertyDescriptor(current, 'toJSON') !== undefined) return true;
+    current = Object.getPrototypeOf(current) as object | null;
+  }
+  return false;
+}
+
 function findNonJsonString(value: string, pointer: string): NonJsonValue | undefined {
   if (value.includes('\u0000')) {
     return { pointer, reason: 'string contains the NUL code point (\\u0000)' };
@@ -83,8 +92,12 @@ function findNonJsonValue(
   if (seen.has(value)) return { pointer, reason: 'circular reference' };
   // toJSON is the one channel through which a prototype can alter JSON output
   // (prototype properties themselves never serialize, and own accessors are
-  // rejected below), so refusing it closes prototype influence entirely.
-  if (typeof (value as { toJSON?: unknown }).toJSON === 'function') {
+  // rejected below), so refusing it closes prototype influence entirely. The
+  // probe walks descriptors instead of reading the property: a [[Get]] would
+  // execute an inherited accessor, letting a stateful getter hide from the
+  // check and reappear at stringify time. Mutating the object graph after
+  // validation is out of scope, as it is for every other validated property.
+  if (definesToJson(value)) {
     return { pointer, reason: 'value defines toJSON (would serialize differently than validated)' };
   }
   seen.add(value);
