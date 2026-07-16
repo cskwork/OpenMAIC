@@ -151,6 +151,10 @@ export const useVideoRenderStore = create<VideoRenderState>()((set, get) => ({
     let lastPercent: number | null = null;
     let lastTs = 0;
     let smoothedSpeed: number | null = null; // percent per ms
+    // Set once the service accepts the job. Lets the catch below distinguish a
+    // *submit* failure (nothing started → degrade to ZIP) from a failure after
+    // the render began (hard error, and cancel the server job to free its slot).
+    let submittedJobId: string | null = null;
 
     try {
       const form = new FormData();
@@ -167,11 +171,11 @@ export const useVideoRenderStore = create<VideoRenderState>()((set, get) => ({
         maxAttempts: MAX_POLL_ATTEMPTS,
         submit: async () => {
           const res = await fetch('/api/export-video/render', { method: 'POST', body: form });
-          if (res.status === 501) return { status: 'failed', message: 'not_configured' };
           const data = (await res.json().catch(() => ({}))) as { jobId?: string; error?: string };
           if (!res.ok || !data.jobId) {
             return { status: 'failed', message: data.error || `HTTP ${res.status}` };
           }
+          submittedJobId = data.jobId;
           return { status: 'submitted', taskId: data.jobId };
         },
         poll: async (jobId) => {
@@ -223,12 +227,19 @@ export const useVideoRenderStore = create<VideoRenderState>()((set, get) => ({
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (message === 'not_configured') {
-        // Degrade: hand back the project ZIP for local CLI rendering.
+      if (submittedJobId == null) {
+        // The submit never succeeded (service unconfigured, unreachable, full,
+        // or rejected the upload). Nothing is rendering, so degrade cleanly:
+        // hand back the project ZIP for local CLI rendering.
         saveAs(zipBlob, `${sanitizeFilename(stageName)}-video.zip`);
         set({ status: 'idle', percent: 0, etaMs: null });
         toast.info(t('export.videoServiceUnavailable'), { id: toastId });
       } else {
+        // The render started but failed / timed out. Cancel the server job so it
+        // doesn't hold a concurrency slot and scratch space, then surface the error.
+        void fetch(`/api/export-video/render/${submittedJobId}`, { method: 'DELETE' }).catch(
+          () => {},
+        );
         log.error('Video render failed:', error);
         set({ status: 'failed', error: message });
         toast.error(t('export.videoFailed'), { id: toastId });

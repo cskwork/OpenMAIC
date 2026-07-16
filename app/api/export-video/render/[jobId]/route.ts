@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
 /** Relay a render job's status. Polled by the client while a render runs. */
 export async function GET(req: NextRequest, context: { params: Promise<{ jobId: string }> }) {
   const { jobId } = await context.params;
-  const resolved = await resolveRenderServiceUrl();
+  const resolved = resolveRenderServiceUrl();
   if ('error' in resolved) {
     return apiError('PROVIDER_DISABLED', 501, 'Render service is not configured');
   }
@@ -36,7 +36,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ jobId: 
 /** Cancel a queued/running render job. */
 export async function DELETE(req: NextRequest, context: { params: Promise<{ jobId: string }> }) {
   const { jobId } = await context.params;
-  const resolved = await resolveRenderServiceUrl();
+  const resolved = resolveRenderServiceUrl();
   if ('error' in resolved) {
     return apiError('PROVIDER_DISABLED', 501, 'Render service is not configured');
   }

@@ -76,26 +76,31 @@ app.post('/render', async (c) => {
   if (!(file instanceof File)) {
     return c.json({ error: 'Missing "project" file field' }, 400);
   }
-  const userId = form.get('userId');
+
+  // Identity is derived by the trusted proxy (client IP) and passed in a header;
+  // a client-supplied multipart `userId` is deliberately ignored so it can't be
+  // rotated to bypass the per-identity guard.
+  const identity = c.req.header('x-openmaic-client')?.trim() || 'anonymous';
+
+  // Reserve an admission slot BEFORE extracting the archive, so a rejected
+  // caller (queue full / per-identity limit) never triggers a decompression.
+  let reservation;
+  try {
+    reservation = manager.reserve(identity);
+  } catch (error) {
+    if (error instanceof RenderRejectedError) return c.json({ error: error.message }, 429);
+    throw error;
+  }
 
   const projectDir = await makeProjectDir();
   try {
     await unzipProject(new Uint8Array(await file.arrayBuffer()), projectDir);
-  } catch (error) {
-    await manager.cleanupProject(projectDir);
-    if (error instanceof InvalidProjectError) return c.json({ error: error.message }, 400);
-    throw error;
-  }
-
-  try {
-    const jobId = await manager.submit(
-      projectDir,
-      options,
-      typeof userId === 'string' && userId ? userId : undefined,
-    );
+    const jobId = await manager.submit(reservation, projectDir, options);
     return c.json({ jobId }, 202);
   } catch (error) {
+    manager.release(reservation);
     await manager.cleanupProject(projectDir);
+    if (error instanceof InvalidProjectError) return c.json({ error: error.message }, 400);
     if (error instanceof RenderRejectedError) return c.json({ error: error.message }, 429);
     throw error;
   }

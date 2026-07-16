@@ -1,13 +1,16 @@
 import { apiSuccess } from '@/lib/server/api-response';
-import { isRenderServiceConfigured } from '@/lib/server/render-service';
+import { checkRenderServiceHealth } from '@/lib/server/render-service';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * Report whether one-click MP4 export is available. The export menu calls this
- * to decide between offering "Render MP4" (service configured) and only
- * "Download ZIP" (degrade). Never leaks the service URL to the client.
+ * Report whether one-click MP4 export is available. "Available" means the
+ * service is configured AND its `/health` responds — so a configured-but-absent
+ * service (e.g. RENDER_SERVICE_URL set but the container not started) reports
+ * disabled and the menu shows only "Download ZIP" rather than advertising an
+ * MP4 export that would then fail. Never leaks the service URL to the client.
  */
 export async function GET() {
-  return apiSuccess({ enabled: isRenderServiceConfigured() });
+  const enabled = await checkRenderServiceHealth();
+  return apiSuccess({ enabled });
 }

@@ -8,9 +8,14 @@ services:
     environment:
       # Point the app at the render service when it's running. This wins over any
       # RENDER_SERVICE_URL in .env.local; the service only starts under the
-      # "video-export" profile, so without that profile the app degrades to the
-      # ZIP-download path regardless of this value.
+      # "video-export" profile. The app's capability check probes the service's
+      # /health, so if the profile is off (service absent) the app reports the
+      # MP4 export disabled and degrades to the ZIP-download path — this URL
+      # being set does not, by itself, advertise a working render.
       - RENDER_SERVICE_URL=http://render-service:9000
+    networks:
+      - default # outbound internet (LLM/media provider APIs, etc.)
+      - render # reach the render service over the isolated network
     volumes:
       # Optional: mount server-providers.yml for provider config
       # - ./server-providers.yml:/app/server-providers.yml:ro
@@ -23,6 +28,11 @@ services:
   #
   #   docker compose --profile video-export up --build
   #
+  # Sits ONLY on the `render` network, which is `internal: true` (no gateway to
+  # the host or internet). The export ZIP is fully self-contained (all assets +
+  # vendored GSAP are bundled at build time), so the render needs no outbound
+  # access — and the untrusted HTML executed in Chromium therefore cannot reach
+  # other services or the internet.
   render-service:
     build: ./render-service
     profiles:
@@ -33,7 +43,17 @@ services:
       - PORT=9000
       # Tune for the host; each concurrent render drives a full Chromium + FFmpeg.
       - RENDER_MAX_CONCURRENCY=2
+    networks:
+      - render
     restart: unless-stopped
+
+networks:
+  default: {}
+  # Isolated network for app <-> render-service traffic. `internal: true` means
+  # no route to the host or internet, sandboxing the Chromium that runs the
+  # uploaded composition.
+  render:
+    internal: true
 
 volumes:
   openmaic-data:

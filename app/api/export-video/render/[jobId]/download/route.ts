@@ -19,16 +19,22 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET(req: NextRequest, context: { params: Promise<{ jobId: string }> }) {
   const { jobId } = await context.params;
-  const resolved = await resolveRenderServiceUrl();
+  const resolved = resolveRenderServiceUrl();
   if ('error' in resolved) {
     return apiError('PROVIDER_DISABLED', 501, 'Render service is not configured');
   }
 
+  // Bound only the time to obtain the response headers — NOT the body stream.
+  // A total-duration timeout would truncate a large MP4 over a slow connection,
+  // so we abort just the initial fetch and clear the timer once headers arrive.
+  const controller = new AbortController();
+  const headerTimeout = setTimeout(() => controller.abort(), 30_000);
   try {
     const upstream = await proxyFetch(
       `${resolved.url}/render/${encodeURIComponent(jobId)}/download`,
-      { method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(120_000) },
+      { method: 'GET', redirect: 'manual', signal: controller.signal },
     );
+    clearTimeout(headerTimeout);
 
     // Presigned-URL artifact store: hand the redirect to the browser.
     if (upstream.status === 302 || upstream.status === 301) {
@@ -53,6 +59,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ jobId: 
       },
     });
   } catch (error) {
+    clearTimeout(headerTimeout);
     log.error(`Failed to download render output ${jobId}:`, error);
     return apiError('UPSTREAM_ERROR', 502, 'Failed to reach render service');
   }

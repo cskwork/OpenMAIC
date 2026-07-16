@@ -35,10 +35,32 @@ poll, then download. Job ids are opaque.
 | --- | --- | --- |
 | `PORT` | `9000` | Listen port. |
 | `RENDER_MAX_CONCURRENCY` | `2` | Renders that execute simultaneously; extras queue FIFO. |
-| `RENDER_MAX_JOBS_PER_USER` | `1` | Active jobs allowed per `userId` (0 disables the guard). |
+| `RENDER_MAX_JOBS_PER_USER` | `1` | Active jobs allowed per client identity (0 disables the guard). |
+| `RENDER_MAX_QUEUE` | `20` | Max jobs in the system (reserved+queued+running) before new submits get `429`. |
 | `RENDER_JOB_TTL_MS` | `1800000` | How long finished jobs + artifacts live before cleanup. |
+| `RENDER_JOB_DEADLINE_MS` | `2700000` | Hard per-job wall-clock deadline; overruns are aborted and marked failed. |
+| `RENDER_MAX_UPLOAD_BYTES` | `314572800` | Max compressed archive size accepted (300 MB). |
+| `RENDER_MAX_ENTRIES` | `5000` | Max entries allowed in the archive. |
+| `RENDER_MAX_ENTRY_BYTES` | `209715200` | Max expanded size of any single entry (200 MB). |
+| `RENDER_MAX_EXPANDED_BYTES` | `1073741824` | Max total expanded size across all entries (1 GB). |
+| `RENDER_MAX_COMPRESSION_RATIO` | `200` | Max expanded:compressed ratio per entry (ZIP-bomb guard). |
 | `PRODUCER_TMP_PROJECT_DIR` | `/tmp/openmaic-renders` | Scratch dir for unzipped projects + outputs. |
 | `PUPPETEER_EXECUTABLE_PATH` | `/usr/bin/chromium` | System Chromium (set in the image). |
+
+Client identity for the per-user guard is taken from the `x-openmaic-client`
+header, which the app's proxy derives from the client IP. A client-supplied
+`userId` form field is ignored.
+
+## Security / isolation
+
+The uploaded archive is untrusted, so extraction is bounded *before* any bytes
+are decompressed (entry count, per-entry and total expanded size, and
+compression ratio — see the limits above), guarding against ZIP bombs. The
+composition HTML is then executed in headless Chromium; in the Compose
+deployment the service sits on an `internal: true` network with no route to
+other services or the internet. **When running standalone, place the service on
+an isolated network yourself** — it needs no outbound access because the export
+ZIP bundles every asset (and GSAP) at build time.
 
 ## Run
 

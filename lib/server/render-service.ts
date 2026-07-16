@@ -6,7 +6,10 @@
  * download the project ZIP for local CLI rendering, so callers treat "not
  * configured" as a normal, expected state — not an error.
  */
-import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
+import { proxyFetch } from '@/lib/server/proxy-fetch';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('RenderService');
 
 /** The configured base URL of the render service, or null when the capability is off. */
 export function getRenderServiceUrl(): string | null {
@@ -14,26 +17,44 @@ export function getRenderServiceUrl(): string | null {
   return raw ? raw.replace(/\/+$/, '') : null;
 }
 
-/** Whether one-click MP4 export is available (service configured). */
+/** Whether the render service is configured (URL present — not a reachability check). */
 export function isRenderServiceConfigured(): boolean {
   return getRenderServiceUrl() !== null;
 }
 
 /**
- * Resolve the render service base URL, applying an SSRF check in production so
- * a misconfigured `RENDER_SERVICE_URL` can't be pointed at arbitrary internal
- * hosts. In development (and for the common `localhost`/compose-network case)
- * the check is skipped — mirrors `app/api/extract-document`'s gating, and a
- * localhost target additionally needs `ALLOW_LOCAL_NETWORKS=true` to pass the
- * guard when it does run. Returns `{ url }` or `{ error }`.
+ * Resolve the render service base URL, or `{ error: 'not_configured' }`.
+ *
+ * `RENDER_SERVICE_URL` is operator-supplied deployment config, not user input,
+ * so it is deliberately NOT run through the SSRF guard: the guard exists to stop
+ * user-controlled URLs from reaching internal hosts, whereas this URL is
+ * *meant* to point at an internal service (e.g. `http://render-service:9000`
+ * on the compose network). Running the guard here would reject the intended
+ * deployment unless the operator globally weakened SSRF via
+ * `ALLOW_LOCAL_NETWORKS`, which we do not want to require.
  */
-export async function resolveRenderServiceUrl(): Promise<{ url: string } | { error: string }> {
+export function resolveRenderServiceUrl(): { url: string } | { error: 'not_configured' } {
   const url = getRenderServiceUrl();
-  if (!url) return { error: 'not_configured' };
+  return url ? { url } : { error: 'not_configured' };
+}
 
-  if (process.env.NODE_ENV === 'production') {
-    const ssrfError = await validateUrlForSSRF(url);
-    if (ssrfError) return { error: `Invalid RENDER_SERVICE_URL: ${ssrfError}` };
+/**
+ * Whether the configured render service is actually reachable and healthy.
+ * Probes `GET /health` with a short timeout. Returns false (rather than
+ * throwing) when unconfigured or unreachable, so the capability endpoint can
+ * report a truthful enabled/disabled state and the UI degrades cleanly.
+ */
+export async function checkRenderServiceHealth(): Promise<boolean> {
+  const url = getRenderServiceUrl();
+  if (!url) return false;
+  try {
+    const res = await proxyFetch(`${url}/health`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(3000),
+    });
+    return res.ok;
+  } catch (error) {
+    log.info('Render service health check failed:', error instanceof Error ? error.message : error);
+    return false;
   }
-  return { url };
 }
