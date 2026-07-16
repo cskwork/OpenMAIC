@@ -75,7 +75,10 @@
     "videoEtaSec": "{{sec}} ث",
     "videoRenderMp4": "عرض MP4",
     "videoDownloadZip": "تنزيل ملف ZIP للمشروع",
-    "videoServiceHint": "يتطلب عرض MP4 خدمة العرض. نزّل ملف ZIP للعرض محليًا."
+    "videoServiceHint": "يتطلب عرض MP4 خدمة العرض. نزّل ملف ZIP للعرض محليًا.",
+    "noSlides": "لا توجد شرائح للتصدير",
+    "noSlidesSkipped": "لا توجد شرائح في هذه الدورة — تم تخطي PPTX",
+    "nothingToExport": "لا يوجد محتوى للتصدير"
   },
   "import": {
     "classroom": "استيراد فصل",

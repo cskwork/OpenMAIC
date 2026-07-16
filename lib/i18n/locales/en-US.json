@@ -75,7 +75,10 @@
     "videoEtaSec": "{{sec}} sec",
     "videoRenderMp4": "Render MP4",
     "videoDownloadZip": "Download project ZIP",
-    "videoServiceHint": "MP4 rendering needs the render service. Download the ZIP to render locally."
+    "videoServiceHint": "MP4 rendering needs the render service. Download the ZIP to render locally.",
+    "noSlides": "No slides to export",
+    "noSlidesSkipped": "No slides in this course — PPTX skipped",
+    "nothingToExport": "Nothing to export"
   },
   "import": {
     "classroom": "Import Classroom",

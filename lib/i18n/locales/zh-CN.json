@@ -75,7 +75,10 @@
     "videoEtaSec": "{{sec}} 秒",
     "videoRenderMp4": "渲染 MP4",
     "videoDownloadZip": "下载项目 ZIP",
-    "videoServiceHint": "渲染 MP4 需要渲染服务。可下载 ZIP 在本地渲染。"
+    "videoServiceHint": "渲染 MP4 需要渲染服务。可下载 ZIP 在本地渲染。",
+    "noSlides": "无可导出的幻灯片",
+    "noSlidesSkipped": "本课程无幻灯片，已跳过 PPTX",
+    "nothingToExport": "没有可导出的内容"
   },
   "import": {
     "classroom": "导入课堂",

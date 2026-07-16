@@ -75,7 +75,10 @@
     "videoEtaSec": "{{sec}} 秒",
     "videoRenderMp4": "算圖 MP4",
     "videoDownloadZip": "下載專案 ZIP",
-    "videoServiceHint": "算圖 MP4 需要算圖服務。可下載 ZIP 在本機算圖。"
+    "videoServiceHint": "算圖 MP4 需要算圖服務。可下載 ZIP 在本機算圖。",
+    "noSlides": "無可匯出的幻燈片",
+    "noSlidesSkipped": "本課程無幻燈片，已跳過 PPTX",
+    "nothingToExport": "沒有可匯出的內容"
   },
   "import": {
     "classroom": "匯入課堂",

@@ -75,7 +75,10 @@
     "videoEtaSec": "{{sec}} с",
     "videoRenderMp4": "Рендерить MP4",
     "videoDownloadZip": "Скачать ZIP проекта",
-    "videoServiceHint": "Для рендеринга MP4 нужен сервис рендеринга. Скачайте ZIP для локального рендеринга."
+    "videoServiceHint": "Для рендеринга MP4 нужен сервис рендеринга. Скачайте ZIP для локального рендеринга.",
+    "noSlides": "Нет слайдов для экспорта",
+    "noSlidesSkipped": "В этом курсе нет слайдов — PPTX пропущен",
+    "nothingToExport": "Нет данных для экспорта"
   },
   "import": {
     "classroom": "Импорт класса",

@@ -75,7 +75,10 @@
     "videoEtaSec": "{{sec}} 秒",
     "videoRenderMp4": "MP4 をレンダリング",
     "videoDownloadZip": "プロジェクト ZIP をダウンロード",
-    "videoServiceHint": "MP4 レンダリングにはレンダーサービスが必要です。ZIP をダウンロードしてローカルでレンダリングできます。"
+    "videoServiceHint": "MP4 レンダリングにはレンダーサービスが必要です。ZIP をダウンロードしてローカルでレンダリングできます。",
+    "noSlides": "エクスポート可能なスライドがありません",
+    "noSlidesSkipped": "このコースにスライドがないため、PPTX をスキップしました",
+    "nothingToExport": "エクスポートできるものがありません"
   },
   "import": {
     "classroom": "教室をインポート",
