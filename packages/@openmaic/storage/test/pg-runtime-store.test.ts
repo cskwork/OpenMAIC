@@ -158,6 +158,63 @@ describe('PgRuntimeStore Postgres behavior', () => {
     await expect(rejection).rejects.not.toMatchObject({ code: '22P05' });
   });
 
+  test('appendRecord tolerates an explicit undefined optional anchor like an omitted anchor', async () => {
+    await store.createSession(makeSession({ kind: 'playback' }));
+
+    const explicit = await store.appendRecord(
+      makeRecordInit('sess-1', { id: 'explicit-undefined', sceneId: undefined }),
+    );
+    const omitted = await store.appendRecord(makeRecordInit('sess-1', { id: 'omitted-anchor' }));
+
+    expect(explicit).toMatchObject({ id: 'explicit-undefined', seq: 0 });
+    expect(omitted).toMatchObject({ id: 'omitted-anchor', seq: 1 });
+    const listed = await store.listRecords('sess-1');
+    expect(listed.map(({ id, seq }) => ({ id, seq }))).toEqual([
+      { id: 'explicit-undefined', seq: 0 },
+      { id: 'omitted-anchor', seq: 1 },
+    ]);
+    expect(listed[0]).not.toHaveProperty('sceneId');
+    expect(listed[1]).not.toHaveProperty('sceneId');
+  });
+
+  test.each([
+    ['NUL', 'bad\u0000key'],
+    ['lone surrogate', 'bad\uD800key'],
+  ])(
+    'treats %s query and delete keys as absent without leaking PostgreSQL errors',
+    async (_, key) => {
+      await store.createSession(makeSession({ kind: 'playback' }));
+      await store.appendRecord(makeRecordInit('sess-1'));
+
+      await expect(store.getSession(key)).resolves.toBeUndefined();
+      await expect(store.listSessions(key, 'anon:device-1')).resolves.toEqual([]);
+      await expect(store.listSessions('stage-1', key)).resolves.toEqual([]);
+      await expect(store.listRecords(key)).resolves.toEqual([]);
+      await expect(store.listRecords('sess-1', { sceneId: key })).resolves.toEqual([]);
+      await expect(store.deleteSession(key)).resolves.toBeUndefined();
+      await expect(store.deleteLearnerRuntime(key, 'anon:device-1')).resolves.toBeUndefined();
+      await expect(store.deleteLearnerRuntime('stage-1', key)).resolves.toBeUndefined();
+      await expect(store.deleteStageRuntime(key)).resolves.toBeUndefined();
+      await expect(store.mergeLearner(key, 'user:42')).resolves.toBe(0);
+
+      const statusRejection = store.setSessionStatus(key, 'completed', '2026-01-01T00:01:00.000Z');
+      await expect(statusRejection).rejects.toThrow(/no session/i);
+      await expect(statusRejection).rejects.not.toMatchObject({ code: '22021' });
+      await expect(statusRejection).rejects.not.toMatchObject({ code: '22P05' });
+
+      expect(await store.getSession('sess-1')).toBeDefined();
+      expect(await store.listRecords('sess-1')).toHaveLength(1);
+    },
+  );
+
+  test('mergeLearner rejects a non-JSON target key before PostgreSQL', async () => {
+    await store.createSession(makeSession());
+    const rejection = store.mergeLearner('anon:device-1', 'user:\uD800');
+
+    await expect(rejection).rejects.toThrow(/target learner key.*unpaired UTF-16 surrogate/i);
+    await expect(rejection).rejects.not.toMatchObject({ code: '22P05' });
+  });
+
   test('single-statement deletes do not invoke the transaction hook', async () => {
     let transactionCalls = 0;
     const directDeleteStore = new PgRuntimeStore(db, {

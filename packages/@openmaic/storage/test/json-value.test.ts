@@ -24,3 +24,42 @@ describe('assertJsonValue string guards', () => {
     expect(() => assertJsonValue({ value: '𐀀' }, 'value')).not.toThrow();
   });
 });
+
+describe('assertJsonValue structural guards', () => {
+  test('rejects an enumerable accessor own property', () => {
+    const value = Object.defineProperty({}, 'dynamic', {
+      enumerable: true,
+      get: () => 'value',
+    });
+
+    expect(() => assertJsonValue(value, 'value')).toThrow(/accessor property/i);
+  });
+
+  test('rejects an Array subclass instance', () => {
+    class JsonLookingArray extends Array<number> {}
+
+    expect(() => assertJsonValue(new JsonLookingArray(1, 2), 'value')).toThrow(
+      /array with a non-Array prototype/i,
+    );
+  });
+
+  test('rejects a sparse array even when its prototype provides the missing index', () => {
+    const sparse = new Array<string>(1);
+    let thrown: unknown;
+    Object.defineProperty(Array.prototype, '0', {
+      configurable: true,
+      value: 'inherited',
+      writable: true,
+    });
+    try {
+      assertJsonValue(sparse, 'value');
+    } catch (error) {
+      thrown = error;
+    } finally {
+      delete Array.prototype[0];
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(/sparse array hole/i);
+  });
+});

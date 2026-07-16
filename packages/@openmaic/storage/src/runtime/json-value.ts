@@ -70,6 +70,12 @@ function findNonJsonValue(
   seen.add(value);
   try {
     if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) {
+        return {
+          pointer,
+          reason: 'array with a non-Array prototype (subclass/null-proto) does not survive JSON',
+        };
+      }
       for (const key of Reflect.ownKeys(value)) {
         if (key === 'length') continue;
         if (typeof key !== 'string' || !isCanonicalIndex(key, value.length)) {
@@ -78,9 +84,16 @@ function findNonJsonValue(
             reason: 'array carries a non-index own property (dropped by JSON)',
           };
         }
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (descriptor && (descriptor.get || descriptor.set)) {
+          return {
+            pointer: `${pointer}/${key}`,
+            reason: 'accessor property (its value can change between validation and JSON)',
+          };
+        }
       }
       for (let index = 0; index < value.length; index += 1) {
-        if (!(index in value)) {
+        if (!Object.hasOwn(value, index)) {
           return { pointer: `${pointer}/${index}`, reason: 'sparse array hole' };
         }
         const nested = findNonJsonValue(value[index], `${pointer}/${index}`, seen);
@@ -103,6 +116,12 @@ function findNonJsonValue(
         return {
           pointer: `${pointer}/${key}`,
           reason: 'non-enumerable own property (dropped by JSON)',
+        };
+      }
+      if (descriptor && (descriptor.get || descriptor.set)) {
+        return {
+          pointer: `${pointer}/${key}`,
+          reason: 'accessor property (its value can change between validation and JSON)',
         };
       }
       const keyIssue = findNonJsonString(key, `${pointer}/${key}`);

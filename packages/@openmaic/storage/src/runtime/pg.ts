@@ -194,6 +194,15 @@ function isUniqueViolation(error: unknown): boolean {
   );
 }
 
+// PostgreSQL text parameters reject NUL and unpaired UTF-16 surrogates before
+// SQL can apply absence semantics. In Unicode mode, a valid surrogate pair is
+// consumed as one astral code point, so this class matches only lone halves.
+const PG_UNQUERYABLE_KEY = /\u0000|[\uD800-\uDFFF]/u;
+
+function isPgQueryableKey(value: string): boolean {
+  return !PG_UNQUERYABLE_KEY.test(value);
+}
+
 // 40001 is not reachable under the READ COMMITTED isolation this store assumes,
 // but remains retryable in case a host injects REPEATABLE READ or SERIALIZABLE
 // at the connection or session level. appendRecord intentionally owns the only
@@ -313,6 +322,7 @@ export class PgRuntimeStore implements RuntimeStore {
   }
 
   async getSession(sessionId: string): Promise<RuntimeSession | undefined> {
+    if (!isPgQueryableKey(sessionId)) return undefined;
     const row = await this.loadSession(this.queryable, sessionId);
     if (!row) return undefined;
     const session = migrateSession(row);
@@ -324,6 +334,7 @@ export class PgRuntimeStore implements RuntimeStore {
   }
 
   async listSessions(stageId: string, learnerKey: string): Promise<RuntimeSession[]> {
+    if (!isPgQueryableKey(stageId) || !isPgQueryableKey(learnerKey)) return [];
     const result = await this.queryable.query<StoredJsonRow>(
       `SELECT data
          FROM runtime_sessions
@@ -353,6 +364,9 @@ export class PgRuntimeStore implements RuntimeStore {
     status: RuntimeSessionStatus,
     updatedAt: string,
   ): Promise<void> {
+    if (!isPgQueryableKey(sessionId)) {
+      throw new Error(`@openmaic/storage: no session ${JSON.stringify(sessionId)}`);
+    }
     await this.transaction(async (queryable) => {
       const row = await this.loadSession(queryable, sessionId, true);
       if (!row) throw new Error(`@openmaic/storage: no session ${JSON.stringify(sessionId)}`);
@@ -364,6 +378,7 @@ export class PgRuntimeStore implements RuntimeStore {
   }
 
   async deleteSession(sessionId: string): Promise<void> {
+    if (!isPgQueryableKey(sessionId)) return;
     await this.queryable.query('DELETE FROM runtime_sessions WHERE id = $1', [sessionId]);
   }
 
@@ -415,7 +430,11 @@ export class PgRuntimeStore implements RuntimeStore {
           const seq = Number(last.rows[0]?.last_seq ?? -1) + 1;
           const record: RuntimeRecord<TPayload> = { ...init, seq };
           assertValid(validateRuntimeRecord(record), `runtime record ${JSON.stringify(init.id)}`);
-          assertJsonValue(record, `runtime record ${JSON.stringify(record.id)}`);
+          const jsonRecord = { ...record } as Record<string, unknown>;
+          for (const [key, value] of Object.entries(jsonRecord)) {
+            if (value === undefined) delete jsonRecord[key];
+          }
+          assertJsonValue(jsonRecord, `runtime record ${JSON.stringify(record.id)}`);
           await queryable.query(
             `INSERT INTO runtime_records
                (id, session_id, seq, scene_id, created_at, data)
@@ -443,6 +462,12 @@ export class PgRuntimeStore implements RuntimeStore {
   }
 
   async listRecords(sessionId: string, opts?: { sceneId?: string }): Promise<RuntimeRecord[]> {
+    if (
+      !isPgQueryableKey(sessionId) ||
+      (opts?.sceneId !== undefined && !isPgQueryableKey(opts.sceneId))
+    ) {
+      return [];
+    }
     const params: unknown[] = [sessionId];
     let filter = '';
     if (opts?.sceneId !== undefined) {
@@ -468,6 +493,8 @@ export class PgRuntimeStore implements RuntimeStore {
     ) {
       throw new Error('@openmaic/storage: learner keys must be non-empty strings');
     }
+    assertJsonValue(toLearnerKey, 'target learner key');
+    if (!isPgQueryableKey(fromLearnerKey)) return 0;
     if (fromLearnerKey === toLearnerKey) return 0;
 
     // This lock set grows without bound with the source learner's session count,
@@ -501,6 +528,7 @@ export class PgRuntimeStore implements RuntimeStore {
   }
 
   async deleteLearnerRuntime(stageId: string, learnerKey: string): Promise<void> {
+    if (!isPgQueryableKey(stageId) || !isPgQueryableKey(learnerKey)) return;
     await this.queryable.query(
       'DELETE FROM runtime_sessions WHERE stage_id = $1 AND learner_key = $2',
       [stageId, learnerKey],
@@ -508,6 +536,7 @@ export class PgRuntimeStore implements RuntimeStore {
   }
 
   async deleteStageRuntime(stageId: string): Promise<void> {
+    if (!isPgQueryableKey(stageId)) return;
     await this.queryable.query('DELETE FROM runtime_sessions WHERE stage_id = $1', [stageId]);
   }
 }
