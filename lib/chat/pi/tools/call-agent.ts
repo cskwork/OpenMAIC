@@ -23,11 +23,7 @@ import {
   toHistoryMessages,
 } from '../prompts';
 import type { SendEvent } from '../types';
-import {
-  buildChildActionTools,
-  createPiWhiteboardBoundaryRuntimeState,
-  createPiWhiteboardRuntimeState,
-} from './classroom-actions';
+import { buildChildActionTools, createPiWhiteboardRuntimeState } from './classroom-actions';
 
 const CallAgentParams = Type.Object({
   agentId: Type.String({
@@ -533,7 +529,6 @@ export function buildCallAgentTool(opts: {
   let consecutiveEmptyTurns = 0;
   let totalAgentAttempts = 0;
   const whiteboardState = createPiWhiteboardRuntimeState(opts.body);
-  const whiteboardBoundaryState = createPiWhiteboardBoundaryRuntimeState(opts.body);
   return {
     name: 'call_agent',
     label: 'Call classroom agent',
@@ -705,7 +700,6 @@ export function buildCallAgentTool(opts: {
         enableWhiteboardTools: opts.enableWhiteboardTools,
         turnKind: isTeacherWrapUpTurn ? 'wrap_up' : 'normal',
         whiteboardState,
-        whiteboardBoundaryState,
       });
       const childToolsByName = new Map(childTools.map((tool) => [tool.name, tool]));
 

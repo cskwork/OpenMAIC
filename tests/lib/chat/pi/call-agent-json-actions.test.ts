@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import type { StatelessChatRequest, StatelessEvent } from '@/lib/types/chat';
-import { getActiveWhiteboardFingerprint } from '@/lib/chat/pi/whiteboard-boundary';
 
 const mocks = vi.hoisted(() => ({
   buildAgent: vi.fn(),
@@ -98,21 +97,6 @@ function makeBody(
     },
     apiKey: '',
   } as unknown as StatelessChatRequest;
-}
-
-function withBoundary(body: StatelessChatRequest, fingerprint?: string): StatelessChatRequest {
-  const snapshot = getActiveWhiteboardFingerprint(body.storeState.stage);
-  if (!snapshot) throw new Error('test body needs an active whiteboard');
-  return {
-    ...body,
-    whiteboardBoundary: {
-      boundaryId: 'boundary-1',
-      sourceSessionId: 'session-old',
-      targetSessionId: 'session-new',
-      whiteboardId: snapshot.whiteboardId,
-      snapshotFingerprint: fingerprint ?? snapshot.fingerprint,
-    },
-  };
 }
 
 function makeMockChildWithJsonOutput(jsonOutput: string) {
@@ -1315,7 +1299,7 @@ describe('Pi call_agent JSON action output', () => {
     expect(onAgentDone).toHaveBeenCalledWith(expect.objectContaining({ actionCount: 1 }));
   });
 
-  it('does not auto-clear existing whiteboard content before a follow-up draw', async () => {
+  it('does not auto-clear existing whiteboard content before a fresh-session draw', async () => {
     mockChildWithJsonOutput(
       JSON.stringify([
         {
@@ -1342,6 +1326,11 @@ describe('Pi call_agent JSON action output', () => {
           agentResponses: [],
           whiteboardLedger: [],
         },
+        piSessionBoundary: {
+          isFirstRequestInLiveSession: true,
+          previousEndSource: 'manual_stop',
+          sameSceneAsPrevious: true,
+        },
       },
       agentConfigs: [slideTeacher],
       send: async (event) => {
@@ -1362,7 +1351,7 @@ describe('Pi call_agent JSON action output', () => {
 
     const result = await tool.execute('call-1', {
       agentId: slideTeacher.id,
-      instruction: 'Continue the same topic.',
+      instruction: 'Draw in the new UI session.',
     });
 
     expect(
@@ -2102,265 +2091,6 @@ describe('Pi call_agent JSON action output', () => {
     expect(r2.details.skipped).toBeFalsy();
     // Third consecutive empty attempt is refused deterministically instead of looping forever
     expect(r3.details).toMatchObject({ skipped: true, reason: 'consecutive_empty_turns' });
-  });
-
-  it('injects one guarded clear before the first fresh-session draw without using its budget', async () => {
-    mockChildWithJsonOutput(
-      JSON.stringify([
-        {
-          type: 'action',
-          name: 'wb_draw_text',
-          params: { content: 'new topic', x: 80, y: 120 },
-        },
-        { type: 'text', content: 'Starting a new diagram.' },
-      ]),
-    );
-    const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
-    const events: StatelessEvent[] = [];
-    const onAgentDone = vi.fn();
-    const onActionDone = vi.fn();
-    const body = withBoundary(
-      makeBody({
-        whiteboardOpen: true,
-        whiteboardElements: [{ id: 'old-note', type: 'text', content: 'old topic' }],
-      }),
-    );
-    const tool = buildCallAgentTool({
-      ...baseToolOpts(events),
-      body,
-      agentConfigs: [slideTeacher],
-      onAgentDone,
-      onActionDone,
-      maxActionsPerAgent: 1,
-    });
-
-    await tool.execute('call-1', { agentId: slideTeacher.id, instruction: 'Draw the new topic.' });
-
-    const actions = events.filter((event) => event.type === 'action');
-    expect(actions.map((event) => event.data.actionName)).toEqual(['wb_clear', 'wb_draw_text']);
-    expect(actions[0].data.boundary).toMatchObject({
-      boundaryId: 'boundary-1',
-      targetSessionId: 'session-new',
-      disposition: 'guarded_clear',
-    });
-    expect(actions[1].data.boundary?.disposition).toBe('consume');
-    expect(onActionDone.mock.calls.map((call) => call[0]?.actionName)).toEqual(['wb_draw_text']);
-    expect(onAgentDone).toHaveBeenCalledWith(expect.objectContaining({ actionCount: 1 }));
-  });
-
-  it('does not clear an empty board and consumes the boundary on the accepted draw', async () => {
-    mockChildWithJsonOutput(
-      JSON.stringify([
-        {
-          type: 'action',
-          name: 'wb_draw_text',
-          params: { content: 'first note', x: 80, y: 120 },
-        },
-      ]),
-    );
-    const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
-    const events: StatelessEvent[] = [];
-    const tool = buildCallAgentTool({
-      ...baseToolOpts(events),
-      body: withBoundary(makeBody({ whiteboardOpen: true, whiteboardElements: [] })),
-      agentConfigs: [slideTeacher],
-    });
-
-    await tool.execute('call-1', { agentId: slideTeacher.id, instruction: 'Draw once.' });
-
-    const actions = events.filter((event) => event.type === 'action');
-    expect(actions.map((event) => event.data.actionName)).toEqual(['wb_draw_text']);
-    expect(actions[0].data.boundary?.disposition).toBe('consume');
-  });
-
-  it('invalidates instead of auto-clearing when the request snapshot changed', async () => {
-    mockChildWithJsonOutput(
-      JSON.stringify([
-        {
-          type: 'action',
-          name: 'wb_draw_text',
-          params: { content: 'preserve external content', x: 80, y: 120 },
-        },
-      ]),
-    );
-    const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
-    const events: StatelessEvent[] = [];
-    const tool = buildCallAgentTool({
-      ...baseToolOpts(events),
-      body: withBoundary(
-        makeBody({
-          whiteboardOpen: true,
-          whiteboardElements: [{ id: 'external-note', type: 'text', content: 'new content' }],
-        }),
-        'stale-fingerprint',
-      ),
-      agentConfigs: [slideTeacher],
-    });
-
-    await tool.execute('call-1', { agentId: slideTeacher.id, instruction: 'Draw safely.' });
-
-    const actions = events.filter((event) => event.type === 'action');
-    expect(actions.map((event) => event.data.actionName)).toEqual(['wb_draw_text']);
-    expect(actions[0].data.boundary?.disposition).toBe('invalidate');
-  });
-
-  it('does not consume the boundary on a rejected draw before a later valid draw', async () => {
-    mockChildWithJsonOutput(
-      JSON.stringify([
-        {
-          type: 'action',
-          name: 'wb_draw_table',
-          params: { x: 0, y: 0, width: 100, height: 100, data: [] },
-        },
-        {
-          type: 'action',
-          name: 'wb_draw_text',
-          params: { content: 'valid draw', x: 80, y: 120 },
-        },
-      ]),
-    );
-    const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
-    const events: StatelessEvent[] = [];
-    const tool = buildCallAgentTool({
-      ...baseToolOpts(events),
-      body: withBoundary(
-        makeBody({
-          whiteboardOpen: true,
-          whiteboardElements: [{ id: 'old-note', type: 'text', content: 'old topic' }],
-        }),
-      ),
-      agentConfigs: [slideTeacher],
-    });
-
-    await tool.execute('call-1', { agentId: slideTeacher.id, instruction: 'Try then draw.' });
-
-    expect(
-      events.filter((event) => event.type === 'action').map((event) => event.data.actionName),
-    ).toEqual(['wb_clear', 'wb_draw_text']);
-  });
-
-  it('shares the fresh-session clear latch across child agent turns', async () => {
-    mocks.buildAgent
-      .mockReturnValueOnce(
-        makeMockChildWithJsonOutput(
-          JSON.stringify([
-            {
-              type: 'action',
-              name: 'wb_draw_text',
-              params: { content: 'first child', x: 80, y: 120 },
-            },
-          ]),
-        ),
-      )
-      .mockReturnValueOnce(
-        makeMockChildWithJsonOutput(
-          JSON.stringify([
-            {
-              type: 'action',
-              name: 'wb_draw_text',
-              params: { content: 'second child', x: 80, y: 180 },
-            },
-          ]),
-        ),
-      );
-    const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
-    const events: StatelessEvent[] = [];
-    const tool = buildCallAgentTool({
-      ...baseToolOpts(events),
-      body: withBoundary(
-        makeBody({
-          whiteboardOpen: true,
-          whiteboardElements: [{ id: 'old-note', type: 'text', content: 'old topic' }],
-        }),
-      ),
-      agentConfigs: [slideTeacher],
-    });
-
-    await tool.execute('call-1', { agentId: slideTeacher.id, instruction: 'First draw.' });
-    await tool.execute('call-2', { agentId: slideTeacher.id, instruction: 'Second draw.' });
-
-    expect(
-      events.filter((event) => event.type === 'action').map((event) => event.data.actionName),
-    ).toEqual(['wb_clear', 'wb_draw_text', 'wb_draw_text']);
-  });
-
-  it('keeps tentative server runtime conservative until the next client snapshot', async () => {
-    mocks.buildAgent
-      .mockReturnValueOnce(
-        makeMockChildWithJsonOutput(
-          JSON.stringify([
-            {
-              type: 'action',
-              name: 'wb_draw_text',
-              params: { content: 'new topic', x: 80, y: 120 },
-            },
-          ]),
-        ),
-      )
-      .mockReturnValueOnce(
-        makeMockChildWithJsonOutput(
-          JSON.stringify([
-            { type: 'action', name: 'wb_delete', params: { elementId: 'old-note' } },
-          ]),
-        ),
-      );
-    const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
-    const events: StatelessEvent[] = [];
-    const onActionDone = vi.fn();
-    const tool = buildCallAgentTool({
-      ...baseToolOpts(events),
-      body: withBoundary(
-        makeBody({
-          whiteboardOpen: true,
-          whiteboardElements: [{ id: 'old-note', type: 'text', content: 'old topic' }],
-        }),
-      ),
-      agentConfigs: [slideTeacher],
-      onActionDone,
-    });
-
-    await tool.execute('call-1', { agentId: slideTeacher.id, instruction: 'Draw.' });
-    await tool.execute('call-2', { agentId: slideTeacher.id, instruction: 'Delete old note.' });
-
-    expect(
-      events.filter((event) => event.type === 'action').map((event) => event.data.actionName),
-    ).toEqual(['wb_clear', 'wb_draw_text', 'wb_delete']);
-    expect(onActionDone.mock.calls.map((call) => call[0]?.actionName)).toEqual([
-      'wb_draw_text',
-      'wb_delete',
-    ]);
-  });
-
-  it('does not inject another clear after the agent explicitly clears the boundary', async () => {
-    mockChildWithJsonOutput(
-      JSON.stringify([
-        { type: 'action', name: 'wb_clear', params: {} },
-        {
-          type: 'action',
-          name: 'wb_draw_text',
-          params: { content: 'after explicit clear', x: 80, y: 120 },
-        },
-      ]),
-    );
-    const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
-    const events: StatelessEvent[] = [];
-    const tool = buildCallAgentTool({
-      ...baseToolOpts(events),
-      body: withBoundary(
-        makeBody({
-          whiteboardOpen: true,
-          whiteboardElements: [{ id: 'old-note', type: 'text', content: 'old topic' }],
-        }),
-      ),
-      agentConfigs: [slideTeacher],
-    });
-
-    await tool.execute('call-1', { agentId: slideTeacher.id, instruction: 'Clear then draw.' });
-
-    const actions = events.filter((event) => event.type === 'action');
-    expect(actions.map((event) => event.data.actionName)).toEqual(['wb_clear', 'wb_draw_text']);
-    expect(actions[0].data.boundary?.disposition).toBe('consume');
-    expect(actions[1].data.boundary).toBeUndefined();
   });
 
   it('treats a thrown child run as an empty turn without escaping execute', async () => {

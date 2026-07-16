@@ -172,6 +172,79 @@ describe('Pi child prompt structured output', () => {
     expect(prompt).not.toContain('- discussion:');
   });
 
+  it('renders first-request session context alongside the current slide and persisted board', () => {
+    const body = makeBody({
+      piSessionBoundary: {
+        isFirstRequestInLiveSession: true,
+        previousEndSource: 'manual_stop',
+        sameSceneAsPrevious: false,
+      },
+      storeState: {
+        stage: {
+          id: 'stage-1',
+          name: 'City Cooling',
+          whiteboard: [
+            {
+              id: 'whiteboard-1',
+              elements: [
+                {
+                  id: 'old-note',
+                  type: 'text',
+                  content: 'previous topic diagram',
+                  left: 80,
+                  top: 120,
+                  width: 300,
+                  height: 80,
+                } as never,
+              ],
+            },
+          ],
+        },
+        scenes: [
+          {
+            id: 'scene-2',
+            title: 'New slide',
+            type: 'slide',
+            content: { type: 'slide', canvas: { elements: [] } as never },
+          },
+        ],
+        currentSceneId: 'scene-2',
+        whiteboardOpen: true,
+      } as never,
+    });
+
+    const prompt = buildChildPrompt(body, agents[0], [], [], ['wb_draw_text', 'wb_clear']);
+
+    expect(prompt).toContain('# Live Session Context');
+    expect(prompt).toContain('first request of a newly created UI live session');
+    expect(prompt).toContain('previous live session ended via: manual_stop');
+    expect(prompt).toContain('current scene differs from the previous live session');
+    expect(prompt).toContain('NOT automatically a semantic topic boundary');
+    expect(prompt).toContain('Current scene: "New slide"');
+    expect(prompt).toContain('[id:old-note]');
+    expect(prompt).toContain('previous topic diagram');
+  });
+
+  it('only teaches semantic clearing when wb_clear is executable', () => {
+    const boundaryBody = makeBody({
+      piSessionBoundary: { isFirstRequestInLiveSession: true },
+    });
+    const withClear = buildChildPrompt(
+      boundaryBody,
+      agents[0],
+      [],
+      [],
+      ['wb_draw_text', 'wb_clear'],
+    );
+    const withoutClear = buildChildPrompt(boundaryBody, agents[0], [], [], ['wb_draw_text']);
+
+    expect(withClear).toContain('Preserve the current whiteboard');
+    expect(withClear).toContain('Use wb_clear only when the new topic is semantically unrelated');
+    expect(withClear).toContain('Do not clear merely because the user manually stopped earlier');
+    expect(withoutClear).not.toContain('Use wb_clear only when');
+    expect(withoutClear).not.toContain('Do not clear merely because');
+  });
+
   it('teaches smart whiteboard layout, trigger rules, and visual type choices', () => {
     const prompt = buildChildPrompt(
       makeBody(),

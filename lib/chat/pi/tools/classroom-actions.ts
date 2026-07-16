@@ -5,8 +5,6 @@ import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import { getEffectiveActions } from '@/lib/orchestration/tool-schemas';
 import type { WhiteboardActionRecord } from '@/lib/orchestration/types';
 import type { StatelessChatRequest } from '@/lib/types/chat';
-import type { WhiteboardBoundaryActionMetadata } from '@/lib/types/chat';
-import { getActiveWhiteboardFingerprint } from '@/lib/chat/pi/whiteboard-boundary';
 import type { SendEvent } from '../types';
 
 const SpotlightParams = Type.Object({
@@ -247,33 +245,6 @@ export interface PiWhiteboardRuntimeState {
   codeLineIdsByElementId: Map<string, Set<string>>;
 }
 
-export interface PiWhiteboardBoundaryRuntimeState {
-  boundary: NonNullable<StatelessChatRequest['whiteboardBoundary']> | null;
-  requestState: 'eligible' | 'empty' | 'invalid' | 'none';
-  settled: boolean;
-}
-
-export function createPiWhiteboardBoundaryRuntimeState(
-  body: StatelessChatRequest,
-): PiWhiteboardBoundaryRuntimeState {
-  const boundary = body.whiteboardBoundary ?? null;
-  if (!boundary) return { boundary: null, requestState: 'none', settled: false };
-
-  const snapshot = getActiveWhiteboardFingerprint(body.storeState.stage);
-  if (
-    !snapshot ||
-    snapshot.whiteboardId !== boundary.whiteboardId ||
-    snapshot.fingerprint !== boundary.snapshotFingerprint
-  ) {
-    return { boundary, requestState: 'invalid', settled: false };
-  }
-  return {
-    boundary,
-    requestState: snapshot.elementCount === 0 ? 'empty' : 'eligible',
-    settled: false,
-  };
-}
-
 export function createPiWhiteboardRuntimeState(
   body: StatelessChatRequest,
 ): PiWhiteboardRuntimeState {
@@ -306,7 +277,6 @@ export function buildChildActionTools(opts: {
   enableWhiteboardTools: boolean;
   turnKind?: 'normal' | 'wrap_up';
   whiteboardState?: PiWhiteboardRuntimeState;
-  whiteboardBoundaryState?: PiWhiteboardBoundaryRuntimeState;
 }): AgentTool[] {
   const currentScene = opts.body.storeState.currentSceneId
     ? opts.body.storeState.scenes.find((scene) => scene.id === opts.body.storeState.currentSceneId)
@@ -339,22 +309,6 @@ export function buildChildActionTools(opts: {
   );
   let emittedActionCount = 0;
   const whiteboardState = opts.whiteboardState ?? createPiWhiteboardRuntimeState(opts.body);
-  const boundaryState =
-    opts.whiteboardBoundaryState ?? createPiWhiteboardBoundaryRuntimeState(opts.body);
-
-  const boundaryMetadata = (
-    disposition: WhiteboardBoundaryActionMetadata['disposition'],
-  ): WhiteboardBoundaryActionMetadata | undefined => {
-    const boundary = boundaryState.boundary;
-    if (!boundary) return undefined;
-    return {
-      boundaryId: boundary.boundaryId,
-      targetSessionId: boundary.targetSessionId,
-      disposition,
-      expectedWhiteboardId: boundary.whiteboardId,
-      expectedFingerprint: boundary.snapshotFingerprint,
-    };
-  };
 
   const makeActionTool = <
     TParams extends
@@ -597,35 +551,6 @@ export function buildChildActionTools(opts: {
         }
       }
 
-      let actionBoundary: WhiteboardBoundaryActionMetadata | undefined;
-      const consumesBoundary =
-        name === 'wb_clear' ||
-        name === 'wb_edit_code' ||
-        name === 'wb_delete' ||
-        isWhiteboardDrawAction(name);
-
-      if (consumesBoundary && !boundaryState.settled && boundaryState.boundary) {
-        actionBoundary = boundaryMetadata(
-          boundaryState.requestState === 'invalid' ? 'invalidate' : 'consume',
-        );
-
-        if (isWhiteboardDrawAction(name) && boundaryState.requestState === 'eligible') {
-          const clearActionId = nanoid();
-          await opts.send({
-            type: 'action',
-            data: {
-              actionId: clearActionId,
-              actionName: 'wb_clear',
-              params: {},
-              agentId: opts.agent.id,
-              messageId: opts.messageId,
-              boundary: boundaryMetadata('guarded_clear'),
-            },
-          });
-        }
-        boundaryState.settled = true;
-      }
-
       const actionId = nanoid();
       emittedActionCount += 1;
       await opts.send({
@@ -636,7 +561,6 @@ export function buildChildActionTools(opts: {
           params: actionParams,
           agentId: opts.agent.id,
           messageId: opts.messageId,
-          boundary: actionBoundary,
         },
       });
       if (name === 'wb_open') whiteboardState.open = true;

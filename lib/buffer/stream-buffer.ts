@@ -1,4 +1,4 @@
-import type { DirectorState, WhiteboardBoundaryActionMetadata } from '@/lib/types/chat';
+import type { DirectorState } from '@/lib/types/chat';
 
 /**
  * StreamBuffer — unified presentation pacing layer.
@@ -51,7 +51,6 @@ export interface ActionItem {
   actionName: string;
   params: Record<string, unknown>;
   agentId: string;
-  boundary?: WhiteboardBoundaryActionMetadata;
 }
 
 export interface ThinkingItem {

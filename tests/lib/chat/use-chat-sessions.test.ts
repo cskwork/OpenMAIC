@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatSession } from '@/lib/types/chat';
 import {
-  claimWhiteboardSessionBoundary,
-  createPendingWhiteboardSessionBoundary,
+  consumePiSessionBoundaryContext,
+  createPreviousLiveSessionContext,
+  createPiSessionBoundaryContext,
+  getPiSessionBoundaryContext,
   getPiSingleRequestOutcome,
   isOpenLiveSession,
   normalizeStoredSessionsForRestore,
-  reconcileWhiteboardBoundariesAfterSceneChange,
   retireLiveRequestResources,
   resumeSoftClosingSessionForFollowUp,
   resumeSoftClosingSessionWithoutMessage,
   runPiSingleRequest,
-  settleClaimedWhiteboardSessionBoundary,
   shouldAwaitPresentationAction,
   withPiInclassWhiteboardTools,
   MANUAL_STOP_END_OPTIONS,
@@ -51,137 +51,79 @@ describe('normalizeStoredSessionsForRestore', () => {
       ['completed', 'completed', undefined],
     ]);
   });
-
-  it('discards persisted boundary tokens on restore', () => {
-    const [restored] = normalizeStoredSessionsForRestore([
-      makeSession({
-        status: 'active',
-        whiteboardBoundary: {
-          boundaryId: 'boundary-1',
-          sourceSessionId: 'old',
-          targetSessionId: 'session-1',
-          whiteboardId: 'wb-1',
-          snapshotFingerprint: 'fingerprint',
-          status: 'claimed',
-        },
-      }),
-    ]);
-
-    expect(restored.whiteboardBoundary).toBeUndefined();
-  });
 });
 
-describe('whiteboard session boundary lifecycle', () => {
-  const stage = {
-    id: 'stage-1',
-    whiteboard: [
-      {
-        id: 'wb-1',
-        elements: [{ id: 'old-note', type: 'text', content: 'old topic' }],
-      },
-    ],
-  } as never;
-
-  it('mints after manual-stop capture and lets exactly one new Pi live session claim it', () => {
-    expect(MANUAL_STOP_END_OPTIONS).toEqual({ source: 'manual_stop' });
-    const pending = createPendingWhiteboardSessionBoundary('session-old', stage, 'boundary-1');
-    const first = claimWhiteboardSessionBoundary(pending, 'session-new', 'qa', true);
-    const second = claimWhiteboardSessionBoundary(
-      first.pending,
-      'session-later',
-      'discussion',
-      true,
+describe('Pi live-session context lifecycle', () => {
+  it('keeps the ended session scene when the store already points at the next scene', () => {
+    const previous = createPreviousLiveSessionContext(
+      makeSession({ sceneId: 'scene-old' }),
+      'scene-new',
+      'scene_switch',
     );
 
-    expect(first.boundary).toMatchObject({
-      boundaryId: 'boundary-1',
-      sourceSessionId: 'session-old',
-      targetSessionId: 'session-new',
-      status: 'claimed',
-    });
-    expect(second.boundary).toBeUndefined();
-  });
-
-  it('discards pending at a lecture boundary instead of leaking it to a later QA', () => {
-    const pending = createPendingWhiteboardSessionBoundary('session-old', stage, 'boundary-1');
-    const lecture = claimWhiteboardSessionBoundary(pending, 'lecture-1', 'lecture', true);
-    const laterQa = claimWhiteboardSessionBoundary(lecture.pending, 'session-new', 'qa', true);
-
-    expect(lecture.boundary).toBeUndefined();
-    expect(laterQa.boundary).toBeUndefined();
-  });
-
-  it('keeps a claimed token across text-only requests until a matching mutation settles it', () => {
-    const pending = createPendingWhiteboardSessionBoundary('session-old', stage, 'boundary-1');
-    const boundary = claimWhiteboardSessionBoundary(pending, 'session-new', 'qa', true).boundary;
-
-    // A text-only response never calls the settlement helper, so the same token
-    // remains available to the next request in this session.
-    expect(boundary?.status).toBe('claimed');
-    expect(
-      settleClaimedWhiteboardSessionBoundary(boundary, 'session-new', 'boundary-1', 'consumed')
-        ?.status,
-    ).toBe('consumed');
-  });
-
-  it('rejects late or cross-session action settlement', () => {
-    const pending = createPendingWhiteboardSessionBoundary('session-old', stage, 'boundary-1');
-    const boundary = claimWhiteboardSessionBoundary(pending, 'session-new', 'qa', true).boundary;
-
-    expect(
-      settleClaimedWhiteboardSessionBoundary(boundary, 'session-later', 'boundary-1', 'consumed'),
-    ).toBeUndefined();
-    expect(
-      settleClaimedWhiteboardSessionBoundary(boundary, 'session-new', 'boundary-old', 'consumed'),
-    ).toBeUndefined();
-  });
-
-  it('does not expose boundary state to the non-Pi runtime', () => {
-    const pending = createPendingWhiteboardSessionBoundary('session-old', stage, 'boundary-1');
-    expect(claimWhiteboardSessionBoundary(pending, 'session-new', 'qa', false)).toEqual({
-      pending: undefined,
+    expect(previous).toEqual({ endSource: 'scene_switch', sceneId: 'scene-old' });
+    expect(createPiSessionBoundaryContext(previous, 'scene-new')).toEqual({
+      isFirstRequestInLiveSession: true,
+      previousEndSource: 'scene_switch',
+      sameSceneAsPrevious: false,
     });
   });
 
-  it('preserves an unclaimed manual-stop boundary across a scene change', () => {
-    const pending = createPendingWhiteboardSessionBoundary('session-old', stage, 'boundary-1');
-    const changed = reconcileWhiteboardBoundariesAfterSceneChange(pending, []);
-    const claimed = claimWhiteboardSessionBoundary(changed.pending, 'session-new', 'qa', true);
+  it('falls back to the current store scene when the session has no captured scene', () => {
+    expect(createPreviousLiveSessionContext(makeSession(), 'scene-current', 'manual_stop')).toEqual(
+      {
+        endSource: 'manual_stop',
+        sceneId: 'scene-current',
+      },
+    );
+  });
 
-    expect(changed.pending).toEqual(pending);
-    expect(claimed.boundary).toMatchObject({
-      boundaryId: 'boundary-1',
-      sourceSessionId: 'session-old',
-      targetSessionId: 'session-new',
-      status: 'claimed',
+  it('describes the first request without treating the UI boundary as a clear command', () => {
+    expect(MANUAL_STOP_END_OPTIONS).toEqual({ source: 'manual_stop' });
+    expect(
+      createPiSessionBoundaryContext({ endSource: 'manual_stop', sceneId: 'scene-1' }, 'scene-1'),
+    ).toEqual({
+      isFirstRequestInLiveSession: true,
+      previousEndSource: 'manual_stop',
+      sameSceneAsPrevious: true,
     });
   });
 
-  it('does not create a boundary for an ordinary scene change', () => {
-    const changed = reconcileWhiteboardBoundariesAfterSceneChange(undefined, []);
-
-    expect(changed.pending).toBeUndefined();
+  it('reports a scene change without implying that the board must be cleared', () => {
     expect(
-      claimWhiteboardSessionBoundary(changed.pending, 'session-new', 'qa', true).boundary,
-    ).toBeUndefined();
+      createPiSessionBoundaryContext({ endSource: 'turn_complete', sceneId: 'scene-1' }, 'scene-2'),
+    ).toEqual({
+      isFirstRequestInLiveSession: true,
+      previousEndSource: 'turn_complete',
+      sameSceneAsPrevious: false,
+    });
   });
 
-  it('drops a claimed session boundary when the scene changes', () => {
-    const pending = createPendingWhiteboardSessionBoundary('session-old', stage, 'boundary-1');
-    const boundary = claimWhiteboardSessionBoundary(pending, 'session-new', 'qa', true).boundary;
-    const changed = reconcileWhiteboardBoundariesAfterSceneChange(undefined, [
-      makeSession({ id: 'session-new', whiteboardBoundary: boundary }),
+  it('can be consumed exactly once so later requests in the same session omit it', () => {
+    const contexts = new Map([
+      ['session-new', createPiSessionBoundaryContext(undefined, 'scene-1')],
     ]);
 
-    expect(changed.sessions[0].whiteboardBoundary).toBeUndefined();
+    const first = getPiSessionBoundaryContext(contexts, 'session-new');
+    expect(first).toEqual({
+      isFirstRequestInLiveSession: true,
+      previousEndSource: undefined,
+      sameSceneAsPrevious: undefined,
+    });
+    expect(first && consumePiSessionBoundaryContext(contexts, 'session-new', first)).toBe(true);
+    expect(getPiSessionBoundaryContext(contexts, 'session-new')).toBeUndefined();
   });
 
-  it('still discards a scene-preserved pending boundary when lecture starts next', () => {
-    const pending = createPendingWhiteboardSessionBoundary('session-old', stage, 'boundary-1');
-    const changed = reconcileWhiteboardBoundariesAfterSceneChange(pending, []);
-    const lecture = claimWhiteboardSessionBoundary(changed.pending, 'lecture-1', 'lecture', true);
+  it('does not consume a replacement context from a stale request callback', () => {
+    const original = createPiSessionBoundaryContext(undefined, 'scene-1');
+    const replacement = createPiSessionBoundaryContext(
+      { endSource: 'scene_switch', sceneId: 'scene-1' },
+      'scene-2',
+    );
+    const contexts = new Map([['session-new', replacement]]);
 
-    expect(lecture).toEqual({ pending: undefined });
+    expect(consumePiSessionBoundaryContext(contexts, 'session-new', original)).toBe(false);
+    expect(getPiSessionBoundaryContext(contexts, 'session-new')).toBe(replacement);
   });
 });
 
@@ -196,14 +138,6 @@ describe('isOpenLiveSession', () => {
 
 describe('resumeSoftClosingSessionForFollowUp', () => {
   it('keeps the visible wrap-up history and reactivates the session for a follow-up', () => {
-    const whiteboardBoundary = {
-      boundaryId: 'boundary-1',
-      sourceSessionId: 'session-old',
-      targetSessionId: 'session-1',
-      whiteboardId: 'wb-1',
-      snapshotFingerprint: 'fingerprint',
-      status: 'claimed' as const,
-    };
     const wrapUpMessage: UIMessage<ChatMessageMetadata> = {
       id: 'teacher-wrap-up',
       role: 'assistant',
@@ -221,7 +155,6 @@ describe('resumeSoftClosingSessionForFollowUp', () => {
         endReason: 'user_done',
         softCloseDeadline: 123,
         messages: [wrapUpMessage],
-        whiteboardBoundary,
       }),
       followUpMessage,
       99,
@@ -232,7 +165,6 @@ describe('resumeSoftClosingSessionForFollowUp', () => {
     expect(next.softCloseDeadline).toBeUndefined();
     expect(next.updatedAt).toBe(99);
     expect(next.messages).toEqual([wrapUpMessage, followUpMessage]);
-    expect(next.whiteboardBoundary).toBe(whiteboardBoundary);
   });
 
   it('resumes without appending a message for explicit continue or input activity', () => {
@@ -391,6 +323,42 @@ describe('shouldAwaitPresentationAction', () => {
 });
 
 describe('runPiSingleRequest', () => {
+  it('does not accept the first-request context when fetch fails before a response', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Promise.reject(new Error('network down'))),
+    );
+    const onResponseAccepted = vi.fn();
+
+    try {
+      await expect(
+        runPiSingleRequest(
+          'session-1',
+          {
+            messages: [],
+            storeState: {},
+            config: { agentIds: ['teacher-1'] },
+            apiKey: '',
+          } as unknown as ChatRequestTemplate,
+          new AbortController(),
+          'qa',
+          () => ({ onEvent: vi.fn(), onIterationEnd: vi.fn() }),
+          vi.fn(),
+          vi.fn(),
+          vi.fn(),
+          vi.fn(),
+          { current: vi.fn() },
+          (key) => key,
+          onResponseAccepted,
+        ),
+      ).rejects.toThrow('network down');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(onResponseAccepted).not.toHaveBeenCalled();
+  });
+
   it('treats EOF without a done event as interrupted without waiting for drain', async () => {
     const encoder = new TextEncoder();
     const body = new ReadableStream<Uint8Array>({
@@ -418,6 +386,7 @@ describe('runPiSingleRequest', () => {
       throw new Error('must not wait for a missing done event');
     });
     const clearAfterError = vi.fn();
+    const onResponseAccepted = vi.fn();
 
     try {
       await runPiSingleRequest(
@@ -437,12 +406,14 @@ describe('runPiSingleRequest', () => {
         vi.fn(),
         { current: vi.fn() },
         (key) => key,
+        onResponseAccepted,
       );
     } finally {
       vi.unstubAllGlobals();
     }
 
     expect(onIterationEnd).not.toHaveBeenCalled();
+    expect(onResponseAccepted).toHaveBeenCalledOnce();
     expect(clearAfterError).toHaveBeenCalledWith('session-1', 'chat.error.streamInterrupted');
   });
 });

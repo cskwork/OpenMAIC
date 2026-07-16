@@ -126,6 +126,7 @@ export function buildChildPrompt(
     'Available actions for this turn:',
     getActionDescriptions(availableActions),
     buildSmartWhiteboardGuidelines(agent.role, availableActions),
+    buildLiveSessionContext(body.piSessionBoundary),
     'Example:',
     '[{"type":"action","name":"spotlight","params":{"elementId":"text_1"}},{"type":"text","content":"看这里，这一步是后面机制成立的关键。"}]',
     '',
@@ -207,13 +208,37 @@ const WHITEBOARD_DRAW_ACTIONS = [
   'wb_draw_code',
 ];
 
+function buildLiveSessionContext(boundary: StatelessChatRequest['piSessionBoundary']): string {
+  if (!boundary?.isFirstRequestInLiveSession) return '';
+
+  const lines = [
+    '',
+    '# Live Session Context',
+    'This is the first request of a newly created UI live session.',
+  ];
+  if (boundary.previousEndSource) {
+    lines.push(`The previous live session ended via: ${boundary.previousEndSource}.`);
+  }
+  if (boundary.sameSceneAsPrevious === true) {
+    lines.push('The current scene is the same as the previous live session.');
+  } else if (boundary.sameSceneAsPrevious === false) {
+    lines.push('The current scene differs from the previous live session.');
+  }
+  lines.push(
+    'This UI session boundary is NOT automatically a semantic topic boundary.',
+    'Use the current slide and whiteboard state below to decide whether the existing board remains relevant.',
+  );
+  return lines.join('\n');
+}
+
 function buildSmartWhiteboardGuidelines(role: string, availableActions: string[]): string {
   const hasWhiteboard = availableActions.some((action) => WHITEBOARD_DRAW_ACTIONS.includes(action));
+  const canClearWhiteboard = availableActions.includes('wb_clear');
   const hasSlidePointer =
     role === 'teacher' &&
     (availableActions.includes('spotlight') || availableActions.includes('laser'));
 
-  if (!hasWhiteboard && !hasSlidePointer) return '';
+  if (!hasWhiteboard && !canClearWhiteboard && !hasSlidePointer) return '';
 
   const lines = [
     '',
@@ -227,7 +252,14 @@ function buildSmartWhiteboardGuidelines(role: string, availableActions: string[]
           '- Drawing is not the goal; better understanding is the goal. If the visual would not add information beyond one clear sentence, answer verbally.',
           '- For simple factual Q&A, short definitions, naming questions, or when the user asks for just one sentence, answer verbally without gratuitous drawing.',
           '- Choose visual type by teaching need: mechanism/causal -> wb_draw_shape + wb_draw_line; comparison -> wb_draw_table or two-column shapes; derivation -> wb_draw_latex; code explanation -> wb_draw_code; trend/data -> wb_draw_chart.',
-          '- Prefer a small number of clear elements. Do not crowd the board; use wb_clear only when the board is already cluttered or the topic changes.',
+          '- Prefer a small number of clear elements. Do not crowd the board.',
+        ].join('\n')
+      : '',
+    canClearWhiteboard
+      ? [
+          '- Preserve the current whiteboard when the request references, continues, extends, or edits its content.',
+          '- Use wb_clear only when the new topic is semantically unrelated, the existing board would cause confusion, or there is not enough space.',
+          '- Do not clear merely because the user manually stopped earlier, a new UI session began, or the slide changed.',
         ].join('\n')
       : '',
     hasSlidePointer

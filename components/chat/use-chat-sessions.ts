@@ -7,8 +7,8 @@ import type {
   SessionStatus,
   ChatMessageMetadata,
   DirectorState,
+  PiSessionBoundaryContext,
   StatelessEvent,
-  WhiteboardSessionBoundary,
 } from '@/lib/types/chat';
 import type { DiscussionRequest } from '@/components/roundtable';
 import type { Action, SpotlightAction, DiscussionAction } from '@/lib/types/action';
@@ -31,9 +31,7 @@ import { toast } from 'sonner';
 import { createLogger } from '@/lib/logger';
 import { isPiChatEnabled } from '@/lib/config/feature-flags';
 import type { CleanupSource } from '@/lib/playback/auto-resume';
-import { getActiveWhiteboardFingerprint } from '@/lib/chat/pi/whiteboard-boundary';
 import { nanoid } from 'nanoid';
-import type { Stage } from '@/lib/types/stage';
 
 const log = createLogger('ChatSessions');
 const SOFT_CLOSE_TIMEOUT_MS = 15_000;
@@ -71,75 +69,48 @@ export interface EndSessionOptions {
 
 export const MANUAL_STOP_END_OPTIONS: EndSessionOptions = { source: 'manual_stop' };
 
-export type PendingWhiteboardSessionBoundary = Omit<
-  WhiteboardSessionBoundary,
-  'targetSessionId' | 'status'
->;
+export interface PreviousLiveSessionContext {
+  endSource?: CleanupSource;
+  sceneId?: string;
+}
 
-export function createPendingWhiteboardSessionBoundary(
-  sourceSessionId: string,
-  stage: Stage | null | undefined,
-  boundaryId: string = nanoid(),
-): PendingWhiteboardSessionBoundary | undefined {
-  const snapshot = getActiveWhiteboardFingerprint(stage);
-  if (!snapshot) return undefined;
+export function createPreviousLiveSessionContext(
+  session: Pick<ChatSession, 'sceneId'>,
+  currentSceneId: string | null | undefined,
+  endSource?: CleanupSource,
+): PreviousLiveSessionContext {
   return {
-    boundaryId,
-    sourceSessionId,
-    whiteboardId: snapshot.whiteboardId,
-    snapshotFingerprint: snapshot.fingerprint,
+    endSource,
+    sceneId: session.sceneId ?? currentSceneId ?? undefined,
   };
 }
 
-export function claimWhiteboardSessionBoundary(
-  pending: PendingWhiteboardSessionBoundary | undefined,
+export function createPiSessionBoundaryContext(
+  previous: PreviousLiveSessionContext | undefined,
+  currentSceneId: string | null | undefined,
+): PiSessionBoundaryContext {
+  return {
+    isFirstRequestInLiveSession: true,
+    previousEndSource: previous?.endSource,
+    sameSceneAsPrevious:
+      previous?.sceneId && currentSceneId ? previous.sceneId === currentSceneId : undefined,
+  };
+}
+
+export function getPiSessionBoundaryContext(
+  contexts: Map<string, PiSessionBoundaryContext>,
   sessionId: string,
-  type: SessionType,
-  piEnabled: boolean,
-): { pending: undefined; boundary?: WhiteboardSessionBoundary } {
-  if (!pending || !piEnabled || (type !== 'qa' && type !== 'discussion')) {
-    return { pending: undefined };
-  }
-  return {
-    pending: undefined,
-    boundary: {
-      ...pending,
-      targetSessionId: sessionId,
-      status: 'claimed',
-    },
-  };
+): PiSessionBoundaryContext | undefined {
+  return contexts.get(sessionId);
 }
 
-export function settleClaimedWhiteboardSessionBoundary(
-  boundary: WhiteboardSessionBoundary | undefined,
+export function consumePiSessionBoundaryContext(
+  contexts: Map<string, PiSessionBoundaryContext>,
   sessionId: string,
-  boundaryId: string,
-  status: 'consumed' | 'invalidated',
-): WhiteboardSessionBoundary | undefined {
-  if (
-    !boundary ||
-    boundary.boundaryId !== boundaryId ||
-    boundary.targetSessionId !== sessionId ||
-    boundary.status !== 'claimed'
-  ) {
-    return undefined;
-  }
-  return { ...boundary, status };
-}
-
-export function reconcileWhiteboardBoundariesAfterSceneChange(
-  pending: PendingWhiteboardSessionBoundary | undefined,
-  sessions: ChatSession[],
-): {
-  pending: PendingWhiteboardSessionBoundary | undefined;
-  sessions: ChatSession[];
-} {
-  return {
-    pending,
-    sessions: sessions.map((session) =>
-      session.whiteboardBoundary ? { ...session, whiteboardBoundary: undefined } : session,
-    ),
-  };
+  expected: PiSessionBoundaryContext,
+): boolean {
+  if (contexts.get(sessionId) !== expected) return false;
+  return contexts.delete(sessionId);
 }
 
 /**
@@ -215,13 +186,7 @@ export type ChatRequestTemplate = {
   providerType?: string;
   thinkingConfig?: ThinkingConfig;
   directorState?: DirectorState;
-  whiteboardBoundary?: {
-    boundaryId: string;
-    sourceSessionId: string;
-    targetSessionId: string;
-    whiteboardId: string;
-    snapshotFingerprint: string;
-  };
+  piSessionBoundary?: PiSessionBoundaryContext;
 };
 
 export function withPiInclassWhiteboardTools(
@@ -278,7 +243,6 @@ export function normalizeStoredSessionsForRestore(sessions: ChatSession[]): Chat
         ...session,
         status: 'interrupted' as SessionStatus,
         softCloseDeadline: undefined,
-        whiteboardBoundary: undefined,
       };
     }
     if (session.status === 'soft-closing') {
@@ -286,12 +250,9 @@ export function normalizeStoredSessionsForRestore(sessions: ChatSession[]): Chat
         ...session,
         status: 'completed' as SessionStatus,
         softCloseDeadline: undefined,
-        whiteboardBoundary: undefined,
       };
     }
-    return session.whiteboardBoundary || session.softCloseDeadline
-      ? { ...session, softCloseDeadline: undefined, whiteboardBoundary: undefined }
-      : session;
+    return session.softCloseDeadline ? { ...session, softCloseDeadline: undefined } : session;
   });
 }
 
@@ -375,11 +336,12 @@ export async function runPiSingleRequest(
   ) => void,
   markSessionCompleted: (
     sessionId: string,
-    data?: { endReason?: string; directorState?: DirectorState },
+    data?: { endReason?: string; directorState?: DirectorState; source?: CleanupSource },
   ) => void,
   storeDirectorState: (sessionId: string, directorState?: DirectorState) => void,
   onStopSessionRef: { current?: ((payload: SessionCleanupPayload) => void) | undefined },
   t: (key: string) => string,
+  onResponseAccepted?: () => void,
 ): Promise<void> {
   const consumer = createConsumer(sessionId, controller, sessionType);
   const response = await fetch('/api/chat/pi', {
@@ -395,6 +357,7 @@ export async function runPiSingleRequest(
   if (!response.body) {
     throw new Error('Pi chat response body is empty');
   }
+  onResponseAccepted?.();
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -444,7 +407,10 @@ export async function runPiSingleRequest(
 
   // The Pi endpoint owns the whole server-side loop; one successful done closes
   // this classroom turn instead of asking the frontend to POST another turn.
-  markSessionCompleted(sessionId, { directorState: outcome.directorState });
+  markSessionCompleted(sessionId, {
+    directorState: outcome.directorState,
+    source: 'turn_complete',
+  });
   onStopSessionRef.current?.({ sessionId, source: 'turn_complete' });
 }
 
@@ -505,10 +471,8 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     new Map(),
   );
   const sessionsRef = useRef<ChatSession[]>(sessions);
-  const pendingWhiteboardBoundaryRef = useRef<PendingWhiteboardSessionBoundary | undefined>(
-    undefined,
-  );
-  const whiteboardBoundariesRef = useRef<Map<string, WhiteboardSessionBoundary>>(new Map());
+  const previousLiveSessionRef = useRef<PreviousLiveSessionContext | undefined>(undefined);
+  const piSessionBoundariesRef = useRef<Map<string, PiSessionBoundaryContext>>(new Map());
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
@@ -537,57 +501,25 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     setSessions(normalizeStoredSessionsForRestore(stored));
     setActiveSessionId(null);
     setExpandedSessionIds(new Set());
-    pendingWhiteboardBoundaryRef.current = undefined;
-    whiteboardBoundariesRef.current.clear();
+    previousLiveSessionRef.current = undefined;
+    piSessionBoundariesRef.current.clear();
   }, [stageId]);
 
   useEffect(() => {
     if (currentSceneId === currentSceneIdRef.current) return;
     currentSceneIdRef.current = currentSceneId;
-    // The stage whiteboard persists across slides. Preserve an unclaimed
-    // manual-stop boundary so the next live session can clear the old topic,
-    // while dropping tokens already bound to a session from the previous slide.
-    whiteboardBoundariesRef.current.clear();
-    const pendingBoundary = pendingWhiteboardBoundaryRef.current;
-    setSessions(
-      (prev) => reconcileWhiteboardBoundariesAfterSceneChange(pendingBoundary, prev).sessions,
-    );
   }, [currentSceneId]);
 
-  const settleWhiteboardBoundary = useCallback(
-    (sessionId: string, boundaryId: string, status: 'consumed' | 'invalidated'): boolean => {
-      const settled = settleClaimedWhiteboardSessionBoundary(
-        whiteboardBoundariesRef.current.get(sessionId),
-        sessionId,
-        boundaryId,
-        status,
-      );
-      if (!settled) return false;
-      whiteboardBoundariesRef.current.set(sessionId, settled);
-      setSessions((prev) =>
-        prev.map((session) =>
-          session.id === sessionId ? { ...session, whiteboardBoundary: settled } : session,
-        ),
-      );
-      return true;
-    },
-    [],
-  );
+  const registerFirstPiRequest = useCallback((sessionId: string) => {
+    piSessionBoundariesRef.current.set(
+      sessionId,
+      createPiSessionBoundaryContext(previousLiveSessionRef.current, currentSceneIdRef.current),
+    );
+  }, []);
 
-  const claimPendingWhiteboardBoundary = useCallback(
-    (sessionId: string, type: SessionType): WhiteboardSessionBoundary | undefined => {
-      const claim = claimWhiteboardSessionBoundary(
-        pendingWhiteboardBoundaryRef.current,
-        sessionId,
-        type,
-        isPiChatEnabled(),
-      );
-      pendingWhiteboardBoundaryRef.current = claim.pending;
-      if (claim.boundary) whiteboardBoundariesRef.current.set(sessionId, claim.boundary);
-      return claim.boundary;
-    },
-    [],
-  );
+  const getFirstPiRequestContext = useCallback((sessionId: string) => {
+    return getPiSessionBoundaryContext(piSessionBoundariesRef.current, sessionId);
+  }, []);
 
   // Sync sessions back to store for persistence (debounced via store's debouncedSave)
   // Guard: only write to the currently active stage
@@ -654,8 +586,19 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   );
 
   const markSessionCompleted = useCallback(
-    (sessionId: string, data?: { endReason?: string; directorState?: DirectorState }) => {
-      whiteboardBoundariesRef.current.delete(sessionId);
+    (
+      sessionId: string,
+      data?: { endReason?: string; directorState?: DirectorState; source?: CleanupSource },
+    ) => {
+      const session = sessionsRef.current.find((candidate) => candidate.id === sessionId);
+      if (session && isLiveSessionType(session)) {
+        previousLiveSessionRef.current = createPreviousLiveSessionContext(
+          session,
+          currentSceneIdRef.current,
+          data?.source,
+        );
+      }
+      piSessionBoundariesRef.current.delete(sessionId);
       setSessions((prev) =>
         prev.map((s) =>
           s.id === sessionId
@@ -666,7 +609,6 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
                 endReason: data?.endReason ?? s.endReason,
                 softCloseDeadline: undefined,
                 directorState: data?.directorState ?? s.directorState,
-                whiteboardBoundary: undefined,
               }
             : s,
         ),
@@ -690,6 +632,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       markSessionCompleted(sessionId, {
         endReason: registration.endReason,
         directorState: registration.directorState,
+        source: 'soft_close_timeout',
       });
       onStopSessionRef.current?.({
         sessionId,
@@ -781,7 +724,14 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     (sessionId: string, message: string) => {
       const now = Date.now();
       const errorMessageId = `error-${now}`;
-      whiteboardBoundariesRef.current.delete(sessionId);
+      const session = sessionsRef.current.find((candidate) => candidate.id === sessionId);
+      if (session && isLiveSessionType(session)) {
+        previousLiveSessionRef.current = createPreviousLiveSessionContext(
+          session,
+          currentSceneIdRef.current,
+          'error',
+        );
+      }
 
       if (streamingSessionIdRef.current === sessionId) {
         retireActiveLiveRequest(sessionId);
@@ -799,7 +749,6 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
                 ...s,
                 status: 'error' as SessionStatus,
                 softCloseDeadline: undefined,
-                whiteboardBoundary: undefined,
                 updatedAt: now,
                 messages: [
                   ...s.messages,
@@ -944,60 +893,29 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
           },
 
           async onActionReady(messageId: string, data: ActionItem, signal: AbortSignal) {
-            const boundary = data.boundary;
-            const getClaimedBoundary = () => {
-              const current = whiteboardBoundariesRef.current.get(sessionId);
-              return current?.status === 'claimed' &&
-                current.boundaryId === boundary?.boundaryId &&
-                current.targetSessionId === sessionId &&
-                boundary.targetSessionId === sessionId
-                ? current
-                : undefined;
-            };
-            const matchesExpectedWhiteboard = () => {
-              const snapshot = getActiveWhiteboardFingerprint(useStageStore.getState().stage);
-              return Boolean(
-                snapshot &&
-                snapshot.whiteboardId === boundary?.expectedWhiteboardId &&
-                snapshot.fingerprint === boundary?.expectedFingerprint,
-              );
-            };
-
-            if (boundary?.disposition === 'guarded_clear' && !getClaimedBoundary()) return;
-            if (boundary?.disposition === 'guarded_clear' && !matchesExpectedWhiteboard()) {
-              settleWhiteboardBoundary(sessionId, boundary.boundaryId, 'invalidated');
-              return;
-            }
-
-            // Boundary-generated clears are internal orchestration and should not
-            // appear as a successful model action badge.
-            if (boundary?.disposition !== 'guarded_clear') {
-              const actionPart = {
-                type: `action-${data.actionName}`,
-                actionId: data.actionId,
-                actionName: data.actionName,
-                input: data.params,
-                state: 'result',
-                output: { success: true },
-              } as unknown as UIMessage<ChatMessageMetadata>['parts'][number];
-              setSessions((prev) =>
-                prev.map((s) => {
-                  if (s.id !== sessionId) return s;
-                  return {
-                    ...s,
-                    messages: s.messages.map((m) =>
-                      m.id === messageId ? { ...m, parts: [...m.parts, actionPart] } : m,
-                    ),
-                    updatedAt: Date.now(),
-                  };
-                }),
-              );
-            }
+            const actionPart = {
+              type: `action-${data.actionName}`,
+              actionId: data.actionId,
+              actionName: data.actionName,
+              input: data.params,
+              state: 'result',
+              output: { success: true },
+            } as unknown as UIMessage<ChatMessageMetadata>['parts'][number];
+            setSessions((prev) =>
+              prev.map((s) => {
+                if (s.id !== sessionId) return s;
+                return {
+                  ...s,
+                  messages: s.messages.map((m) =>
+                    m.id === messageId ? { ...m, parts: [...m.parts, actionPart] } : m,
+                  ),
+                  updatedAt: Date.now(),
+                };
+              }),
+            );
 
             // Whiteboard effects mutate shared stage state after animation delays,
             // so keep them ordered. Long-running media playback stays interruptible.
-            let completed = false;
-            let guardRejected = false;
             try {
               const actionEngine = new ActionEngine(useStageStore);
               const action = {
@@ -1005,54 +923,14 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
                 type: data.actionName,
                 ...data.params,
               } as Action;
-              const execution = actionEngine.execute(action, {
-                signal,
-                whiteboardClearGuard:
-                  boundary?.disposition === 'guarded_clear'
-                    ? () => !signal.aborted && matchesExpectedWhiteboard()
-                    : undefined,
-                onWhiteboardClearGuardRejected:
-                  boundary?.disposition === 'guarded_clear'
-                    ? () => {
-                        guardRejected = true;
-                      }
-                    : undefined,
-              });
+              const execution = actionEngine.execute(action, { signal });
               if (shouldAwaitPresentationAction(data.actionName)) {
                 await execution;
-                completed = !signal.aborted;
               } else {
                 void execution.catch((err) => log.warn('[Buffer] Action execution error:', err));
               }
             } catch (err) {
               log.warn('[Buffer] Action execution error:', err);
-            }
-
-            if (!boundary || !getClaimedBoundary()) return;
-            if (boundary.disposition === 'guarded_clear') {
-              const snapshot = getActiveWhiteboardFingerprint(useStageStore.getState().stage);
-              if (guardRejected && signal.aborted && matchesExpectedWhiteboard()) {
-                return;
-              }
-              if (
-                guardRejected ||
-                !snapshot ||
-                snapshot.whiteboardId !== boundary.expectedWhiteboardId
-              ) {
-                settleWhiteboardBoundary(sessionId, boundary.boundaryId, 'invalidated');
-              } else if (completed && snapshot.elementCount === 0) {
-                settleWhiteboardBoundary(sessionId, boundary.boundaryId, 'consumed');
-              } else if (snapshot.fingerprint !== boundary.expectedFingerprint) {
-                settleWhiteboardBoundary(sessionId, boundary.boundaryId, 'invalidated');
-              }
-              return;
-            }
-            if (completed) {
-              settleWhiteboardBoundary(
-                sessionId,
-                boundary.boundaryId,
-                boundary.disposition === 'invalidate' ? 'invalidated' : 'consumed',
-              );
             }
           },
 
@@ -1138,7 +1016,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
 
       return buffer;
     },
-    [settleWhiteboardBoundary],
+    [],
   );
 
   const createStatelessStreamConsumer = useCallback(
@@ -1187,7 +1065,6 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               params: event.data.params,
               messageId: targetId,
               agentId: event.data.agentId,
-              boundary: event.data.boundary,
             });
             break;
           }
@@ -1262,21 +1139,13 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       }
 
       if (isPiChatEnabled()) {
-        const boundary = whiteboardBoundariesRef.current.get(sessionId);
-        if (boundary?.status === 'claimed') {
-          requestTemplate.whiteboardBoundary = {
-            boundaryId: boundary.boundaryId,
-            sourceSessionId: boundary.sourceSessionId,
-            targetSessionId: boundary.targetSessionId,
-            whiteboardId: boundary.whiteboardId,
-            snapshotFingerprint: boundary.snapshotFingerprint,
-          };
-        } else {
-          delete requestTemplate.whiteboardBoundary;
-        }
+        const firstRequestContext = getFirstPiRequestContext(sessionId);
+        const piRequestTemplate = firstRequestContext
+          ? { ...requestTemplate, piSessionBoundary: firstRequestContext }
+          : requestTemplate;
         await runPiSingleRequest(
           sessionId,
-          withPiInclassWhiteboardTools(requestTemplate),
+          withPiInclassWhiteboardTools(piRequestTemplate),
           controller,
           sessionType,
           createStatelessStreamConsumer,
@@ -1286,6 +1155,15 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
           storeDirectorState,
           onStopSessionRef,
           t,
+          firstRequestContext
+            ? () => {
+                consumePiSessionBoundaryContext(
+                  piSessionBoundariesRef.current,
+                  sessionId,
+                  firstRequestContext,
+                );
+              }
+            : undefined,
         );
         return;
       }
@@ -1375,6 +1253,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       markSessionCompleted,
       storeDirectorState,
       t,
+      getFirstPiRequestContext,
     ],
   );
 
@@ -1386,7 +1265,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       const sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const now = Date.now();
 
-      const whiteboardBoundary = claimPendingWhiteboardBoundary(sessionId, type);
+      if (type === 'qa' || type === 'discussion') registerFirstPiRequest(sessionId);
       const newSession: ChatSession = {
         id: sessionId,
         type,
@@ -1399,9 +1278,9 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         },
         toolCalls: [],
         pendingToolCalls: [],
+        sceneId: currentSceneIdRef.current ?? undefined,
         createdAt: now,
         updatedAt: now,
-        whiteboardBoundary,
       };
 
       setSessions((prev) => [...prev, newSession]);
@@ -1411,7 +1290,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       log.info(`[ChatArea] Created session: ${sessionId} (${type})`);
       return sessionId;
     },
-    [claimPendingWhiteboardBoundary],
+    [registerFirstPiRequest],
   );
 
   /**
@@ -1442,11 +1321,12 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         );
       }
       await pendingRetirementRef.current;
-      whiteboardBoundariesRef.current.delete(sessionId);
-      if (options.source === 'manual_stop' && isLiveSession && isPiChatEnabled()) {
-        pendingWhiteboardBoundaryRef.current = createPendingWhiteboardSessionBoundary(
-          sessionId,
-          useStageStore.getState().stage,
+      piSessionBoundariesRef.current.delete(sessionId);
+      if (isLiveSession && session) {
+        previousLiveSessionRef.current = createPreviousLiveSessionContext(
+          session,
+          currentSceneIdRef.current,
+          options.source,
         );
       }
       lectureMessageIds.current.delete(sessionId);
@@ -1492,7 +1372,6 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               messages,
               status: 'completed' as SessionStatus,
               softCloseDeadline: undefined,
-              whiteboardBoundary: undefined,
             };
           }),
         );
@@ -1507,7 +1386,6 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
                   ...s,
                   status: 'completed' as SessionStatus,
                   softCloseDeadline: undefined,
-                  whiteboardBoundary: undefined,
                 }
               : s,
           ),
@@ -1890,9 +1768,9 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             },
             toolCalls: [],
             pendingToolCalls: [],
+            sceneId: currentSceneIdRef.current ?? undefined,
             createdAt: now,
             updatedAt: now,
-            whiteboardBoundary: whiteboardBoundariesRef.current.get(sessionId!),
           };
           return [...prev, newSession];
         }
@@ -2006,6 +1884,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       const sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const now = Date.now();
       const agentId = request.agentId || 'default-1';
+      registerFirstPiRequest(sessionId);
 
       // Read all selected agent IDs from settings store
       const settingsState = useSettingsStore.getState();
@@ -2031,9 +1910,9 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         },
         toolCalls: [],
         pendingToolCalls: [],
+        sceneId: currentSceneIdRef.current ?? undefined,
         createdAt: now,
         updatedAt: now,
-        whiteboardBoundary: claimPendingWhiteboardBoundary(sessionId, 'discussion'),
       };
 
       setSessions((prev) => [...prev, newSession]);
@@ -2108,7 +1987,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable from i18n context
-    [claimPendingWhiteboardBoundary, clearLiveSessionAfterError, endSession, runAgentLoopFn],
+    [clearLiveSessionAfterError, endSession, registerFirstPiRequest, runAgentLoopFn],
   );
 
   /**
@@ -2128,9 +2007,6 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
    */
   const startLecture = useCallback(
     async (sceneId: string): Promise<string> => {
-      // A lecture is the next session boundary even though it does not claim a Pi
-      // token. Do not let an earlier manual-stop token leak past it into a later QA.
-      pendingWhiteboardBoundaryRef.current = undefined;
       // Check for existing lecture session with same sceneId (active or completed)
       const existing = sessions.find(
         (s) =>

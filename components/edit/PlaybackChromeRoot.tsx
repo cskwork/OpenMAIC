@@ -550,7 +550,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
 
         // Wait for an in-flight presentation action before initializing the next
         // scene against shared whiteboard state.
-        await chatAreaRef.current?.endActiveSession();
+        await chatAreaRef.current?.endActiveSession({ source: 'scene_switch' });
         if (cancelled) return;
 
         // Also abort the engine-level discussion controller
@@ -941,7 +941,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
           setPendingSceneId(targetSceneId);
           return false;
         }
-        await chatAreaRef.current?.endActiveSession();
+        await chatAreaRef.current?.endActiveSession({ source: 'scene_switch' });
         if (requestId !== sceneSwitchRequestRef.current) return false;
         setCurrentSceneId(targetSceneId);
         return true;
@@ -957,7 +957,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       sceneSwitchConfirmingRef.current = true;
       setPendingSceneId(null);
       try {
-        await chatAreaRef.current?.endActiveSession();
+        await chatAreaRef.current?.endActiveSession({ source: 'scene_switch' });
         if (requestId !== sceneSwitchRequestRef.current) return;
         doSessionCleanup();
         setCurrentSceneId(targetSceneId);
