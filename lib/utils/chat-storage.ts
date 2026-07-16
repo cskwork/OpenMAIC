@@ -16,7 +16,11 @@ import { getLearnerKey } from '@/lib/runtime/learner-key';
 import { getRuntimeStore } from '@/lib/runtime/store';
 import type { ChatMessageMetadata, ChatSession, SessionStatus } from '@/lib/types/chat';
 import { db, type ChatSessionRecord } from './database';
-import { chatStoragePartitionLockName, withChatStorageSharedLock } from './chat-storage-lock';
+import {
+  chatStoragePartitionLockName,
+  withChatStorageExclusiveLock,
+  withChatStorageSharedLock,
+} from './chat-storage-lock';
 
 const MAX_MESSAGES_PER_SESSION = 200;
 const MAX_RUNTIME_RECORDS_PER_CHAT_SESSION = 256;
@@ -143,6 +147,30 @@ function matchesObservedSessions(
   return sessions.every((session) => isEqual(observed.get(session.id), normalizeSession(session)));
 }
 
+function withPartitionLocks<T>(
+  crossRealmKey: string,
+  key: string,
+  requiresCrossRealmLock: boolean,
+  work: (isolatedWrites: boolean) => Promise<T>,
+): Promise<T> {
+  if (typeof navigator !== 'undefined' && navigator.locks) {
+    const locks = navigator.locks;
+    return locks.request<Promise<T>>(
+      chatStoragePartitionLockName(crossRealmKey),
+      () =>
+        locks.request<Promise<T>>(chatStoragePartitionLockName(key), () =>
+          work(false),
+        ) as unknown as Promise<T>,
+    ) as unknown as Promise<T>;
+  }
+  if (requiresCrossRealmLock) {
+    throw new ChatStorageLockUnavailableError(
+      'Chat storage requires the Web Locks API in this browser',
+    );
+  }
+  return work(true);
+}
+
 function enqueue<T>(
   store: RuntimeStore,
   key: string,
@@ -157,24 +185,7 @@ function enqueue<T>(
     storeQueues.set(store, queues);
   }
   const previous = queues.get(key) ?? Promise.resolve();
-  const run = () => {
-    if (typeof navigator !== 'undefined' && navigator.locks) {
-      const locks = navigator.locks;
-      return locks.request<Promise<T>>(
-        chatStoragePartitionLockName(crossRealmKey),
-        () =>
-          locks.request<Promise<T>>(chatStoragePartitionLockName(key), () =>
-            work(false),
-          ) as unknown as Promise<T>,
-      ) as unknown as Promise<T>;
-    }
-    if (requiresCrossRealmLock) {
-      throw new ChatStorageLockUnavailableError(
-        'Chat storage requires the Web Locks API in this browser',
-      );
-    }
-    return work(true);
-  };
+  const run = () => withPartitionLocks(crossRealmKey, key, requiresCrossRealmLock, work);
   const runQueued = () => previous.catch(() => undefined).then(run);
   const current = globalLockHeld ? runQueued() : withChatStorageSharedLock(runQueued);
   const settled = current.then(
@@ -1152,18 +1163,21 @@ export async function restoreChatSessionsFromBackup(
 ): Promise<void> {
   const resolved = await context(options);
   const orderedStageIds = [...new Set(stageIds)].sort();
+  const queueKeys = orderedStageIds.map((stageId) => `${stageId}\0${resolved.learnerKey}`);
+  // Snapshot only work that predates this restore. A later save may be queued
+  // behind an exclusive maintenance request; awaiting it while holding the
+  // shared global lock would create a cycle (restore -> save -> maintenance -> restore).
+  const existingQueues = storeQueues.get(resolved.store);
+  const precedingWrites = queueKeys
+    .map((queueKey) => existingQueues?.get(queueKey))
+    .filter((pending): pending is Promise<void> => pending !== undefined);
 
   async function withStageLock(index: number): Promise<void> {
     if (index < orderedStageIds.length) {
       const stageId = orderedStageIds[index]!;
-      const queueKey = `${stageId}\0${resolved.learnerKey}`;
-      await enqueue(
-        resolved.store,
-        queueKey,
-        stageId,
-        resolved.requiresCrossRealmLock,
-        async () => withStageLock(index + 1),
-        true,
+      const queueKey = queueKeys[index]!;
+      await withPartitionLocks(stageId, queueKey, resolved.requiresCrossRealmLock, async () =>
+        withStageLock(index + 1),
       );
       return;
     }
@@ -1180,7 +1194,26 @@ export async function restoreChatSessionsFromBackup(
     }
   }
 
-  await withChatStorageSharedLock(() => withStageLock(0));
+  const restoreAfterPrecedingWrites = async (): Promise<void> => {
+    await Promise.all(precedingWrites);
+    await withStageLock(0);
+  };
+
+  if (typeof navigator !== 'undefined' && navigator.locks) {
+    // The queue snapshot and shared-lock request are synchronous with respect
+    // to other JavaScript tasks. New saves either join this shared epoch and
+    // coordinate on partition locks, or wait behind a later exclusive request.
+    await withChatStorageSharedLock(restoreAfterPrecedingWrites);
+    return;
+  }
+  if (resolved.requiresCrossRealmLock) {
+    throw new ChatStorageLockUnavailableError(
+      'Chat storage requires the Web Locks API in this browser',
+    );
+  }
+  // Without Web Locks, serialize the whole restore against same-realm writers.
+  await Promise.all(precedingWrites);
+  await withChatStorageExclusiveLock(() => withStageLock(0));
 }
 
 /** Clear the legacy table during stage deletion; RuntimeStore cascades separately. */

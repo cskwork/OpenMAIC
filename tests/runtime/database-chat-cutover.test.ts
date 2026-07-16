@@ -37,6 +37,74 @@ function serialLockManager(): Pick<LockManager, 'request'> {
   return manager as unknown as Pick<LockManager, 'request'>;
 }
 
+function fairLockManager(): Pick<LockManager, 'request'> {
+  type Mode = 'shared' | 'exclusive';
+  interface Waiter {
+    mode: Mode;
+    callback: () => Promise<unknown> | unknown;
+    resolve: (value: unknown) => void;
+    reject: (reason?: unknown) => void;
+  }
+  interface State {
+    readers: number;
+    writer: boolean;
+    waiters: Waiter[];
+  }
+
+  const states = new Map<string, State>();
+  const pump = (name: string): void => {
+    const state = states.get(name)!;
+    if (state.writer || state.waiters.length === 0) return;
+    if (state.readers > 0 && state.waiters[0]!.mode === 'exclusive') return;
+
+    const start = (waiter: Waiter): void => {
+      if (waiter.mode === 'shared') state.readers += 1;
+      else state.writer = true;
+      void Promise.resolve()
+        .then(waiter.callback)
+        .then(waiter.resolve, waiter.reject)
+        .finally(() => {
+          if (waiter.mode === 'shared') state.readers -= 1;
+          else state.writer = false;
+          pump(name);
+        });
+    };
+
+    if (state.readers === 0 && state.waiters[0]!.mode === 'exclusive') {
+      start(state.waiters.shift()!);
+      return;
+    }
+    while (!state.writer && state.waiters[0]?.mode === 'shared') {
+      start(state.waiters.shift()!);
+    }
+  };
+
+  return {
+    request<T>(
+      name: string,
+      optionsOrCallback: LockOptions | (() => Promise<T> | T),
+      maybeCallback?: () => Promise<T> | T,
+    ): Promise<T> {
+      const mode: Mode =
+        typeof optionsOrCallback === 'function'
+          ? 'exclusive'
+          : (optionsOrCallback.mode ?? 'exclusive');
+      const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback!;
+      const state = states.get(name) ?? { readers: 0, writer: false, waiters: [] };
+      states.set(name, state);
+      return new Promise<T>((resolve, reject) => {
+        state.waiters.push({
+          mode,
+          callback,
+          resolve: resolve as (value: unknown) => void,
+          reject,
+        });
+        pump(name);
+      });
+    },
+  } as Pick<LockManager, 'request'>;
+}
+
 function chatSession(): ChatSession {
   return {
     id: 'chat-backup',
@@ -311,6 +379,65 @@ describe('database runtime chat integration', () => {
     await expect(
       loadChatSessions('stage-backup', { store: loadingStore, learnerKey }),
     ).resolves.toMatchObject([{ title: 'Persisted chat' }]);
+  });
+
+  it('does not deadlock backup restore behind a queued maintenance lock and later autosave', async () => {
+    vi.stubGlobal('navigator', { locks: fairLockManager() });
+    const runtimeBacking = new BrowserRuntimeStore({
+      indexedDB: globalThis.indexedDB,
+      dbName: 'restore-queue-order',
+    });
+    let firstSaveStarted!: () => void;
+    const didStartFirstSave = new Promise<void>((resolve) => {
+      firstSaveStarted = resolve;
+    });
+    let releaseFirstSave!: () => void;
+    const firstSaveMayContinue = new Promise<void>((resolve) => {
+      releaseFirstSave = resolve;
+    });
+    const runtimeStore = new Proxy(runtimeBacking, {
+      get(target, property) {
+        if (property === 'createSession') {
+          return async (...args: Parameters<BrowserRuntimeStore['createSession']>) => {
+            if (args[0].stageId === 'stage-a') {
+              firstSaveStarted();
+              await firstSaveMayContinue;
+            }
+            return runtimeBacking.createSession(...args);
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as BrowserRuntimeStore;
+    const { withRuntimeStorageExclusiveLock } = await import('@/lib/utils/chat-storage-lock');
+    const { restoreChatSessionsFromBackup, saveChatSessions } =
+      await import('@/lib/utils/chat-storage');
+
+    const firstSave = saveChatSessions('stage-a', [chatSession()], {
+      store: runtimeStore,
+      learnerKey,
+    });
+    await didStartFirstSave;
+    const restoring = restoreChatSessionsFromBackup(['stage-a', 'stage-b'], async () => {}, {
+      store: runtimeStore,
+      learnerKey,
+    });
+    await Promise.resolve();
+    const maintaining = withRuntimeStorageExclusiveLock(async () => {});
+    const laterSave = saveChatSessions(
+      'stage-b',
+      [{ ...chatSession(), id: 'chat-later', title: 'Later save' }],
+      { store: runtimeStore, learnerKey },
+    );
+
+    releaseFirstSave();
+    const outcome = await Promise.race([
+      Promise.all([firstSave, restoring, maintaining, laterSave]).then(() => 'completed' as const),
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 100)),
+    ]);
+
+    expect(outcome).toBe('completed');
   });
 
   it('waits for an active runtime writer before deleting a stage cascade', async () => {
