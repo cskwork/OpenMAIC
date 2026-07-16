@@ -61,6 +61,23 @@ runRuntimeStoreContract('HTTP', () => {
 });
 
 describe('HttpRuntimeStore error mapping', () => {
+  test.each([
+    ['empty', undefined],
+    ['unparseable', '{'],
+    ['null', 'null'],
+  ])('maps a %s JSON request body to a 400 validation failure', async (_name, body) => {
+    const response = await server.fetch(`${server.baseUrl}/runtime/sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      ...(body === undefined ? {} : { body }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'VALIDATION_FAILED' },
+    });
+  });
+
   test('reconstitutes a 400 validation failure as an Error with its code and message', async () => {
     const store = new HttpRuntimeStore({
       baseUrl: server.baseUrl,
@@ -210,6 +227,9 @@ describe('HttpRuntimeStore HTTP hardening', () => {
       ['bigint', (globalThis as unknown as { BigInt(value: number): unknown }).BigInt(1)],
       ['sparse array', sparse],
       ['NUL', `before\u0000after`],
+      ['NUL object key', { 'bad key\u0000': 1 }],
+      ['unpaired surrogate string', '\uD800'],
+      ['unpaired surrogate object key', { ['\uD800']: 1 }],
       ['symbol key', symbolKeyed],
       ['non-enumerable property', nonEnumerable],
       ['array extra own property', arrayWithExtraProperty],
@@ -238,6 +258,40 @@ describe('HttpRuntimeStore HTTP hardening', () => {
     await expect(
       store.appendRecord(makeRecord('json-separators', `before\u2029after`)),
     ).resolves.toMatchObject({ payload: `before\u2029after` });
+  });
+
+  test('accepts a valid surrogate pair string', async () => {
+    const storeId = `json-surrogate-pair-${namespace++}`;
+    const store = new HttpRuntimeStore({
+      baseUrl: server.baseUrl,
+      fetch: server.fetch,
+      headers: () => ({ 'x-runtime-store-id': storeId }),
+    });
+    await store.createSession(makeSession('json-surrogate-pair'));
+
+    await expect(store.appendRecord(makeRecord('json-surrogate-pair', '𐀀'))).resolves.toMatchObject(
+      { payload: '𐀀' },
+    );
+  });
+
+  test('rejects non-JSON properties and NUL ids across full write envelopes', async () => {
+    const store = new HttpRuntimeStore({
+      baseUrl: 'https://runtime.invalid',
+      fetch: async () => {
+        throw new Error('fetch must not be called');
+      },
+    });
+    const sessionWithDate = Object.assign(makeSession('session-date'), { extra: new Date(T0) });
+    const recordWithDate = Object.assign(makeRecord('session'), { extra: new Date(T0) });
+
+    await expect(store.createSession(sessionWithDate)).rejects.toThrow(/not a plain JSON value/);
+    await expect(store.appendRecord(recordWithDate)).rejects.toThrow(/not a plain JSON value/);
+    await expect(store.createSession(makeSession('bad\u0000session'))).rejects.toThrow(
+      /not a plain JSON value/,
+    );
+    await expect(
+      store.appendRecord({ ...makeRecord('session'), id: 'bad\u0000record' }),
+    ).rejects.toThrow(/not a plain JSON value/);
   });
 
   test('rejects dot-only path segments before URL construction', async () => {
@@ -275,6 +329,8 @@ describe('HttpRuntimeStore HTTP hardening', () => {
   test.each([
     ['non-numeric', '1'],
     ['non-finite', Number.POSITIVE_INFINITY],
+    ['negative', -3],
+    ['fractional', 2.5],
   ])('maps a %s merge moved field to a malformed-response error', async (_name, moved) => {
     const store = new HttpRuntimeStore({
       baseUrl: 'https://runtime.invalid',
@@ -314,6 +370,35 @@ describe('HttpRuntimeStore HTTP hardening', () => {
       fetch: async () => fakeJsonResponse([{ ...baseRecord, seq: 1 }, invalidRecords[0]]),
     });
     await expect(listStore.listRecords('session')).rejects.toThrow(/seq/);
+  });
+
+  test('reports null session and record response bodies as readable storage errors', async () => {
+    const nullStore = new HttpRuntimeStore({
+      baseUrl: 'https://runtime.invalid',
+      fetch: async () => fakeJsonResponse(null),
+    });
+    const nullListStore = new HttpRuntimeStore({
+      baseUrl: 'https://runtime.invalid',
+      fetch: async () => fakeJsonResponse([null]),
+    });
+    const operations: [string, () => Promise<unknown>][] = [
+      ['session', () => nullStore.getSession('session')],
+      ['session', () => nullStore.createSession(makeSession('session'))],
+      ['record', () => nullStore.appendRecord(makeRecord('session'))],
+      ['record', () => nullListStore.listRecords('session')],
+    ];
+
+    for (const [kind, operation] of operations) {
+      const error = await operation().then(
+        () => undefined,
+        (reason: unknown) => reason,
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(TypeError);
+      expect(error).toMatchObject({
+        message: expect.stringContaining(`invalid stored runtime ${kind}`),
+      });
+    }
   });
 
   test('sorts validated listRecords responses by seq ascending', async () => {

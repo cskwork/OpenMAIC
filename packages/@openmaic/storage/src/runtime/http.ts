@@ -58,8 +58,9 @@ function assertValidSession(session: RuntimeSession): RuntimeSession {
   const result = validateRuntimeSession(session);
   if (result.valid) return session;
   const detail = result.errors.map((error) => `${error.path || '/'}: ${error.message}`).join('; ');
+  const id = typeof session === 'object' && session !== null ? session.id : undefined;
   throw new Error(
-    `@openmaic/storage: invalid stored runtime session ${JSON.stringify(session.id)}: ${detail}`,
+    `@openmaic/storage: invalid stored runtime session ${JSON.stringify(id)}: ${detail}`,
   );
 }
 
@@ -69,8 +70,9 @@ function assertValidRecord<TPayload extends RuntimePayload>(
   const result = validateRuntimeRecord(record);
   if (result.valid) return record;
   const detail = result.errors.map((error) => `${error.path || '/'}: ${error.message}`).join('; ');
+  const id = typeof record === 'object' && record !== null ? record.id : undefined;
   throw new Error(
-    `@openmaic/storage: invalid stored runtime record ${JSON.stringify(record.id)}: ${detail}`,
+    `@openmaic/storage: invalid stored runtime record ${JSON.stringify(id)}: ${detail}`,
   );
 }
 
@@ -160,6 +162,7 @@ export class HttpRuntimeStore implements RuntimeStore {
   }
 
   async createSession(init: RuntimeSessionInit): Promise<RuntimeSession> {
+    assertJsonValue(init, `runtime session ${JSON.stringify(init.id)}`);
     const session = await this.request<RuntimeSession>('POST', '/runtime/sessions', init);
     return this.migrateSession(session);
   }
@@ -224,6 +227,7 @@ export class HttpRuntimeStore implements RuntimeStore {
     init: RuntimeRecordInit<TPayload>,
   ): Promise<RuntimeRecord<TPayload>> {
     assertJsonValue(init.payload, `runtime record ${JSON.stringify(init.id)} payload`);
+    assertJsonValue(init, `runtime record ${JSON.stringify(init.id)}`);
     const record = await this.request<RuntimeRecord<TPayload>>(
       'POST',
       `/runtime/sessions/${segment(init.sessionId)}/records`,
@@ -258,11 +262,11 @@ export class HttpRuntimeStore implements RuntimeStore {
       typeof response.body === 'object' && response.body !== null && 'moved' in response.body
         ? response.body.moved
         : undefined;
-    if (typeof moved !== 'number' || !Number.isFinite(moved)) {
+    if (typeof moved !== 'number' || !Number.isInteger(moved) || moved < 0) {
       throw new HttpRuntimeStoreError(
         response.status,
         'MALFORMED_RESPONSE',
-        '@openmaic/storage: RuntimeStore HTTP mergeLearner response moved must be a finite number',
+        '@openmaic/storage: RuntimeStore HTTP mergeLearner response moved must be a non-negative integer',
       );
     }
     return moved;

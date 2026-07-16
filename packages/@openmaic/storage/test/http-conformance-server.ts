@@ -61,8 +61,20 @@ async function readJson<T>(req: IncomingMessage): Promise<T> {
   for await (const chunk of req) {
     chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
   }
-  if (chunks.length === 0) throw new Error('request body must be JSON');
-  return JSON.parse(Buffer.concat(chunks).toString('utf8')) as T;
+  if (chunks.length === 0) {
+    throw new ConformanceHttpError(400, 'VALIDATION_FAILED', 'request body must be a JSON object');
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new ConformanceHttpError(400, 'VALIDATION_FAILED', message);
+  }
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    throw new ConformanceHttpError(400, 'VALIDATION_FAILED', 'request body must be a JSON object');
+  }
+  return body as T;
 }
 
 function errorResponse(error: unknown): { status: number; body: ErrorBody } {
