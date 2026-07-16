@@ -1055,6 +1055,31 @@ describe('database runtime chat integration', () => {
     await expect(backing.listSessions('stage-delete-race', learnerKey)).resolves.toEqual([]);
   });
 
+  it('deletes interrupted-restore staging rows with the stage cascade', async () => {
+    stubMemoryLocalStorage();
+    const { db, deleteStageWithRelatedData, exportDatabase } = await import('@/lib/utils/database');
+    await db.stages.put({
+      id: 'stage-delete-staging',
+      name: 'Delete staged restore',
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    });
+    await db.chatRestoreStaging.put({
+      ...chatSession(),
+      stageId: 'stage-delete-staging',
+    });
+
+    await deleteStageWithRelatedData('stage-delete-staging');
+
+    await expect(
+      db.chatRestoreStaging.where('stageId').equals('stage-delete-staging').count(),
+    ).resolves.toBe(0);
+    const exported = await exportDatabase();
+    expect(
+      exported.chatSessions.some((session) => session.stageId === 'stage-delete-staging'),
+    ).toBe(false);
+  });
+
   it('keeps the maintenance lock until a timed-out stage cascade actually settles', async () => {
     vi.stubGlobal('navigator', { locks: fairLockManager() });
     stubMemoryLocalStorage();

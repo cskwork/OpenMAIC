@@ -231,7 +231,7 @@ export function mediaFileKey(stageId: string, elementId: string): string {
 // ==================== Database Definition ====================
 
 const DATABASE_NAME = 'MAIC-Database';
-const _DATABASE_VERSION = 14;
+const _DATABASE_VERSION = 15;
 
 /**
  * MAIC Database Instance
@@ -714,6 +714,7 @@ export async function deleteStageWithRelatedData(stageId: string): Promise<void>
         db.stages,
         db.scenes,
         db.chatSessions,
+        db.chatRestoreStaging,
         db.playbackState,
         db.stageOutlines,
         db.mediaFiles,
@@ -724,6 +725,7 @@ export async function deleteStageWithRelatedData(stageId: string): Promise<void>
         await db.stages.delete(stageId);
         await db.scenes.where('stageId').equals(stageId).delete();
         await db.chatSessions.where('stageId').equals(stageId).delete();
+        await db.chatRestoreStaging.where('stageId').equals(stageId).delete();
         await db.playbackState.delete(stageId);
         await db.stageOutlines.delete(stageId);
         await db.mediaFiles.where('stageId').equals(stageId).delete();
