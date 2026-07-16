@@ -772,6 +772,45 @@ describe('PBL runtime hydration', () => {
     }
   });
 
+  it('retains the shared maintenance lock after a timed-out hydration until work settles', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('navigator', { locks: readWriteLockManager() });
+    const project = transitionProjectUiPhase(makeProject(), 'workspace');
+    const eventId = project.runtimeEvents![0]!.id;
+    const store = new SlowFirstAppendRuntimeStore(eventId);
+
+    try {
+      const hydrating = hydrate(project, store);
+      let hydrationSettled = false;
+      const hydrationOutcome = hydrating.then(
+        () => {
+          hydrationSettled = true;
+        },
+        () => {
+          hydrationSettled = true;
+        },
+      );
+      await store.appendStarted;
+      await vi.advanceTimersByTimeAsync(20_001);
+      await Promise.resolve();
+      expect(hydrationSettled).toBe(true);
+
+      let maintenanceStarted = false;
+      const maintenance = withRuntimeStorageExclusiveLock(async () => {
+        maintenanceStarted = true;
+      });
+      await Promise.resolve();
+      expect(maintenanceStarted).toBe(false);
+
+      store.release();
+      await Promise.all([hydrationOutcome, maintenance]);
+      expect(maintenanceStarted).toBe(true);
+    } finally {
+      store.release();
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps document state and self-heals when runtime history is partial', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const store = new MemoryRuntimeStore();

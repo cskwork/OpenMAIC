@@ -1,6 +1,6 @@
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BrowserRuntimeStore } from '@openmaic/storage';
+import { BrowserRuntimeStore, type KVStore } from '@openmaic/storage';
 
 import type { ChatSession } from '@/lib/types/chat';
 
@@ -44,6 +44,8 @@ function fairLockManager(): Pick<LockManager, 'request'> {
     callback: () => Promise<unknown> | unknown;
     resolve: (value: unknown) => void;
     reject: (reason?: unknown) => void;
+    signal?: AbortSignal;
+    onAbort?: () => void;
   }
   interface State {
     readers: number;
@@ -58,6 +60,7 @@ function fairLockManager(): Pick<LockManager, 'request'> {
     if (state.readers > 0 && state.waiters[0]!.mode === 'exclusive') return;
 
     const start = (waiter: Waiter): void => {
+      waiter.signal?.removeEventListener('abort', waiter.onAbort!);
       if (waiter.mode === 'shared') state.readers += 1;
       else state.writer = true;
       void Promise.resolve()
@@ -90,15 +93,29 @@ function fairLockManager(): Pick<LockManager, 'request'> {
           ? 'exclusive'
           : (optionsOrCallback.mode ?? 'exclusive');
       const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback!;
+      const signal = typeof optionsOrCallback === 'function' ? undefined : optionsOrCallback.signal;
       const state = states.get(name) ?? { readers: 0, writer: false, waiters: [] };
       states.set(name, state);
       return new Promise<T>((resolve, reject) => {
-        state.waiters.push({
+        const waiter: Waiter = {
           mode,
           callback,
           resolve: resolve as (value: unknown) => void,
           reject,
-        });
+          signal,
+        };
+        waiter.onAbort = () => {
+          const index = state.waiters.indexOf(waiter);
+          if (index >= 0) state.waiters.splice(index, 1);
+          reject(signal?.reason);
+          pump(name);
+        };
+        if (signal?.aborted) {
+          reject(signal.reason);
+          return;
+        }
+        signal?.addEventListener('abort', waiter.onAbort, { once: true });
+        state.waiters.push(waiter);
         pump(name);
       });
     },
@@ -523,6 +540,13 @@ describe('database runtime chat integration', () => {
     try {
       await vi.advanceTimersByTimeAsync(51);
       await expect(outcome).resolves.toBe('rejected');
+      let laterSharedStarted = false;
+      const laterShared = withRuntimeStorageSharedLock(async () => {
+        laterSharedStarted = true;
+      });
+      await Promise.resolve();
+      expect(laterSharedStarted).toBe(true);
+      await laterShared;
     } finally {
       releaseShared();
       await shared;
@@ -530,6 +554,64 @@ describe('database runtime chat integration', () => {
       vi.useRealTimers();
     }
     expect(maintenanceRan).toBe(false);
+  });
+
+  it('enrolls backup import before learner context setup', async () => {
+    const runtimeStore = new BrowserRuntimeStore({
+      indexedDB: globalThis.indexedDB,
+      dbName: 'import-setup-enrollment',
+    });
+    let learnerLookupStarted!: () => void;
+    const didStartLearnerLookup = new Promise<void>((resolve) => {
+      learnerLookupStarted = resolve;
+    });
+    let releaseLearnerLookup!: () => void;
+    const learnerLookupMayContinue = new Promise<void>((resolve) => {
+      releaseLearnerLookup = resolve;
+    });
+    const kv: KVStore = {
+      async get<T>() {
+        learnerLookupStarted();
+        await learnerLookupMayContinue;
+        return learnerKey as T;
+      },
+      async set() {},
+      async remove() {},
+      async keys() {
+        return [];
+      },
+    };
+    const { importDatabase } = await import('@/lib/utils/database');
+    const { withRuntimeStorageExclusiveLock } = await import('@/lib/utils/chat-storage-lock');
+    const importing = importDatabase(
+      {
+        stages: [
+          {
+            id: 'stage-import-enrollment',
+            name: 'Imported stage',
+            createdAt: 1_000,
+            updatedAt: 2_000,
+          },
+        ],
+        chatSessions: [
+          {
+            ...chatSession(),
+            stageId: 'stage-import-enrollment',
+          },
+        ],
+      },
+      { store: runtimeStore, kv },
+    );
+    await didStartLearnerLookup;
+    let maintenanceStarted = false;
+    const maintenance = withRuntimeStorageExclusiveLock(async () => {
+      maintenanceStarted = true;
+    });
+    await Promise.resolve();
+
+    expect(maintenanceStarted).toBe(false);
+    releaseLearnerLookup();
+    await Promise.all([importing, maintenance]);
   });
 
   it('waits for an active runtime writer before deleting a stage cascade', async () => {

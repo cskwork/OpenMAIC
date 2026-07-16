@@ -30,11 +30,18 @@ function pumpFallbackLocks(): void {
   }
 }
 
-function withFallbackRuntimeLock<T>(mode: FallbackLockMode, work: () => Promise<T>): Promise<T> {
+function withFallbackRuntimeLock<T>(
+  mode: FallbackLockMode,
+  work: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    fallbackWaiters.push({
+    let started = false;
+    const waiter: FallbackLockWaiter = {
       mode,
       start() {
+        started = true;
+        signal?.removeEventListener('abort', onAbort);
         if (mode === 'shared') fallbackReaders += 1;
         else fallbackWriter = true;
         void Promise.resolve()
@@ -46,7 +53,20 @@ function withFallbackRuntimeLock<T>(mode: FallbackLockMode, work: () => Promise<
             pumpFallbackLocks();
           });
       },
-    });
+    };
+    const onAbort = (): void => {
+      if (started) return;
+      const index = fallbackWaiters.indexOf(waiter);
+      if (index >= 0) fallbackWaiters.splice(index, 1);
+      reject(signal?.reason);
+      pumpFallbackLocks();
+    };
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+    fallbackWaiters.push(waiter);
     pumpFallbackLocks();
   });
 }
@@ -58,6 +78,29 @@ export async function withRuntimeStorageSharedLock<T>(work: () => Promise<T>): P
     return manager.request(CHAT_STORAGE_GLOBAL_LOCK, { mode: 'shared' }, work);
   }
   return typeof window === 'undefined' ? work() : withFallbackRuntimeLock('shared', work);
+}
+
+/**
+ * Bound caller wait time without cancelling the protected work. The shared
+ * lock remains held until `work` really settles, so late storage writes cannot
+ * resume after destructive maintenance has overtaken them.
+ */
+export async function withRuntimeStorageSharedLockUntilSettled<T>(
+  work: () => Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  const protectedWork = withRuntimeStorageSharedLock(work);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      protectedWork,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export interface RuntimeStorageExclusiveLockOptions {
@@ -82,13 +125,12 @@ export function withRuntimeStorageExclusiveLock<T>(
       ? configuredTimeout
       : DEFAULT_EXCLUSIVE_ACQUIRE_TIMEOUT_MS;
   let acquired = false;
-  let cancelled = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const controller = new AbortController();
   const timeoutError = new RuntimeStorageLockAcquisitionTimeoutError(
     `Timed out acquiring the runtime maintenance lock after ${acquireTimeoutMs}ms`,
   );
   const guardedWork = async (): Promise<T> => {
-    if (cancelled) throw timeoutError;
     acquired = true;
     clearTimeout(timer);
     return work();
@@ -97,13 +139,13 @@ export function withRuntimeStorageExclusiveLock<T>(
   // coordinates every writer in this realm and preserves the pre-cutover
   // ability to perform an explicit whole-database clear.
   const request = manager
-    ? manager.request(CHAT_STORAGE_GLOBAL_LOCK, guardedWork)
-    : withFallbackRuntimeLock('exclusive', guardedWork);
+    ? manager.request(CHAT_STORAGE_GLOBAL_LOCK, { signal: controller.signal }, guardedWork)
+    : withFallbackRuntimeLock('exclusive', guardedWork, controller.signal);
 
   return new Promise<T>((resolve, reject) => {
     timer = setTimeout(() => {
       if (acquired) return;
-      cancelled = true;
+      controller.abort(timeoutError);
       reject(timeoutError);
     }, acquireTimeoutMs);
     void request.then(

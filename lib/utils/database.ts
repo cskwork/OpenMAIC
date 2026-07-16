@@ -23,7 +23,7 @@ import type { AgentEditSessionRecord } from '@/lib/agent/client/agent-edit-sessi
 import { createLogger } from '@/lib/logger';
 import { deleteStageRuntimeSafely, getRuntimeStore } from '@/lib/runtime/store';
 import type { RuntimeStore } from '@openmaic/storage';
-import { withRuntimeStorageExclusiveLock } from './chat-storage-lock';
+import { withRuntimeStorageExclusiveLock, withRuntimeStorageSharedLock } from './chat-storage-lock';
 import type { ChatStorageOptions } from './chat-storage';
 
 const log = createLogger('Database');
@@ -574,34 +574,39 @@ export async function importDatabase(
   },
   chatOptions: ChatStorageOptions = {},
 ): Promise<void> {
-  const restoredChatStageIds =
-    data.chatSessions === undefined
-      ? []
-      : [
-          ...new Set([
-            ...(data.stages ?? []).map((stage) => stage.id),
-            ...data.chatSessions.map((session) => session.stageId),
-          ]),
-        ];
-  const restoreRows = () =>
-    db.transaction('rw', [db.stages, db.scenes, db.chatSessions, db.playbackState], async () => {
-      if (data.stages) await db.stages.bulkPut(data.stages);
-      if (data.scenes) await db.scenes.bulkPut(data.scenes);
-      if (data.chatSessions) {
-        for (const stageId of restoredChatStageIds) {
-          await db.chatSessions.where('stageId').equals(stageId).delete();
+  return withRuntimeStorageSharedLock(async () => {
+    const restoredChatStageIds =
+      data.chatSessions === undefined
+        ? []
+        : [
+            ...new Set([
+              ...(data.stages ?? []).map((stage) => stage.id),
+              ...data.chatSessions.map((session) => session.stageId),
+            ]),
+          ];
+    const restoreRows = () =>
+      db.transaction('rw', [db.stages, db.scenes, db.chatSessions, db.playbackState], async () => {
+        if (data.stages) await db.stages.bulkPut(data.stages);
+        if (data.scenes) await db.scenes.bulkPut(data.scenes);
+        if (data.chatSessions) {
+          for (const stageId of restoredChatStageIds) {
+            await db.chatSessions.where('stageId').equals(stageId).delete();
+          }
+          await db.chatSessions.bulkPut(data.chatSessions);
         }
-        await db.chatSessions.bulkPut(data.chatSessions);
-      }
-      if (data.playbackState) await db.playbackState.bulkPut(data.playbackState);
-    });
-  if (data.chatSessions !== undefined) {
-    const { restoreChatSessionsFromBackup } = await import('./chat-storage');
-    await restoreChatSessionsFromBackup(restoredChatStageIds, restoreRows, chatOptions);
-  } else {
-    await restoreRows();
-  }
-  log.info('Database imported successfully');
+        if (data.playbackState) await db.playbackState.bulkPut(data.playbackState);
+      });
+    if (data.chatSessions !== undefined) {
+      const { restoreChatSessionsFromBackup } = await import('./chat-storage');
+      await restoreChatSessionsFromBackup(restoredChatStageIds, restoreRows, {
+        ...chatOptions,
+        globalLockHeld: true,
+      });
+    } else {
+      await restoreRows();
+    }
+    log.info('Database imported successfully');
+  });
 }
 
 // ==================== Convenience Query Functions ====================

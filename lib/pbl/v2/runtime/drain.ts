@@ -28,7 +28,7 @@ import { enrichPBLRuntimeEvent, pblEngagementRecordPayload } from './record-payl
 
 const PBL_DRAIN_TIMEOUT_MS = 10_000;
 const PBL_DRAIN_CHAIN_HARD_CAP_MS = PBL_DRAIN_TIMEOUT_MS * 2;
-const PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS = PBL_DRAIN_CHAIN_HARD_CAP_MS;
+export const PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS = PBL_DRAIN_CHAIN_HARD_CAP_MS;
 const WATERMARK_SCOPE = 'device';
 
 let defaultKv: KVStore | undefined;
@@ -422,7 +422,9 @@ export async function withDrainedProjectRuntime<T>(
   };
   const operation = globalLockHeld ? run() : withRuntimeStorageSharedLock(run);
   operation.catch(() => {});
-  return withTimeout(operation, PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS);
+  return globalLockHeld
+    ? operation
+    : withTimeout(operation, PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS);
 }
 
 export async function drainProjectRuntime(args: DrainProjectRuntimeArgs): Promise<void> {

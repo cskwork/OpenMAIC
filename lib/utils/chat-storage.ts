@@ -1201,6 +1201,10 @@ export async function restoreChatSessionsFromBackup(
     await withStageLock(0);
   };
 
+  if (options.globalLockHeld) {
+    await restoreAfterPrecedingWrites();
+    return;
+  }
   if (typeof navigator !== 'undefined' && navigator.locks) {
     // The queue snapshot and shared-lock request are synchronous with respect
     // to other JavaScript tasks. New saves either join this shared epoch and

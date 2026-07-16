@@ -4,10 +4,14 @@ import { isEqual } from 'lodash';
 
 import { getLearnerKey } from '@/lib/runtime/learner-key';
 import { getRuntimeStore } from '@/lib/runtime/store';
-import { withRuntimeStorageSharedLock } from '@/lib/utils/chat-storage-lock';
+import { withRuntimeStorageSharedLockUntilSettled } from '@/lib/utils/chat-storage-lock';
 import type { Scene } from '@/lib/types/stage';
 import type { PBLProjectV2 } from '@/lib/pbl/v2/types';
-import { ensurePBLRuntimeSession, withDrainedProjectRuntime } from './drain';
+import {
+  ensurePBLRuntimeSession,
+  PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS,
+  withDrainedProjectRuntime,
+} from './drain';
 import { foldPBLRuntime, type PBLFoldDiagnostics } from './fold';
 import {
   applyLearnerState,
@@ -174,7 +178,7 @@ function hasWriteCutoverSnapshot(records: readonly RuntimeRecord[]): boolean {
 }
 
 export async function synchronizePBLProjectRuntime(args: HydratePBLProjectArgs): Promise<void> {
-  await withRuntimeStorageSharedLock(async () => {
+  await withRuntimeStorageSharedLockUntilSettled(async () => {
     const kv = args.kv ?? getDefaultKv();
     const learnerKey = args.learnerKey ?? (await getLearnerKey(kv));
     const store = args.store ?? getRuntimeStore();
@@ -221,13 +225,13 @@ export async function synchronizePBLProjectRuntime(args: HydratePBLProjectArgs):
         true,
       ),
     );
-  });
+  }, PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS);
 }
 
 export async function hydratePBLProjectFromRuntime(
   args: HydratePBLProjectArgs,
 ): Promise<HydratePBLProjectResult> {
-  return withRuntimeStorageSharedLock(async () => {
+  return withRuntimeStorageSharedLockUntilSettled(async () => {
     const kv = args.kv ?? getDefaultKv();
     const learnerKey = args.learnerKey ?? (await getLearnerKey(kv));
     const store = args.store ?? getRuntimeStore();
@@ -317,7 +321,7 @@ export async function hydratePBLProjectFromRuntime(
         true,
       ),
     );
-  });
+  }, PBL_HYDRATION_DRAIN_BARRIER_TIMEOUT_MS);
 }
 
 export async function hydratePBLScenesFromRuntime(
