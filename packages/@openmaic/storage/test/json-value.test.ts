@@ -101,6 +101,11 @@ describe('cross-realm and shared-predicate behavior', () => {
     expect(invoked).toBe(0);
   });
 
+  test('accepts a plain non-callable toJSON data field', () => {
+    expect(() => assertJsonValue({ toJSON: 'metadata' }, 'payload')).not.toThrow();
+    expect(() => assertJsonValue({ toJSON: null }, 'payload')).not.toThrow();
+  });
+
   test('isLosslessJsonString mirrors the string gate', () => {
     expect(isLosslessJsonString('plain text')).toBe(true);
     expect(isLosslessJsonString('a\u0000b')).toBe(false);
