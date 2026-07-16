@@ -10,6 +10,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./runtime/pg": {
+      "types": "./dist/runtime/pg.d.ts",
+      "import": "./dist/runtime/pg.js"
     }
   },
   "files": [
@@ -48,6 +52,7 @@
     "@openmaic/dsl": "workspace:*"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.3.14",
     "fake-indexeddb": "^6.0.0",
     "typescript": "^5",
     "vitest": "^4.1.8"
