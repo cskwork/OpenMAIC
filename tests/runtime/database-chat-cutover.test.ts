@@ -1,6 +1,6 @@
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BrowserRuntimeStore, type KVStore } from '@openmaic/storage';
+import { BrowserRuntimeStore, type KVStore, type RuntimeStore } from '@openmaic/storage';
 
 import type { ChatSession } from '@/lib/types/chat';
 import type { ChatStorageSnapshot } from '@/lib/utils/chat-storage';
@@ -388,6 +388,119 @@ describe('database runtime chat integration', () => {
     await expect(
       loadChatSessions('stage-failed-load', { store: savingStore, learnerKey }),
     ).resolves.toMatchObject([{ title: 'Persisted chat' }, { title: 'Created after recovery' }]);
+  });
+
+  it('rolls back imported Dexie rows when restore-marker creation fails', async () => {
+    const backing = new BrowserRuntimeStore({ indexedDB: globalThis.indexedDB });
+    const { db, importDatabase } = await import('@/lib/utils/database');
+    const { loadChatSessions, saveChatSessions } = await import('@/lib/utils/chat-storage');
+    await db.stages.put({
+      id: 'stage-marker-failure',
+      name: 'Original stage',
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    });
+    await saveChatSessions(
+      'stage-marker-failure',
+      [{ ...chatSession(), title: 'Original runtime chat' }],
+      { store: backing, learnerKey },
+    );
+    const markerFailureStore = new Proxy(backing, {
+      get(target, property) {
+        if (property === 'createSession') {
+          return async (init: Parameters<RuntimeStore['createSession']>[0]) => {
+            if (init.id.startsWith('chat-restore-marker:')) {
+              throw new Error('restore marker failed');
+            }
+            return target.createSession(init);
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    await expect(
+      importDatabase(
+        {
+          stages: [
+            {
+              id: 'stage-marker-failure',
+              name: 'Imported stage',
+              createdAt: 1_000,
+              updatedAt: 3_000,
+            },
+          ],
+          chatSessions: [
+            { ...chatSession(), stageId: 'stage-marker-failure', title: 'Imported chat' },
+          ],
+        },
+        { store: markerFailureStore, learnerKey },
+      ),
+    ).rejects.toThrow('restore marker failed');
+
+    await expect(db.stages.get('stage-marker-failure')).resolves.toMatchObject({
+      name: 'Original stage',
+    });
+    await expect(
+      loadChatSessions('stage-marker-failure', { store: backing, learnerKey }),
+    ).resolves.toMatchObject([{ title: 'Original runtime chat' }]);
+  });
+
+  it('finishes an interrupted runtime clear from the durable restore marker', async () => {
+    const backing = new BrowserRuntimeStore({ indexedDB: globalThis.indexedDB });
+    const { db, importDatabase } = await import('@/lib/utils/database');
+    const { loadChatSessions, saveChatSessions } = await import('@/lib/utils/chat-storage');
+    await saveChatSessions(
+      'stage-interrupted-restore',
+      [{ ...chatSession(), title: 'Pre-restore runtime chat' }],
+      { store: backing, learnerKey },
+    );
+    const [oldRuntime] = (
+      await backing.listSessions('stage-interrupted-restore', learnerKey)
+    ).filter((session) => session.kind === 'chat');
+    const failingDeleteStore = new Proxy(backing, {
+      get(target, property) {
+        if (property === 'deleteSession') {
+          return async (runtimeSessionId: string) => {
+            if (runtimeSessionId === oldRuntime?.id) throw new Error('restore delete failed');
+            return target.deleteSession(runtimeSessionId);
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    await expect(
+      importDatabase(
+        {
+          stages: [
+            {
+              id: 'stage-interrupted-restore',
+              name: 'Imported stage',
+              createdAt: 1_000,
+              updatedAt: 3_000,
+            },
+          ],
+          chatSessions: [
+            {
+              ...chatSession(),
+              stageId: 'stage-interrupted-restore',
+              title: 'Restored backup chat',
+            },
+          ],
+        },
+        { store: failingDeleteStore, learnerKey },
+      ),
+    ).rejects.toThrow('restore delete failed');
+    await expect(db.stages.get('stage-interrupted-restore')).resolves.toMatchObject({
+      name: 'Imported stage',
+    });
+
+    await expect(
+      loadChatSessions('stage-interrupted-restore', { store: backing, learnerKey }),
+    ).resolves.toMatchObject([{ title: 'Restored backup chat' }]);
   });
 
   it('fails backup export instead of returning legacy-only chats after a runtime read error', async () => {
