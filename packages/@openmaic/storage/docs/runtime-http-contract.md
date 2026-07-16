@@ -1,6 +1,6 @@
 # RuntimeStore HTTP contract
 
-This contract exposes the complete `RuntimeStore` interface over JSON HTTP. All paths below are relative to a deployment-defined base URL. Path segments and query parameter values are percent-encoded UTF-8 strings. Request and response bodies use `application/json`; successful operations with no return value respond with `204 No Content`.
+This contract exposes the complete `RuntimeStore` interface over JSON HTTP. All paths below are relative to a deployment-defined base URL. Path segments and query parameter values are percent-encoded UTF-8 strings. Identifiers used as path segments MUST NOT be exactly `.` or `..`, because URL parsers normalize those dot segments before routing. Request and response bodies use `application/json`; successful operations with no return value respond with `204 No Content`.
 
 ## Endpoints
 
@@ -27,7 +27,7 @@ Likewise, `runtimeDslVersion` is server-assigned when a session is created. If t
 
 ## Payload domain
 
-HTTP implementations carry record payloads through JSON and therefore MUST accept only plain JSON values that survive serialization without changing meaning. They MUST fail loud before sending values such as `Map`, `Set`, `Date`, non-finite numbers, nested `undefined`, `bigint`, sparse arrays, strings containing U+0000, U+2028, or U+2029, class instances, and circular references. This is intentionally narrower than `BrowserRuntimeStore`, whose structured-clone persistence can preserve values such as `Map`, `Set`, and `Date` that JSON cannot.
+HTTP implementations carry record payloads through JSON and therefore MUST accept only plain JSON values that survive serialization without changing meaning. They MUST fail loud before sending values such as `Map`, `Set`, `Date`, non-finite numbers, negative zero, nested `undefined`, `bigint`, sparse arrays, symbol-keyed properties, non-enumerable properties, arrays with non-index own properties, strings containing U+0000, class instances, and circular references. U+2028 and U+2029 are valid JSON string contents and MUST be accepted. This is intentionally narrower than `BrowserRuntimeStore`, whose structured-clone persistence can preserve values such as `Map`, `Set`, and `Date` that JSON cannot.
 
 ## learnerKey security model
 
@@ -65,5 +65,7 @@ The client MUST use the machine-readable code, not status alone, when an operati
 ## Retry and atomicity guarantees
 
 `mergeLearner`, `DELETE /runtime/sessions/{sessionId}`, `DELETE /runtime/stages/{stageId}/learners/{learnerKey}`, and `DELETE /runtime/stages/{stageId}` MUST be safely retryable. Repeating a completed merge moves `0`; repeating a delete succeeds with `204`. A merge is atomic across every matching source session and MUST NOT expose a partial move. Delete endpoints cascade atomically to the target sessions' records.
+
+The test-only conformance server may report a future-stamped-row conflict encountered mid-merge as `500 INTERNAL_ERROR`; structured classification of that specific case is deferred to the real Part D server implementation.
 
 `POST /runtime/sessions` and record append are not implicitly retry-safe: clients must not retry them after an ambiguous transport failure unless a deployment adds a separate idempotency-key policy. Session ids and record ids remain caller-owned uniqueness keys, while record `seq` remains exclusively server-owned.

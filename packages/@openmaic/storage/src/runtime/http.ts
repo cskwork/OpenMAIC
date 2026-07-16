@@ -48,6 +48,9 @@ export class HttpRuntimeStoreError extends Error {
 }
 
 function segment(value: string): string {
+  if (value === '.' || value === '..') {
+    throw new Error(`@openmaic/storage: URL path segment must not be ${JSON.stringify(value)}`);
+  }
   return encodeURIComponent(value);
 }
 
@@ -113,7 +116,11 @@ export class HttpRuntimeStore implements RuntimeStore {
     this.headersHook = options.headers;
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  private async requestWithStatus<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<{ body: T; status: number }> {
     const headers = normalizeHeaders(await this.headersHook?.({ method, path }));
     let serializedBody: string | undefined;
     if (body !== undefined) {
@@ -140,8 +147,12 @@ export class HttpRuntimeStore implements RuntimeStore {
           : `@openmaic/storage: RuntimeStore HTTP request failed with status ${response.status}`;
       throw new HttpRuntimeStoreError(response.status, code, message);
     }
-    if (response.status === 204) return undefined as T;
-    return (await response.json()) as T;
+    if (response.status === 204) return { body: undefined as T, status: response.status };
+    return { body: (await response.json()) as T, status: response.status };
+  }
+
+  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    return (await this.requestWithStatus<T>(method, path, body)).body;
   }
 
   private migrateSession(session: RuntimeSession): RuntimeSession {
@@ -169,10 +180,18 @@ export class HttpRuntimeStore implements RuntimeStore {
   }
 
   async listSessions(stageId: string, learnerKey: string): Promise<RuntimeSession[]> {
-    const sessions = await this.request<RuntimeSession[]>(
+    const response = await this.requestWithStatus<unknown>(
       'GET',
       `/runtime/stages/${segment(stageId)}/learners/${segment(learnerKey)}/sessions`,
     );
+    if (!Array.isArray(response.body)) {
+      throw new HttpRuntimeStoreError(
+        response.status,
+        'MALFORMED_RESPONSE',
+        '@openmaic/storage: RuntimeStore HTTP listSessions response must be an array',
+      );
+    }
+    const sessions = response.body as RuntimeSession[];
     const migrated: RuntimeSession[] = [];
     for (const session of sessions) {
       try {
@@ -215,19 +234,38 @@ export class HttpRuntimeStore implements RuntimeStore {
 
   async listRecords(sessionId: string, opts?: { sceneId?: string }): Promise<RuntimeRecord[]> {
     const query = opts?.sceneId === undefined ? '' : `?sceneId=${encodeURIComponent(opts.sceneId)}`;
-    const records = await this.request<RuntimeRecord[]>(
+    const response = await this.requestWithStatus<unknown>(
       'GET',
       `/runtime/sessions/${segment(sessionId)}/records${query}`,
     );
+    if (!Array.isArray(response.body)) {
+      throw new HttpRuntimeStoreError(
+        response.status,
+        'MALFORMED_RESPONSE',
+        '@openmaic/storage: RuntimeStore HTTP listRecords response must be an array',
+      );
+    }
+    const records = response.body as RuntimeRecord[];
     return records.map((record) => assertValidRecord(record)).sort((a, b) => a.seq - b.seq);
   }
 
   async mergeLearner(fromLearnerKey: string, toLearnerKey: string): Promise<number> {
-    const result = await this.request<{ moved: number }>('POST', '/runtime/learners/merge', {
+    const response = await this.requestWithStatus<unknown>('POST', '/runtime/learners/merge', {
       fromLearnerKey,
       toLearnerKey,
     });
-    return result.moved;
+    const moved =
+      typeof response.body === 'object' && response.body !== null && 'moved' in response.body
+        ? response.body.moved
+        : undefined;
+    if (typeof moved !== 'number' || !Number.isFinite(moved)) {
+      throw new HttpRuntimeStoreError(
+        response.status,
+        'MALFORMED_RESPONSE',
+        '@openmaic/storage: RuntimeStore HTTP mergeLearner response moved must be a finite number',
+      );
+    }
+    return moved;
   }
 
   async deleteLearnerRuntime(stageId: string, learnerKey: string): Promise<void> {

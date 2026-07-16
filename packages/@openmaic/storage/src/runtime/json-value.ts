@@ -1,16 +1,19 @@
 /**
  * Shared payload guard for JSON-carrying backends (HTTP transport, Postgres
  * JSONB). The browser backend persists payloads via structured clone, which
- * preserves values JSON cannot represent (Map, Set, Date, NaN, nested
- * undefined, bigint). A JSON backend that accepted those would silently hand
- * back different data on the next read — appendRecord's return value and a
- * later listRecords would disagree. JSON backends therefore narrow the
- * accepted payload domain and fail loud at the write boundary.
+ * preserves values JSON cannot represent (Map, Set, Date, NaN, negative zero,
+ * nested undefined, bigint, symbol-keyed or non-enumerable properties). A JSON
+ * backend that accepted those would silently hand back different data on the
+ * next read — appendRecord's return value and a later listRecords would
+ * disagree. JSON backends therefore narrow the accepted payload domain and
+ * fail loud at the write boundary.
  *
- * JSONB note: Postgres jsonb cannot store the NUL code point (U+0000) inside
- * strings (error 22P05), so strings containing it are rejected here too —
- * keeping the payload domain identical across JSON backends rather than
- * letting one accept what another must refuse.
+ * The narrowing is exactly "survives JSON.stringify/JSON.parse losslessly":
+ * characters that round-trip through JSON (including U+2028/U+2029, legal in
+ * JSON strings per RFC 8259) are accepted. The one string exception is the
+ * NUL code point (U+0000): Postgres jsonb cannot store it (error 22P05), so
+ * it is rejected here too — keeping the payload domain identical across JSON
+ * backends rather than letting one accept what another must refuse.
  */
 
 interface NonJsonValue {
@@ -23,6 +26,11 @@ function isPlainPrototype(value: object): boolean {
   return prototype === Object.prototype || prototype === null;
 }
 
+function isCanonicalIndex(key: string, length: number): boolean {
+  const index = Number(key);
+  return Number.isInteger(index) && index >= 0 && index < length && String(index) === key;
+}
+
 function findNonJsonValue(
   value: unknown,
   pointer: string,
@@ -30,20 +38,15 @@ function findNonJsonValue(
 ): NonJsonValue | undefined {
   if (value === null || typeof value === 'boolean') return undefined;
   if (typeof value === 'number') {
+    if (Object.is(value, -0)) {
+      return { pointer, reason: 'negative zero (JSON serializes it as 0)' };
+    }
     if (Number.isFinite(value)) return undefined;
     return { pointer, reason: `non-finite number ${String(value)}` };
   }
   if (typeof value === 'string') {
-    if (value.includes('\u0000')) {
-      return { pointer, reason: 'string contains the NUL code point (\\u0000)' };
-    }
-    if (value.includes('\u2028') || value.includes('\u2029')) {
-      return {
-        pointer,
-        reason: 'string contains a line or paragraph separator (\\u2028/\\u2029)',
-      };
-    }
-    return undefined;
+    if (!value.includes('\u0000')) return undefined;
+    return { pointer, reason: 'string contains the NUL code point (\\u0000)' };
   }
   if (typeof value !== 'object') {
     return { pointer, reason: `${typeof value} is not a JSON value` };
@@ -52,6 +55,15 @@ function findNonJsonValue(
   seen.add(value);
   try {
     if (Array.isArray(value)) {
+      for (const key of Reflect.ownKeys(value)) {
+        if (key === 'length') continue;
+        if (typeof key !== 'string' || !isCanonicalIndex(key, value.length)) {
+          return {
+            pointer: `${pointer}/${String(key)}`,
+            reason: 'array carries a non-index own property (dropped by JSON)',
+          };
+        }
+      }
       for (let index = 0; index < value.length; index += 1) {
         if (!(index in value)) {
           return { pointer: `${pointer}/${index}`, reason: 'sparse array hole' };
@@ -67,12 +79,22 @@ function findNonJsonValue(
         reason: 'not a plain object (Map, Set, Date, class instances do not survive JSON)',
       };
     }
-    for (const [key, member] of Object.entries(value)) {
-      const memberPointer = `${pointer}/${key}`;
-      if (member === undefined) {
-        return { pointer: memberPointer, reason: 'undefined member (dropped by JSON)' };
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string') {
+        return { pointer, reason: 'symbol-keyed own property (dropped by JSON)' };
       }
-      const nested = findNonJsonValue(member, memberPointer, seen);
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor !== undefined && !descriptor.enumerable) {
+        return {
+          pointer: `${pointer}/${key}`,
+          reason: 'non-enumerable own property (dropped by JSON)',
+        };
+      }
+      const member = (value as Record<string, unknown>)[key];
+      if (member === undefined) {
+        return { pointer: `${pointer}/${key}`, reason: 'undefined member (dropped by JSON)' };
+      }
+      const nested = findNonJsonValue(member, `${pointer}/${key}`, seen);
       if (nested) return nested;
     }
     return undefined;

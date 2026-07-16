@@ -121,6 +121,66 @@ describe('HttpRuntimeStore error mapping', () => {
     await expect(failure).rejects.toMatchObject({ status: 409, code: 'FUTURE_VERSION' });
     await expect(failure).rejects.toThrow(/newer than this client's/);
   });
+
+  test('maps concurrent duplicate session creation to one success and one 409', async () => {
+    const storeId = `duplicate-race-${namespace++}`;
+    const store = new HttpRuntimeStore({
+      baseUrl: server.baseUrl,
+      fetch: server.fetch,
+      headers: () => ({ 'x-runtime-store-id': storeId }),
+    });
+
+    const results = await Promise.allSettled([
+      store.createSession(makeSession('duplicate-race')),
+      store.createSession(makeSession('duplicate-race')),
+    ]);
+    const fulfilled = results.filter((result) => result.status === 'fulfilled');
+    const rejected = results.filter((result) => result.status === 'rejected');
+
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]).toMatchObject({
+      reason: expect.objectContaining({
+        status: 409,
+        code: 'SESSION_ALREADY_EXISTS',
+      }),
+    });
+  });
+
+  test('maps invalid kind-specific append payloads to 400 validation failures', async () => {
+    const storeId = `payload-gate-${namespace++}`;
+    const store = new HttpRuntimeStore({
+      baseUrl: server.baseUrl,
+      fetch: server.fetch,
+      headers: () => ({ 'x-runtime-store-id': storeId }),
+    });
+    await store.createSession(makeSession('chat-session', { kind: 'chat' }));
+    await store.createSession(makeSession('quiz-session', { kind: 'quizAttempt' }));
+
+    await expect(
+      store.appendRecord(makeRecord('chat-session', { role: 'tool', content: 'invalid' })),
+    ).rejects.toMatchObject({ status: 400, code: 'VALIDATION_FAILED' });
+    await expect(
+      store.appendRecord(makeRecord('quiz-session', { phase: 'graded', answers: {} })),
+    ).rejects.toMatchObject({ status: 400, code: 'VALIDATION_FAILED' });
+  });
+
+  test('maps empty merge learner keys to 400 validation failures', async () => {
+    const store = new HttpRuntimeStore({
+      baseUrl: server.baseUrl,
+      fetch: server.fetch,
+      headers: () => ({ 'x-runtime-store-id': `merge-validation-${namespace++}` }),
+    });
+
+    await expect(store.mergeLearner('', 'learner-2')).rejects.toMatchObject({
+      status: 400,
+      code: 'VALIDATION_FAILED',
+    });
+    await expect(store.mergeLearner('learner-1', '')).rejects.toMatchObject({
+      status: 400,
+      code: 'VALIDATION_FAILED',
+    });
+  });
 });
 
 describe('HttpRuntimeStore HTTP hardening', () => {
@@ -137,16 +197,22 @@ describe('HttpRuntimeStore HTTP hardening', () => {
     sparse[1] = 'present';
     const circular: Record<string, unknown> = {};
     circular.self = circular;
+    const symbolKeyed = { [Symbol('k')]: 1 };
+    const nonEnumerable = Object.defineProperty({}, 'k', { value: 1, enumerable: false });
+    const arrayWithExtraProperty = Object.assign([1, 2], { meta: 'x' });
     const rejected: [string, unknown][] = [
       ['Map', new Map([['key', 'value']])],
       ['Set', new Set(['value'])],
       ['Date', new Date(T0)],
       ['NaN', Number.NaN],
+      ['negative zero', -0],
       ['nested undefined', { nested: undefined }],
       ['bigint', (globalThis as unknown as { BigInt(value: number): unknown }).BigInt(1)],
       ['sparse array', sparse],
-      ['line separator', `before\u2028after`],
-      ['paragraph separator', `before\u2029after`],
+      ['NUL', `before\u0000after`],
+      ['symbol key', symbolKeyed],
+      ['non-enumerable property', nonEnumerable],
+      ['array extra own property', arrayWithExtraProperty],
       ['circular reference', circular],
     ];
 
@@ -155,6 +221,70 @@ describe('HttpRuntimeStore HTTP hardening', () => {
         /not a plain JSON value/,
       );
     }
+  });
+
+  test('accepts JSON strings containing line and paragraph separators', async () => {
+    const storeId = `json-separators-${namespace++}`;
+    const store = new HttpRuntimeStore({
+      baseUrl: server.baseUrl,
+      fetch: server.fetch,
+      headers: () => ({ 'x-runtime-store-id': storeId }),
+    });
+    await store.createSession(makeSession('json-separators'));
+
+    await expect(
+      store.appendRecord(makeRecord('json-separators', `before\u2028after`)),
+    ).resolves.toMatchObject({ payload: `before\u2028after` });
+    await expect(
+      store.appendRecord(makeRecord('json-separators', `before\u2029after`)),
+    ).resolves.toMatchObject({ payload: `before\u2029after` });
+  });
+
+  test('rejects dot-only path segments before URL construction', async () => {
+    const store = new HttpRuntimeStore({
+      baseUrl: 'https://runtime.invalid',
+      fetch: async () => {
+        throw new Error('fetch must not be called');
+      },
+    });
+
+    await expect(store.getSession('.')).rejects.toThrow(/must not be ['"]\.['"]/);
+    await expect(store.getSession('..')).rejects.toThrow(/must not be ['"]\.\.['"]/);
+  });
+
+  test('maps non-array list response containers to malformed-response errors', async () => {
+    const sessionsStore = new HttpRuntimeStore({
+      baseUrl: 'https://runtime.invalid',
+      fetch: async () => fakeJsonResponse({ sessions: [] }, 206),
+    });
+    const recordsStore = new HttpRuntimeStore({
+      baseUrl: 'https://runtime.invalid',
+      fetch: async () => fakeJsonResponse({ records: [] }, 202),
+    });
+
+    await expect(sessionsStore.listSessions('stage', 'learner')).rejects.toMatchObject({
+      status: 206,
+      code: 'MALFORMED_RESPONSE',
+    });
+    await expect(recordsStore.listRecords('session')).rejects.toMatchObject({
+      status: 202,
+      code: 'MALFORMED_RESPONSE',
+    });
+  });
+
+  test.each([
+    ['non-numeric', '1'],
+    ['non-finite', Number.POSITIVE_INFINITY],
+  ])('maps a %s merge moved field to a malformed-response error', async (_name, moved) => {
+    const store = new HttpRuntimeStore({
+      baseUrl: 'https://runtime.invalid',
+      fetch: async () => fakeJsonResponse({ moved }, 201),
+    });
+
+    await expect(store.mergeLearner('from', 'to')).rejects.toMatchObject({
+      status: 201,
+      code: 'MALFORMED_RESPONSE',
+    });
   });
 
   test('validates append responses and every listed record, including seq', async () => {

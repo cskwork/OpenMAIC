@@ -1,6 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { IDBFactory } from 'fake-indexeddb';
 import {
+  isChatMessageSkeleton,
+  isQuizAttemptSkeleton,
   needsRuntimeMigration,
   RUNTIME_DSL_VERSION,
   runtimeDslVersionOf,
@@ -100,6 +102,25 @@ function assertNotFutureSession(session: RuntimeSession): void {
   }
 }
 
+function validatePayloadForKind(session: RuntimeSession, payload: unknown): void {
+  if (session.kind === 'chat' && !isChatMessageSkeleton(payload)) {
+    throw new ConformanceHttpError(
+      400,
+      'VALIDATION_FAILED',
+      '@openmaic/storage: invalid runtime record: /payload: chat payload must match ' +
+        'ChatMessageSkeleton (role + content)',
+    );
+  }
+  if (session.kind === 'quizAttempt' && !isQuizAttemptSkeleton(payload)) {
+    throw new ConformanceHttpError(
+      400,
+      'VALIDATION_FAILED',
+      '@openmaic/storage: invalid runtime record: /payload: quizAttempt payload must match ' +
+        'QuizAttemptSkeleton (phase + answers)',
+    );
+  }
+}
+
 async function requireSession(store: RuntimeStore, sessionId: string): Promise<RuntimeSession> {
   const session = await store.getSession(sessionId);
   if (session === undefined) throw missingSessionError(sessionId);
@@ -142,7 +163,20 @@ async function route(
         `@openmaic/storage: runtime session ${JSON.stringify(init.id)} already exists`,
       );
     }
-    sendJson(res, 201, await store.createSession(init));
+    let created: RuntimeSession;
+    try {
+      created = await store.createSession(init);
+    } catch (error) {
+      if (await store.getSession(init.id)) {
+        throw new ConformanceHttpError(
+          409,
+          'SESSION_ALREADY_EXISTS',
+          `@openmaic/storage: runtime session ${JSON.stringify(init.id)} already exists`,
+        );
+      }
+      throw error;
+    }
+    sendJson(res, 201, created);
     return;
   }
 
@@ -194,6 +228,7 @@ async function route(
       );
       const session = await requireSession(store, sessionId);
       assertNotFutureSession(session);
+      validatePayloadForKind(session, init.payload);
       if (session.status !== 'active') {
         throw new ConformanceHttpError(
           400,
@@ -228,7 +263,19 @@ async function route(
   }
 
   if (parts[1] === 'learners' && parts[2] === 'merge' && parts.length === 3 && method === 'POST') {
-    const body = await readJson<{ fromLearnerKey: string; toLearnerKey: string }>(req);
+    const body = await readJson<{ fromLearnerKey?: unknown; toLearnerKey?: unknown }>(req);
+    if (
+      typeof body.fromLearnerKey !== 'string' ||
+      body.fromLearnerKey === '' ||
+      typeof body.toLearnerKey !== 'string' ||
+      body.toLearnerKey === ''
+    ) {
+      throw new ConformanceHttpError(
+        400,
+        'VALIDATION_FAILED',
+        '@openmaic/storage: learner keys must be non-empty strings',
+      );
+    }
     sendJson(res, 200, {
       moved: await store.mergeLearner(body.fromLearnerKey, body.toLearnerKey),
     });
