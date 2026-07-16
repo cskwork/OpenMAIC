@@ -139,6 +139,25 @@ describe('PgRuntimeStore Postgres behavior', () => {
     await expect(rejection).rejects.not.toMatchObject({ code: '22P05' });
   });
 
+  test('createSession rejects an extraneous Date property before PostgreSQL', async () => {
+    const init = Object.assign(makeSession(), {
+      diagnosticTimestamp: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    await expect(store.createSession(init)).rejects.toThrow(/plain JSON value.*Date/i);
+    await expect(store.getSession(init.id)).resolves.toBeUndefined();
+  });
+
+  test('appendRecord rejects NUL in the record envelope before PostgreSQL', async () => {
+    await store.createSession(makeSession({ kind: 'playback' }));
+    const rejection = store.appendRecord(
+      makeRecordInit('sess-1', { sceneId: 'scene-before\u0000after' }),
+    );
+
+    await expect(rejection).rejects.toThrow(/runtime record.*sceneId.*NUL code point/i);
+    await expect(rejection).rejects.not.toMatchObject({ code: '22P05' });
+  });
+
   test('single-statement deletes do not invoke the transaction hook', async () => {
     let transactionCalls = 0;
     const directDeleteStore = new PgRuntimeStore(db, {

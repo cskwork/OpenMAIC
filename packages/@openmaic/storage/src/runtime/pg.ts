@@ -194,6 +194,13 @@ function isUniqueViolation(error: unknown): boolean {
   );
 }
 
+// 40001 is not reachable under the READ COMMITTED isolation this store assumes,
+// but remains retryable in case a host injects REPEATABLE READ or SERIALIZABLE
+// at the connection or session level. appendRecord intentionally owns the only
+// write-conflict retry loop: a non-cooperating external writer can deadlock its
+// multi-statement lock/read/insert sequence. mergeLearner acquires its complete
+// lock set in one statement, so it cannot form a lock-acquisition cycle, while
+// setSessionStatus takes only one row lock; neither path needs conflict retries.
 function isRetryableAppendError(error: unknown): boolean {
   if (typeof error !== 'object' || error === null || !('code' in error)) return false;
   const code = (error as { code?: unknown }).code;
@@ -276,6 +283,7 @@ export class PgRuntimeStore implements RuntimeStore {
   async createSession(init: RuntimeSessionInit): Promise<RuntimeSession> {
     const stamped: RuntimeSession = { ...init, runtimeDslVersion: RUNTIME_DSL_VERSION };
     assertValid(validateRuntimeSession(stamped), `runtime session ${JSON.stringify(stamped.id)}`);
+    assertJsonValue(stamped, `runtime session ${JSON.stringify(stamped.id)}`);
 
     try {
       await this.queryable.query(
@@ -407,6 +415,7 @@ export class PgRuntimeStore implements RuntimeStore {
           const seq = Number(last.rows[0]?.last_seq ?? -1) + 1;
           const record: RuntimeRecord<TPayload> = { ...init, seq };
           assertValid(validateRuntimeRecord(record), `runtime record ${JSON.stringify(init.id)}`);
+          assertJsonValue(record, `runtime record ${JSON.stringify(record.id)}`);
           await queryable.query(
             `INSERT INTO runtime_records
                (id, session_id, seq, scene_id, created_at, data)
@@ -461,6 +470,10 @@ export class PgRuntimeStore implements RuntimeStore {
     }
     if (fromLearnerKey === toLearnerKey) return 0;
 
+    // This lock set grows without bound with the source learner's session count,
+    // and the following updates hold it across N round-trips. That is a known
+    // contention/scalability surface, not a correctness issue; deployments that
+    // need to cap the wait can mitigate it with PostgreSQL's lock_timeout.
     return this.transaction(async (queryable) => {
       const result = await queryable.query<StoredJsonRow>(
         `SELECT data

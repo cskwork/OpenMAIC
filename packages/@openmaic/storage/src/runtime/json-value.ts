@@ -10,10 +10,12 @@
  *
  * The narrowing is exactly "survives JSON.stringify/JSON.parse losslessly":
  * characters that round-trip through JSON (including U+2028/U+2029, legal in
- * JSON strings per RFC 8259) are accepted. The one string exception is the
- * NUL code point (U+0000): Postgres jsonb cannot store it (error 22P05), so
- * it is rejected here too — keeping the payload domain identical across JSON
- * backends rather than letting one accept what another must refuse.
+ * JSON strings per RFC 8259) are accepted. Two string exceptions — applied to
+ * object keys as well as values — keep the payload domain identical across
+ * JSON backends rather than letting one accept what another must refuse: the
+ * NUL code point (U+0000), which Postgres jsonb cannot store (error 22P05),
+ * and unpaired UTF-16 surrogates, which jsonb rejects (22P02) and which other
+ * JSON stacks silently replace with U+FFFD.
  */
 
 interface NonJsonValue {
@@ -31,6 +33,20 @@ function isCanonicalIndex(key: string, length: number): boolean {
   return Number.isInteger(index) && index >= 0 && index < length && String(index) === key;
 }
 
+// In u-mode a surrogate pair is consumed as one astral code point, so this
+// class matches exactly the unpaired surrogates.
+const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
+
+function findNonJsonString(value: string, pointer: string): NonJsonValue | undefined {
+  if (value.includes('\u0000')) {
+    return { pointer, reason: 'string contains the NUL code point (\\u0000)' };
+  }
+  if (LONE_SURROGATE.test(value)) {
+    return { pointer, reason: 'string contains an unpaired UTF-16 surrogate' };
+  }
+  return undefined;
+}
+
 function findNonJsonValue(
   value: unknown,
   pointer: string,
@@ -45,8 +61,7 @@ function findNonJsonValue(
     return { pointer, reason: `non-finite number ${String(value)}` };
   }
   if (typeof value === 'string') {
-    if (!value.includes('\u0000')) return undefined;
-    return { pointer, reason: 'string contains the NUL code point (\\u0000)' };
+    return findNonJsonString(value, pointer);
   }
   if (typeof value !== 'object') {
     return { pointer, reason: `${typeof value} is not a JSON value` };
@@ -89,6 +104,10 @@ function findNonJsonValue(
           pointer: `${pointer}/${key}`,
           reason: 'non-enumerable own property (dropped by JSON)',
         };
+      }
+      const keyIssue = findNonJsonString(key, `${pointer}/${key}`);
+      if (keyIssue) {
+        return { pointer: keyIssue.pointer, reason: `object key: ${keyIssue.reason}` };
       }
       const member = (value as Record<string, unknown>)[key];
       if (member === undefined) {

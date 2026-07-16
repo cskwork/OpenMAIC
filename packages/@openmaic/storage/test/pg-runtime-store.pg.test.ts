@@ -95,4 +95,115 @@ describe.skipIf(!contractUrl)('PgRuntimeStore with PostgreSQL 16', () => {
     expect(seqs).toEqual(Array.from({ length: concurrentTransactions }, (_, index) => index));
     expect(new Set(seqs).size).toBe(concurrentTransactions);
   });
+
+  test('retries after a real unique violation from an independent writer', async () => {
+    await store.createSession(makeSession({ kind: 'playback' }));
+    const writer = await pool.connect();
+    let attempts = 0;
+    let collisionErrorCode: unknown;
+    const collisionStore = new PgRuntimeStore(pool as Queryable, {
+      withTransaction: async (body) => {
+        attempts += 1;
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+          if (attempts === 1) {
+            // Establish the store transaction's snapshot before the external
+            // row commits, so MAX(seq) still chooses the colliding value.
+            await client.query('SELECT COUNT(*) FROM runtime_records');
+            await writer.query(
+              `INSERT INTO runtime_records
+                 (id, session_id, seq, scene_id, created_at, data)
+               VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+              [
+                'external-collision',
+                'sess-1',
+                0,
+                null,
+                '2026-01-01T00:01:00.000Z',
+                JSON.stringify({
+                  id: 'external-collision',
+                  sessionId: 'sess-1',
+                  seq: 0,
+                  createdAt: '2026-01-01T00:01:00.000Z',
+                  payload: { source: 'external' },
+                }),
+              ],
+            );
+          }
+          const result = await body(client as Queryable);
+          await client.query('COMMIT');
+          return result;
+        } catch (error) {
+          if (attempts === 1) collisionErrorCode = (error as { code?: unknown }).code;
+          await client.query('ROLLBACK');
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+    });
+
+    try {
+      const appended = await collisionStore.appendRecord(
+        makeRecordInit('sess-1', { id: 'store-after-collision', payload: { source: 'store' } }),
+      );
+
+      expect(attempts).toBe(2);
+      expect(collisionErrorCode).toBe('23505');
+      expect(appended.seq).toBe(1);
+      expect((await store.listRecords('sess-1')).map((record) => record.seq)).toEqual([0, 1]);
+    } finally {
+      writer.release();
+    }
+  });
+
+  test('a real aborted transaction does not poison the next store operation', async () => {
+    await store.createSession(makeSession({ kind: 'playback' }));
+    const baseTransaction = transactionFor(pool);
+    let injectFailure = true;
+    let initialErrorCode: unknown;
+    let abortedErrorCode: unknown;
+    const recoveryStore = new PgRuntimeStore(pool as Queryable, {
+      withTransaction: (body) =>
+        baseTransaction((queryable) =>
+          body({
+            async query<TRow extends Record<string, unknown> = Record<string, unknown>>(
+              text: string,
+              params?: unknown[],
+            ) {
+              if (injectFailure && text.includes('SELECT COALESCE(MAX(seq)')) {
+                injectFailure = false;
+                try {
+                  await queryable.query('SELECT 1 / 0');
+                } catch (error) {
+                  initialErrorCode = (error as { code?: unknown }).code;
+                  try {
+                    await queryable.query('SELECT 1');
+                  } catch (abortedError) {
+                    abortedErrorCode = (abortedError as { code?: unknown }).code;
+                  }
+                  throw error;
+                }
+              }
+              return queryable.query<TRow>(text, params);
+            },
+          }),
+        ),
+    });
+
+    await expect(
+      recoveryStore.appendRecord(
+        makeRecordInit('sess-1', { id: 'aborted-attempt', payload: { attempt: 1 } }),
+      ),
+    ).rejects.toMatchObject({ code: '22012' });
+    expect(initialErrorCode).toBe('22012');
+    expect(abortedErrorCode).toBe('25P02');
+
+    await expect(
+      recoveryStore.appendRecord(
+        makeRecordInit('sess-1', { id: 'after-abort', payload: { attempt: 2 } }),
+      ),
+    ).resolves.toMatchObject({ id: 'after-abort', seq: 0 });
+  });
 });
