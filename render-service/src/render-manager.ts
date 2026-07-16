@@ -122,7 +122,14 @@ export class RenderManager {
       updatedAtMs: now,
       projectDir,
     };
-    await this.jobs.create(record);
+    // If persisting the job fails, the identity slot claimed at reserve() would
+    // otherwise leak (run() never runs to decrement it). Release it here.
+    try {
+      await this.jobs.create(record);
+    } catch (error) {
+      this.decrementIdentity(reservation.identity);
+      throw error;
+    }
 
     const abort = new AbortController();
     this.controllers.set(id, abort);
@@ -163,8 +170,13 @@ export class RenderManager {
     const outputPath = join(projectDir, 'output.mp4');
     // Wall-clock watchdog: abort a render that overruns the deadline so it can't
     // hold a concurrency slot + scratch dir indefinitely. executeRenderJob
-    // honors the same AbortSignal we pass for user cancellation.
-    const deadline = setTimeout(() => abort.abort(), config.jobDeadlineMs);
+    // honors the same AbortSignal we pass for user cancellation. `timedOut`
+    // distinguishes a deadline abort (→ failed) from a user cancel (→ cancelled).
+    let timedOut = false;
+    const deadline = setTimeout(() => {
+      timedOut = true;
+      abort.abort();
+    }, config.jobDeadlineMs);
     if (typeof deadline.unref === 'function') deadline.unref();
     try {
       await this.jobs.update(id, { status: 'running', currentStage: 'preparing' });
@@ -197,7 +209,12 @@ export class RenderManager {
       );
 
       if (abort.signal.aborted) {
-        await this.jobs.update(id, { status: 'cancelled', currentStage: 'cancelled' });
+        // Deadline overrun is a failure, not a user cancellation.
+        await this.jobs.update(id, {
+          status: timedOut ? 'failed' : 'cancelled',
+          currentStage: timedOut ? 'failed' : 'cancelled',
+          ...(timedOut ? { error: 'Render exceeded the deadline' } : {}),
+        });
         await this.cleanupProject(projectDir);
         return;
       }
@@ -210,11 +227,17 @@ export class RenderManager {
         outputPath,
       });
     } catch (error) {
-      const aborted = abort.signal.aborted;
+      // A deadline abort surfaces as a thrown RenderCancelledError; report it as
+      // failed (with a clear reason), reserving `cancelled` for user cancels.
+      const cancelledByUser = abort.signal.aborted && !timedOut;
       await this.jobs.update(id, {
-        status: aborted ? 'cancelled' : 'failed',
-        currentStage: aborted ? 'cancelled' : 'failed',
-        error: error instanceof Error ? error.message : String(error),
+        status: cancelledByUser ? 'cancelled' : 'failed',
+        currentStage: cancelledByUser ? 'cancelled' : 'failed',
+        error: timedOut
+          ? 'Render exceeded the deadline'
+          : error instanceof Error
+            ? error.message
+            : String(error),
       });
       // On failure/cancel the artifact is worthless — reclaim the project dir now.
       await this.cleanupProject(projectDir);

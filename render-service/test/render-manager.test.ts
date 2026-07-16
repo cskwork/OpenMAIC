@@ -99,4 +99,21 @@ describe('RenderManager admission control', () => {
     // Once released, capacity is back.
     expect(() => m.reserve('user-again')).not.toThrow();
   });
+
+  it('does not leak the identity slot when jobs.create fails', async () => {
+    // submit() consumes the reservation and persists the job; if create() throws
+    // (a fallible JobStore, e.g. a future Redis backend), run() never runs to
+    // decrement the identity — so submit() must decrement it itself.
+    const store = fakeJobStore();
+    store.create = async () => {
+      throw new Error('store down');
+    };
+    const m = new RenderManager(store, fakeArtifacts);
+    const r = m.reserve('carol');
+    await expect(
+      m.submit(r, '/tmp/whatever', { fps: 30, quality: 'draft', format: 'mp4' }),
+    ).rejects.toThrow('store down');
+    // The slot must be free again: a fresh reserve for the same identity succeeds.
+    expect(() => m.reserve('carol')).not.toThrow();
+  });
 });

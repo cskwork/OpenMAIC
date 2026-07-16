@@ -35,15 +35,17 @@ poll, then download. Job ids are opaque.
 | --- | --- | --- |
 | `PORT` | `9000` | Listen port. |
 | `RENDER_MAX_CONCURRENCY` | `2` | Renders that execute simultaneously; extras queue FIFO. |
-| `RENDER_MAX_JOBS_PER_USER` | `1` | Active jobs allowed per client identity (0 disables the guard). |
+| `RENDER_MAX_CONCURRENT_EXTRACTIONS` | `2` | Archives expanded simultaneously; bounds the RAM multiplier (≈ this × max expanded size). |
+| `RENDER_MAX_JOBS_PER_USER` | `1` | Active jobs allowed per client identity (0 disables the guard — see note below). |
 | `RENDER_MAX_QUEUE` | `20` | Max jobs in the system (reserved+queued+running) before new submits get `429`. |
 | `RENDER_JOB_TTL_MS` | `1800000` | How long finished jobs + artifacts live before cleanup. |
-| `RENDER_JOB_DEADLINE_MS` | `2700000` | Hard per-job wall-clock deadline; overruns are aborted and marked failed. |
-| `RENDER_MAX_UPLOAD_BYTES` | `314572800` | Max compressed archive size accepted (300 MB). |
+| `RENDER_JOB_DEADLINE_MS` | `2700000` | Hard per-job wall-clock deadline; overruns are aborted and marked **failed**. |
+| `RENDER_MAX_UPLOAD_BYTES` | `314572800` | Max compressed archive size accepted (300 MB); enforced on real bytes, before buffering. |
 | `RENDER_MAX_ENTRIES` | `5000` | Max entries allowed in the archive. |
 | `RENDER_MAX_ENTRY_BYTES` | `209715200` | Max expanded size of any single entry (200 MB). |
-| `RENDER_MAX_EXPANDED_BYTES` | `1073741824` | Max total expanded size across all entries (1 GB). |
+| `RENDER_MAX_EXPANDED_BYTES` | `536870912` | Max total expanded size across all entries (512 MB). |
 | `RENDER_MAX_COMPRESSION_RATIO` | `200` | Max expanded:compressed ratio per entry (ZIP-bomb guard). |
+| `RENDER_EGRESS_LOCKDOWN` | `true` | Install the iptables egress lockdown at startup (needs root + `CAP_NET_ADMIN`). |
 | `PRODUCER_TMP_PROJECT_DIR` | `/tmp/openmaic-renders` | Scratch dir for unzipped projects + outputs. |
 | `PUPPETEER_EXECUTABLE_PATH` | `/usr/bin/chromium` | System Chromium (set in the image). |
 
@@ -55,16 +57,37 @@ overwrites those headers); otherwise all callers share one `direct` identity, so
 the default directly-exposed Compose topology can't be gamed by spoofing
 forwarding headers.
 
+> **Per-user guard vs. shared identity.** When identity can't be trusted (no
+> reverse proxy → everyone is `direct`), a `RENDER_MAX_JOBS_PER_USER` of 1 would
+> throttle the *whole deployment* to one render at a time. The default Compose
+> therefore sets `RENDER_MAX_JOBS_PER_USER=0` (guard off) and relies on
+> `RENDER_MAX_CONCURRENCY` + `RENDER_MAX_QUEUE`. Enable the per-user guard only
+> behind a trusted proxy that supplies a real per-user identity.
+
 ## Security / isolation
 
 The uploaded archive is untrusted, so extraction is bounded *before* any bytes
 are decompressed (entry count, per-entry and total expanded size, and
-compression ratio — see the limits above), guarding against ZIP bombs. The
-composition HTML is then executed in headless Chromium; in the Compose
-deployment the service sits on an `internal: true` network with no route to
-other services or the internet. **When running standalone, place the service on
-an isolated network yourself** — it needs no outbound access because the export
-ZIP bundles every asset (and GSAP) at build time.
+compression ratio — see the limits above), guarding against ZIP bombs.
+Extraction runs on fflate's worker (off the event loop) and is concurrency-capped
+so admitted jobs can't stack the per-archive RAM ceiling.
+
+The composition HTML is then executed in headless Chromium. Two boundaries keep
+that untrusted page contained:
+
+- **No inbound-to-app bridge.** The container's entrypoint installs an iptables
+  egress lockdown (drop all outbound except loopback + replies on app-initiated
+  connections), so Chromium can't open connections back to the app — even though
+  they share the Compose network so the app can reach the service. This needs the
+  container to run with `CAP_NET_ADMIN` (`cap_add: [NET_ADMIN]`, already set in
+  the Compose file); without it the service still boots but logs a warning and
+  does **not** block egress. Toggle with `RENDER_EGRESS_LOCKDOWN`.
+- **No internet.** In Compose the `render` network is `internal: true` (no host
+  or internet gateway). The export ZIP bundles every asset (and GSAP) at build
+  time, so the render needs no outbound at all.
+
+**When running standalone, place the service on an isolated network yourself**
+(and keep the egress lockdown on) — it needs no outbound access.
 
 ## Run
 

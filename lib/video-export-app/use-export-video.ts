@@ -12,7 +12,7 @@
  * App-side / impure: imperative store read, a single sonner toast id for
  * progress, `saveAs` for download.
  */
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { saveAs } from 'file-saver';
 import { toast } from 'sonner';
 import { useI18n } from '@/lib/hooks/use-i18n';
@@ -31,16 +31,21 @@ const log = createLogger('ExportVideo');
 export { VIDEO_RESOLUTIONS };
 export type { VideoResolution };
 
+// Module-level, NOT a per-hook ref: this hook lives in the export menu, which
+// unmounts as soon as the ZIP click closes it — a per-instance ref would reset
+// to false on the next mount and let a second concurrent snapshot/ZIP pipeline
+// start. A module singleton makes the in-flight guard survive remounts.
+let exportInFlight = false;
+
 export function useExportVideo() {
   const [exporting, setExporting] = useState(false);
-  const exportingRef = useRef(false);
   const { t } = useI18n();
 
   const exportVideo = useCallback(
     async (resolution: VideoResolution = '1080p') => {
-      if (exportingRef.current) return;
+      if (exportInFlight) return;
 
-      exportingRef.current = true;
+      exportInFlight = true;
       setExporting(true);
       const toastId = toast.loading(t('export.videoCompiling'));
 
@@ -65,7 +70,7 @@ export function useExportVideo() {
           toast.error(t('export.videoFailed'), { id: toastId });
         }
       } finally {
-        exportingRef.current = false;
+        exportInFlight = false;
         setExporting(false);
       }
     },

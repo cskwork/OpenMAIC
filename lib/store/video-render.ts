@@ -152,9 +152,13 @@ export const useVideoRenderStore = create<VideoRenderState>()((set, get) => ({
     let lastTs = 0;
     let smoothedSpeed: number | null = null; // percent per ms
     // Set once the service accepts the job. Lets the catch below distinguish a
-    // *submit* failure (nothing started → degrade to ZIP) from a failure after
-    // the render began (hard error, and cancel the server job to free its slot).
+    // *submit* failure (nothing started) from a failure after the render began
+    // (hard error, and cancel the server job to free its slot).
     let submittedJobId: string | null = null;
+    // HTTP status of a failed submit, so the catch can tell "service genuinely
+    // unavailable" (degrade to ZIP) from a real rejection like 429/413/5xx
+    // (surface the error instead of an unsolicited download). null = fetch threw.
+    let submitStatus: number | null = null;
 
     try {
       const form = new FormData();
@@ -171,9 +175,15 @@ export const useVideoRenderStore = create<VideoRenderState>()((set, get) => ({
         maxAttempts: MAX_POLL_ATTEMPTS,
         submit: async () => {
           const res = await fetch('/api/export-video/render', { method: 'POST', body: form });
-          const data = (await res.json().catch(() => ({}))) as { jobId?: string; error?: string };
+          const data = (await res.json().catch(() => ({}))) as {
+            jobId?: string;
+            error?: string;
+            details?: string;
+          };
           if (!res.ok || !data.jobId) {
-            return { status: 'failed', message: data.error || `HTTP ${res.status}` };
+            submitStatus = res.status;
+            const detail = [data.error, data.details].filter(Boolean).join(': ');
+            return { status: 'failed', message: detail || `HTTP ${res.status}` };
           }
           submittedJobId = data.jobId;
           return { status: 'submitted', taskId: data.jobId };
@@ -228,12 +238,20 @@ export const useVideoRenderStore = create<VideoRenderState>()((set, get) => ({
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (submittedJobId == null) {
-        // The submit never succeeded (service unconfigured, unreachable, full,
-        // or rejected the upload). Nothing is rendering, so degrade cleanly:
-        // hand back the project ZIP for local CLI rendering.
-        saveAs(zipBlob, `${sanitizeFilename(stageName)}-video.zip`);
-        set({ status: 'idle', percent: 0, etaMs: null });
-        toast.info(t('export.videoServiceUnavailable'), { id: toastId });
+        // The submit never succeeded. Only degrade to the ZIP when the service
+        // is genuinely unavailable — not configured (501) or unreachable (fetch
+        // threw, submitStatus null). For real rejections (429 busy, 413 too
+        // large, 5xx) surface the actual reason instead of silently downloading
+        // a ZIP the user didn't ask for, so the failure is honest and retryable.
+        const unavailable = submitStatus == null || submitStatus === 501;
+        if (unavailable) {
+          saveAs(zipBlob, `${sanitizeFilename(stageName)}-video.zip`);
+          set({ status: 'idle', percent: 0, etaMs: null });
+          toast.info(t('export.videoServiceUnavailable'), { id: toastId });
+        } else {
+          set({ status: 'failed', error: message });
+          toast.error(t('export.videoFailed'), { id: toastId });
+        }
       } else {
         // The render started but failed / timed out. Cancel the server job so it
         // doesn't hold a concurrency slot and scratch space, then surface the error.

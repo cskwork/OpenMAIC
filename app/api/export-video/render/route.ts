@@ -8,11 +8,17 @@ import { createLogger } from '@/lib/logger';
 const log = createLogger('ExportVideo Render API');
 
 // Only forwards the upload to the isolated render service; the render itself
-// happens there, so this route stays lightweight despite large ZIP bodies.
-export const maxDuration = 60;
+// happens there, so this route stays lightweight despite large ZIP bodies. The
+// budget must cover *uploading* up to MAX_UPLOAD_BYTES over a slow link (a
+// 300 MB body needs ~40 Mbps to finish in 60s), not the render — so it's sized
+// for the transfer, well above the old 60s.
+export const maxDuration = 300;
 
 /** Reject uploads larger than this (compressed ZIP bytes), enforced on real bytes. */
 const MAX_UPLOAD_BYTES = 300 * 1024 * 1024;
+
+/** Upload-forwarding budget. Covers a large body over a slow link; the render is async. */
+const SUBMIT_TIMEOUT_MS = 300_000;
 
 /**
  * Derive a client identity for the render service's per-identity guard.
@@ -74,7 +80,7 @@ export async function POST(req: NextRequest) {
         'content-type': contentType,
         'x-openmaic-client': clientIdentity(req),
       },
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
     } as RequestInit);
 
     const data = (await upstream.json().catch(() => ({}))) as Record<string, unknown>;

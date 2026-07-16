@@ -32,6 +32,7 @@ import { LocalDiskArtifactStore } from './artifact-store.js';
 import { RenderManager, RenderRejectedError, makeProjectDir } from './render-manager.js';
 import { InvalidProjectError, unzipProject } from './unzip.js';
 import { capBodyStream } from './capped-stream.js';
+import { Semaphore } from './semaphore.js';
 import { isTerminal, type RenderOptions } from './types.js';
 
 const artifacts = new LocalDiskArtifactStore();
@@ -41,6 +42,9 @@ const jobs = new InMemoryJobStore(config.jobTtlMs, (record) => {
   void manager.cleanupProject(record.projectDir);
 });
 const manager = new RenderManager(jobs, artifacts);
+
+/** Bounds concurrent archive extractions so the per-archive RAM ceiling can't stack. */
+const extractionGate = new Semaphore(config.maxConcurrentExtractions);
 
 const app = new Hono();
 
@@ -71,46 +75,15 @@ app.post('/render', async (c) => {
     return c.json({ error: 'Upload too large' }, 413);
   }
 
-  // Cap the raw body BEFORE formData()/arrayBuffer() can buffer it, so a
-  // chunked/length-lying upload can't OOM the process. We parse a rebuilt
-  // Request whose body is the capped stream.
-  const raw = c.req.raw;
-  let form: FormData;
-  let capped: ReturnType<typeof capBodyStream> | undefined;
-  try {
-    if (raw.body) {
-      capped = capBodyStream(raw.body, config.maxUploadBytes);
-      const bounded = new Request(raw.url, {
-        method: raw.method,
-        headers: raw.headers,
-        body: capped.stream,
-        // duplex is required for a streaming request body.
-        duplex: 'half',
-      } as RequestInit);
-      form = await bounded.formData();
-    } else {
-      form = await c.req.formData();
-    }
-  } catch {
-    if (capped?.exceeded()) return c.json({ error: 'Upload too large' }, 413);
-    return c.json({ error: 'Expected multipart/form-data' }, 400);
-  }
-
-  const options = parseOptions(form);
-  if (typeof options === 'string') return c.json({ error: options }, 400);
-
-  const file = form.get('project');
-  if (!(file instanceof File)) {
-    return c.json({ error: 'Missing "project" file field' }, 400);
-  }
-
   // Identity is derived by the trusted proxy (client IP) and passed in a header;
   // a client-supplied multipart `userId` is deliberately ignored so it can't be
   // rotated to bypass the per-identity guard.
   const identity = c.req.header('x-openmaic-client')?.trim() || 'anonymous';
 
-  // Reserve an admission slot BEFORE extracting the archive, so a rejected
-  // caller (queue full / per-identity limit) never triggers a decompression.
+  // Reserve an admission slot BEFORE reading/buffering the multipart body, so a
+  // rejected caller (queue full / per-identity limit) never buffers hundreds of
+  // MB and never triggers extraction. This bounds concurrent near-cap uploads to
+  // the queue depth, not just each individual body to the size cap.
   let reservation;
   try {
     reservation = manager.reserve(identity);
@@ -119,14 +92,56 @@ app.post('/render', async (c) => {
     throw error;
   }
 
-  // Everything from here MUST release the reservation on failure — including
-  // makeProjectDir(), whose ENOENT (missing tmp root on the documented
-  // standalone path) / ENOSPC would otherwise leak the slot and eventually
-  // wedge the service at "queue full". So it lives inside the guarded block.
+  // From here every failure MUST release the reservation.
   let projectDir: string | undefined;
   try {
+    // Cap the raw body BEFORE formData()/arrayBuffer() can buffer it, so a
+    // chunked/length-lying upload can't OOM the process. We parse a rebuilt
+    // Request whose body is the capped stream.
+    const raw = c.req.raw;
+    let form: FormData;
+    let capped: ReturnType<typeof capBodyStream> | undefined;
+    try {
+      if (raw.body) {
+        capped = capBodyStream(raw.body, config.maxUploadBytes);
+        const bounded = new Request(raw.url, {
+          method: raw.method,
+          headers: raw.headers,
+          body: capped.stream,
+          // duplex is required for a streaming request body.
+          duplex: 'half',
+        } as RequestInit);
+        form = await bounded.formData();
+      } else {
+        form = await c.req.formData();
+      }
+    } catch {
+      manager.release(reservation);
+      if (capped?.exceeded()) return c.json({ error: 'Upload too large' }, 413);
+      return c.json({ error: 'Expected multipart/form-data' }, 400);
+    }
+
+    const options = parseOptions(form);
+    if (typeof options === 'string') {
+      manager.release(reservation);
+      return c.json({ error: options }, 400);
+    }
+
+    const file = form.get('project');
+    if (!(file instanceof File)) {
+      manager.release(reservation);
+      return c.json({ error: 'Missing "project" file field' }, 400);
+    }
+
+    // Extraction (and the file buffering that feeds it) holds the expanded
+    // archive in RAM and is CPU-bound; gate the whole memory-heavy section so a
+    // burst of admitted jobs can't stack the per-archive memory ceiling.
     projectDir = await makeProjectDir();
-    await unzipProject(new Uint8Array(await file.arrayBuffer()), projectDir);
+    const dir = projectDir;
+    await extractionGate.run(async () => {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      await unzipProject(bytes, dir);
+    });
     const jobId = await manager.submit(reservation, projectDir, options);
     return c.json({ jobId }, 202);
   } catch (error) {
