@@ -58,9 +58,17 @@ function segment(value: string): string {
   return encodeURIComponent(value);
 }
 
-function withoutTopLevelUndefined<T extends object>(value: T): T {
+const OPTIONAL_RECORD_ANCHORS = ['sceneId', 'actionIndex', 'subAnchor'] as const;
+
+/**
+ * Drop the DSL-declared optional anchors when they are explicitly undefined —
+ * for those keys undefined means "omitted" throughout the DSL and JSON
+ * produces the identical envelope. Any other undefined member still reaches
+ * the JSON gate and fails loud, so unknown fields cannot be dropped silently.
+ */
+function withoutUndefinedAnchors<T extends object>(value: T): T {
   const descriptors = Object.getOwnPropertyDescriptors(value);
-  for (const key of Reflect.ownKeys(descriptors)) {
+  for (const key of OPTIONAL_RECORD_ANCHORS) {
     const descriptor = descriptors[key as keyof typeof descriptors];
     if (descriptor && 'value' in descriptor && descriptor.value === undefined) {
       delete descriptors[key as keyof typeof descriptors];
@@ -245,7 +253,7 @@ export class HttpRuntimeStore implements RuntimeStore {
     init: RuntimeRecordInit<TPayload>,
   ): Promise<RuntimeRecord<TPayload>> {
     assertJsonValue(init.payload, `runtime record ${JSON.stringify(init.id)} payload`);
-    const normalizedInit = withoutTopLevelUndefined(init);
+    const normalizedInit = withoutUndefinedAnchors(init);
     assertJsonValue(normalizedInit, `runtime record ${JSON.stringify(init.id)}`);
     const record = await this.request<RuntimeRecord<TPayload>>(
       'POST',

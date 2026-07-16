@@ -24,8 +24,12 @@ interface NonJsonValue {
 }
 
 function isPlainPrototype(value: object): boolean {
+  // Realm-agnostic: a plain object's chain is value -> (some realm's)
+  // Object.prototype -> null, or value -> null for null-proto objects.
+  // Identity against this realm's Object.prototype would reject ordinary
+  // objects from another realm (vm, iframe), which JSON round-trips fine.
   const prototype = Object.getPrototypeOf(value) as object | null;
-  return prototype === Object.prototype || prototype === null;
+  return prototype === null || Object.getPrototypeOf(prototype) === null;
 }
 
 function isCanonicalIndex(key: string, length: number): boolean {
@@ -45,6 +49,16 @@ function findNonJsonString(value: string, pointer: string): NonJsonValue | undef
     return { pointer, reason: 'string contains an unpaired UTF-16 surrogate' };
   }
   return undefined;
+}
+
+/**
+ * True when `value` contains neither of the two string exceptions above.
+ * SQL backends also use this to decide that a lookup key can never match a
+ * stored row (the write gate provably refuses such keys), so this predicate
+ * and the write-side string rule must stay coupled — hence the shared export.
+ */
+export function isLosslessJsonString(value: string): boolean {
+  return findNonJsonString(value, '') === undefined;
 }
 
 function findNonJsonValue(
@@ -70,7 +84,15 @@ function findNonJsonValue(
   seen.add(value);
   try {
     if (Array.isArray(value)) {
-      if (Object.getPrototypeOf(value) !== Array.prototype) {
+      // Realm-agnostic plain-array check: a plain array's chain is
+      // arr -> Array.prototype -> Object.prototype -> null. Subclasses add a
+      // hop and null-proto arrays short-circuit; comparing against this
+      // realm's Array.prototype identity would reject ordinary arrays from
+      // another realm (vm, iframe), which JSON round-trips fine.
+      const arrayProto = Object.getPrototypeOf(value) as object | null;
+      const objectProto =
+        arrayProto === null ? null : (Object.getPrototypeOf(arrayProto) as object | null);
+      if (objectProto === null || Object.getPrototypeOf(objectProto) !== null) {
         return {
           pointer,
           reason: 'array with a non-Array prototype (subclass/null-proto) does not survive JSON',

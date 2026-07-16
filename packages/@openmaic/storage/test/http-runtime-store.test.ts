@@ -430,6 +430,23 @@ describe('HttpRuntimeStore HTTP hardening', () => {
     await expect(store.listRecords('undefined-anchor')).resolves.toEqual([explicit, omitted]);
   });
 
+  test('rejects an unknown top-level record field that is explicitly undefined', async () => {
+    const storeId = `undefined-ext-${namespace++}`;
+    const store = new HttpRuntimeStore({
+      baseUrl: server.baseUrl,
+      fetch: server.fetch,
+      headers: () => ({ 'x-runtime-store-id': storeId }),
+    });
+    await store.createSession(makeSession('undefined-ext'));
+
+    await expect(
+      store.appendRecord({
+        ...makeRecord('undefined-ext', { source: 'extension' }),
+        ext: undefined,
+      } as never),
+    ).rejects.toThrow(/undefined member/);
+  });
+
   test('maps non-array list response containers to malformed-response errors', async () => {
     const sessionsStore = new HttpRuntimeStore({
       baseUrl: 'https://runtime.invalid',

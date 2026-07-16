@@ -311,6 +311,7 @@ async function route(
         '@openmaic/storage: learner keys must be non-empty strings',
       );
     }
+    assertAddressableSegment(body.toLearnerKey);
     assertJsonRequestValue(body.fromLearnerKey, 'runtime learner merge fromLearnerKey');
     assertJsonRequestValue(body.toLearnerKey, 'runtime learner merge toLearnerKey');
     assertAddressableSegment(body.toLearnerKey);
