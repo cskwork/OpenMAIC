@@ -842,6 +842,43 @@ describe('drainProjectRuntime', () => {
     expect(maintenanceStarted).toBe(true);
   });
 
+  it('enrolls queued PBL drains ahead of later runtime maintenance', async () => {
+    vi.stubGlobal('navigator', { locks: serialLockManager() });
+    const store = new SlowFirstAppendStore('evt-first-enrolled');
+    const kv = new MemoryKVStore();
+    const stageId = 'stage-queued-maintenance';
+    const sceneId = 'scene-queued-maintenance';
+    const first = drainProjectRuntime({
+      stageId,
+      sceneId,
+      project: makeProject([runtimeEvent('evt-first-enrolled')]),
+      store,
+      kv,
+      learnerKey: LEARNER_KEY,
+    });
+    await vi.waitFor(() => expect(store.appendLog).toEqual(['start:evt-first-enrolled']));
+
+    const second = drainProjectRuntime({
+      stageId,
+      sceneId,
+      project: makeProject([runtimeEvent('evt-second-enrolled')]),
+      store,
+      kv,
+      learnerKey: LEARNER_KEY,
+    });
+    await Promise.resolve();
+    const maintenance = withRuntimeStorageExclusiveLock(async () => {
+      store.records.splice(0);
+      store.sessions.splice(0);
+    });
+
+    store.resolveSlowAppend();
+    await Promise.all([first, second, maintenance]);
+
+    expect(store.records).toEqual([]);
+    expect(store.sessions).toEqual([]);
+  });
+
   it('does not permanently block later drains after a queued append times out', async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

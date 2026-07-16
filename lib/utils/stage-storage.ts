@@ -14,7 +14,7 @@ import { clearAllForScene } from '@/lib/quiz/persistence';
 import { deleteStageRuntimeSafely } from '@/lib/runtime/store';
 import { clearStageDrainWatermarks } from '@/lib/pbl/v2/runtime/drain';
 import { createLogger } from '@/lib/logger';
-import { withRuntimeStorageExclusiveLock } from './chat-storage-lock';
+import { withRuntimeStorageExclusiveLock, withRuntimeStorageSharedLock } from './chat-storage-lock';
 
 const log = createLogger('StageStorage');
 
@@ -40,52 +40,54 @@ export interface StageListItem {
  * Save stage data to IndexedDB
  */
 export async function saveStageData(stageId: string, data: StageStoreData): Promise<void> {
-  try {
-    const now = Date.now();
+  return withRuntimeStorageSharedLock(async () => {
+    try {
+      const now = Date.now();
 
-    // Save to stages table
-    await db.stages.put({
-      id: stageId,
-      name: data.stage.name || 'Untitled Stage',
-      description: data.stage.description,
-      createdAt: data.stage.createdAt || now,
-      updatedAt: now,
-      languageDirective: data.stage.languageDirective,
-      style: data.stage.style,
-      currentSceneId: data.currentSceneId || undefined,
-      agentIds: data.stage.agentIds,
-      videoManifest: data.stage.videoManifest,
-      interactiveMode: data.stage.interactiveMode,
-      taskEngineMode: data.stage.taskEngineMode,
-      generatedAgentConfigs: data.stage.generatedAgentConfigs,
-    });
+      // Save to stages table
+      await db.stages.put({
+        id: stageId,
+        name: data.stage.name || 'Untitled Stage',
+        description: data.stage.description,
+        createdAt: data.stage.createdAt || now,
+        updatedAt: now,
+        languageDirective: data.stage.languageDirective,
+        style: data.stage.style,
+        currentSceneId: data.currentSceneId || undefined,
+        agentIds: data.stage.agentIds,
+        videoManifest: data.stage.videoManifest,
+        interactiveMode: data.stage.interactiveMode,
+        taskEngineMode: data.stage.taskEngineMode,
+        generatedAgentConfigs: data.stage.generatedAgentConfigs,
+      });
 
-    // Delete old scenes first to avoid orphaned data
-    await db.scenes.where('stageId').equals(stageId).delete();
+      // Delete old scenes first to avoid orphaned data
+      await db.scenes.where('stageId').equals(stageId).delete();
 
-    // Save new scenes
-    if (data.scenes && data.scenes.length > 0) {
-      await db.scenes.bulkPut(
-        data.scenes.map((scene, index) => ({
-          ...scene,
-          stageId,
-          order: scene.order ?? index,
-          createdAt: scene.createdAt || now,
-          updatedAt: scene.updatedAt || now,
-        })),
-      );
+      // Save new scenes
+      if (data.scenes && data.scenes.length > 0) {
+        await db.scenes.bulkPut(
+          data.scenes.map((scene, index) => ({
+            ...scene,
+            stageId,
+            order: scene.order ?? index,
+            createdAt: scene.createdAt || now,
+            updatedAt: scene.updatedAt || now,
+          })),
+        );
+      }
+
+      // Chat sessions live in the learner RuntimeStore, outside the document DB.
+      if (data.chats) {
+        await saveChatSessions(stageId, data.chats, { globalLockHeld: true });
+      }
+
+      log.info(`Saved stage: ${stageId}`);
+    } catch (error) {
+      log.error('Failed to save stage:', error);
+      throw error;
     }
-
-    // Chat sessions live in the learner RuntimeStore, outside the document DB.
-    if (data.chats) {
-      await saveChatSessions(stageId, data.chats);
-    }
-
-    log.info(`Saved stage: ${stageId}`);
-  } catch (error) {
-    log.error('Failed to save stage:', error);
-    throw error;
-  }
+  });
 }
 
 /**

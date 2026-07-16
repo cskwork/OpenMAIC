@@ -1,4 +1,5 @@
 const CHAT_STORAGE_GLOBAL_LOCK = 'openmaic:chat-storage:all';
+const DEFAULT_EXCLUSIVE_ACQUIRE_TIMEOUT_MS = 5_000;
 type FallbackLockMode = 'shared' | 'exclusive';
 interface FallbackLockWaiter {
   mode: FallbackLockMode;
@@ -59,16 +60,63 @@ export async function withRuntimeStorageSharedLock<T>(work: () => Promise<T>): P
   return typeof window === 'undefined' ? work() : withFallbackRuntimeLock('shared', work);
 }
 
+export interface RuntimeStorageExclusiveLockOptions {
+  acquireTimeoutMs?: number;
+}
+
+export class RuntimeStorageLockAcquisitionTimeoutError extends Error {}
+
 /** Quiesce runtime mutations before destructive whole-store work. */
-export async function withRuntimeStorageExclusiveLock<T>(work: () => Promise<T>): Promise<T> {
+export function withRuntimeStorageExclusiveLock<T>(
+  work: () => Promise<T>,
+  options: RuntimeStorageExclusiveLockOptions = {},
+): Promise<T> {
   const manager = locks();
-  if (manager) {
-    return manager.request(CHAT_STORAGE_GLOBAL_LOCK, work);
+  if (!manager && typeof window === 'undefined') {
+    return work();
   }
+
+  const configuredTimeout = options.acquireTimeoutMs ?? DEFAULT_EXCLUSIVE_ACQUIRE_TIMEOUT_MS;
+  const acquireTimeoutMs =
+    Number.isFinite(configuredTimeout) && configuredTimeout > 0
+      ? configuredTimeout
+      : DEFAULT_EXCLUSIVE_ACQUIRE_TIMEOUT_MS;
+  let acquired = false;
+  let cancelled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutError = new RuntimeStorageLockAcquisitionTimeoutError(
+    `Timed out acquiring the runtime maintenance lock after ${acquireTimeoutMs}ms`,
+  );
+  const guardedWork = async (): Promise<T> => {
+    if (cancelled) throw timeoutError;
+    acquired = true;
+    clearTimeout(timer);
+    return work();
+  };
   // Cross-realm exclusion is impossible without Web Locks. The fallback still
   // coordinates every writer in this realm and preserves the pre-cutover
   // ability to perform an explicit whole-database clear.
-  return typeof window === 'undefined' ? work() : withFallbackRuntimeLock('exclusive', work);
+  const request = manager
+    ? manager.request(CHAT_STORAGE_GLOBAL_LOCK, guardedWork)
+    : withFallbackRuntimeLock('exclusive', guardedWork);
+
+  return new Promise<T>((resolve, reject) => {
+    timer = setTimeout(() => {
+      if (acquired) return;
+      cancelled = true;
+      reject(timeoutError);
+    }, acquireTimeoutMs);
+    void request.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 /** Compatibility aliases for the chat cutover's partitioned writers. */

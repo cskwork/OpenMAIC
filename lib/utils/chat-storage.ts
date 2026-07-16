@@ -37,6 +37,7 @@ export interface ChatStorageOptions {
   kv?: KVStore;
   learnerKey?: string;
   legacyStore?: LegacyChatStore;
+  globalLockHeld?: boolean;
 }
 
 interface ChatStorageReadOptions extends ChatStorageOptions {
@@ -1025,6 +1026,7 @@ export async function saveChatSessions(
         rememberObservedSessions(resolved.store, queueKey, nextSessions);
         await resolved.legacyStore.clear(stageId);
       },
+      options.globalLockHeld,
     );
   } catch (error) {
     // A stage autosave echoes the caller-visible chat snapshot even when the

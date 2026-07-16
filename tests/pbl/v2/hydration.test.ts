@@ -678,7 +678,7 @@ describe('PBL runtime hydration', () => {
     }
   });
 
-  it('does not hold a shared maintenance lock while waiting for an earlier drain', async () => {
+  it('enrolls hydration before later maintenance while waiting for an earlier drain', async () => {
     let sharedAcquisitions = 0;
     vi.stubGlobal('navigator', {
       locks: readWriteLockManager((mode) => {
@@ -689,7 +689,6 @@ describe('PBL runtime hydration', () => {
     const eventId = project.runtimeEvents![0]!.id;
     const store = new SlowFirstAppendRuntimeStore(eventId);
     const kv = new MemoryKVStore();
-    const order: string[] = [];
 
     const priorDrain = drainProjectRuntime({
       stageId: STAGE_ID,
@@ -707,20 +706,19 @@ describe('PBL runtime hydration', () => {
       store,
       kv,
       learnerKey: LEARNER_KEY,
-    }).then((result) => {
-      order.push('hydrate');
-      return result;
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
     const sharedAcquisitionsBeforeRelease = sharedAcquisitions;
     const maintenance = withRuntimeStorageExclusiveLock(async () => {
-      order.push('maintenance');
+      store.records.splice(0);
+      store.sessions.splice(0);
     });
 
     store.release();
     await Promise.all([priorDrain, hydrating, maintenance]);
-    expect(sharedAcquisitionsBeforeRelease).toBe(1);
-    expect(order).toEqual(['maintenance', 'hydrate']);
+    expect(sharedAcquisitionsBeforeRelease).toBe(2);
+    expect(store.records).toEqual([]);
+    expect(store.sessions).toEqual([]);
   });
 
   it('falls back to the document without a snapshot when the drain barrier times out', async () => {

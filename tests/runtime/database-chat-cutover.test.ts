@@ -440,6 +440,98 @@ describe('database runtime chat integration', () => {
     expect(outcome).toBe('completed');
   });
 
+  it('enrolls a stage save before document writes so maintenance cannot overtake it', async () => {
+    stubMemoryLocalStorage();
+    const { db } = await import('@/lib/utils/database');
+    const { saveStageData } = await import('@/lib/utils/stage-storage');
+    const { withRuntimeStorageExclusiveLock } = await import('@/lib/utils/chat-storage-lock');
+    const originalPut = db.stages.put.bind(db.stages);
+    let documentWriteStarted!: () => void;
+    const didStartDocumentWrite = new Promise<void>((resolve) => {
+      documentWriteStarted = resolve;
+    });
+    let releaseDocumentWrite!: () => void;
+    const documentWriteMayContinue = new Promise<void>((resolve) => {
+      releaseDocumentWrite = resolve;
+    });
+    vi.spyOn(db.stages, 'put').mockImplementation((async (record, key) => {
+      documentWriteStarted();
+      await documentWriteMayContinue;
+      return originalPut(record, key);
+    }) as typeof db.stages.put);
+
+    const saving = saveStageData('stage-save-enrollment', {
+      stage: {
+        id: 'stage-save-enrollment',
+        name: 'Enrolled save',
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+      scenes: [],
+      currentSceneId: null,
+      chats: [chatSession()],
+    });
+    await didStartDocumentWrite;
+    let maintenanceStarted = false;
+    const maintenance = withRuntimeStorageExclusiveLock(async () => {
+      maintenanceStarted = true;
+    });
+    await Promise.resolve();
+
+    expect(maintenanceStarted).toBe(false);
+    releaseDocumentWrite();
+    await Promise.all([saving, maintenance]);
+  });
+
+  it('bounds maintenance lock acquisition without running delayed destructive work', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('navigator', { locks: fairLockManager() });
+    const { withRuntimeStorageExclusiveLock, withRuntimeStorageSharedLock } =
+      await import('@/lib/utils/chat-storage-lock');
+    let sharedStarted!: () => void;
+    const didStartShared = new Promise<void>((resolve) => {
+      sharedStarted = resolve;
+    });
+    let releaseShared!: () => void;
+    const sharedMayContinue = new Promise<void>((resolve) => {
+      releaseShared = resolve;
+    });
+    const shared = withRuntimeStorageSharedLock(async () => {
+      sharedStarted();
+      await sharedMayContinue;
+    });
+    await didStartShared;
+    let maintenanceRan = false;
+    const boundedExclusive = withRuntimeStorageExclusiveLock as <T>(
+      work: () => Promise<T>,
+      options: { acquireTimeoutMs: number },
+    ) => Promise<T>;
+    const maintenance = boundedExclusive(
+      async () => {
+        maintenanceRan = true;
+      },
+      { acquireTimeoutMs: 50 },
+    );
+    const outcome = Promise.race([
+      maintenance.then(
+        () => 'completed' as const,
+        () => 'rejected' as const,
+      ),
+      new Promise<'still-pending'>((resolve) => setTimeout(() => resolve('still-pending'), 51)),
+    ]);
+
+    try {
+      await vi.advanceTimersByTimeAsync(51);
+      await expect(outcome).resolves.toBe('rejected');
+    } finally {
+      releaseShared();
+      await shared;
+      await maintenance.catch(() => {});
+      vi.useRealTimers();
+    }
+    expect(maintenanceRan).toBe(false);
+  });
+
   it('waits for an active runtime writer before deleting a stage cascade', async () => {
     const { getRuntimeStore } = await import('@/lib/runtime/store');
     const backing = getRuntimeStore() as BrowserRuntimeStore;
