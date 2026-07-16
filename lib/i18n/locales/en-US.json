@@ -79,7 +79,7 @@
     "unknown": "Unknown",
     "stopDiscussion": "Stop Discussion",
     "endQA": "End Q&A",
-    "softClosing": "Ask again",
+    "softClosing": "Continue discussion",
     "error": {
       "emptyAgentResponses": "Agents returned empty responses; discussion stopped. Try again or check your model settings.",
       "streamInterrupted": "Stream ended unexpectedly; discussion didn't complete. Please try again."
@@ -502,7 +502,7 @@
     "thinking": "Thinking",
     "yourTurn": "Your turn",
     "stopDiscussion": "Stop Discussion",
-    "softClosing": "Ask again",
+    "softClosing": "Continue discussion",
     "autoPlay": "Auto-play",
     "autoPlayOff": "Stop auto-play",
     "speed": "Speed",

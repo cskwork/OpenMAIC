@@ -1,13 +1,12 @@
 import type { EngineMode } from './types';
 
 /**
- * Where a chat-session cleanup originated. Only `soft_close_timeout` is
- * eligible to auto-resume an interrupted lecture; every other source is either
- * a terminal action or the mere entry into the soft-closing window, and must
- * NOT resume playback.
+ * Where a chat-session cleanup originated. A confirmed or timed-out soft close
+ * may auto-resume an interrupted lecture; other sources must not.
  */
 export type CleanupSource =
   | 'soft_close_enter'
+  | 'soft_close_confirmed'
   | 'soft_close_timeout'
   | 'manual_stop'
   | 'scene_switch'
@@ -32,11 +31,11 @@ export interface AutoResumeArgs {
 /**
  * Decide whether an ended Q&A/discussion should auto-resume the lecture it
  * interrupted. Pure and conservative: it only returns true for the narrow
- * "soft-close timeout after a satisfied/back-to-lesson Q&A" case, and requires
- * the engine to be idle with content still remaining.
+ * "completed soft close after a satisfied/back-to-lesson Q&A" case, and
+ * requires the engine to be idle with content still remaining.
  */
 export function shouldAutoResumeLecture(args: AutoResumeArgs): boolean {
-  if (args.source !== 'soft_close_timeout') return false;
+  if (args.source !== 'soft_close_confirmed' && args.source !== 'soft_close_timeout') return false;
   if (!args.hadLectureInterruption) return false;
   if (args.endReason !== 'user_done' && args.endReason !== 'back_to_lesson') return false;
   if (args.engineMode !== 'idle') return false;

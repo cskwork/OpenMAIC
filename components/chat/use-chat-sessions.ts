@@ -38,6 +38,26 @@ import type { Stage } from '@/lib/types/stage';
 const log = createLogger('ChatSessions');
 const SOFT_CLOSE_TIMEOUT_MS = 15_000;
 
+export interface SoftCloseRegistration {
+  token: string;
+  deadline: number;
+  timer: ReturnType<typeof setTimeout>;
+  endReason?: string;
+  directorState?: DirectorState;
+}
+
+export function takeSoftCloseRegistration(
+  registrations: Map<string, SoftCloseRegistration>,
+  sessionId: string,
+  expectedToken?: string,
+): SoftCloseRegistration | undefined {
+  const registration = registrations.get(sessionId);
+  if (!registration || (expectedToken && registration.token !== expectedToken)) return undefined;
+  registrations.delete(sessionId);
+  clearTimeout(registration.timer);
+  return registration;
+}
+
 /** Context used by playback cleanup and optional lecture auto-resume. */
 export interface SessionCleanupPayload {
   sessionId: string;
@@ -257,6 +277,7 @@ export function normalizeStoredSessionsForRestore(sessions: ChatSession[]): Chat
       return {
         ...session,
         status: 'interrupted' as SessionStatus,
+        softCloseDeadline: undefined,
         whiteboardBoundary: undefined,
       };
     }
@@ -264,10 +285,13 @@ export function normalizeStoredSessionsForRestore(sessions: ChatSession[]): Chat
       return {
         ...session,
         status: 'completed' as SessionStatus,
+        softCloseDeadline: undefined,
         whiteboardBoundary: undefined,
       };
     }
-    return session.whiteboardBoundary ? { ...session, whiteboardBoundary: undefined } : session;
+    return session.whiteboardBoundary || session.softCloseDeadline
+      ? { ...session, softCloseDeadline: undefined, whiteboardBoundary: undefined }
+      : session;
   });
 }
 
@@ -291,6 +315,21 @@ export function resumeSoftClosingSessionForFollowUp(
     messages: [...session.messages, userMessage],
     status: 'active' as SessionStatus,
     endReason: undefined,
+    softCloseDeadline: undefined,
+    updatedAt: now,
+  };
+}
+
+export function resumeSoftClosingSessionWithoutMessage(
+  session: ChatSession,
+  now: number,
+): ChatSession | undefined {
+  if (session.status !== 'soft-closing') return undefined;
+  return {
+    ...session,
+    status: 'active',
+    endReason: undefined,
+    softCloseDeadline: undefined,
     updatedAt: now,
   };
 }
@@ -461,7 +500,10 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   const [isStreaming, setIsStreaming] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const streamingSessionIdRef = useRef<string | null>(null);
-  const softCloseTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const softCloseRegistrationsRef = useRef<Map<string, SoftCloseRegistration>>(new Map());
+  const softCloseLifecycleRef = useRef<Map<string, 'soft-closing' | 'active' | 'completed'>>(
+    new Map(),
+  );
   const sessionsRef = useRef<ChatSession[]>(sessions);
   const pendingWhiteboardBoundaryRef = useRef<PendingWhiteboardSessionBoundary | undefined>(
     undefined,
@@ -487,8 +529,9 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   useEffect(() => {
     if (stageId === stageIdRef.current) return;
     stageIdRef.current = stageId;
-    softCloseTimersRef.current.forEach((timer) => clearTimeout(timer));
-    softCloseTimersRef.current.clear();
+    softCloseRegistrationsRef.current.forEach(({ timer }) => clearTimeout(timer));
+    softCloseRegistrationsRef.current.clear();
+    softCloseLifecycleRef.current.clear();
     // Stage changed — reload sessions from store (already populated by loadFromStorage)
     const stored = useStageStore.getState().chats;
     setSessions(normalizeStoredSessionsForRestore(stored));
@@ -581,26 +624,34 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   // Abort active stream and destroy buffers on unmount
   useEffect(() => {
     const buffers = buffersRef.current;
-    const softCloseTimers = softCloseTimersRef.current;
+    const softCloseRegistrations = softCloseRegistrationsRef.current;
+    const softCloseLifecycle = softCloseLifecycleRef.current;
     return () => {
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
         abortControllerRef.current = null;
       }
-      softCloseTimers.forEach((timer) => clearTimeout(timer));
-      softCloseTimers.clear();
+      softCloseRegistrations.forEach(({ timer }) => clearTimeout(timer));
+      softCloseRegistrations.clear();
+      softCloseLifecycle.clear();
       buffers.forEach((buf) => buf.shutdown());
       buffers.clear();
     };
   }, []);
 
-  const clearSoftCloseTimer = useCallback((sessionId: string): boolean => {
-    const timer = softCloseTimersRef.current.get(sessionId);
-    if (!timer) return false;
-    clearTimeout(timer);
-    softCloseTimersRef.current.delete(sessionId);
-    return true;
-  }, []);
+  const claimSoftCloseRegistration = useCallback(
+    (sessionId: string, expectedToken?: string): SoftCloseRegistration | undefined => {
+      return takeSoftCloseRegistration(softCloseRegistrationsRef.current, sessionId, expectedToken);
+    },
+    [],
+  );
+
+  const clearSoftCloseRegistration = useCallback(
+    (sessionId: string): boolean => {
+      return Boolean(claimSoftCloseRegistration(sessionId));
+    },
+    [claimSoftCloseRegistration],
+  );
 
   const markSessionCompleted = useCallback(
     (sessionId: string, data?: { endReason?: string; directorState?: DirectorState }) => {
@@ -613,6 +664,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
                 status: 'completed' as SessionStatus,
                 updatedAt: Date.now(),
                 endReason: data?.endReason ?? s.endReason,
+                softCloseDeadline: undefined,
                 directorState: data?.directorState ?? s.directorState,
                 whiteboardBoundary: undefined,
               }
@@ -621,6 +673,32 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       );
     },
     [],
+  );
+
+  const finishSoftCloseTimeout = useCallback(
+    (sessionId: string, expectedToken?: string): boolean => {
+      const registration = claimSoftCloseRegistration(sessionId, expectedToken);
+      if (!registration || softCloseLifecycleRef.current.get(sessionId) !== 'soft-closing') {
+        return false;
+      }
+      softCloseLifecycleRef.current.set(sessionId, 'completed');
+
+      const retirement = retireLiveRequestResources(null, sessionId, buffersRef.current);
+      pendingRetirementRef.current = Promise.all([pendingRetirementRef.current, retirement]).then(
+        () => undefined,
+      );
+      markSessionCompleted(sessionId, {
+        endReason: registration.endReason,
+        directorState: registration.directorState,
+      });
+      onStopSessionRef.current?.({
+        sessionId,
+        endReason: registration.endReason,
+        source: 'soft_close_timeout',
+      });
+      return true;
+    },
+    [claimSoftCloseRegistration, markSessionCompleted],
   );
 
   const storeDirectorState = useCallback((sessionId: string, directorState?: DirectorState) => {
@@ -640,7 +718,10 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
 
   const enterSoftClosing = useCallback(
     (sessionId: string, data: { endReason?: string; directorState?: DirectorState }) => {
-      clearSoftCloseTimer(sessionId);
+      clearSoftCloseRegistration(sessionId);
+      const token = nanoid();
+      const deadline = Date.now() + SOFT_CLOSE_TIMEOUT_MS;
+      softCloseLifecycleRef.current.set(sessionId, 'soft-closing');
       // Entering the soft-closing window is NOT the timeout — only the 15s timer
       // firing below counts as soft_close_timeout (the auto-resume trigger).
       onSoftCloseSessionRef.current?.({
@@ -656,6 +737,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
                 status: 'soft-closing' as SessionStatus,
                 updatedAt: Date.now(),
                 endReason: data.endReason ?? s.endReason,
+                softCloseDeadline: deadline,
                 directorState: data.directorState ?? s.directorState,
               }
             : s,
@@ -663,23 +745,33 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       );
 
       const timer = setTimeout(() => {
-        softCloseTimersRef.current.delete(sessionId);
-        const retirement = retireLiveRequestResources(null, sessionId, buffersRef.current);
-        pendingRetirementRef.current = Promise.all([pendingRetirementRef.current, retirement]).then(
-          () => undefined,
-        );
-        markSessionCompleted(sessionId, data);
-        onStopSessionRef.current?.({
-          sessionId,
-          endReason: data.endReason,
-          source: 'soft_close_timeout',
-        });
+        finishSoftCloseTimeout(sessionId, token);
       }, SOFT_CLOSE_TIMEOUT_MS);
 
-      softCloseTimersRef.current.set(sessionId, timer);
+      softCloseRegistrationsRef.current.set(sessionId, {
+        token,
+        deadline,
+        timer,
+        endReason: data.endReason,
+        directorState: data.directorState,
+      });
     },
-    [clearSoftCloseTimer, markSessionCompleted],
+    [clearSoftCloseRegistration, finishSoftCloseTimeout],
   );
+
+  useEffect(() => {
+    const reconcileExpiredSoftClose = () => {
+      if (document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      for (const [sessionId, registration] of softCloseRegistrationsRef.current) {
+        if (now >= registration.deadline) {
+          finishSoftCloseTimeout(sessionId, registration.token);
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', reconcileExpiredSoftClose);
+    return () => document.removeEventListener('visibilitychange', reconcileExpiredSoftClose);
+  }, [finishSoftCloseTimeout]);
 
   // Session-scoped "paused intent" — survives buffer recreation across turns.
   // When true, newly created discussion/QA buffers are immediately paused.
@@ -706,6 +798,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             ? {
                 ...s,
                 status: 'error' as SessionStatus,
+                softCloseDeadline: undefined,
                 whiteboardBoundary: undefined,
                 updatedAt: now,
                 messages: [
@@ -1328,7 +1421,8 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   const endSession = useCallback(
     async (sessionId: string, options: EndSessionOptions = {}): Promise<void> => {
       log.info(`[ChatArea] Ending session: ${sessionId}`);
-      clearSoftCloseTimer(sessionId);
+      clearSoftCloseRegistration(sessionId);
+      softCloseLifecycleRef.current.set(sessionId, 'completed');
       livePausedRef.current = false;
 
       const session = sessionsRef.current.find((s) => s.id === sessionId);
@@ -1397,6 +1491,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               ...s,
               messages,
               status: 'completed' as SessionStatus,
+              softCloseDeadline: undefined,
               whiteboardBoundary: undefined,
             };
           }),
@@ -1411,6 +1506,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               ? {
                   ...s,
                   status: 'completed' as SessionStatus,
+                  softCloseDeadline: undefined,
                   whiteboardBoundary: undefined,
                 }
               : s,
@@ -1422,7 +1518,47 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         setActiveSessionId(null);
       }
     },
-    [activeSessionId, clearSoftCloseTimer, retireActiveLiveRequest],
+    [activeSessionId, clearSoftCloseRegistration, retireActiveLiveRequest],
+  );
+
+  const continueSoftClosingSession = useCallback(
+    (sessionId: string): boolean => {
+      if (
+        softCloseLifecycleRef.current.get(sessionId) !== 'soft-closing' ||
+        !claimSoftCloseRegistration(sessionId)
+      ) {
+        return false;
+      }
+      softCloseLifecycleRef.current.set(sessionId, 'active');
+      const now = Date.now();
+      setSessions((prev) =>
+        prev.map((session) =>
+          session.id === sessionId
+            ? (resumeSoftClosingSessionWithoutMessage(session, now) ?? session)
+            : session,
+        ),
+      );
+      return true;
+    },
+    [claimSoftCloseRegistration],
+  );
+
+  const confirmSoftClosingSession = useCallback(
+    async (sessionId: string): Promise<SessionCleanupPayload | undefined> => {
+      const registration = claimSoftCloseRegistration(sessionId);
+      if (!registration || softCloseLifecycleRef.current.get(sessionId) !== 'soft-closing') {
+        return undefined;
+      }
+      softCloseLifecycleRef.current.set(sessionId, 'completed');
+      const payload: SessionCleanupPayload = {
+        sessionId,
+        endReason: registration.endReason,
+        source: 'soft_close_confirmed',
+      };
+      await endSession(sessionId, { source: 'soft_close_confirmed' });
+      return payload;
+    },
+    [claimSoftCloseRegistration, endSession],
   );
 
   /**
@@ -1690,7 +1826,16 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         }
         sessionId = await createSession('qa', 'Q&A');
       } else if (sessionId && activeSession?.status === 'soft-closing') {
-        clearSoftCloseTimer(sessionId);
+        if (claimSoftCloseRegistration(sessionId)) {
+          softCloseLifecycleRef.current.set(sessionId, 'active');
+        } else {
+          const lifecycle = softCloseLifecycleRef.current.get(sessionId);
+          if (lifecycle === 'completed') {
+            sessionId = await createSession('qa', 'Q&A');
+          } else if (lifecycle !== 'active') {
+            return;
+          }
+        }
       }
 
       const controller = new AbortController();
@@ -1822,7 +1967,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       clearLiveSessionAfterError,
       createSession,
       endSession,
-      clearSoftCloseTimer,
+      claimSoftCloseRegistration,
       retireActiveLiveRequest,
       runAgentLoopFn,
       t,
@@ -2179,6 +2324,8 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     createSession,
     endSession,
     endActiveSession,
+    continueSoftClosingSession,
+    confirmSoftClosingSession,
     softPauseActiveSession,
     resumeActiveSession,
     sendMessage,

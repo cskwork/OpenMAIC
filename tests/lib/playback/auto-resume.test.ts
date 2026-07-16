@@ -19,7 +19,18 @@ describe('shouldAutoResumeLecture', () => {
     expect(shouldAutoResumeLecture({ ...base, endReason: 'back_to_lesson' })).toBe(true);
   });
 
-  it('never resumes for a non-timeout cleanup source', () => {
+  it('uses the same resume gate for a user-confirmed soft close', () => {
+    expect(shouldAutoResumeLecture({ ...base, source: 'soft_close_confirmed' })).toBe(true);
+    expect(
+      shouldAutoResumeLecture({
+        ...base,
+        source: 'soft_close_confirmed',
+        endReason: 'user_goodbye',
+      }),
+    ).toBe(false);
+  });
+
+  it('never resumes for a non-soft-close cleanup source', () => {
     expect(shouldAutoResumeLecture({ ...base, source: 'soft_close_enter' })).toBe(false);
     expect(shouldAutoResumeLecture({ ...base, source: 'manual_stop' })).toBe(false);
     expect(shouldAutoResumeLecture({ ...base, source: 'scene_switch' })).toBe(false);

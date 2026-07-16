@@ -41,7 +41,7 @@ interface ChatAreaProps {
   onCueUser?: (fromAgentId?: string, prompt?: string) => void;
   onLiveSessionError?: () => void;
   onSoftCloseSession?: (payload: SessionCleanupPayload) => void;
-  onSoftClosingChange?: (softClosing: boolean) => void;
+  onSoftClosingChange?: (softClosing: boolean, deadline?: number) => void;
   onStopSession?: (payload: SessionCleanupPayload) => void;
   onSegmentSealed?: (
     messageId: string,
@@ -61,6 +61,8 @@ export interface ChatAreaRef {
   createSession: (type: SessionType, title: string) => Promise<string>;
   endSession: (sessionId: string, options?: EndSessionOptions) => Promise<void>;
   endActiveSession: (options?: EndSessionOptions) => Promise<void>;
+  stopActiveSession: () => Promise<void>;
+  continueActiveSoftClosingSession: () => boolean;
   softPauseActiveSession: () => Promise<void>;
   resumeActiveSession: () => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
@@ -118,6 +120,8 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       createSession,
       endSession,
       endActiveSession,
+      continueSoftClosingSession,
+      confirmSoftClosingSession,
       softPauseActiveSession,
       resumeActiveSession,
       sendMessage,
@@ -160,23 +164,44 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       [chatSessions],
     );
 
-    const hasSoftClosingChatSession = useMemo(
-      () => chatSessions.some((s) => s.status === 'soft-closing'),
+    const softClosingChatSession = useMemo(
+      () => chatSessions.find((s) => s.status === 'soft-closing'),
       [chatSessions],
     );
 
     useEffect(() => {
-      onSoftClosingChange?.(hasSoftClosingChatSession);
-    }, [hasSoftClosingChatSession, onSoftClosingChange]);
+      onSoftClosingChange?.(
+        Boolean(softClosingChatSession),
+        softClosingChatSession?.softCloseDeadline,
+      );
+    }, [softClosingChatSession, onSoftClosingChange]);
 
     // Wrap endSession for QA/Discussion: also notify parent for engine cleanup
     const handleEndSession = useCallback(
       async (sessionId: string) => {
+        const session = chatSessions.find((candidate) => candidate.id === sessionId);
+        if (session?.status === 'soft-closing') {
+          const payload = await confirmSoftClosingSession(sessionId);
+          if (payload) onStopSession?.(payload);
+          return;
+        }
         await endSession(sessionId, MANUAL_STOP_END_OPTIONS);
         onStopSession?.({ sessionId, source: 'manual_stop' });
       },
-      [endSession, onStopSession],
+      [chatSessions, confirmSoftClosingSession, endSession, onStopSession],
     );
+
+    const handleStopActiveSession = useCallback(async () => {
+      const active = chatSessions.find(
+        (session) => session.status === 'active' || session.status === 'soft-closing',
+      );
+      if (active) await handleEndSession(active.id);
+    }, [chatSessions, handleEndSession]);
+
+    const handleContinueActiveSoftClosingSession = useCallback((): boolean => {
+      const softClosing = chatSessions.find((session) => session.status === 'soft-closing');
+      return softClosing ? continueSoftClosingSession(softClosing.id) : false;
+    }, [chatSessions, continueSoftClosingSession]);
 
     const switchToTab = useCallback((tab: 'lecture' | 'chat') => {
       setActiveTab(tab);
@@ -186,6 +211,8 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       createSession,
       endSession,
       endActiveSession,
+      stopActiveSession: handleStopActiveSession,
+      continueActiveSoftClosingSession: handleContinueActiveSoftClosingSession,
       softPauseActiveSession,
       resumeActiveSession,
       sendMessage,
@@ -328,6 +355,7 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
                       activeBubbleId={activeBubbleId}
                       onToggleExpand={toggleSessionExpand}
                       onEndSession={handleEndSession}
+                      onContinueSession={continueSoftClosingSession}
                     />
                     <div ref={bottomRef} />
                   </>

@@ -9,11 +9,13 @@ import {
   reconcileWhiteboardBoundariesAfterSceneChange,
   retireLiveRequestResources,
   resumeSoftClosingSessionForFollowUp,
+  resumeSoftClosingSessionWithoutMessage,
   runPiSingleRequest,
   settleClaimedWhiteboardSessionBoundary,
   shouldAwaitPresentationAction,
   withPiInclassWhiteboardTools,
   MANUAL_STOP_END_OPTIONS,
+  takeSoftCloseRegistration,
 } from '@/components/chat/use-chat-sessions';
 import type { ChatRequestTemplate } from '@/components/chat/use-chat-sessions';
 import type { UIMessage } from 'ai';
@@ -217,6 +219,7 @@ describe('resumeSoftClosingSessionForFollowUp', () => {
       makeSession({
         status: 'soft-closing',
         endReason: 'user_done',
+        softCloseDeadline: 123,
         messages: [wrapUpMessage],
         whiteboardBoundary,
       }),
@@ -226,9 +229,44 @@ describe('resumeSoftClosingSessionForFollowUp', () => {
 
     expect(next.status).toBe('active');
     expect(next.endReason).toBeUndefined();
+    expect(next.softCloseDeadline).toBeUndefined();
     expect(next.updatedAt).toBe(99);
     expect(next.messages).toEqual([wrapUpMessage, followUpMessage]);
     expect(next.whiteboardBoundary).toBe(whiteboardBoundary);
+  });
+
+  it('resumes without appending a message for explicit continue or input activity', () => {
+    const session = makeSession({
+      status: 'soft-closing',
+      endReason: 'user_done',
+      softCloseDeadline: 123,
+    });
+
+    const next = resumeSoftClosingSessionWithoutMessage(session, 99);
+
+    expect(next).toMatchObject({
+      status: 'active',
+      endReason: undefined,
+      softCloseDeadline: undefined,
+      updatedAt: 99,
+      messages: [],
+    });
+    expect(resumeSoftClosingSessionWithoutMessage(makeSession(), 99)).toBeUndefined();
+  });
+});
+
+describe('soft-close registration arbitration', () => {
+  it('allows exactly one path to claim a soft-close cycle', () => {
+    const timer = setTimeout(() => undefined, 60_000);
+    const registrations = new Map([['session-1', { token: 'cycle-1', deadline: 100, timer }]]);
+
+    expect(takeSoftCloseRegistration(registrations, 'session-1', 'stale')).toBeUndefined();
+    expect(takeSoftCloseRegistration(registrations, 'session-1', 'cycle-1')).toMatchObject({
+      token: 'cycle-1',
+      deadline: 100,
+    });
+    expect(takeSoftCloseRegistration(registrations, 'session-1', 'cycle-1')).toBeUndefined();
+    expect(registrations.size).toBe(0);
   });
 });
 

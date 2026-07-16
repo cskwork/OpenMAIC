@@ -14,6 +14,7 @@ interface SessionListProps {
   activeBubbleId?: string | null;
   onToggleExpand: (sessionId: string) => void;
   onEndSession: (sessionId: string) => Promise<void>;
+  onContinueSession: (sessionId: string) => boolean;
 }
 
 const sessionBadgeStyles = {
@@ -49,6 +50,7 @@ export function SessionList({
   activeBubbleId,
   onToggleExpand,
   onEndSession,
+  onContinueSession,
 }: SessionListProps) {
   const { t } = useI18n();
   return (
@@ -131,6 +133,7 @@ export function SessionList({
                       isStreaming={isStreaming && isActive}
                       activeBubbleId={activeBubbleId}
                       onEndSession={onEndSession}
+                      onContinueSession={onContinueSession}
                     />
                   </div>
                 </motion.div>

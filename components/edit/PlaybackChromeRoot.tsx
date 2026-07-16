@@ -41,10 +41,7 @@ import type { Action, DiscussionAction, SpeechAction } from '@/lib/types/action'
 import { cn } from '@/lib/utils';
 // Playback state persistence removed — refresh always starts from the beginning
 import { ChatArea, type ChatAreaRef } from '@/components/chat/chat-area';
-import {
-  MANUAL_STOP_END_OPTIONS,
-  type SessionCleanupPayload,
-} from '@/components/chat/use-chat-sessions';
+import type { SessionCleanupPayload } from '@/components/chat/use-chat-sessions';
 import { agentsToParticipants, useAgentRegistry } from '@/lib/orchestration/registry/store';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import {
@@ -143,6 +140,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     // Streaming state for stop button (Issue 1)
     const [chatIsStreaming, setChatIsStreaming] = useState(false);
     const [chatIsSoftClosing, setChatIsSoftClosing] = useState(false);
+    const [softCloseDeadline, setSoftCloseDeadline] = useState<number | undefined>();
     const [chatSessionType, setChatSessionType] = useState<string | null>(null);
 
     // Topic pending state: session is soft-paused, bubble stays visible, waiting for user input
@@ -365,14 +363,20 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
 
     // Shared stop-discussion handler (used by both Roundtable and Canvas toolbar)
     const handleStopDiscussion = useCallback(async () => {
-      await chatAreaRef.current?.endActiveSession(MANUAL_STOP_END_OPTIONS);
-      doSessionCleanup();
-    }, [doSessionCleanup]);
+      await chatAreaRef.current?.stopActiveSession();
+    }, []);
+
+    const handleContinueDiscussion = useCallback(() => {
+      if (chatAreaRef.current?.continueActiveSoftClosingSession()) {
+        setChatIsSoftClosing(false);
+        setSoftCloseDeadline(undefined);
+      }
+    }, []);
 
     /**
      * Session-stop callback from the chat layer. Runs the normal cleanup, then —
-     * only when a soft-close timeout ended a Q&A that had interrupted an active
-     * lecture — auto-resumes the lecture from where it was paused.
+     * only when a confirmed or timed-out soft close ended a Q&A that had
+     * interrupted an active lecture — auto-resumes from the saved position.
      *
      * hadLectureInterruption MUST be read before doSessionCleanup(), because
      * handleEndDiscussion() restores and clears the saved lecture position.
@@ -1302,6 +1306,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                 !!chatSessionType
               }
               isSoftClosing={chatIsSoftClosing}
+              softCloseDeadline={softCloseDeadline}
               whiteboardOpen={whiteboardOpen}
               sidebarCollapsed={sidebarCollapsed}
               chatCollapsed={chatAreaCollapsed}
@@ -1319,6 +1324,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                   (chatSessionType === 'qa' || chatSessionType === 'discussion'))
               }
               onStopDiscussion={handleStopDiscussion}
+              onContinueDiscussion={handleContinueDiscussion}
               hideToolbar={mode === 'playback' || (isPresenting && !controlsVisible)}
               isPendingScene={isPendingScene}
               isCourseComplete={isCourseComplete}
@@ -1369,6 +1375,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                 thinkingState={thinkingState}
                 isCueUser={isCueUser}
                 isSoftClosing={chatIsSoftClosing}
+                softCloseDeadline={softCloseDeadline}
                 isTopicPending={isTopicPending}
                 onMessageSend={async (msg) => {
                   // Always clear Level-1 pause state — the closure may hold a stale
@@ -1423,6 +1430,10 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                   engineRef.current?.skipDiscussion();
                 }}
                 onStopDiscussion={handleStopDiscussion}
+                onContinueDiscussion={handleContinueDiscussion}
+                onUserInputActivity={() => {
+                  handleContinueDiscussion();
+                }}
                 onInputActivate={() => {
                   // Level-1 pause: freeze buffer tick + TTS audio while SSE keeps buffering.
                   // User resumes manually via Space / pause button after closing the input.
@@ -1541,7 +1552,10 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
               setIsCueUser(false);
               setActiveBubbleId(null);
             }}
-            onSoftClosingChange={setChatIsSoftClosing}
+            onSoftClosingChange={(softClosing, deadline) => {
+              setChatIsSoftClosing(softClosing);
+              setSoftCloseDeadline(deadline);
+            }}
             onStopSession={handleSessionStop}
             onSegmentSealed={discussionTTS.handleSegmentSealed}
             shouldHoldAfterReveal={discussionTTS.shouldHold}

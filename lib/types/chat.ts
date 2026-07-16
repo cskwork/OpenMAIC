@@ -59,6 +59,8 @@ export interface ChatSession {
   sceneId?: string;
   lastActionIndex?: number;
   endReason?: string;
+  /** Absolute deadline for the client-side soft-closing grace window. */
+  softCloseDeadline?: number;
   directorState?: DirectorState;
   whiteboardBoundary?: WhiteboardSessionBoundary;
 }
