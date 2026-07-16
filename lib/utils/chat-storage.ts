@@ -102,11 +102,18 @@ interface ChatRuntimeCandidate extends ChatRuntimeView {
 
 const dexieLegacyStore: LegacyChatStore = {
   async load(stageId) {
-    const records = await db.chatSessions.where('stageId').equals(stageId).sortBy('createdAt');
+    const staged = await db.chatRestoreStaging.where('stageId').equals(stageId).sortBy('createdAt');
+    const records =
+      staged.length > 0
+        ? staged
+        : await db.chatSessions.where('stageId').equals(stageId).sortBy('createdAt');
     return records.map(fromLegacyRecord);
   },
   async clear(stageId) {
-    await db.chatSessions.where('stageId').equals(stageId).delete();
+    await db.transaction('rw', [db.chatSessions, db.chatRestoreStaging], async () => {
+      await db.chatSessions.where('stageId').equals(stageId).delete();
+      await db.chatRestoreStaging.where('stageId').equals(stageId).delete();
+    });
   },
 };
 
@@ -1545,12 +1552,12 @@ export async function restoreChatSessionsFromBackup(
     .map((queueKey) => existingQueues?.get(queueKey))
     .filter((pending): pending is Promise<void> => pending !== undefined);
 
-  async function withStageLock(index: number): Promise<void> {
+  async function withStageLock(index: number, isolatedWrites = false): Promise<void> {
     if (index < orderedStageIds.length) {
       const stageId = orderedStageIds[index]!;
       const queueKey = queueKeys[index]!;
-      await withPartitionLocks(stageId, queueKey, resolved.requiresCrossRealmLock, async () =>
-        withStageLock(index + 1),
+      await withPartitionLocks(stageId, queueKey, resolved.requiresCrossRealmLock, (isolated) =>
+        withStageLock(index + 1, isolatedWrites || isolated),
       );
       return;
     }
@@ -1589,9 +1596,24 @@ export async function restoreChatSessionsFromBackup(
         ),
       );
     }
-    await Promise.all(
-      restoreMarkers.map((marker) => finalizeRestoreMarker(resolved.store, marker)),
-    );
+    for (const stageId of orderedStageIds) {
+      const marker = restoreMarkers.find((candidate) => candidate.stageId === stageId)!;
+      await finalizeRestoreMarker(resolved.store, marker);
+      const beforeMigration = await runtimeViews(resolved.store, stageId, resolved.learnerKey);
+      const restored = (await resolved.legacyStore.load(stageId)).map(normalizeSession);
+      await syncSessions(
+        resolved.store,
+        stageId,
+        resolved.learnerKey,
+        restored,
+        false,
+        isolatedWrites,
+        undefined,
+        undefined,
+        beforeMigration,
+      );
+      await resolved.legacyStore.clear(stageId);
+    }
   }
 
   const restoreAfterPrecedingWrites = async (): Promise<void> => {

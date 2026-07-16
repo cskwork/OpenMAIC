@@ -1,4 +1,4 @@
-import Dexie, { type EntityTable } from 'dexie';
+import Dexie, { type EntityTable, type Table } from 'dexie';
 import type {
   Scene,
   SceneType,
@@ -244,6 +244,7 @@ class MAICDatabase extends Dexie {
   imageFiles!: EntityTable<ImageFileRecord, 'id'>;
   snapshots!: EntityTable<Snapshot, 'id'>; // Undo/redo snapshots (legacy)
   chatSessions!: EntityTable<ChatSessionRecord, 'id'>;
+  chatRestoreStaging!: Table<ChatSessionRecord, [string, string]>;
   playbackState!: EntityTable<PlaybackStateRecord, 'stageId'>;
   stageOutlines!: EntityTable<StageOutlinesRecord, 'stageId'>;
   mediaFiles!: EntityTable<MediaFileRecord, 'id'>;
@@ -471,6 +472,12 @@ class MAICDatabase extends Dexie {
       agentEditSessions: 'id, stageId, [stageId+updatedAt]',
       chatStorageLocks: null,
     });
+
+    // Version 15: backup restore staging must preserve chat IDs that are reused
+    // in different stage partitions; the legacy chat table is keyed by id only.
+    this.version(15).stores({
+      chatRestoreStaging: '[stageId+id], stageId, [stageId+createdAt]',
+    });
   }
 }
 
@@ -539,7 +546,14 @@ export async function exportDatabase(chatOptions: ChatStorageOptions = {}): Prom
   playbackState: PlaybackStateRecord[];
 }> {
   const stages = await db.stages.toArray();
-  const legacyChats = await db.chatSessions.toArray();
+  const legacyChatMap = new Map<string, ChatSessionRecord>();
+  for (const session of [
+    ...(await db.chatSessions.toArray()),
+    ...(await db.chatRestoreStaging.toArray()),
+  ]) {
+    legacyChatMap.set(JSON.stringify([session.stageId, session.id]), session);
+  }
+  const legacyChats = [...legacyChatMap.values()];
   const { loadChatSessions } = await import('./chat-storage');
   const runtimeChats = (
     await Promise.all(
@@ -594,17 +608,22 @@ export async function importDatabase(
             ]),
           ];
     const restoreRows = () =>
-      db.transaction('rw', [db.stages, db.scenes, db.chatSessions, db.playbackState], async () => {
-        if (data.stages) await db.stages.bulkPut(data.stages);
-        if (data.scenes) await db.scenes.bulkPut(data.scenes);
-        if (data.chatSessions) {
-          for (const stageId of restoredChatStageIds) {
-            await db.chatSessions.where('stageId').equals(stageId).delete();
+      db.transaction(
+        'rw',
+        [db.stages, db.scenes, db.chatSessions, db.chatRestoreStaging, db.playbackState],
+        async () => {
+          if (data.stages) await db.stages.bulkPut(data.stages);
+          if (data.scenes) await db.scenes.bulkPut(data.scenes);
+          if (data.chatSessions) {
+            for (const stageId of restoredChatStageIds) {
+              await db.chatSessions.where('stageId').equals(stageId).delete();
+              await db.chatRestoreStaging.where('stageId').equals(stageId).delete();
+            }
+            await db.chatRestoreStaging.bulkPut(data.chatSessions);
           }
-          await db.chatSessions.bulkPut(data.chatSessions);
-        }
-        if (data.playbackState) await db.playbackState.bulkPut(data.playbackState);
-      });
+          if (data.playbackState) await db.playbackState.bulkPut(data.playbackState);
+        },
+      );
     if (data.chatSessions !== undefined) {
       // RuntimeStore cannot join Dexie's transaction. Keep a rollback image
       // until durable restore markers have been created for every affected
@@ -612,7 +631,7 @@ export async function importDatabase(
       // imported backup.
       const rollbackImage = await db.transaction(
         'r',
-        [db.stages, db.scenes, db.chatSessions, db.playbackState],
+        [db.stages, db.scenes, db.chatSessions, db.chatRestoreStaging, db.playbackState],
         async () => ({
           stages: (await db.stages.bulkGet((data.stages ?? []).map((stage) => stage.id))).filter(
             (stage): stage is StageRecord => stage !== undefined,
@@ -627,6 +646,13 @@ export async function importDatabase(
               ),
             )
           ).flat(),
+          chatRestoreStaging: (
+            await Promise.all(
+              restoredChatStageIds.map((stageId) =>
+                db.chatRestoreStaging.where('stageId').equals(stageId).toArray(),
+              ),
+            )
+          ).flat(),
           playbackState: (
             await db.playbackState.bulkGet(
               (data.playbackState ?? []).map((playback) => playback.stageId),
@@ -637,12 +663,13 @@ export async function importDatabase(
       const rollbackRows = () =>
         db.transaction(
           'rw',
-          [db.stages, db.scenes, db.chatSessions, db.playbackState],
+          [db.stages, db.scenes, db.chatSessions, db.chatRestoreStaging, db.playbackState],
           async () => {
             await db.stages.bulkDelete((data.stages ?? []).map((stage) => stage.id));
             await db.scenes.bulkDelete((data.scenes ?? []).map((scene) => scene.id));
             for (const stageId of restoredChatStageIds) {
               await db.chatSessions.where('stageId').equals(stageId).delete();
+              await db.chatRestoreStaging.where('stageId').equals(stageId).delete();
             }
             await db.playbackState.bulkDelete(
               (data.playbackState ?? []).map((playback) => playback.stageId),
@@ -650,6 +677,7 @@ export async function importDatabase(
             await db.stages.bulkPut(rollbackImage.stages);
             await db.scenes.bulkPut(rollbackImage.scenes);
             await db.chatSessions.bulkPut(rollbackImage.chatSessions);
+            await db.chatRestoreStaging.bulkPut(rollbackImage.chatRestoreStaging);
             await db.playbackState.bulkPut(rollbackImage.playbackState);
           },
         );

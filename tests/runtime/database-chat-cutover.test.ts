@@ -213,8 +213,8 @@ describe('database runtime chat integration', () => {
 
   it('keeps same-id legacy chats from a different stage in backup export', async () => {
     const runtimeStore = new BrowserRuntimeStore({ indexedDB: globalThis.indexedDB });
-    const { db, exportDatabase } = await import('@/lib/utils/database');
-    const { saveChatSessions } = await import('@/lib/utils/chat-storage');
+    const { db, exportDatabase, importDatabase } = await import('@/lib/utils/database');
+    const { loadChatSessions, saveChatSessions } = await import('@/lib/utils/chat-storage');
     await db.stages.put({
       id: 'stage-runtime-export',
       name: 'Runtime stage',
@@ -249,7 +249,14 @@ describe('database runtime chat integration', () => {
         }),
       ]),
     );
-    await db.chatSessions.delete('shared-chat-id');
+    await importDatabase(exported, { store: runtimeStore, learnerKey });
+    await expect(
+      loadChatSessions('stage-runtime-export', { store: runtimeStore, learnerKey }),
+    ).resolves.toMatchObject([{ title: 'Runtime chat' }]);
+    await expect(
+      loadChatSessions('stage-legacy-export', { store: runtimeStore, learnerKey }),
+    ).resolves.toMatchObject([{ title: 'Legacy chat' }]);
+    await expect(db.chatRestoreStaging.count()).resolves.toBe(0);
     await db.stages.delete('stage-runtime-export');
   });
 
@@ -572,7 +579,7 @@ describe('database runtime chat integration', () => {
     );
   });
 
-  it('upgrades past the abandoned lease schema and deletes its table', async () => {
+  it('upgrades past the abandoned lease schema and adds compound chat restore staging', async () => {
     const { default: Dexie } = await import('dexie');
     const intermediate = new Dexie('MAIC-Database', {
       indexedDB: globalThis.indexedDB,
@@ -590,8 +597,9 @@ describe('database runtime chat integration', () => {
     const { db } = await import('@/lib/utils/database');
     await db.open();
 
-    expect(db.verno).toBe(14);
+    expect(db.verno).toBe(15);
     expect([...db.backendDB().objectStoreNames]).not.toContain('chatStorageLocks');
+    expect([...db.backendDB().objectStoreNames]).toContain('chatRestoreStaging');
   });
 
   it('waits for active and locally queued chat writers before clearing all runtime data', async () => {
