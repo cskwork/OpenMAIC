@@ -16,6 +16,7 @@ import type {
   ValidationResult,
 } from '@openmaic/dsl';
 import { BrowserRuntimeStore } from '../src/runtime/browser.js';
+import { assertJsonValue } from '../src/runtime/json-value.js';
 import type { RuntimeSessionInit, RuntimeStore } from '../src/runtime/types.js';
 
 export interface HttpConformanceServer {
@@ -94,6 +95,25 @@ function validationError(result: ValidationResult, label: string): void {
   throw new ConformanceHttpError(400, 'VALIDATION_FAILED', `${label}: ${detail}`);
 }
 
+function assertAddressableSegment(value: string): void {
+  if (value === '.' || value === '..') {
+    throw new ConformanceHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `@openmaic/storage: URL path segment must not be ${JSON.stringify(value)}`,
+    );
+  }
+}
+
+function assertJsonRequestValue(value: unknown, label: string): void {
+  try {
+    assertJsonValue(value, label);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new ConformanceHttpError(400, 'VALIDATION_FAILED', message);
+  }
+}
+
 function missingSessionError(sessionId: string): ConformanceHttpError {
   return new ConformanceHttpError(
     404,
@@ -164,6 +184,9 @@ async function route(
 
   if (method === 'POST' && parts.length === 2 && parts[1] === 'sessions') {
     const init = await readJson<RuntimeSessionInit & { runtimeDslVersion?: unknown }>(req);
+    assertAddressableSegment(init.id);
+    assertAddressableSegment(init.stageId);
+    assertAddressableSegment(init.learnerKey);
     validationError(
       validateRuntimeSession({ ...init, runtimeDslVersion: RUNTIME_DSL_VERSION }),
       `@openmaic/storage: invalid runtime session ${JSON.stringify(init.id)}`,
@@ -288,6 +311,9 @@ async function route(
         '@openmaic/storage: learner keys must be non-empty strings',
       );
     }
+    assertJsonRequestValue(body.fromLearnerKey, 'runtime learner merge fromLearnerKey');
+    assertJsonRequestValue(body.toLearnerKey, 'runtime learner merge toLearnerKey');
+    assertAddressableSegment(body.toLearnerKey);
     sendJson(res, 200, {
       moved: await store.mergeLearner(body.fromLearnerKey, body.toLearnerKey),
     });

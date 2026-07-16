@@ -198,6 +198,54 @@ describe('HttpRuntimeStore error mapping', () => {
       code: 'VALIDATION_FAILED',
     });
   });
+
+  test.each([
+    ['createSession id', '/runtime/sessions', makeSession('.')],
+    ['createSession stageId', '/runtime/sessions', makeSession('dot-stage', { stageId: '..' })],
+    [
+      'createSession learnerKey',
+      '/runtime/sessions',
+      makeSession('dot-learner', { learnerKey: '.' }),
+    ],
+    [
+      'mergeLearner target',
+      '/runtime/learners/merge',
+      { fromLearnerKey: 'learner-1', toLearnerKey: '..' },
+    ],
+  ])('maps a dot-only %s body field to a 400 validation failure', async (_name, path, body) => {
+    const response = await server.fetch(`${server.baseUrl}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        code: 'VALIDATION_FAILED',
+        message: expect.stringContaining('URL path segment must not be'),
+      },
+    });
+  });
+
+  test.each([
+    ['NUL', 'from\u0000learner', 'to-learner'],
+    ['unpaired surrogate', 'from-learner', '\uD800'],
+  ])(
+    'maps a merge learner key containing %s to a 400 validation failure',
+    async (_name, fromLearnerKey, toLearnerKey) => {
+      const response = await server.fetch(`${server.baseUrl}/runtime/learners/merge`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ fromLearnerKey, toLearnerKey }),
+      });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: 'VALIDATION_FAILED' },
+      });
+    },
+  );
 });
 
 describe('HttpRuntimeStore HTTP hardening', () => {
@@ -210,13 +258,19 @@ describe('HttpRuntimeStore HTTP hardening', () => {
     });
     await store.createSession(makeSession('json-session'));
 
-    const sparse = Array.from({ length: 2 }) as unknown[];
-    sparse[1] = 'present';
+    const sparse = [, 'present'];
     const circular: Record<string, unknown> = {};
     circular.self = circular;
     const symbolKeyed = { [Symbol('k')]: 1 };
     const nonEnumerable = Object.defineProperty({}, 'k', { value: 1, enumerable: false });
     const arrayWithExtraProperty = Object.assign([1, 2], { meta: 'x' });
+    const enumerableAccessor = Object.defineProperty({}, 'value', {
+      enumerable: true,
+      get: () => 'x',
+    });
+    const ArraySubclass = class extends Array {};
+    const arraySubclass = Object.assign(new ArraySubclass(), { 0: 'x', length: 1 });
+    const fakeDense = Object.setPrototypeOf([, 1], { 0: 'x' });
     const rejected: [string, unknown][] = [
       ['Map', new Map([['key', 'value']])],
       ['Set', new Set(['value'])],
@@ -225,7 +279,6 @@ describe('HttpRuntimeStore HTTP hardening', () => {
       ['negative zero', -0],
       ['nested undefined', { nested: undefined }],
       ['bigint', (globalThis as unknown as { BigInt(value: number): unknown }).BigInt(1)],
-      ['sparse array', sparse],
       ['NUL', `before\u0000after`],
       ['NUL object key', { 'bad key\u0000': 1 }],
       ['unpaired surrogate string', '\uD800'],
@@ -233,8 +286,15 @@ describe('HttpRuntimeStore HTTP hardening', () => {
       ['symbol key', symbolKeyed],
       ['non-enumerable property', nonEnumerable],
       ['array extra own property', arrayWithExtraProperty],
+      ['enumerable accessor property', enumerableAccessor],
+      ['Array subclass', arraySubclass],
+      ['prototype-provided array index', fakeDense],
       ['circular reference', circular],
     ];
+
+    await expect(store.appendRecord(makeRecord('json-session', sparse))).rejects.toThrow(
+      /sparse array hole/,
+    );
 
     for (const [name, payload] of rejected) {
       await expect(store.appendRecord(makeRecord('json-session', payload)), name).rejects.toThrow(
@@ -304,6 +364,70 @@ describe('HttpRuntimeStore HTTP hardening', () => {
 
     await expect(store.getSession('.')).rejects.toThrow(/must not be ['"]\.['"]/);
     await expect(store.getSession('..')).rejects.toThrow(/must not be ['"]\.\.['"]/);
+  });
+
+  test.each([
+    ['session id', (store: HttpRuntimeStore) => store.createSession(makeSession('.'))],
+    [
+      'stage id',
+      (store: HttpRuntimeStore) => store.createSession(makeSession('dot-stage', { stageId: '..' })),
+    ],
+    [
+      'session learner key',
+      (store: HttpRuntimeStore) =>
+        store.createSession(makeSession('dot-learner', { learnerKey: '.' })),
+    ],
+    ['merge target learner key', (store: HttpRuntimeStore) => store.mergeLearner('from', '..')],
+  ])('rejects a dot-only %s body field before sending a request', async (_name, operation) => {
+    const store = new HttpRuntimeStore({
+      baseUrl: 'https://runtime.invalid',
+      fetch: async () => {
+        throw new Error('fetch must not be called');
+      },
+    });
+
+    await expect(operation(store)).rejects.toThrow(/URL path segment must not be/);
+  });
+
+  test.each([
+    ['from NUL', 'from\u0000learner', 'to-learner'],
+    ['to NUL', 'from-learner', 'to\u0000learner'],
+    ['from unpaired surrogate', '\uD800', 'to-learner'],
+    ['to unpaired surrogate', 'from-learner', '\uD800'],
+  ])(
+    'rejects a merge learner key containing %s before sending a request',
+    async (_name, fromLearnerKey, toLearnerKey) => {
+      const store = new HttpRuntimeStore({
+        baseUrl: 'https://runtime.invalid',
+        fetch: async () => {
+          throw new Error('fetch must not be called');
+        },
+      });
+
+      await expect(store.mergeLearner(fromLearnerKey, toLearnerKey)).rejects.toThrow(
+        /not a plain JSON value/,
+      );
+    },
+  );
+
+  test('treats a top-level undefined record anchor identically to an omitted anchor', async () => {
+    const storeId = `undefined-anchor-${namespace++}`;
+    const store = new HttpRuntimeStore({
+      baseUrl: server.baseUrl,
+      fetch: server.fetch,
+      headers: () => ({ 'x-runtime-store-id': storeId }),
+    });
+    await store.createSession(makeSession('undefined-anchor'));
+
+    const explicit = await store.appendRecord({
+      ...makeRecord('undefined-anchor', { source: 'explicit' }),
+      sceneId: undefined,
+    });
+    const omitted = await store.appendRecord(makeRecord('undefined-anchor', { source: 'omitted' }));
+
+    expect('sceneId' in explicit).toBe(false);
+    expect('sceneId' in omitted).toBe(false);
+    await expect(store.listRecords('undefined-anchor')).resolves.toEqual([explicit, omitted]);
   });
 
   test('maps non-array list response containers to malformed-response errors', async () => {

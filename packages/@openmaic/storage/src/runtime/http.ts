@@ -47,11 +47,26 @@ export class HttpRuntimeStoreError extends Error {
   }
 }
 
-function segment(value: string): string {
+function assertAddressableSegment(value: string): void {
   if (value === '.' || value === '..') {
     throw new Error(`@openmaic/storage: URL path segment must not be ${JSON.stringify(value)}`);
   }
+}
+
+function segment(value: string): string {
+  assertAddressableSegment(value);
   return encodeURIComponent(value);
+}
+
+function withoutTopLevelUndefined<T extends object>(value: T): T {
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  for (const key of Reflect.ownKeys(descriptors)) {
+    const descriptor = descriptors[key as keyof typeof descriptors];
+    if (descriptor && 'value' in descriptor && descriptor.value === undefined) {
+      delete descriptors[key as keyof typeof descriptors];
+    }
+  }
+  return Object.create(Object.getPrototypeOf(value), descriptors) as T;
 }
 
 function assertValidSession(session: RuntimeSession): RuntimeSession {
@@ -163,6 +178,9 @@ export class HttpRuntimeStore implements RuntimeStore {
 
   async createSession(init: RuntimeSessionInit): Promise<RuntimeSession> {
     assertJsonValue(init, `runtime session ${JSON.stringify(init.id)}`);
+    assertAddressableSegment(init.id);
+    assertAddressableSegment(init.stageId);
+    assertAddressableSegment(init.learnerKey);
     const session = await this.request<RuntimeSession>('POST', '/runtime/sessions', init);
     return this.migrateSession(session);
   }
@@ -227,11 +245,12 @@ export class HttpRuntimeStore implements RuntimeStore {
     init: RuntimeRecordInit<TPayload>,
   ): Promise<RuntimeRecord<TPayload>> {
     assertJsonValue(init.payload, `runtime record ${JSON.stringify(init.id)} payload`);
-    assertJsonValue(init, `runtime record ${JSON.stringify(init.id)}`);
+    const normalizedInit = withoutTopLevelUndefined(init);
+    assertJsonValue(normalizedInit, `runtime record ${JSON.stringify(init.id)}`);
     const record = await this.request<RuntimeRecord<TPayload>>(
       'POST',
       `/runtime/sessions/${segment(init.sessionId)}/records`,
-      init,
+      normalizedInit,
     );
     return assertValidRecord(record);
   }
@@ -254,6 +273,9 @@ export class HttpRuntimeStore implements RuntimeStore {
   }
 
   async mergeLearner(fromLearnerKey: string, toLearnerKey: string): Promise<number> {
+    assertJsonValue(fromLearnerKey, 'runtime learner merge fromLearnerKey');
+    assertJsonValue(toLearnerKey, 'runtime learner merge toLearnerKey');
+    assertAddressableSegment(toLearnerKey);
     const response = await this.requestWithStatus<unknown>('POST', '/runtime/learners/merge', {
       fromLearnerKey,
       toLearnerKey,
