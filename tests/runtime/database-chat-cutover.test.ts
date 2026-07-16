@@ -211,6 +211,48 @@ describe('database runtime chat integration', () => {
     );
   });
 
+  it('keeps same-id legacy chats from a different stage in backup export', async () => {
+    const runtimeStore = new BrowserRuntimeStore({ indexedDB: globalThis.indexedDB });
+    const { db, exportDatabase } = await import('@/lib/utils/database');
+    const { saveChatSessions } = await import('@/lib/utils/chat-storage');
+    await db.stages.put({
+      id: 'stage-runtime-export',
+      name: 'Runtime stage',
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    });
+    await saveChatSessions(
+      'stage-runtime-export',
+      [{ ...chatSession(), id: 'shared-chat-id', title: 'Runtime chat' }],
+      { store: runtimeStore, learnerKey },
+    );
+    await db.chatSessions.put({
+      ...chatSession(),
+      id: 'shared-chat-id',
+      stageId: 'stage-legacy-export',
+      title: 'Legacy chat',
+    });
+
+    const exported = await exportDatabase({ store: runtimeStore, learnerKey });
+
+    expect(exported.chatSessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'shared-chat-id',
+          stageId: 'stage-runtime-export',
+          title: 'Runtime chat',
+        }),
+        expect.objectContaining({
+          id: 'shared-chat-id',
+          stageId: 'stage-legacy-export',
+          title: 'Legacy chat',
+        }),
+      ]),
+    );
+    await db.chatSessions.delete('shared-chat-id');
+    await db.stages.delete('stage-runtime-export');
+  });
+
   it('does not let a pre-restore autosave replace the restored chat snapshot', async () => {
     const indexedDB = globalThis.indexedDB;
     const staleStore = new BrowserRuntimeStore({ indexedDB, dbName: 'restore-stale-autosave' });

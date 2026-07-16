@@ -554,14 +554,18 @@ export async function exportDatabase(chatOptions: ChatStorageOptions = {}): Prom
       ),
     )
   ).flat();
-  const runtimeChatIds = new Set(runtimeChats.map((session) => session.id));
+  const runtimeChatKeys = new Set(
+    runtimeChats.map((session) => JSON.stringify([session.stageId, session.id])),
+  );
 
   return {
     stages,
     scenes: await db.scenes.toArray(),
     chatSessions: [
       ...runtimeChats,
-      ...legacyChats.filter((session) => !runtimeChatIds.has(session.id)),
+      ...legacyChats.filter(
+        (session) => !runtimeChatKeys.has(JSON.stringify([session.stageId, session.id])),
+      ),
     ],
     playbackState: await db.playbackState.toArray(),
   };
