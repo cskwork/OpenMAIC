@@ -22,7 +22,7 @@
  * the entrypoint is `main.ts` to avoid spawning that phantom server.
  */
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { mkdir, stat } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
@@ -31,6 +31,7 @@ import { InMemoryJobStore } from './job-store.js';
 import { LocalDiskArtifactStore } from './artifact-store.js';
 import { RenderManager, RenderRejectedError, makeProjectDir } from './render-manager.js';
 import { InvalidProjectError, unzipProject } from './unzip.js';
+import { capBodyStream } from './capped-stream.js';
 import { isTerminal, type RenderOptions } from './types.js';
 
 const artifacts = new LocalDiskArtifactStore();
@@ -62,10 +63,36 @@ function parseOptions(form: FormData): RenderOptions | string {
 }
 
 app.post('/render', async (c) => {
+  // Reject an oversized body by declared length first (courtesy 413 for honest
+  // clients). The real bound is the byte-counting cap below, since
+  // Content-Length is client-supplied and absent on chunked uploads.
+  const declared = Number(c.req.header('content-length') ?? '0');
+  if (Number.isFinite(declared) && declared > config.maxUploadBytes) {
+    return c.json({ error: 'Upload too large' }, 413);
+  }
+
+  // Cap the raw body BEFORE formData()/arrayBuffer() can buffer it, so a
+  // chunked/length-lying upload can't OOM the process. We parse a rebuilt
+  // Request whose body is the capped stream.
+  const raw = c.req.raw;
   let form: FormData;
+  let capped: ReturnType<typeof capBodyStream> | undefined;
   try {
-    form = await c.req.formData();
+    if (raw.body) {
+      capped = capBodyStream(raw.body, config.maxUploadBytes);
+      const bounded = new Request(raw.url, {
+        method: raw.method,
+        headers: raw.headers,
+        body: capped.stream,
+        // duplex is required for a streaming request body.
+        duplex: 'half',
+      } as RequestInit);
+      form = await bounded.formData();
+    } else {
+      form = await c.req.formData();
+    }
   } catch {
+    if (capped?.exceeded()) return c.json({ error: 'Upload too large' }, 413);
     return c.json({ error: 'Expected multipart/form-data' }, 400);
   }
 
@@ -92,14 +119,19 @@ app.post('/render', async (c) => {
     throw error;
   }
 
-  const projectDir = await makeProjectDir();
+  // Everything from here MUST release the reservation on failure — including
+  // makeProjectDir(), whose ENOENT (missing tmp root on the documented
+  // standalone path) / ENOSPC would otherwise leak the slot and eventually
+  // wedge the service at "queue full". So it lives inside the guarded block.
+  let projectDir: string | undefined;
   try {
+    projectDir = await makeProjectDir();
     await unzipProject(new Uint8Array(await file.arrayBuffer()), projectDir);
     const jobId = await manager.submit(reservation, projectDir, options);
     return c.json({ jobId }, 202);
   } catch (error) {
     manager.release(reservation);
-    await manager.cleanupProject(projectDir);
+    if (projectDir) await manager.cleanupProject(projectDir);
     if (error instanceof InvalidProjectError) return c.json({ error: error.message }, 400);
     if (error instanceof RenderRejectedError) return c.json({ error: error.message }, 429);
     throw error;
@@ -153,6 +185,11 @@ app.get('/render/:jobId/download', async (c) => {
     },
   });
 });
+
+// Ensure the scratch root exists before accepting work. On the documented
+// standalone path nothing creates /tmp/openmaic-renders, so without this every
+// makeProjectDir() would ENOENT. mktemp still creates a fresh subdir per job.
+await mkdir(config.tmpDir, { recursive: true }).catch(() => {});
 
 serve({ fetch: app.fetch, port: config.port }, (info) => {
   // eslint-disable-next-line no-console

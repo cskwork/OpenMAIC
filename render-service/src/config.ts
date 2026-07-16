@@ -11,6 +11,18 @@ function intEnv(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+/**
+ * Like {@link intEnv} but accepts 0 as a valid value (still rejects negatives /
+ * non-numeric). Used for knobs where 0 has a distinct meaning — e.g. a per-user
+ * limit of 0 disables the guard entirely, as documented.
+ */
+function intEnvAllowZero(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
 const MB = 1024 * 1024;
 
 export const config = {
@@ -18,7 +30,7 @@ export const config = {
   /** Renders that execute simultaneously; extras queue FIFO. */
   maxConcurrency: intEnv('RENDER_MAX_CONCURRENCY', 2),
   /** Active (queued+running) jobs allowed per client identity. 0 disables the guard. */
-  maxJobsPerUser: intEnv('RENDER_MAX_JOBS_PER_USER', 1),
+  maxJobsPerUser: intEnvAllowZero('RENDER_MAX_JOBS_PER_USER', 1),
   /** Max jobs allowed in the system (queued+running) before new submits are rejected. */
   maxQueue: intEnv('RENDER_MAX_QUEUE', 20),
   /** How long a finished job's record + artifacts live before the sweeper reaps them. */
