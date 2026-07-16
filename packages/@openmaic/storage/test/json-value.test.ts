@@ -84,6 +84,23 @@ describe('cross-realm and shared-predicate behavior', () => {
     expect(() => assertJsonValue(crafted, 'payload')).toThrow(/toJSON/);
   });
 
+  test('detects an inherited toJSON accessor without invoking it', () => {
+    let invoked = 0;
+    const proto = Object.create(null) as object;
+    Object.defineProperty(proto, 'toJSON', {
+      get() {
+        invoked += 1;
+        return undefined;
+      },
+      enumerable: false,
+      configurable: true,
+    });
+    const crafted = Object.create(proto) as Record<string, unknown>;
+    crafted.real = 1;
+    expect(() => assertJsonValue(crafted, 'payload')).toThrow(/toJSON/);
+    expect(invoked).toBe(0);
+  });
+
   test('isLosslessJsonString mirrors the string gate', () => {
     expect(isLosslessJsonString('plain text')).toBe(true);
     expect(isLosslessJsonString('a\u0000b')).toBe(false);
