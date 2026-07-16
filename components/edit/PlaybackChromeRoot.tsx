@@ -41,7 +41,10 @@ import type { Action, DiscussionAction, SpeechAction } from '@/lib/types/action'
 import { cn } from '@/lib/utils';
 // Playback state persistence removed — refresh always starts from the beginning
 import { ChatArea, type ChatAreaRef } from '@/components/chat/chat-area';
-import type { SessionCleanupPayload } from '@/components/chat/use-chat-sessions';
+import {
+  MANUAL_STOP_END_OPTIONS,
+  type SessionCleanupPayload,
+} from '@/components/chat/use-chat-sessions';
 import { agentsToParticipants, useAgentRegistry } from '@/lib/orchestration/registry/store';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import {
@@ -362,7 +365,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
 
     // Shared stop-discussion handler (used by both Roundtable and Canvas toolbar)
     const handleStopDiscussion = useCallback(async () => {
-      await chatAreaRef.current?.endActiveSession();
+      await chatAreaRef.current?.endActiveSession(MANUAL_STOP_END_OPTIONS);
       doSessionCleanup();
     }, [doSessionCleanup]);
 

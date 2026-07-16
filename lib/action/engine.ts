@@ -89,6 +89,9 @@ export type WidgetMessageCallback = (type: string, payload: Record<string, unkno
 export interface ActionExecutionOptions {
   silent?: boolean;
   signal?: AbortSignal;
+  /** Internal Pi boundary guard. Ordinary model wb_clear actions leave this unset. */
+  whiteboardClearGuard?: () => boolean;
+  onWhiteboardClearGuardRejected?: () => void;
 }
 
 export class ActionEngine {
@@ -762,14 +765,27 @@ export class ActionEngine {
     const elementCount = wb.data.elements?.length || 0;
     if (elementCount === 0) return;
 
+    const guardAllowsCommit = () => {
+      if (!options.whiteboardClearGuard || options.whiteboardClearGuard()) return true;
+      useCanvasStore.getState().setWhiteboardClearing(false);
+      options.onWhiteboardClearGuardRejected?.();
+      return false;
+    };
+    if (!guardAllowsCommit()) return;
+
     if (options.silent) {
+      if (!guardAllowsCommit()) return;
       this.stageAPI.whiteboard.update({ elements: [] }, wb.data.id);
       useCanvasStore.getState().setWhiteboardClearing(false);
       return;
     }
 
-    // Save snapshot before AI clear (mirrors UI handleClear in index.tsx)
-    useWhiteboardHistoryStore.getState().pushSnapshot(wb.data.elements!);
+    // Ordinary clears preserve their existing history timing. Guarded clears defer
+    // the snapshot until the final precondition passes, avoiding an undo entry for
+    // a clear cancelled because the board changed during the animation.
+    if (!options.whiteboardClearGuard) {
+      useWhiteboardHistoryStore.getState().pushSnapshot(wb.data.elements!);
+    }
 
     // Trigger cascade exit animation
     useCanvasStore.getState().setWhiteboardClearing(true);
@@ -779,6 +795,10 @@ export class ActionEngine {
     await delay(animMs);
 
     // Actually remove elements
+    if (!guardAllowsCommit()) return;
+    if (options.whiteboardClearGuard) {
+      useWhiteboardHistoryStore.getState().pushSnapshot(wb.data.elements!);
+    }
     this.stageAPI.whiteboard.update({ elements: [] }, wb.data.id);
     useCanvasStore.getState().setWhiteboardClearing(false);
   }

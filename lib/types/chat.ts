@@ -60,6 +60,32 @@ export interface ChatSession {
   lastActionIndex?: number;
   endReason?: string;
   directorState?: DirectorState;
+  whiteboardBoundary?: WhiteboardSessionBoundary;
+}
+
+export interface WhiteboardSessionBoundary {
+  boundaryId: string;
+  sourceSessionId: string;
+  targetSessionId: string;
+  whiteboardId: string;
+  snapshotFingerprint: string;
+  status: 'claimed' | 'consumed' | 'invalidated';
+}
+
+export interface WhiteboardBoundaryRequest {
+  boundaryId: string;
+  sourceSessionId: string;
+  targetSessionId: string;
+  whiteboardId: string;
+  snapshotFingerprint: string;
+}
+
+export interface WhiteboardBoundaryActionMetadata {
+  boundaryId: string;
+  targetSessionId: string;
+  disposition: 'guarded_clear' | 'consume' | 'invalidate';
+  expectedWhiteboardId?: string;
+  expectedFingerprint?: string;
 }
 
 /**
@@ -314,6 +340,8 @@ export interface StatelessChatRequest {
   };
   /** Accumulated director state from previous per-agent requests */
   directorState?: DirectorState;
+  /** Pi-only lifecycle boundary for a fresh session after an explicit manual stop. */
+  whiteboardBoundary?: WhiteboardBoundaryRequest;
   /** User profile for personalization */
   userProfile?: {
     nickname?: string;
@@ -370,6 +398,7 @@ export type StatelessEvent =
         params: Record<string, unknown>;
         agentId: string;
         messageId?: string;
+        boundary?: WhiteboardBoundaryActionMetadata;
       };
     }
   | {

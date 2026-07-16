@@ -18,7 +18,12 @@ import { useStageStore } from '@/lib/store';
 import { buildLectureNotes } from '@/lib/chat/lecture-notes';
 import { PanelRightClose, BookOpen, MessageSquare } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { useChatSessions, type SessionCleanupPayload } from './use-chat-sessions';
+import {
+  useChatSessions,
+  MANUAL_STOP_END_OPTIONS,
+  type EndSessionOptions,
+  type SessionCleanupPayload,
+} from './use-chat-sessions';
 import { SessionList } from './session-list';
 import { LectureNotesView } from './lecture-notes-view';
 
@@ -54,8 +59,8 @@ interface ChatAreaProps {
 
 export interface ChatAreaRef {
   createSession: (type: SessionType, title: string) => Promise<string>;
-  endSession: (sessionId: string) => Promise<void>;
-  endActiveSession: () => Promise<void>;
+  endSession: (sessionId: string, options?: EndSessionOptions) => Promise<void>;
+  endActiveSession: (options?: EndSessionOptions) => Promise<void>;
   softPauseActiveSession: () => Promise<void>;
   resumeActiveSession: () => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
@@ -167,7 +172,7 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
     // Wrap endSession for QA/Discussion: also notify parent for engine cleanup
     const handleEndSession = useCallback(
       async (sessionId: string) => {
-        await endSession(sessionId);
+        await endSession(sessionId, MANUAL_STOP_END_OPTIONS);
         onStopSession?.({ sessionId, source: 'manual_stop' });
       },
       [endSession, onStopSession],
