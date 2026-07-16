@@ -141,6 +141,22 @@ describe('runClassroomLoad', () => {
     useStageStore.getState().clearStore();
   });
 
+  it('resets caller-bound chat authority when fallback replaces the classroom', () => {
+    useStageStore.setState({
+      stage: makeStage('stage-old'),
+      chats: [],
+      chatSnapshot: { sessions: [], restoreMarker: 'chat-restore-marker:stage-old:marker' },
+    });
+
+    applyClassroomStageAndScenes(makeStage('stage-new'), [], { persist: false });
+
+    expect(useStageStore.getState().chatSnapshot).toEqual({
+      sessions: [],
+      restoreMarker: null,
+    });
+    useStageStore.getState().clearStore();
+  });
+
   it('does not run stale restore phases after a newer navigation wins', async () => {
     const loadStorage = deferred<void>();
     const { deps, setCurrent, setStage } = makeDeps({

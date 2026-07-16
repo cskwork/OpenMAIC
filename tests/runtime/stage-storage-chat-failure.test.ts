@@ -43,7 +43,7 @@ vi.mock('@/lib/quiz/persistence', () => ({
   clearAllForScene: vi.fn(),
 }));
 vi.mock('@/lib/runtime/store', () => ({
-  deleteStageRuntimeSafely: vi.fn(),
+  beginStageRuntimeDeletionSafely: vi.fn(),
 }));
 vi.mock('@/lib/pbl/v2/runtime/drain', () => ({
   clearStageDrainWatermarks: vi.fn(),
@@ -58,7 +58,11 @@ describe('loadStageData chat failure isolation', () => {
       scenes: [{ id: 'scene-1', type: 'slide', title: 'Persisted scene' }],
       currentSceneId: 'scene-1',
       chats: [],
+      chatSnapshot: { sessions: [], restoreMarker: undefined },
     });
-    expect(loadChatSessions).toHaveBeenCalledExactlyOnceWith('stage-1');
+    expect(loadChatSessions).toHaveBeenCalledExactlyOnceWith(
+      'stage-1',
+      expect.objectContaining({ onSnapshot: expect.any(Function) }),
+    );
   });
 });

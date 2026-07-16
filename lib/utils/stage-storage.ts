@@ -8,13 +8,21 @@
 import { makeScene, Stage, Scene } from '../types/stage';
 import { ChatSession } from '../types/chat';
 import { db } from './database';
-import { saveChatSessions, loadChatSessions, deleteChatSessions } from './chat-storage';
+import {
+  saveChatSessions,
+  loadChatSessions,
+  deleteChatSessions,
+  type ChatStorageSnapshot,
+} from './chat-storage';
 import { clearPlaybackState } from './playback-storage';
 import { clearAllForScene } from '@/lib/quiz/persistence';
-import { deleteStageRuntimeSafely } from '@/lib/runtime/store';
+import { beginStageRuntimeDeletionSafely } from '@/lib/runtime/store';
 import { clearStageDrainWatermarks } from '@/lib/pbl/v2/runtime/drain';
 import { createLogger } from '@/lib/logger';
-import { withRuntimeStorageExclusiveLock, withRuntimeStorageSharedLock } from './chat-storage-lock';
+import {
+  withRuntimeStorageExclusiveLockUntilSettled,
+  withRuntimeStorageSharedLock,
+} from './chat-storage-lock';
 
 const log = createLogger('StageStorage');
 
@@ -23,6 +31,7 @@ export interface StageStoreData {
   scenes: Scene[];
   currentSceneId: string | null;
   chats: ChatSession[];
+  chatSnapshot?: ChatStorageSnapshot;
 }
 
 export interface StageListItem {
@@ -79,7 +88,10 @@ export async function saveStageData(stageId: string, data: StageStoreData): Prom
 
       // Chat sessions live in the learner RuntimeStore, outside the document DB.
       if (data.chats) {
-        await saveChatSessions(stageId, data.chats, { globalLockHeld: true });
+        await saveChatSessions(stageId, data.chats, {
+          globalLockHeld: true,
+          snapshot: data.chatSnapshot,
+        });
       }
 
       log.info(`Saved stage: ${stageId}`);
@@ -110,8 +122,13 @@ export async function loadStageData(stageId: string): Promise<StageStoreData | n
     // unavailable; a later chat load/save can recover without treating the
     // already-loaded stage as missing.
     let chats: ChatSession[] = [];
+    let chatSnapshot: ChatStorageSnapshot = { sessions: [], restoreMarker: undefined };
     try {
-      chats = await loadChatSessions(stageId);
+      chats = await loadChatSessions(stageId, {
+        onSnapshot: (snapshot) => {
+          chatSnapshot = snapshot;
+        },
+      });
     } catch (error) {
       log.warn(`Failed to load chat sessions for stage ${stageId}:`, error);
     }
@@ -126,6 +143,7 @@ export async function loadStageData(stageId: string): Promise<StageStoreData | n
       scenes: scenes.map((s) => makeScene(s, s.content)),
       currentSceneId: stage.currentSceneId || scenes[0]?.id || null,
       chats,
+      chatSnapshot,
     };
   } catch (error) {
     log.error('Failed to load stage:', error);
@@ -137,7 +155,7 @@ export async function loadStageData(stageId: string): Promise<StageStoreData | n
  * Delete stage and all related data
  */
 export async function deleteStageData(stageId: string): Promise<void> {
-  return withRuntimeStorageExclusiveLock(async () => {
+  return withRuntimeStorageExclusiveLockUntilSettled(async (releaseCaller) => {
     try {
       // Collect scene ids before deletion so we can sweep per-scene localStorage
       // keys (quiz draft / submitted answers / graded results).
@@ -165,7 +183,8 @@ export async function deleteStageData(stageId: string): Promise<void> {
       // cascaded after the Dexie work: it cannot join those transactions, and a
       // runtime failure must not abort them (the helper warns instead of
       // throwing).
-      await deleteStageRuntimeSafely(stageId);
+      const runtimeDeletion = beginStageRuntimeDeletionSafely(stageId);
+      await runtimeDeletion.completion;
       try {
         await clearStageDrainWatermarks(stageId);
       } catch (error) {
@@ -173,6 +192,11 @@ export async function deleteStageData(stageId: string): Promise<void> {
       }
 
       log.info(`Deleted stage: ${stageId}`);
+      releaseCaller(undefined);
+      // The public deletion remains bounded, but this callback deliberately
+      // retains the exclusive lock until a late runtime cascade can no longer
+      // delete data written after the caller was released.
+      await runtimeDeletion.settlement;
     } catch (error) {
       log.error('Failed to delete stage:', error);
       throw error;

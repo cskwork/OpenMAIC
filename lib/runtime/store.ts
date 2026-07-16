@@ -65,21 +65,34 @@ export async function deleteStageRuntimeSafely(
   stageId: string,
   runtimeStore?: RuntimeStore,
 ): Promise<void> {
-  try {
-    // Probe + cascade share the try/catch and the timeout envelope: a hanging
-    // `databases()` must not brick deletion any more than a hanging store.
-    const work = (async () => {
-      if (!(await runtimeDbExists())) return; // nothing to clean
-      const cascade = (runtimeStore ?? getRuntimeStore()).deleteStageRuntime(stageId);
-      // A rejection landing after the timeout already won the race would have
-      // no listener left — swallow that branch so it cannot surface as an
-      // unhandled rejection (the await below still reports it if it lands in
-      // time).
-      cascade.catch(() => {});
-      await cascade;
-    })();
-    await withTimeout(work, STAGE_RUNTIME_DELETE_TIMEOUT_MS);
-  } catch (error) {
+  await beginStageRuntimeDeletionSafely(stageId, runtimeStore).completion;
+}
+
+export interface StageRuntimeDeletion {
+  /** Bounded, fail-soft caller-visible completion. */
+  completion: Promise<void>;
+  /** Fail-soft actual settlement, used to retain destructive maintenance locks. */
+  settlement: Promise<void>;
+}
+
+/** Start one bounded deletion while keeping a handle to its real settlement. */
+export function beginStageRuntimeDeletionSafely(
+  stageId: string,
+  runtimeStore?: RuntimeStore,
+): StageRuntimeDeletion {
+  // Probe + cascade share the same underlying work: a hanging databases()
+  // probe is just as important to retain behind maintenance as a hanging delete.
+  const work = (async () => {
+    if (!(await runtimeDbExists())) return;
+    await (runtimeStore ?? getRuntimeStore()).deleteStageRuntime(stageId);
+  })();
+  let reported = false;
+  const report = (error: unknown): void => {
+    if (reported) return;
+    reported = true;
     console.warn(`Failed to delete runtime data for stage ${stageId}:`, error);
-  }
+  };
+  const settlement = work.catch(report);
+  const completion = withTimeout(work, STAGE_RUNTIME_DELETE_TIMEOUT_MS).catch(report);
+  return { completion, settlement };
 }

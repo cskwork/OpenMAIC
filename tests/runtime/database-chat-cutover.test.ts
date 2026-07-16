@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserRuntimeStore, type KVStore } from '@openmaic/storage';
 
 import type { ChatSession } from '@/lib/types/chat';
+import type { ChatStorageSnapshot } from '@/lib/utils/chat-storage';
 
 if (!('IDBKeyRange' in globalThis)) {
   Object.defineProperty(globalThis, 'IDBKeyRange', { value: IDBKeyRange, configurable: true });
@@ -208,6 +209,175 @@ describe('database runtime chat integration', () => {
     await expect(runtimeStore.listSessions('orphaned-runtime-stage', learnerKey)).resolves.toEqual(
       [],
     );
+  });
+
+  it('does not let a pre-restore autosave replace the restored chat snapshot', async () => {
+    const indexedDB = globalThis.indexedDB;
+    const staleStore = new BrowserRuntimeStore({ indexedDB, dbName: 'restore-stale-autosave' });
+    const restoringStore = new BrowserRuntimeStore({
+      indexedDB,
+      dbName: 'restore-stale-autosave',
+    });
+    const freshStore = new BrowserRuntimeStore({ indexedDB, dbName: 'restore-stale-autosave' });
+    const staleSnapshot = { ...chatSession(), title: 'Pre-restore chat', updatedAt: 3_000 };
+    const restoredSnapshot = {
+      ...chatSession(),
+      stageId: 'stage-restore-stale',
+      title: 'Restored chat',
+      updatedAt: 2_000,
+    };
+    const { exportDatabase, importDatabase } = await import('@/lib/utils/database');
+    const { loadChatSessions, saveChatSessions } = await import('@/lib/utils/chat-storage');
+    const callerSnapshot = { sessions: [structuredClone(staleSnapshot)], restoreMarker: null };
+
+    await saveChatSessions('stage-restore-stale', [staleSnapshot], {
+      store: staleStore,
+      learnerKey,
+    });
+    await importDatabase(
+      {
+        stages: [
+          {
+            id: 'stage-restore-stale',
+            name: 'Restored stage',
+            createdAt: 1_000,
+            updatedAt: 2_000,
+          },
+        ],
+        chatSessions: [restoredSnapshot],
+      },
+      { store: restoringStore, learnerKey },
+    );
+
+    // A backup/export read on the same RuntimeStore must not advance the
+    // mounted editor's caller-bound snapshot authority.
+    await expect(exportDatabase({ store: staleStore, learnerKey })).resolves.toMatchObject({
+      chatSessions: [{ id: 'chat-backup', title: 'Restored chat' }],
+    });
+
+    // A mounted tab can echo the exact snapshot it observed before restore
+    // when an unrelated document autosave runs.
+    await saveChatSessions('stage-restore-stale', [staleSnapshot], {
+      store: staleStore,
+      learnerKey,
+      snapshot: callerSnapshot,
+    });
+
+    await expect(
+      saveChatSessions(
+        'stage-restore-stale',
+        [{ ...staleSnapshot, title: 'Edited stale chat', updatedAt: 3_001 }],
+        { store: staleStore, learnerKey, snapshot: callerSnapshot },
+      ),
+    ).rejects.toThrow('invalidated by backup restore');
+
+    let reloadedSnapshot: ChatStorageSnapshot | undefined;
+    const [restored] = await loadChatSessions('stage-restore-stale', {
+      store: freshStore,
+      learnerKey,
+      onSnapshot: (snapshot) => {
+        reloadedSnapshot = snapshot;
+      },
+    });
+    expect(restored).toMatchObject({
+      id: 'chat-backup',
+      title: 'Restored chat',
+      updatedAt: 2_000,
+    });
+
+    await saveChatSessions(
+      'stage-restore-stale',
+      [{ ...restored!, title: 'Edited after reload', updatedAt: 2_001 }],
+      { store: freshStore, learnerKey, snapshot: reloadedSnapshot },
+    );
+    await expect(
+      loadChatSessions('stage-restore-stale', { store: freshStore, learnerKey }),
+    ).resolves.toMatchObject([{ title: 'Edited after reload', updatedAt: 2_001 }]);
+  });
+
+  it('does not let a pre-restore autosave repopulate an empty backup', async () => {
+    const indexedDB = globalThis.indexedDB;
+    const staleStore = new BrowserRuntimeStore({ indexedDB, dbName: 'restore-empty-autosave' });
+    const restoringStore = new BrowserRuntimeStore({ indexedDB, dbName: 'restore-empty-autosave' });
+    const freshStore = new BrowserRuntimeStore({ indexedDB, dbName: 'restore-empty-autosave' });
+    const staleSnapshot = { ...chatSession(), title: 'Removed by restore', updatedAt: 3_000 };
+    const callerSnapshot = {
+      sessions: [structuredClone(staleSnapshot)],
+      restoreMarker: null,
+    } satisfies ChatStorageSnapshot;
+    const { importDatabase } = await import('@/lib/utils/database');
+    const { loadChatSessions, saveChatSessions } = await import('@/lib/utils/chat-storage');
+
+    await saveChatSessions('stage-restore-empty', [staleSnapshot], {
+      store: staleStore,
+      learnerKey,
+      snapshot: callerSnapshot,
+    });
+    await importDatabase(
+      {
+        stages: [
+          {
+            id: 'stage-restore-empty',
+            name: 'Empty restored stage',
+            createdAt: 1_000,
+            updatedAt: 2_000,
+          },
+        ],
+        chatSessions: [],
+      },
+      { store: restoringStore, learnerKey },
+    );
+
+    await saveChatSessions('stage-restore-empty', [staleSnapshot], {
+      store: staleStore,
+      learnerKey,
+      snapshot: callerSnapshot,
+    });
+
+    await expect(
+      saveChatSessions(
+        'stage-restore-empty',
+        [{ ...staleSnapshot, title: 'Edited after empty restore', updatedAt: 3_001 }],
+        { store: staleStore, learnerKey, snapshot: callerSnapshot },
+      ),
+    ).rejects.toThrow('invalidated by backup restore');
+
+    await expect(
+      loadChatSessions('stage-restore-empty', { store: freshStore, learnerKey }),
+    ).resolves.toEqual([]);
+  });
+
+  it('does not let a snapshot from a failed chat load clear a later backup restore', async () => {
+    const indexedDB = globalThis.indexedDB;
+    const restoringStore = new BrowserRuntimeStore({ indexedDB, dbName: 'failed-load-restore' });
+    const savingStore = new BrowserRuntimeStore({ indexedDB, dbName: 'failed-load-restore' });
+    const { importDatabase } = await import('@/lib/utils/database');
+    const { loadChatSessions, saveChatSessions } = await import('@/lib/utils/chat-storage');
+
+    await importDatabase(
+      {
+        stages: [
+          {
+            id: 'stage-failed-load',
+            name: 'Restored stage',
+            createdAt: 1_000,
+            updatedAt: 2_000,
+          },
+        ],
+        chatSessions: [{ ...chatSession(), stageId: 'stage-failed-load' }],
+      },
+      { store: restoringStore, learnerKey },
+    );
+
+    await saveChatSessions('stage-failed-load', [], {
+      store: savingStore,
+      learnerKey,
+      snapshot: { sessions: [], restoreMarker: undefined },
+    });
+
+    await expect(
+      loadChatSessions('stage-failed-load', { store: savingStore, learnerKey }),
+    ).resolves.toMatchObject([{ title: 'Persisted chat' }]);
   });
 
   it('fails backup export instead of returning legacy-only chats after a runtime read error', async () => {
@@ -442,11 +612,11 @@ describe('database runtime chat integration', () => {
     });
     await Promise.resolve();
     const maintaining = withRuntimeStorageExclusiveLock(async () => {});
-    const laterSave = saveChatSessions(
-      'stage-b',
-      [{ ...chatSession(), id: 'chat-later', title: 'Later save' }],
-      { store: runtimeStore, learnerKey },
-    );
+    const laterSave = saveChatSessions('stage-b', [], {
+      store: runtimeStore,
+      learnerKey,
+      snapshot: { sessions: [], restoreMarker: null },
+    });
 
     releaseFirstSave();
     const outcome = await Promise.race([
@@ -664,6 +834,82 @@ describe('database runtime chat integration', () => {
     await deleting;
     await expect(backing.listSessions('stage-delete-race', learnerKey)).resolves.toEqual([]);
   });
+
+  it('keeps the maintenance lock until a timed-out stage cascade actually settles', async () => {
+    vi.stubGlobal('navigator', { locks: fairLockManager() });
+    stubMemoryLocalStorage();
+    const { getRuntimeStore } = await import('@/lib/runtime/store');
+    const backing = getRuntimeStore() as BrowserRuntimeStore;
+    const originalDelete = backing.deleteStageRuntime.bind(backing);
+    let cascadeStarted!: () => void;
+    const didStartCascade = new Promise<void>((resolve) => {
+      cascadeStarted = resolve;
+    });
+    let releaseCascade!: () => void;
+    const cascadeMayContinue = new Promise<void>((resolve) => {
+      releaseCascade = resolve;
+    });
+    vi.spyOn(backing, 'deleteStageRuntime').mockImplementation(async (stageId) => {
+      cascadeStarted();
+      await cascadeMayContinue;
+      await originalDelete(stageId);
+    });
+    const { db } = await import('@/lib/utils/database');
+    const { deleteStageData } = await import('@/lib/utils/stage-storage');
+    const { loadChatSessions, saveChatSessions } = await import('@/lib/utils/chat-storage');
+    await db.stages.put({
+      id: 'stage-timeout-delete',
+      name: 'Timed-out delete',
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    });
+    await saveChatSessions('stage-timeout-delete', [chatSession()], {
+      store: backing,
+      learnerKey,
+    });
+    await Promise.resolve();
+
+    const deleting = deleteStageData('stage-timeout-delete');
+    await didStartCascade;
+    await expect(deleting).resolves.toBeUndefined();
+
+    let replacementStarted!: () => void;
+    const didStartReplacement = new Promise<void>((resolve) => {
+      replacementStarted = resolve;
+    });
+    let replacementReadStarted = false;
+    const replacementStore = new Proxy(backing, {
+      get(target, property) {
+        if (property === 'listSessions') {
+          return async (...args: Parameters<BrowserRuntimeStore['listSessions']>) => {
+            if (!replacementReadStarted) {
+              replacementReadStarted = true;
+              replacementStarted();
+            }
+            return backing.listSessions(...args);
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as BrowserRuntimeStore;
+    const replacement = saveChatSessions(
+      'stage-timeout-delete',
+      [{ ...chatSession(), title: 'Saved after timeout', updatedAt: 4_000 }],
+      { store: replacementStore, learnerKey },
+    );
+    const replacementOutcome = await Promise.race([
+      didStartReplacement.then(() => 'started' as const),
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 50)),
+    ]);
+
+    releaseCascade();
+    await replacement;
+    expect(replacementOutcome).toBe('blocked');
+    await expect(
+      loadChatSessions('stage-timeout-delete', { store: backing, learnerKey }),
+    ).resolves.toMatchObject([{ title: 'Saved after timeout', updatedAt: 4_000 }]);
+  }, 10_000);
 
   it('acquires both the stage-wide and legacy partition Web Lock names', async () => {
     const requested: string[] = [];

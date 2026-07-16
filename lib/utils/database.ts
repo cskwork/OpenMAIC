@@ -21,9 +21,13 @@ import type { VoiceDesign } from '@/lib/audio/voice-design';
 import type { UIMessage } from 'ai';
 import type { AgentEditSessionRecord } from '@/lib/agent/client/agent-edit-session-types';
 import { createLogger } from '@/lib/logger';
-import { deleteStageRuntimeSafely, getRuntimeStore } from '@/lib/runtime/store';
+import { beginStageRuntimeDeletionSafely, getRuntimeStore } from '@/lib/runtime/store';
 import type { RuntimeStore } from '@openmaic/storage';
-import { withRuntimeStorageExclusiveLock, withRuntimeStorageSharedLock } from './chat-storage-lock';
+import {
+  withRuntimeStorageExclusiveLock,
+  withRuntimeStorageExclusiveLockUntilSettled,
+  withRuntimeStorageSharedLock,
+} from './chat-storage-lock';
 import type { ChatStorageOptions } from './chat-storage';
 
 const log = createLogger('Database');
@@ -544,6 +548,7 @@ export async function exportDatabase(chatOptions: ChatStorageOptions = {}): Prom
           await loadChatSessions(stage.id, {
             ...chatOptions,
             fallbackToLegacyOnError: false,
+            observe: false,
           })
         ).map((session) => toChatSessionRecord(stage.id, session)),
       ),
@@ -622,7 +627,7 @@ export async function getScenesByStageId(stageId: string): Promise<SceneRecord[]
  * Delete a course and all its related data
  */
 export async function deleteStageWithRelatedData(stageId: string): Promise<void> {
-  await withRuntimeStorageExclusiveLock(async () => {
+  await withRuntimeStorageExclusiveLockUntilSettled(async (releaseCaller) => {
     await db.transaction(
       'rw',
       [
@@ -649,7 +654,10 @@ export async function deleteStageWithRelatedData(stageId: string): Promise<void>
     // Learner-runtime data lives in a separate IndexedDB database, so it is
     // cascaded after the Dexie transaction: it cannot join it, and a runtime
     // failure must not abort it (the helper warns instead of throwing).
-    await deleteStageRuntimeSafely(stageId);
+    const runtimeDeletion = beginStageRuntimeDeletionSafely(stageId);
+    await runtimeDeletion.completion;
+    releaseCaller(undefined);
+    await runtimeDeletion.settlement;
   });
 }
 

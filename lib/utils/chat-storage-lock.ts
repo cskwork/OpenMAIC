@@ -161,6 +161,50 @@ export function withRuntimeStorageExclusiveLock<T>(
   });
 }
 
+/**
+ * Let a bounded public operation finish while retaining the exclusive lock
+ * until its underlying destructive work actually settles. `releaseCaller`
+ * may be invoked once the caller-visible safety budget has elapsed; the lock
+ * remains owned until `work` itself returns.
+ */
+export function withRuntimeStorageExclusiveLockUntilSettled<T>(
+  work: (releaseCaller: (value: T) => void) => Promise<T>,
+  options: RuntimeStorageExclusiveLockOptions = {},
+): Promise<T> {
+  let callerSettled = false;
+  let resolveCaller!: (value: T) => void;
+  let rejectCaller!: (reason?: unknown) => void;
+  const caller = new Promise<T>((resolve, reject) => {
+    resolveCaller = resolve;
+    rejectCaller = reject;
+  });
+  const releaseCaller = (value: T): void => {
+    if (callerSettled) return;
+    callerSettled = true;
+    resolveCaller(value);
+  };
+  const protectedWork = withRuntimeStorageExclusiveLock(async () => {
+    try {
+      const value = await work(releaseCaller);
+      releaseCaller(value);
+      return value;
+    } catch (error) {
+      if (!callerSettled) {
+        callerSettled = true;
+        rejectCaller(error);
+      }
+      throw error;
+    }
+  }, options);
+  void protectedWork.catch((error) => {
+    if (!callerSettled) {
+      callerSettled = true;
+      rejectCaller(error);
+    }
+  });
+  return caller;
+}
+
 /** Compatibility aliases for the chat cutover's partitioned writers. */
 export const withChatStorageSharedLock = withRuntimeStorageSharedLock;
 export const withChatStorageExclusiveLock = withRuntimeStorageExclusiveLock;

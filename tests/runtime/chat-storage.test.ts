@@ -13,7 +13,12 @@ import {
   type ChatMessageMetadata,
   type ChatSession,
 } from '@/lib/types/chat';
-import { loadChatSessions, saveChatSessions } from '@/lib/utils/chat-storage';
+import {
+  loadChatSessions,
+  restoreChatSessionsFromBackup,
+  saveChatSessions,
+  type ChatStorageSnapshot,
+} from '@/lib/utils/chat-storage';
 
 if (!('IDBKeyRange' in globalThis)) {
   Object.defineProperty(globalThis, 'IDBKeyRange', { value: IDBKeyRange, configurable: true });
@@ -1362,6 +1367,35 @@ describe('chat RuntimeStore cutover', () => {
         (candidate) => candidate.kind === 'chat',
       ),
     ).toHaveLength(1);
+  });
+
+  it('keeps a restore marker visible after the learner partition is merged', async () => {
+    const store = makeRuntimeStore();
+    const legacyStore = new MemoryLegacyChatStore();
+    await saveChatSessions(STAGE_ID, [session()], {
+      store,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+    await restoreChatSessionsFromBackup([STAGE_ID], async () => {}, {
+      store,
+      learnerKey: LEARNER_KEY,
+      legacyStore,
+    });
+
+    const accountLearnerKey = 'user:restored-chat-test';
+    await store.mergeLearner(LEARNER_KEY, accountLearnerKey);
+    let snapshot: ChatStorageSnapshot | undefined;
+    await loadChatSessions(STAGE_ID, {
+      store,
+      learnerKey: accountLearnerKey,
+      legacyStore,
+      onSnapshot: (loaded) => {
+        snapshot = loaded;
+      },
+    });
+
+    expect(snapshot?.restoreMarker).toMatch(/^chat-restore-marker:/);
   });
 
   it('retains migrated observations when clearing legacy rows fails', async () => {

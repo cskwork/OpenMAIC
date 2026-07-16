@@ -26,6 +26,7 @@ const MAX_MESSAGES_PER_SESSION = 200;
 const MAX_RUNTIME_RECORDS_PER_CHAT_SESSION = 256;
 const CHAT_PAYLOAD_VERSION = 1;
 const RUNTIME_GENERATION_SEPARATOR = ':generation:';
+const RESTORE_MARKER_PREFIX = 'chat-restore-marker:';
 
 interface LegacyChatStore {
   load(stageId: string): Promise<ChatSession[]>;
@@ -38,10 +39,19 @@ export interface ChatStorageOptions {
   learnerKey?: string;
   legacyStore?: LegacyChatStore;
   globalLockHeld?: boolean;
+  snapshot?: ChatStorageSnapshot;
 }
 
-interface ChatStorageReadOptions extends ChatStorageOptions {
+export interface ChatStorageReadOptions extends ChatStorageOptions {
   fallbackToLegacyOnError?: boolean;
+  observe?: boolean;
+  onSnapshot?: (snapshot: ChatStorageSnapshot) => void;
+}
+
+export interface ChatStorageSnapshot {
+  sessions: ChatSession[];
+  /** `undefined` means the runtime generation could not be read authoritatively. */
+  restoreMarker?: string | null;
 }
 
 interface ChatMessagePayload extends ChatMessageSkeleton {
@@ -103,6 +113,7 @@ const observedChatSessionIds = new WeakMap<RuntimeStore, Map<string, Set<string>
 const observedChatSessions = new WeakMap<RuntimeStore, Map<string, Map<string, ChatSession>>>();
 
 export class ChatStorageLockUnavailableError extends Error {}
+export class ChatStorageSnapshotInvalidatedByRestoreError extends Error {}
 
 function observedIds(store: RuntimeStore, key: string): Set<string> {
   return observedChatSessionIds.get(store)?.get(key) ?? new Set();
@@ -146,6 +157,29 @@ function matchesObservedSessions(
   if (!observed) return sessions.length === 0;
   if (observed.size !== sessions.length) return false;
   return sessions.every((session) => isEqual(observed.get(session.id), normalizeSession(session)));
+}
+
+function sessionMap(sessions: readonly ChatSession[]): Map<string, ChatSession> {
+  return new Map(
+    sessions.map((session) => [session.id, structuredClone(normalizeSession(session))]),
+  );
+}
+
+function matchesSnapshot(snapshot: ChatStorageSnapshot, sessions: readonly ChatSession[]): boolean {
+  const baseline = sessionMap(snapshot.sessions);
+  if (baseline.size !== sessions.length) return false;
+  return sessions.every((session) => isEqual(baseline.get(session.id), normalizeSession(session)));
+}
+
+function reportSnapshot(
+  options: ChatStorageReadOptions,
+  sessions: readonly ChatSession[],
+  restoreMarker: string | null | undefined,
+): void {
+  options.onSnapshot?.({
+    sessions: structuredClone([...sessions]),
+    restoreMarker,
+  });
 }
 
 function withPartitionLocks<T>(
@@ -251,6 +285,25 @@ function generationRuntimeSessionId(
   writerToken?: string,
 ): string {
   return `${baseRuntimeId}${RUNTIME_GENERATION_SEPARATOR}${generation}${writerToken ? `:${writerToken}` : ''}`;
+}
+
+function restoreMarkerPrefix(stageId: string): string {
+  return `${RESTORE_MARKER_PREFIX}${encodeURIComponent(stageId)}:`;
+}
+
+function currentRestoreMarker(
+  views: readonly ChatRuntimeView[],
+  stageId: string,
+): string | undefined {
+  // RuntimeStore already scopes `views` to one learner. Keep marker discovery
+  // stage-scoped so a marker remains recognizable after mergeLearner re-keys
+  // the session without rewriting its immutable id.
+  const prefix = restoreMarkerPrefix(stageId);
+  return views
+    .map((view) => view.runtimeSession.id)
+    .filter((id) => id.startsWith(prefix))
+    .sort()
+    .at(-1);
 }
 
 function chatRuntimeIdentity(
@@ -883,8 +936,9 @@ async function syncSessions(
   isolatedWrites: boolean,
   knownSessionIds: ReadonlySet<string> = new Set(),
   observed: ReadonlyMap<string, ChatSession> = new Map(),
+  existingViews?: ChatRuntimeView[],
 ): Promise<ChatSession[]> {
-  const existing = await runtimeViews(store, stageId, learnerKey);
+  const existing = existingViews ?? (await runtimeViews(store, stageId, learnerKey));
   const desiredRuntimeIds = new Map<string, string>();
 
   for (const session of sessions) {
@@ -1003,8 +1057,33 @@ export async function saveChatSessions(
       stageId,
       resolved.requiresCrossRealmLock,
       async (isolatedWrites) => {
-        const knownSessionIds = observedIds(resolved.store, queueKey);
-        const priorObservedSessions = observedSessions(resolved.store, queueKey);
+        const beforeSave = await runtimeViews(resolved.store, stageId, resolved.learnerKey);
+        const restoreMarker = currentRestoreMarker(beforeSave, stageId) ?? null;
+        const callerSnapshot = options.snapshot;
+        if (
+          callerSnapshot &&
+          (callerSnapshot.restoreMarker === undefined ||
+            callerSnapshot.restoreMarker !== restoreMarker)
+        ) {
+          // Restore invalidates snapshots captured by already-mounted callers.
+          // Unchanged stage autosaves are harmless no-ops; real chat mutations
+          // fail loud until the caller reloads instead of overwriting backup data.
+          if (matchesSnapshot(callerSnapshot, nextSessions)) return;
+          throw new ChatStorageSnapshotInvalidatedByRestoreError(
+            `Chat snapshot for stage ${JSON.stringify(stageId)} was invalidated by backup restore`,
+          );
+        }
+        if (!callerSnapshot && restoreMarker !== null) {
+          throw new ChatStorageSnapshotInvalidatedByRestoreError(
+            `Chat snapshot for stage ${JSON.stringify(stageId)} must be reloaded after backup restore`,
+          );
+        }
+        const knownSessionIds = callerSnapshot
+          ? new Set(callerSnapshot.sessions.map((session) => session.id))
+          : observedIds(resolved.store, queueKey);
+        const priorObservedSessions = callerSnapshot
+          ? sessionMap(callerSnapshot.sessions)
+          : observedSessions(resolved.store, queueKey);
         await syncSessions(
           resolved.store,
           stageId,
@@ -1014,6 +1093,7 @@ export async function saveChatSessions(
           isolatedWrites,
           knownSessionIds,
           priorObservedSessions,
+          beforeSave,
         );
         rememberObservedIds(
           resolved.store,
@@ -1034,7 +1114,9 @@ export async function saveChatSessions(
     // a safe no-op; any chat creation, edit, or deletion must still fail loud.
     if (
       error instanceof ChatStorageLockUnavailableError &&
-      matchesObservedSessions(resolved.store, queueKey, nextSessions)
+      (options.snapshot
+        ? matchesSnapshot(options.snapshot, nextSessions)
+        : matchesObservedSessions(resolved.store, queueKey, nextSessions))
     ) {
       return;
     }
@@ -1051,6 +1133,7 @@ export async function loadChatSessions(
   const queueKey = `${stageId}\0${resolved.learnerKey}`;
   let legacy: ChatSession[] = [];
   let runtimeReadSucceeded = false;
+  let readRestoreMarker: string | null | undefined;
   try {
     return await enqueue(
       resolved.store,
@@ -1062,15 +1145,21 @@ export async function loadChatSessions(
         // saves. Otherwise a delayed migration can replay a snapshot captured
         // before a concurrent save cleared it and resurrect deleted chats.
         legacy = (await resolved.legacyStore.load(stageId)).map(normalizeSession);
+        const beforeLoad = await runtimeViews(resolved.store, stageId, resolved.learnerKey);
+        const restoreMarker = currentRestoreMarker(beforeLoad, stageId) ?? null;
+        readRestoreMarker = restoreMarker;
         if (legacy.length === 0) {
           const loaded = await loadRuntimeSessions(resolved.store, stageId, resolved.learnerKey);
           runtimeReadSucceeded = true;
-          rememberObservedIds(
-            resolved.store,
-            queueKey,
-            loaded.map((session) => session.id),
-          );
-          rememberObservedSessions(resolved.store, queueKey, loaded);
+          if (options.observe !== false) {
+            rememberObservedIds(
+              resolved.store,
+              queueKey,
+              loaded.map((session) => session.id),
+            );
+            rememberObservedSessions(resolved.store, queueKey, loaded);
+          }
+          reportSnapshot(options, loaded, restoreMarker);
           return loaded;
         }
         const migrated = await syncSessions(
@@ -1080,15 +1169,21 @@ export async function loadChatSessions(
           legacy,
           false,
           isolatedWrites,
+          undefined,
+          undefined,
+          beforeLoad,
         );
         runtimeReadSucceeded = true;
-        rememberObservedIds(
-          resolved.store,
-          queueKey,
-          migrated.map((session) => session.id),
-        );
-        rememberObservedSessions(resolved.store, queueKey, migrated);
+        if (options.observe !== false) {
+          rememberObservedIds(
+            resolved.store,
+            queueKey,
+            migrated.map((session) => session.id),
+          );
+          rememberObservedSessions(resolved.store, queueKey, migrated);
+        }
         await resolved.legacyStore.clear(stageId);
+        reportSnapshot(options, migrated, restoreMarker);
         return migrated;
       },
     );
@@ -1100,22 +1195,25 @@ export async function loadChatSessions(
       if (options.fallbackToLegacyOnError === false) throw error;
       const readOnlyLegacy = (await resolved.legacyStore.load(stageId)).map(normalizeSession);
       if (readOnlyLegacy.length === 0) throw error;
-      rememberObservedIds(
-        resolved.store,
-        queueKey,
-        readOnlyLegacy.map((session) => session.id),
-      );
-      rememberObservedSessions(resolved.store, queueKey, readOnlyLegacy);
+      if (options.observe !== false) {
+        rememberObservedIds(
+          resolved.store,
+          queueKey,
+          readOnlyLegacy.map((session) => session.id),
+        );
+        rememberObservedSessions(resolved.store, queueKey, readOnlyLegacy);
+      }
+      reportSnapshot(options, readOnlyLegacy, undefined);
       console.warn(`Loaded legacy chat sessions without migration for stage ${stageId}:`, error);
       return readOnlyLegacy;
     }
     // A failed runtime read is not an authoritative empty snapshot. Forget the
     // prior observation so a later stage save cannot retire unseen data. A
     // legacy-clear failure happens after migration succeeded, so retain it.
-    if (!runtimeReadSucceeded) {
+    if (options.observe !== false && !runtimeReadSucceeded) {
       rememberObservedIds(resolved.store, queueKey, []);
       rememberObservedSessions(resolved.store, queueKey, []);
-    } else {
+    } else if (options.observe !== false) {
       // The fallback returns only the legacy rows. Runtime-only sessions that
       // were discovered during sync were not exposed to the caller, so their
       // omission from the next UI snapshot must not be treated as deletion.
@@ -1128,6 +1226,7 @@ export async function loadChatSessions(
     }
     if (options.fallbackToLegacyOnError === false) throw error;
     if (legacy.length === 0) throw error;
+    reportSnapshot(options, legacy, runtimeReadSucceeded ? readRestoreMarker : undefined);
     console.warn(`Failed to migrate chat sessions for stage ${stageId}:`, error);
     return legacy;
   }
@@ -1150,9 +1249,25 @@ async function clearRuntimeChatSessionsUnlocked(
   stageId: string,
   learnerKey: string,
   queueKey: string,
+  recordRestore = false,
 ): Promise<void> {
   const views = await runtimeViews(store, stageId, learnerKey);
   await Promise.all(views.map((view) => store.deleteSession(view.runtimeSession.id)));
+  if (recordRestore) {
+    const now = new Date().toISOString();
+    await store.createSession({
+      id: `${restoreMarkerPrefix(stageId)}${encodeURIComponent(learnerKey)}:${nanoid()}`,
+      kind: 'chat',
+      stageId,
+      learnerKey,
+      status: 'completed',
+      createdAt: now,
+      updatedAt: now,
+    });
+    // Durable restore state changed, but the mounted caller's React snapshot
+    // did not. Preserve its old observation so its next autosave is rejected.
+    return;
+  }
   rememberObservedIds(store, queueKey, []);
   rememberObservedSessions(store, queueKey, []);
 }
@@ -1192,6 +1307,7 @@ export async function restoreChatSessionsFromBackup(
         stageId,
         resolved.learnerKey,
         queueKey,
+        true,
       );
     }
   }

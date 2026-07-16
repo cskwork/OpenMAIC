@@ -183,6 +183,7 @@ export function applyClassroomStageAndScenes(
     scenes: nextScenes,
     currentSceneId: nextScenes[0]?.id ?? null,
     chats: [],
+    chatSnapshot: { sessions: [], restoreMarker: null },
     generationComplete: false,
     generationEpoch: state.generationEpoch + 1,
     mode: 'playback',
