@@ -8,12 +8,7 @@
 import { makeScene, Stage, Scene } from '../types/stage';
 import { ChatSession } from '../types/chat';
 import { db } from './database';
-import {
-  ChatStorageLockUnavailableError,
-  saveChatSessions,
-  loadChatSessions,
-  deleteChatSessions,
-} from './chat-storage';
+import { saveChatSessions, loadChatSessions, deleteChatSessions } from './chat-storage';
 import { clearPlaybackState } from './playback-storage';
 import { clearAllForScene } from '@/lib/quiz/persistence';
 import { deleteStageRuntimeSafely } from '@/lib/runtime/store';
@@ -83,17 +78,7 @@ export async function saveStageData(stageId: string, data: StageStoreData): Prom
 
     // Chat sessions live in the learner RuntimeStore, outside the document DB.
     if (data.chats) {
-      try {
-        await saveChatSessions(stageId, data.chats);
-      } catch (error) {
-        // A document-only stage must remain saveable in environments where
-        // Web Locks are unavailable. There is no chat state to migrate or
-        // delete, so leaving the independent chat store untouched is safe.
-        if (!(data.chats.length === 0 && error instanceof ChatStorageLockUnavailableError)) {
-          throw error;
-        }
-        log.warn(`Skipped empty chat persistence for stage ${stageId}:`, error);
-      }
+      await saveChatSessions(stageId, data.chats);
     }
 
     log.info(`Saved stage: ${stageId}`);

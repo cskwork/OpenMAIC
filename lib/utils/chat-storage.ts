@@ -132,6 +132,17 @@ function rememberObservedSessions(
   );
 }
 
+function matchesObservedSessions(
+  store: RuntimeStore,
+  key: string,
+  sessions: readonly ChatSession[],
+): boolean {
+  const observed = observedSessions(store, key);
+  if (!observed) return sessions.length === 0;
+  if (observed.size !== sessions.length) return false;
+  return sessions.every((session) => isEqual(observed.get(session.id), normalizeSession(session)));
+}
+
 function enqueue<T>(
   store: RuntimeStore,
   key: string,
@@ -973,38 +984,49 @@ export async function saveChatSessions(
   const resolved = await context(options);
   const queueKey = `${stageId}\0${resolved.learnerKey}`;
   const nextSessions = sessions ?? [];
-  await enqueue(
-    resolved.store,
-    queueKey,
-    stageId,
-    resolved.requiresCrossRealmLock,
-    async (isolatedWrites) => {
-      const knownSessionIds = observedIds(resolved.store, queueKey);
-      const priorObservedSessions = observedSessions(resolved.store, queueKey);
-      await syncSessions(
-        resolved.store,
-        stageId,
-        resolved.learnerKey,
-        nextSessions,
-        true,
-        isolatedWrites,
-        knownSessionIds,
-        priorObservedSessions,
-      );
-      rememberObservedIds(
-        resolved.store,
-        queueKey,
-        nextSessions.map((session) => session.id),
-      );
-      if (priorObservedSessions) {
+  try {
+    await enqueue(
+      resolved.store,
+      queueKey,
+      stageId,
+      resolved.requiresCrossRealmLock,
+      async (isolatedWrites) => {
+        const knownSessionIds = observedIds(resolved.store, queueKey);
+        const priorObservedSessions = observedSessions(resolved.store, queueKey);
+        await syncSessions(
+          resolved.store,
+          stageId,
+          resolved.learnerKey,
+          nextSessions,
+          true,
+          isolatedWrites,
+          knownSessionIds,
+          priorObservedSessions,
+        );
+        rememberObservedIds(
+          resolved.store,
+          queueKey,
+          nextSessions.map((session) => session.id),
+        );
         // saveChatSessions does not return a reconciled snapshot to its caller.
         // Keep conflict observations aligned with the state the caller really
         // saw, even when this save silently preserved a newer cross-tab value.
         rememberObservedSessions(resolved.store, queueKey, nextSessions);
-      }
-      await resolved.legacyStore.clear(stageId);
-    },
-  );
+        await resolved.legacyStore.clear(stageId);
+      },
+    );
+  } catch (error) {
+    // A stage autosave echoes the caller-visible chat snapshot even when the
+    // user only changed document data. Without Web Locks, an unchanged echo is
+    // a safe no-op; any chat creation, edit, or deletion must still fail loud.
+    if (
+      error instanceof ChatStorageLockUnavailableError &&
+      matchesObservedSessions(resolved.store, queueKey, nextSessions)
+    ) {
+      return;
+    }
+    throw error;
+  }
 }
 
 /** Load chat sessions, migrating legacy Dexie rows on first access. */

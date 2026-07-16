@@ -492,6 +492,92 @@ describe('database runtime chat integration', () => {
     ).resolves.toBe(1);
   });
 
+  it('keeps unrelated document saves available for an unchanged read-only legacy snapshot', async () => {
+    vi.stubGlobal('navigator', {});
+    stubMemoryLocalStorage();
+    const { db } = await import('@/lib/utils/database');
+    const { loadStageData, saveStageData } = await import('@/lib/utils/stage-storage');
+    await db.stages.put({
+      id: 'stage-legacy-autosave',
+      name: 'Existing stage',
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    });
+    await db.chatSessions.put({
+      ...chatSession(),
+      stageId: 'stage-legacy-autosave',
+    });
+    const loaded = await loadStageData('stage-legacy-autosave');
+
+    await expect(
+      saveStageData('stage-legacy-autosave', {
+        ...loaded!,
+        stage: { ...loaded!.stage, name: 'Updated stage' },
+      }),
+    ).resolves.toBeUndefined();
+    await expect(db.stages.get('stage-legacy-autosave')).resolves.toMatchObject({
+      name: 'Updated stage',
+    });
+    await expect(
+      db.chatSessions.where('stageId').equals('stage-legacy-autosave').count(),
+    ).resolves.toBe(1);
+
+    vi.stubGlobal('navigator', { locks: serialLockManager() });
+    await expect(loadStageData('stage-legacy-autosave')).resolves.toMatchObject({
+      chats: [{ id: 'chat-backup', title: 'Persisted chat' }],
+    });
+    await expect(
+      db.chatSessions.where('stageId').equals('stage-legacy-autosave').count(),
+    ).resolves.toBe(0);
+  });
+
+  it('still fails edits to a read-only legacy snapshot without Web Locks', async () => {
+    vi.stubGlobal('navigator', {});
+    stubMemoryLocalStorage();
+    const { db } = await import('@/lib/utils/database');
+    const { loadStageData, saveStageData } = await import('@/lib/utils/stage-storage');
+    await db.stages.put({
+      id: 'stage-legacy-edit',
+      name: 'Existing stage',
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    });
+    await db.chatSessions.put({
+      ...chatSession(),
+      stageId: 'stage-legacy-edit',
+    });
+    const loaded = await loadStageData('stage-legacy-edit');
+
+    await expect(
+      saveStageData('stage-legacy-edit', {
+        ...loaded!,
+        chats: [{ ...loaded!.chats[0]!, title: 'Unsaved edit', updatedAt: 3_000 }],
+      }),
+    ).rejects.toThrow(/Web Locks/);
+  });
+
+  it('still fails deletion of a read-only legacy snapshot without Web Locks', async () => {
+    vi.stubGlobal('navigator', {});
+    stubMemoryLocalStorage();
+    const { db } = await import('@/lib/utils/database');
+    const { loadStageData, saveStageData } = await import('@/lib/utils/stage-storage');
+    await db.stages.put({
+      id: 'stage-legacy-delete',
+      name: 'Existing stage',
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    });
+    await db.chatSessions.put({
+      ...chatSession(),
+      stageId: 'stage-legacy-delete',
+    });
+    const loaded = await loadStageData('stage-legacy-delete');
+
+    await expect(saveStageData('stage-legacy-delete', { ...loaded!, chats: [] })).rejects.toThrow(
+      /Web Locks/,
+    );
+  });
+
   it('still fails non-empty chat document saves without Web Locks', async () => {
     vi.stubGlobal('navigator', {});
     stubMemoryLocalStorage();
