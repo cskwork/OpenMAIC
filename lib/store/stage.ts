@@ -15,12 +15,27 @@ import type { SceneOutline } from '@/lib/types/generation';
 import { createLogger } from '@/lib/logger';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { migrateScene } from '@/lib/edit/slide-schema';
-import { emitStageSaved } from '@/lib/store/stage-save-signal';
+import { preparePBLScenesForDocumentPersistence } from '@/lib/pbl/v2/runtime/document-persistence';
+import { hydratePBLScenesFromRuntime } from '@/lib/pbl/v2/runtime/hydration';
+import type { ChatStorageSnapshot } from '@/lib/utils/chat-storage';
 
 const log = createLogger('StageStore');
 
 /** Virtual scene ID used when the user navigates to a page still being generated */
 export const PENDING_SCENE_ID = '__pending__';
+
+export type StageSceneLoadToken = number;
+
+let latestStageSceneLoadToken = 0;
+
+export function claimStageSceneLoadToken(): StageSceneLoadToken {
+  latestStageSceneLoadToken += 1;
+  return latestStageSceneLoadToken;
+}
+
+export function isCurrentStageSceneLoadToken(token: StageSceneLoadToken): boolean {
+  return token === latestStageSceneLoadToken;
+}
 
 // ==================== Debounce Helper ====================
 
@@ -73,6 +88,7 @@ interface StageState {
 
   // Chats
   chats: ChatSession[];
+  chatSnapshot: ChatStorageSnapshot;
 
   // Mode
   mode: StageMode;
@@ -127,7 +143,7 @@ interface StageState {
 
   // Storage
   saveToStorage: () => Promise<boolean>;
-  loadFromStorage: (stageId: string) => Promise<void>;
+  loadFromStorage: (stageId: string, loadToken?: StageSceneLoadToken) => Promise<void>;
   clearStore: () => void;
 }
 
@@ -149,6 +165,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
   scenes: [],
   currentSceneId: null,
   chats: [],
+  chatSnapshot: { sessions: [], restoreMarker: null },
   mode: 'playback',
   toolbarState: 'ai',
   generatingOutlines: [],
@@ -161,11 +178,13 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
 
   // Actions
   setStage: (stage) => {
+    claimStageSceneLoadToken();
     set((s) => ({
       stage,
       scenes: [],
       currentSceneId: null,
       chats: [],
+      chatSnapshot: { sessions: [], restoreMarker: null },
       generationComplete: false,
       generationEpoch: s.generationEpoch + 1,
     }));
@@ -396,26 +415,34 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
   // durability (e.g. setGenerationComplete) can avoid recording state that
   // outruns the scene data.
   saveToStorage: async () => {
-    const { stage, scenes, currentSceneId, chats } = get();
+    const { stage, scenes, currentSceneId, chats, chatSnapshot } = get();
     if (!stage?.id) {
       log.warn('Cannot save: stage.id is required');
       return false;
     }
 
     try {
+      const persistedScenes = await preparePBLScenesForDocumentPersistence(stage.id, scenes);
       const { saveStageData } = await import('@/lib/utils/stage-storage');
       await saveStageData(stage.id, {
         stage,
-        scenes,
+        scenes: persistedScenes,
         currentSceneId,
         chats,
+        chatSnapshot,
       });
-      const pblScenes = scenes.flatMap((scene) => {
-        const content = scene.content;
-        if (content.type !== 'pbl' || !content.projectV2) return [];
-        return [{ sceneId: scene.id, project: content.projectV2 }];
-      });
-      emitStageSaved({ stageId: stage.id, pblScenes });
+
+      // Bind future saves to the exact chat snapshot this successful write
+      // represented. Keep the restore marker unchanged: a stale no-op after a
+      // restore must remain stale until the editor reloads.
+      if (get().stage?.id === stage.id && get().chats === chats) {
+        set({
+          chatSnapshot: {
+            sessions: structuredClone(chats),
+            restoreMarker: chatSnapshot.restoreMarker,
+          },
+        });
+      }
 
       return true;
     } catch (error) {
@@ -424,8 +451,9 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
     }
   },
 
-  loadFromStorage: async (stageId: string) => {
+  loadFromStorage: async (stageId: string, loadToken?: StageSceneLoadToken) => {
     try {
+      const token = loadToken ?? claimStageSceneLoadToken();
       // Skip IndexedDB load if the store already has this stage with scenes
       // (e.g. navigated from generation-preview with fresh in-memory data)
       const currentState = get();
@@ -447,7 +475,16 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
         // Normalize legacy slide content (missing schemaVersion) at the load
         // boundary, same as setScenes/addScene — IndexedDB snapshots predate
         // the schema field, so they must be migrated on the way in.
-        const migrated = data.scenes.map(migrateScene);
+        const migrated = await hydratePBLScenesFromRuntime(stageId, data.scenes.map(migrateScene));
+        if (!isCurrentStageSceneLoadToken(token)) {
+          log.info('Newer stage load started during IndexedDB hydration, skipping load:', stageId);
+          return;
+        }
+        const latestState = get();
+        if (latestState.stage?.id === stageId && latestState.scenes.length > 0) {
+          log.info('Stage appeared in memory during IndexedDB hydration, skipping load:', stageId);
+          return;
+        }
 
         // Self-heal decks generated before generationComplete was tracked: if
         // every outline already has a matching scene and none failed,
@@ -486,6 +523,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
           scenes: migrated,
           currentSceneId: data.currentSceneId,
           chats: data.chats,
+          chatSnapshot: data.chatSnapshot ?? { sessions: [], restoreMarker: undefined },
           outlines,
           generationComplete,
           // Compute generatingOutlines from persisted outlines minus completed
@@ -514,11 +552,13 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
   },
 
   clearStore: () => {
+    claimStageSceneLoadToken();
     set((s) => ({
       stage: null,
       scenes: [],
       currentSceneId: null,
       chats: [],
+      chatSnapshot: { sessions: [], restoreMarker: null },
       outlines: [],
       generationComplete: false,
       generationEpoch: s.generationEpoch + 1,

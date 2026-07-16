@@ -1,14 +1,17 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import type {
-  ChatSession,
-  SessionType,
-  SessionStatus,
-  ChatMessageMetadata,
-  DirectorState,
-  PiSessionBoundaryContext,
-  StatelessEvent,
+import {
+  nextChatUpdatedAt,
+  withChatSegmentReveal,
+  withChatSessionStatus,
+  type ChatSession,
+  type SessionType,
+  type SessionStatus,
+  type ChatMessageMetadata,
+  type DirectorState,
+  type PiSessionBoundaryContext,
+  type StatelessEvent,
 } from '@/lib/types/chat';
 import type { DiscussionRequest } from '@/components/roundtable';
 import type { Action, SpotlightAction, DiscussionAction } from '@/lib/types/action';
@@ -240,15 +243,13 @@ export function normalizeStoredSessionsForRestore(sessions: ChatSession[]): Chat
   return sessions.map((session) => {
     if (session.status === 'active') {
       return {
-        ...session,
-        status: 'interrupted' as SessionStatus,
+        ...withChatSessionStatus(session, 'interrupted'),
         softCloseDeadline: undefined,
       };
     }
     if (session.status === 'soft-closing') {
       return {
-        ...session,
-        status: 'completed' as SessionStatus,
+        ...withChatSessionStatus(session, 'completed'),
         softCloseDeadline: undefined,
       };
     }
@@ -277,7 +278,7 @@ export function resumeSoftClosingSessionForFollowUp(
     status: 'active' as SessionStatus,
     endReason: undefined,
     softCloseDeadline: undefined,
-    updatedAt: now,
+    updatedAt: nextChatUpdatedAt(session, now),
   };
 }
 
@@ -291,7 +292,7 @@ export function resumeSoftClosingSessionWithoutMessage(
     status: 'active',
     endReason: undefined,
     softCloseDeadline: undefined,
-    updatedAt: now,
+    updatedAt: nextChatUpdatedAt(session, now),
   };
 }
 
@@ -652,7 +653,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
           ? {
               ...s,
               directorState,
-              updatedAt: Date.now(),
+              updatedAt: nextChatUpdatedAt(s),
             }
           : s,
       ),
@@ -749,7 +750,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
                 ...s,
                 status: 'error' as SessionStatus,
                 softCloseDeadline: undefined,
-                updatedAt: now,
+                updatedAt: nextChatUpdatedAt(s, now),
                 messages: [
                   ...s.messages,
                   {
@@ -833,7 +834,11 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             setSessions((prev) =>
               prev.map((s) =>
                 s.id === sessionId
-                  ? { ...s, messages: [...s.messages, newMsg], updatedAt: now }
+                  ? {
+                      ...s,
+                      messages: [...s.messages, newMsg],
+                      updatedAt: nextChatUpdatedAt(s, now),
+                    }
                   : s,
               ),
             );
@@ -848,7 +853,9 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
                 const msgs = s.messages.filter(
                   (m) => !(m.role === 'assistant' && m.parts.length === 0),
                 );
-                return msgs.length !== s.messages.length ? { ...s, messages: msgs } : s;
+                return msgs.length !== s.messages.length
+                  ? { ...s, messages: msgs, updatedAt: nextChatUpdatedAt(s) }
+                  : s;
               }),
             );
           },
@@ -857,12 +864,12 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             messageId: string,
             partId: string,
             revealedText: string,
-            _isComplete: boolean,
+            isComplete: boolean,
           ) {
             setSessions((prev) =>
               prev.map((s) => {
                 if (s.id !== sessionId) return s;
-                return {
+                const revealed = {
                   ...s,
                   messages: s.messages.map((m) => {
                     if (m.id !== messageId) return m;
@@ -888,6 +895,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
                   }),
                   // Don't update updatedAt on every tick — avoids thrashing persistence sync
                 };
+                return withChatSegmentReveal(revealed, isComplete);
               }),
             );
           },
@@ -909,7 +917,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
                   messages: s.messages.map((m) =>
                     m.id === messageId ? { ...m, parts: [...m.parts, actionPart] } : m,
                   ),
-                  updatedAt: Date.now(),
+                  updatedAt: nextChatUpdatedAt(s),
                 };
               }),
             );
@@ -1226,7 +1234,11 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             setSessions((prev) =>
               prev.map((s) =>
                 s.id === sessionId
-                  ? { ...s, status: 'completed' as SessionStatus, updatedAt: Date.now() }
+                  ? {
+                      ...s,
+                      status: 'completed' as SessionStatus,
+                      updatedAt: nextChatUpdatedAt(s),
+                    }
                   : s,
               ),
             );
@@ -1368,9 +1380,8 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               }
             }
             return {
-              ...s,
+              ...withChatSessionStatus(s, 'completed'),
               messages,
-              status: 'completed' as SessionStatus,
               softCloseDeadline: undefined,
             };
           }),
@@ -1383,8 +1394,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
           prev.map((s) =>
             s.id === sessionId
               ? {
-                  ...s,
-                  status: 'completed' as SessionStatus,
+                  ...withChatSessionStatus(s, 'completed'),
                   softCloseDeadline: undefined,
                 }
               : s,
@@ -1515,7 +1525,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               }
             }
             // Keep status 'active' — session continues when user speaks
-            return { ...s, messages, updatedAt: Date.now() };
+            return { ...s, messages, updatedAt: nextChatUpdatedAt(s) };
           }),
         );
         // Note: Do NOT call onLiveSpeech/onThinking here.
@@ -1661,7 +1671,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
                         text: (textPart.text || '') + '...',
                       } as UIMessage<ChatMessageMetadata>['parts'][number];
                       messages[i] = { ...messages[i], parts };
-                      return { ...s, messages, updatedAt: Date.now() };
+                      return { ...s, messages, updatedAt: nextChatUpdatedAt(s) };
                     }
                   }
                   break;
@@ -2019,9 +2029,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         // Actions won't be re-appended because lastActionIndex already covers them.
         if (existing.status === 'completed') {
           setSessions((prev) =>
-            prev.map((s) =>
-              s.id === existing.id ? { ...s, status: 'active' as SessionStatus } : s,
-            ),
+            prev.map((s) => (s.id === existing.id ? withChatSessionStatus(s, 'active') : s)),
           );
           // Restore lecture tracking refs (cleared by endSession)
           const messageId = existing.messages[0]?.id;
@@ -2107,7 +2115,9 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       // Update lastActionIndex in session
       setSessions((prev) =>
         prev.map((s) =>
-          s.id === sessionId ? { ...s, lastActionIndex: actionIndex, updatedAt: Date.now() } : s,
+          s.id === sessionId
+            ? { ...s, lastActionIndex: actionIndex, updatedAt: nextChatUpdatedAt(s) }
+            : s,
         ),
       );
 
