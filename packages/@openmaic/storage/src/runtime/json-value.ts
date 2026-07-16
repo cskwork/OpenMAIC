@@ -42,9 +42,17 @@ function isCanonicalIndex(key: string, length: number): boolean {
 const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
 
 function definesToJson(value: object): boolean {
+  // Mirror JSON.stringify exactly: it reads the own-most 'toJSON' and only
+  // invokes it when callable. A non-callable data value shadows anything
+  // above it and is an ordinary member, so it is safe; an accessor cannot be
+  // inspected without invoking it, so it is rejected outright.
   let current: object | null = value;
   while (current !== null) {
-    if (Object.getOwnPropertyDescriptor(current, 'toJSON') !== undefined) return true;
+    const descriptor = Object.getOwnPropertyDescriptor(current, 'toJSON');
+    if (descriptor !== undefined) {
+      if ('value' in descriptor) return typeof descriptor.value === 'function';
+      return true;
+    }
     current = Object.getPrototypeOf(current) as object | null;
   }
   return false;
