@@ -10,6 +10,13 @@ import { makeRecordInit, makeSession, runRuntimeStoreContract } from './runtime-
 
 const contractUrl = process.env.PG_CONTRACT_URL;
 
+if (process.env.STORAGE_PG_CONTRACT_REQUIRED === '1' && !contractUrl) {
+  throw new Error(
+    '@openmaic/storage: STORAGE_PG_CONTRACT_REQUIRED=1 requires PG_CONTRACT_URL; ' +
+      'refusing to skip the PostgreSQL contract suite',
+  );
+}
+
 function transactionFor(pool: Pool, afterBegin?: () => Promise<void>): WithTransaction {
   return async (body) => {
     const client = await pool.connect();

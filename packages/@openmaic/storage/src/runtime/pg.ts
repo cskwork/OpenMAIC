@@ -152,6 +152,12 @@ function decodeJson<T>(value: unknown): T {
   return (typeof value === 'string' ? JSON.parse(value) : value) as T;
 }
 
+function isPlainObject(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 function encodeJson(value: unknown, label: string): string {
   try {
     const encoded = JSON.stringify(value);
@@ -231,7 +237,16 @@ export class PgRuntimeStore implements RuntimeStore {
         WHERE id = $1${lock ? ' FOR UPDATE' : ''}`,
       [sessionId],
     );
-    return result.rows[0] ? decodeJson<RuntimeSession>(result.rows[0].data) : undefined;
+    const storedRow = result.rows[0];
+    if (!storedRow) return undefined;
+    const decoded = decodeJson<unknown>(storedRow.data);
+    if (!isPlainObject(decoded)) {
+      throw new Error(
+        `@openmaic/storage: corrupt stored row for session ${JSON.stringify(sessionId)}: ` +
+          'data must be a plain object',
+      );
+    }
+    return decoded as RuntimeSession;
   }
 
   private async persistSession(queryable: Queryable, session: RuntimeSession): Promise<void> {

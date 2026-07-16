@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main, feat/maic-editor-v0, feat/maic-editor-v1]
+    branches: [main, runtime-server-backend, feat/maic-editor-v0, feat/maic-editor-v1]
 
 concurrency:
   group: storage-pg-contract-${{ github.ref }}
@@ -29,6 +29,7 @@ jobs:
           --health-retries 5
     env:
       PG_CONTRACT_URL: postgresql://postgres:postgres@localhost:5432/openmaic
+      STORAGE_PG_CONTRACT_REQUIRED: '1'
     steps:
       - uses: actions/checkout@v4
 

@@ -29,6 +29,12 @@ function makeBarrier(parties: number): () => Promise<void> {
   };
 }
 
+const symbolPropertyPayload = { visible: true, [Symbol('hidden')]: 'x' };
+const nonEnumerablePropertyPayload = Object.defineProperty({ visible: true }, 'hidden', {
+  value: 'x',
+  enumerable: false,
+});
+
 describe('PgRuntimeStore with PGlite', () => {
   let db: PGlite;
   let store: RuntimeStore;
@@ -90,7 +96,18 @@ describe('PgRuntimeStore Postgres behavior', () => {
     ['Map', new Map([['key', 'value']]), /plain JSON value.*Map/i],
     ['nested undefined', { nested: { missing: undefined } }, /undefined member.*dropped by JSON/i],
     ['NaN', { value: Number.NaN }, /non-finite number NaN/i],
-    ['NUL string', { value: 'before\u0000after' }, /NUL code point/i],
+    ['negative zero', { value: -0 }, /negative zero.*serializes it as 0/i],
+    ['symbol-keyed property', symbolPropertyPayload, /symbol-keyed own property.*dropped by JSON/i],
+    [
+      'non-enumerable property',
+      nonEnumerablePropertyPayload,
+      /non-enumerable own property.*dropped by JSON/i,
+    ],
+    [
+      'non-index array property',
+      Object.assign([1, 2], { meta: 'x' }),
+      /non-index own property.*dropped by JSON/i,
+    ],
   ])(
     'appendRecord rejects a %s payload with an actionable error',
     async (_name, payload, error) => {
@@ -101,6 +118,26 @@ describe('PgRuntimeStore Postgres behavior', () => {
       );
     },
   );
+
+  test('appendRecord accepts U+2028 and U+2029 in strings', async () => {
+    await store.createSession(makeSession({ kind: 'playback' }));
+
+    await expect(
+      store.appendRecord(
+        makeRecordInit('sess-1', { payload: { separators: 'line\u2028paragraph\u2029end' } }),
+      ),
+    ).resolves.toMatchObject({ payload: { separators: 'line\u2028paragraph\u2029end' } });
+  });
+
+  test('appendRecord rejects NUL with a human-readable error before PostgreSQL', async () => {
+    await store.createSession(makeSession({ kind: 'playback' }));
+    const rejection = store.appendRecord(
+      makeRecordInit('sess-1', { payload: { value: 'before\u0000after' } }),
+    );
+
+    await expect(rejection).rejects.toThrow(/NUL code point/i);
+    await expect(rejection).rejects.not.toMatchObject({ code: '22P05' });
+  });
 
   test('single-statement deletes do not invoke the transaction hook', async () => {
     let transactionCalls = 0;
@@ -260,5 +297,12 @@ describe('PgRuntimeStore Postgres behavior', () => {
 
     await expect(store.getSession(created.id)).rejects.toThrow();
     await expect(store.appendRecord(makeRecordInit(created.id))).rejects.toThrow();
+  });
+
+  test('getSession fails loud when a stored row contains JSON null', async () => {
+    const created = await store.createSession(makeSession());
+    await db.query(`UPDATE runtime_sessions SET data = 'null'::jsonb WHERE id = $1`, [created.id]);
+
+    await expect(store.getSession(created.id)).rejects.toThrow(/corrupt stored row.*"sess-1"/i);
   });
 });
