@@ -6,7 +6,7 @@ This contract exposes the complete `RuntimeStore` interface over JSON HTTP. All 
 
 | Method | Path | Purpose | Success |
 | --- | --- | --- | --- |
-| `POST` | `/runtime/sessions` | Create a session from a `RuntimeSessionInit`. The server stamps `runtimeDslVersion`. | `201` with the full `RuntimeSession` |
+| `POST` | `/runtime/sessions` | Create a session from a `RuntimeSessionInit`. The server stamps `runtimeDslVersion`; a client-submitted value is ignored. | `201` with the full `RuntimeSession` |
 | `GET` | `/runtime/sessions/{sessionId}` | Get one session. | `200` with the `RuntimeSession`, or `404` if absent |
 | `PATCH` | `/runtime/sessions/{sessionId}/status` | Set status from `{ "status", "updatedAt" }`. | `204` |
 | `DELETE` | `/runtime/sessions/{sessionId}` | Delete a session and all of its records. | `204` |
@@ -21,11 +21,19 @@ This contract exposes the complete `RuntimeStore` interface over JSON HTTP. All 
 
 ## Server-assigned sequence
 
-`seq` is server-assigned. The append request body is a `RuntimeRecordInit` and MUST NOT include `seq`. The server allocates the next per-session monotonic sequence number atomically with the insert, starting at `0`, and the response returns the full `RuntimeRecord`, including the assigned `seq`. A server MUST reject a client-submitted `seq` with `400 VALIDATION_FAILED` rather than accepting or ignoring it.
+`seq` is server-assigned. The append request body is a `RuntimeRecordInit`. If it includes `seq`, that value is ignored; the store's assigned value is authoritative. The server allocates the next per-session monotonic sequence number atomically with the insert, starting at `0`, and the response returns the full `RuntimeRecord`, including the assigned `seq`.
+
+Likewise, `runtimeDslVersion` is server-assigned when a session is created. If the request body includes `runtimeDslVersion`, that value is ignored; the store's assigned value is authoritative.
+
+## Payload domain
+
+HTTP implementations carry record payloads through JSON and therefore MUST accept only plain JSON values that survive serialization without changing meaning. They MUST fail loud before sending values such as `Map`, `Set`, `Date`, non-finite numbers, nested `undefined`, `bigint`, sparse arrays, strings containing U+0000, U+2028, or U+2029, class instances, and circular references. This is intentionally narrower than `BrowserRuntimeStore`, whose structured-clone persistence can preserve values such as `Map`, `Set`, and `Date` that JSON cannot.
 
 ## learnerKey security model
 
 `learnerKey` appears in paths, query parameters, and request bodies, but the server MUST derive or verify `learnerKey` from the authenticated session and MUST NOT blindly trust the client-submitted value. `learnerKey` is an opaque partition key, not proof of identity or authorization; trusting it verbatim creates a lateral-authorization vulnerability that lets one learner read, merge, or delete another learner's runtime data. The same rule applies to both keys in `mergeLearner`; authorization policy must explicitly permit the authenticated principal to migrate the source partition into the destination partition.
+
+The conformance server in this package is test-only and does not implement an authentication or authorization model; deriving `learnerKey` from authentication is left to the reference server in #939 Part D.
 
 ## Errors
 
@@ -45,7 +53,7 @@ Every non-2xx response has this machine-readable JSON shape:
 
 | Condition | HTTP status | Error code | Client behavior |
 | --- | --- | --- | --- |
-| Malformed JSON, an invalid envelope or payload, invalid learner keys, a body/path mismatch, client-supplied `seq`, or append to a non-active session | `400` | `VALIDATION_FAILED` | Throw `HttpRuntimeStoreError` (an `Error`) with the server message |
+| Malformed JSON, an invalid envelope or payload, invalid learner keys, a body/path mismatch, or append to a non-active session | `400` | `VALIDATION_FAILED` | Throw `HttpRuntimeStoreError` (an `Error`) with the server message |
 | Session does not exist | `404` | `SESSION_NOT_FOUND` | `getSession` returns `undefined`; operations that require the session throw `HttpRuntimeStoreError` with the browser store's `no session` semantics |
 | Route does not exist | `404` | `ROUTE_NOT_FOUND` | Throw `HttpRuntimeStoreError` |
 | A stored session has a future runtime DSL version | `409` | `FUTURE_VERSION` | Throw `HttpRuntimeStoreError` with the browser store's fail-loud `newer than this client's` semantics |

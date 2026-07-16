@@ -1,4 +1,4 @@
-import { migrateRuntime, validateRuntimeSession } from '@openmaic/dsl';
+import { migrateRuntime, validateRuntimeRecord, validateRuntimeSession } from '@openmaic/dsl';
 import type {
   RuntimePayload,
   RuntimeRecord,
@@ -7,6 +7,7 @@ import type {
   RuntimeSessionStatus,
 } from '@openmaic/dsl';
 import type { RuntimeSessionInit, RuntimeStore } from './types.js';
+import { assertJsonValue } from './json-value.js';
 
 export interface HttpRuntimeHeadersContext {
   method: string;
@@ -59,6 +60,36 @@ function assertValidSession(session: RuntimeSession): RuntimeSession {
   );
 }
 
+function assertValidRecord<TPayload extends RuntimePayload>(
+  record: RuntimeRecord<TPayload>,
+): RuntimeRecord<TPayload> {
+  const result = validateRuntimeRecord(record);
+  if (result.valid) return record;
+  const detail = result.errors.map((error) => `${error.path || '/'}: ${error.message}`).join('; ');
+  throw new Error(
+    `@openmaic/storage: invalid stored runtime record ${JSON.stringify(record.id)}: ${detail}`,
+  );
+}
+
+function normalizeHeaders(init: HeadersInit | undefined): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  const set = (name: string, value: string): void => {
+    normalized[name.toLowerCase()] = value;
+  };
+
+  if (init === undefined) return normalized;
+  if (Array.isArray(init)) {
+    for (const [name, value] of init) set(name, value);
+    return normalized;
+  }
+  if (typeof (init as Headers).forEach === 'function') {
+    (init as Headers).forEach((value, name) => set(name, value));
+    return normalized;
+  }
+  for (const [name, value] of Object.entries(init)) set(name, value);
+  return normalized;
+}
+
 /**
  * RuntimeStore client for the JSON HTTP contract. Session reads migrate again
  * on the client so a server running an older schema cannot leak stale envelopes
@@ -83,10 +114,10 @@ export class HttpRuntimeStore implements RuntimeStore {
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const headers = new Headers(await this.headersHook?.({ method, path }));
+    const headers = normalizeHeaders(await this.headersHook?.({ method, path }));
     let serializedBody: string | undefined;
     if (body !== undefined) {
-      if (!headers.has('content-type')) headers.set('content-type', 'application/json');
+      headers['content-type'] ??= 'application/json';
       serializedBody = JSON.stringify(body);
     }
 
@@ -173,19 +204,22 @@ export class HttpRuntimeStore implements RuntimeStore {
   async appendRecord<TPayload extends RuntimePayload>(
     init: RuntimeRecordInit<TPayload>,
   ): Promise<RuntimeRecord<TPayload>> {
-    return this.request<RuntimeRecord<TPayload>>(
+    assertJsonValue(init.payload, `runtime record ${JSON.stringify(init.id)} payload`);
+    const record = await this.request<RuntimeRecord<TPayload>>(
       'POST',
       `/runtime/sessions/${segment(init.sessionId)}/records`,
       init,
     );
+    return assertValidRecord(record);
   }
 
   async listRecords(sessionId: string, opts?: { sceneId?: string }): Promise<RuntimeRecord[]> {
     const query = opts?.sceneId === undefined ? '' : `?sceneId=${encodeURIComponent(opts.sceneId)}`;
-    return this.request<RuntimeRecord[]>(
+    const records = await this.request<RuntimeRecord[]>(
       'GET',
       `/runtime/sessions/${segment(sessionId)}/records${query}`,
     );
+    return records.map((record) => assertValidRecord(record)).sort((a, b) => a.seq - b.seq);
   }
 
   async mergeLearner(fromLearnerKey: string, toLearnerKey: string): Promise<number> {

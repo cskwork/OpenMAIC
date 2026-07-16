@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { RUNTIME_DSL_VERSION } from '@openmaic/dsl';
+import type { RuntimePayload, RuntimeRecord, RuntimeRecordInit } from '@openmaic/dsl';
 import { HttpRuntimeStore, HttpRuntimeStoreError } from '../src/runtime/http.js';
+import type { RuntimeSessionInit } from '../src/runtime/types.js';
 import { runRuntimeStoreContract } from './runtime-contract.js';
 import {
   startHttpConformanceServer,
@@ -9,6 +12,36 @@ import {
 const T0 = '2026-01-01T00:00:00.000Z';
 let server: HttpConformanceServer;
 let namespace = 0;
+
+function makeSession(id: string, overrides: Partial<RuntimeSessionInit> = {}): RuntimeSessionInit {
+  return {
+    id,
+    kind: 'playback',
+    stageId: 'stage-1',
+    learnerKey: 'learner-1',
+    status: 'active',
+    createdAt: T0,
+    updatedAt: T0,
+    ...overrides,
+  };
+}
+
+function makeRecord(sessionId: string, payload: unknown = { value: 'ok' }): RuntimeRecordInit {
+  return {
+    id: `record-${namespace++}`,
+    sessionId,
+    createdAt: T0,
+    payload: payload as RuntimePayload,
+  };
+}
+
+function fakeJsonResponse(body: unknown, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+  } as Response;
+}
 
 beforeAll(async () => {
   server = await startHttpConformanceServer({ listen: false });
@@ -88,4 +121,185 @@ describe('HttpRuntimeStore error mapping', () => {
     await expect(failure).rejects.toMatchObject({ status: 409, code: 'FUTURE_VERSION' });
     await expect(failure).rejects.toThrow(/newer than this client's/);
   });
+});
+
+describe('HttpRuntimeStore HTTP hardening', () => {
+  test('rejects payload values that cannot be represented faithfully by JSON', async () => {
+    const storeId = `json-${namespace++}`;
+    const store = new HttpRuntimeStore({
+      baseUrl: server.baseUrl,
+      fetch: server.fetch,
+      headers: () => ({ 'x-runtime-store-id': storeId }),
+    });
+    await store.createSession(makeSession('json-session'));
+
+    const sparse = Array.from({ length: 2 }) as unknown[];
+    sparse[1] = 'present';
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    const rejected: [string, unknown][] = [
+      ['Map', new Map([['key', 'value']])],
+      ['Set', new Set(['value'])],
+      ['Date', new Date(T0)],
+      ['NaN', Number.NaN],
+      ['nested undefined', { nested: undefined }],
+      ['bigint', (globalThis as unknown as { BigInt(value: number): unknown }).BigInt(1)],
+      ['sparse array', sparse],
+      ['line separator', `before\u2028after`],
+      ['paragraph separator', `before\u2029after`],
+      ['circular reference', circular],
+    ];
+
+    for (const [name, payload] of rejected) {
+      await expect(store.appendRecord(makeRecord('json-session', payload)), name).rejects.toThrow(
+        /not a plain JSON value/,
+      );
+    }
+  });
+
+  test('validates append responses and every listed record, including seq', async () => {
+    const baseRecord = {
+      id: 'record',
+      sessionId: 'session',
+      createdAt: T0,
+      payload: null,
+    };
+    const invalidRecords: unknown[] = [
+      { ...baseRecord, seq: -1 },
+      { ...baseRecord, seq: Number.NaN },
+      { ...baseRecord, seq: 0.5 },
+      baseRecord,
+    ];
+
+    for (const invalid of invalidRecords) {
+      const store = new HttpRuntimeStore({
+        baseUrl: 'https://runtime.invalid',
+        fetch: async () => fakeJsonResponse(invalid, 201),
+      });
+      await expect(store.appendRecord(makeRecord('session', null))).rejects.toThrow(/seq/);
+    }
+
+    const listStore = new HttpRuntimeStore({
+      baseUrl: 'https://runtime.invalid',
+      fetch: async () => fakeJsonResponse([{ ...baseRecord, seq: 1 }, invalidRecords[0]]),
+    });
+    await expect(listStore.listRecords('session')).rejects.toThrow(/seq/);
+  });
+
+  test('sorts validated listRecords responses by seq ascending', async () => {
+    const records: RuntimeRecord[] = [
+      { id: 'two', sessionId: 'session', seq: 2, createdAt: T0, payload: null },
+      { id: 'zero', sessionId: 'session', seq: 0, createdAt: T0, payload: null },
+      { id: 'one', sessionId: 'session', seq: 1, createdAt: T0, payload: null },
+    ];
+    const store = new HttpRuntimeStore({
+      baseUrl: 'https://runtime.invalid',
+      fetch: async () => fakeJsonResponse(records),
+    });
+
+    await expect(store.listRecords('session')).resolves.toMatchObject([
+      { seq: 0 },
+      { seq: 1 },
+      { seq: 2 },
+    ]);
+  });
+
+  test('normalizes a Headers instance without consulting the global Headers constructor', async () => {
+    const HeadersConstructor = globalThis.Headers;
+    const suppliedHeaders = new HeadersConstructor([['X-Test-Header', 'present']]);
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'Headers');
+    const fetch: typeof globalThis.fetch = async (_input, init) => {
+      expect(init?.headers).toEqual({ 'x-test-header': 'present' });
+      return fakeJsonResponse(undefined, 204);
+    };
+    const store = new HttpRuntimeStore({
+      baseUrl: 'https://runtime.invalid',
+      fetch,
+      headers: () => suppliedHeaders,
+    });
+
+    Reflect.deleteProperty(globalThis, 'Headers');
+    try {
+      await store.deleteStageRuntime('stage');
+    } finally {
+      if (descriptor) Object.defineProperty(globalThis, 'Headers', descriptor);
+    }
+  });
+
+  test('caller-controlled error substrings do not hijack structured status classification', async () => {
+    const storeId = `malicious-${namespace++}`;
+    const store = new HttpRuntimeStore({
+      baseUrl: server.baseUrl,
+      fetch: server.fetch,
+      headers: () => ({ 'x-runtime-store-id': storeId }),
+    });
+    const maliciousId = `no session already exists newer than this client's`;
+
+    const failure = store.createSession(makeSession(maliciousId, { learnerKey: '' }));
+    await expect(failure).rejects.toMatchObject({ status: 400, code: 'VALIDATION_FAILED' });
+  });
+
+  test('preserves empty segments and keeps empty-key deletes idempotent and route-local', async () => {
+    const storeId = `empty-${namespace++}`;
+    const store = new HttpRuntimeStore({
+      baseUrl: server.baseUrl,
+      fetch: server.fetch,
+      headers: () => ({ 'x-runtime-store-id': storeId }),
+    });
+    await store.createSession(
+      makeSession('route-sentinel', { stageId: 'learners', learnerKey: 'sentinel' }),
+    );
+
+    await expect(store.getSession('')).resolves.toBeUndefined();
+    await expect(store.deleteSession('')).resolves.toBeUndefined();
+    await expect(store.deleteLearnerRuntime('', '')).resolves.toBeUndefined();
+    await expect(store.getSession('route-sentinel')).resolves.toMatchObject({
+      id: 'route-sentinel',
+    });
+  });
+
+  test('ignores client-submitted runtimeDslVersion and seq in favor of store values', async () => {
+    const storeId = `assigned-${namespace++}`;
+    const store = new HttpRuntimeStore({
+      baseUrl: server.baseUrl,
+      fetch: server.fetch,
+      headers: () => ({ 'x-runtime-store-id': storeId }),
+    });
+    const session = await store.createSession({
+      ...makeSession('assigned-session'),
+      runtimeDslVersion: '99.0.0',
+    } as RuntimeSessionInit);
+    const record = await store.appendRecord({
+      ...makeRecord('assigned-session'),
+      seq: 99,
+    } as RuntimeRecordInit);
+
+    expect(session.runtimeDslVersion).toBe(RUNTIME_DSL_VERSION);
+    expect(record.seq).toBe(0);
+  });
+});
+
+test('real fetch reaches the listening conformance server over loopback', async ({ skip }) => {
+  let networkServer: HttpConformanceServer;
+  try {
+    networkServer = await startHttpConformanceServer();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+      skip('sandbox does not permit binding a 127.0.0.1 listener');
+    }
+    throw error;
+  }
+  try {
+    const store = new HttpRuntimeStore({
+      baseUrl: networkServer.baseUrl,
+      headers: () => ({ 'x-runtime-store-id': 'real-network' }),
+    });
+    await store.createSession(makeSession('network-session'));
+    await store.appendRecord(makeRecord('network-session'));
+    await expect(store.listRecords('network-session')).resolves.toMatchObject([
+      { sessionId: 'network-session', seq: 0 },
+    ]);
+  } finally {
+    await networkServer.close();
+  }
 });

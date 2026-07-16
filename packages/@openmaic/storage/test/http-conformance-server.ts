@@ -1,6 +1,18 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { IDBFactory } from 'fake-indexeddb';
-import type { RuntimeRecordInit, RuntimeSessionStatus } from '@openmaic/dsl';
+import {
+  needsRuntimeMigration,
+  RUNTIME_DSL_VERSION,
+  runtimeDslVersionOf,
+  validateRuntimeRecord,
+  validateRuntimeSession,
+} from '@openmaic/dsl';
+import type {
+  RuntimeRecordInit,
+  RuntimeSession,
+  RuntimeSessionStatus,
+  ValidationResult,
+} from '@openmaic/dsl';
 import { BrowserRuntimeStore } from '../src/runtime/browser.js';
 import type { RuntimeSessionInit, RuntimeStore } from '../src/runtime/types.js';
 
@@ -20,6 +32,16 @@ interface ErrorBody {
     code: string;
     message: string;
   };
+}
+
+class ConformanceHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -46,32 +68,50 @@ function errorResponse(error: unknown): { status: number; body: ErrorBody } {
   if (error instanceof SyntaxError) {
     return { status: 400, body: { error: { code: 'VALIDATION_FAILED', message } } };
   }
-  if (/newer than this client's/i.test(message)) {
-    return { status: 409, body: { error: { code: 'FUTURE_VERSION', message } } };
-  }
-  if (/already exists/i.test(message)) {
-    return { status: 409, body: { error: { code: 'SESSION_ALREADY_EXISTS', message } } };
-  }
-  if (/no session/i.test(message)) {
-    return { status: 404, body: { error: { code: 'SESSION_NOT_FOUND', message } } };
-  }
-  if (
-    /invalid|must be|may only be appended|non-empty|request body|unexpected|does not match/i.test(
-      message,
-    )
-  ) {
-    return { status: 400, body: { error: { code: 'VALIDATION_FAILED', message } } };
+  if (error instanceof ConformanceHttpError) {
+    return { status: error.status, body: { error: { code: error.code, message } } };
   }
   return { status: 500, body: { error: { code: 'INTERNAL_ERROR', message } } };
 }
 
+function validationError(result: ValidationResult, label: string): void {
+  if (result.valid) return;
+  const detail = result.errors.map((error) => `${error.path || '/'}: ${error.message}`).join('; ');
+  throw new ConformanceHttpError(400, 'VALIDATION_FAILED', `${label}: ${detail}`);
+}
+
+function missingSessionError(sessionId: string): ConformanceHttpError {
+  return new ConformanceHttpError(
+    404,
+    'SESSION_NOT_FOUND',
+    `@openmaic/storage: no session ${JSON.stringify(sessionId)}`,
+  );
+}
+
+function assertNotFutureSession(session: RuntimeSession): void {
+  const version = runtimeDslVersionOf(session);
+  if (!needsRuntimeMigration(session) && version !== RUNTIME_DSL_VERSION) {
+    throw new ConformanceHttpError(
+      409,
+      'FUTURE_VERSION',
+      `@openmaic/storage: session ${JSON.stringify(session.id)} was written at runtime DSL ` +
+        `version ${JSON.stringify(version)}, newer than this client's ${RUNTIME_DSL_VERSION}`,
+    );
+  }
+}
+
+async function requireSession(store: RuntimeStore, sessionId: string): Promise<RuntimeSession> {
+  const session = await store.getSession(sessionId);
+  if (session === undefined) throw missingSessionError(sessionId);
+  return session;
+}
+
 function pathParts(req: IncomingMessage): { parts: string[]; url: URL } {
   const url = new URL(req.url ?? '/', 'http://conformance.invalid');
+  const parts = url.pathname.split('/');
+  if (parts[0] === '') parts.shift();
   return {
-    parts: url.pathname
-      .split('/')
-      .filter(Boolean)
-      .map((part) => decodeURIComponent(part)),
+    parts: parts.map((part) => decodeURIComponent(part)),
     url,
   };
 }
@@ -91,8 +131,16 @@ async function route(
 
   if (method === 'POST' && parts.length === 2 && parts[1] === 'sessions') {
     const init = await readJson<RuntimeSessionInit & { runtimeDslVersion?: unknown }>(req);
-    if (Object.hasOwn(init, 'runtimeDslVersion')) {
-      throw new Error('invalid runtime session: request body must not include runtimeDslVersion');
+    validationError(
+      validateRuntimeSession({ ...init, runtimeDslVersion: RUNTIME_DSL_VERSION }),
+      `@openmaic/storage: invalid runtime session ${JSON.stringify(init.id)}`,
+    );
+    if (await store.getSession(init.id)) {
+      throw new ConformanceHttpError(
+        409,
+        'SESSION_ALREADY_EXISTS',
+        `@openmaic/storage: runtime session ${JSON.stringify(init.id)} already exists`,
+      );
     }
     sendJson(res, 201, await store.createSession(init));
     return;
@@ -116,6 +164,12 @@ async function route(
     }
     if (method === 'PATCH' && parts.length === 4 && parts[3] === 'status') {
       const body = await readJson<{ status: RuntimeSessionStatus; updatedAt: string }>(req);
+      const session = await requireSession(store, sessionId);
+      assertNotFutureSession(session);
+      validationError(
+        validateRuntimeSession({ ...session, status: body.status, updatedAt: body.updatedAt }),
+        `@openmaic/storage: invalid runtime session ${JSON.stringify(sessionId)}`,
+      );
       await store.setSessionStatus(sessionId, body.status, body.updatedAt);
       sendNoContent(res);
       return;
@@ -127,11 +181,26 @@ async function route(
     }
     if (method === 'POST' && parts.length === 4 && parts[3] === 'records') {
       const init = await readJson<RuntimeRecordInit & { seq?: unknown }>(req);
-      if (Object.hasOwn(init, 'seq')) {
-        throw new Error('invalid runtime record: append request body must not include seq');
-      }
       if (init.sessionId !== sessionId) {
-        throw new Error('invalid runtime record: body sessionId does not match the request path');
+        throw new ConformanceHttpError(
+          400,
+          'VALIDATION_FAILED',
+          'invalid runtime record: body sessionId does not match the request path',
+        );
+      }
+      validationError(
+        validateRuntimeRecord({ ...init, seq: 0 }),
+        `@openmaic/storage: invalid runtime record ${JSON.stringify(init.id)}`,
+      );
+      const session = await requireSession(store, sessionId);
+      assertNotFutureSession(session);
+      if (session.status !== 'active') {
+        throw new ConformanceHttpError(
+          400,
+          'VALIDATION_FAILED',
+          `@openmaic/storage: cannot append to session ${JSON.stringify(sessionId)} with ` +
+            `status '${session.status}' — records may only be appended to an active session`,
+        );
       }
       sendJson(res, 201, await store.appendRecord(init));
       return;
