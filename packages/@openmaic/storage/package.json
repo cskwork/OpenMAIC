@@ -11,6 +11,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./runtime/http": {
+      "types": "./dist/runtime/http.d.ts",
+      "import": "./dist/runtime/http.js"
+    },
     "./runtime/pg": {
       "types": "./dist/runtime/pg.d.ts",
       "import": "./dist/runtime/pg.js"
