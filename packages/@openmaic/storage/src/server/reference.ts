@@ -111,12 +111,20 @@ async function main(): Promise<void> {
   }>;
   const { Pool } = await importHostModule('pg');
   const pool = new Pool({ connectionString });
-  const server = await createReferenceRuntimeServer(pool as ConnectableQueryable);
   const port = Number(process.env.PORT ?? '3000');
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, '127.0.0.1', resolve);
-  });
+  let server;
+  try {
+    server = await createReferenceRuntimeServer(pool as ConnectableQueryable);
+    await new Promise<void>((resolve, reject) => {
+      server!.once('error', reject);
+      server!.listen(port, '127.0.0.1', resolve);
+    });
+  } catch (error) {
+    // Startup failed after the pool may have opened connections (ensureSchema
+    // runs inside createReferenceRuntimeServer); release them before exiting.
+    await pool.end().catch(() => {});
+    throw error;
+  }
   process.stdout.write(`Runtime reference server listening on http://127.0.0.1:${port}\n`);
 
   const close = (): void => {
