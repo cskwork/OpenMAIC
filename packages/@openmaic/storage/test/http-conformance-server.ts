@@ -338,6 +338,12 @@ async function route(
     return;
   }
 
+  if (parts.length === 1 && method === 'DELETE') {
+    await store.deleteAllRuntime();
+    sendNoContent(res);
+    return;
+  }
+
   sendJson(res, 404, { error: { code: 'ROUTE_NOT_FOUND', message: 'route not found' } });
 }
 
