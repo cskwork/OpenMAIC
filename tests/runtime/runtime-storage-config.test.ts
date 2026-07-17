@@ -148,3 +148,35 @@ describe('configureRuntimeStorage', () => {
     expect(() => configureRuntimeStorage({ store: stubStore() })).not.toThrow();
   });
 });
+
+describe('configuration snapshot and full reset', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.unstubAllGlobals();
+  });
+
+  it('mutating the options object after configure has no effect', async () => {
+    const first = stubStore();
+    const second = stubStore();
+    const { configureRuntimeStorage, getRuntimeStore } = await import('@/lib/runtime/store');
+    const options = { store: first };
+    configureRuntimeStorage(options);
+    options.store = second;
+
+    expect(getRuntimeStore()).toBe(first);
+  });
+
+  it('resetRuntimeStorageForTests clears the latched store singleton', async () => {
+    const first = stubStore();
+    const second = stubStore();
+    const { configureRuntimeStorage, getRuntimeStore, resetRuntimeStorageForTests } =
+      await import('@/lib/runtime/store');
+    configureRuntimeStorage({ store: first });
+    expect(getRuntimeStore()).toBe(first);
+
+    resetRuntimeStorageForTests();
+    configureRuntimeStorage({ store: second });
+
+    expect(getRuntimeStore()).toBe(second);
+  });
+});

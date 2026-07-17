@@ -48,7 +48,9 @@ export function configureRuntimeStorage(next: RuntimeStorageOptions): void {
   if (options) {
     throw new Error('Runtime storage has already been configured');
   }
-  options = next;
+  // Snapshot: a caller mutating its options object after configuring must not
+  // be able to swap the backend or identity behind the sealed configuration.
+  options = { store: next.store, learnerKey: next.learnerKey };
 }
 
 /** Whether client bootstrap has supplied runtime storage configuration. */
@@ -56,10 +58,23 @@ export function isRuntimeStorageConfigured(): boolean {
   return options !== undefined;
 }
 
-/** @internal Test-only reset for the configuration module's singleton state. */
+type RuntimeStorageResetHook = () => void;
+const resetHooks: RuntimeStorageResetHook[] = [];
+
+/**
+ * @internal Modules that latch singleton caches derived from this
+ * configuration (the store singleton, the learner-key in-flight promise)
+ * register a clearer so the test reset below leaves no stale cache behind.
+ */
+export function registerRuntimeStorageResetHook(hook: RuntimeStorageResetHook): void {
+  resetHooks.push(hook);
+}
+
+/** @internal Test-only reset: clears configuration AND every latched consumer cache. */
 export function resetRuntimeStorageForTests(): void {
   options = undefined;
   resolutionStarted = false;
+  for (const hook of resetHooks) hook();
 }
 
 /** @internal Resolve and seal the configured store override, if any. */

@@ -12,7 +12,7 @@
  */
 import { BrowserKVStore, type KVStore } from '@openmaic/storage';
 
-import { resolveConfiguredLearnerKey } from './config';
+import { registerRuntimeStorageResetHook, resolveConfiguredLearnerKey } from './config';
 
 export const LEARNER_KEY_KV_KEY = 'runtime.learnerKey';
 
@@ -21,6 +21,10 @@ const LEARNER_KEY_LOCK = 'maic:learner-key';
 let defaultKv: KVStore | undefined;
 let defaultInFlight: Promise<string> | undefined;
 let configuredInFlight: Promise<string> | undefined;
+
+registerRuntimeStorageResetHook(() => {
+  configuredInFlight = undefined;
+});
 
 function mintLearnerKey(): string {
   const uuid =

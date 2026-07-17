@@ -9,7 +9,7 @@
  */
 import { BrowserRuntimeStore, type RuntimeStore } from '@openmaic/storage';
 
-import { resolveConfiguredRuntimeStore } from './config';
+import { registerRuntimeStorageResetHook, resolveConfiguredRuntimeStore } from './config';
 
 export {
   configureRuntimeStorage,
@@ -23,6 +23,10 @@ export type { RuntimeStorageOptions } from './config';
 const RUNTIME_DB_NAME = 'maic-runtime';
 
 let store: RuntimeStore | undefined;
+
+registerRuntimeStorageResetHook(() => {
+  store = undefined;
+});
 let usesDefaultBrowserStore = false;
 
 function createRuntimeStore(): RuntimeStore {
