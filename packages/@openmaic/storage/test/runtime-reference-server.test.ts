@@ -114,6 +114,47 @@ runRuntimeStoreContract('reference HTTP handler', () => {
   });
 });
 
+describe('reference HTTP handler records-route existence concealment', () => {
+  function makeHarness() {
+    const backingStore = new BrowserRuntimeStore({ indexedDB: new IDBFactory() });
+    const handler = createRuntimeHttpHandler(backingStore, {
+      authenticate: async (req) => bearerLearner(req),
+    });
+    const fetchAs = (authorization: string) => handlerFetch(handler, async () => authorization);
+    return { backingStore, fetchAs };
+  }
+
+  test('absent and foreign sessions answer the records route identically', async () => {
+    const { backingStore, fetchAs } = makeHarness();
+    await backingStore.createSession(
+      makeSession({ id: 'victim-session', learnerKey: 'learner-victim' }),
+    );
+
+    const absent = await fetchAs('Bearer learner-probe')(
+      `${BASE_URL}/runtime/sessions/no-such-session/records`,
+    );
+    const foreign = await fetchAs('Bearer learner-probe')(
+      `${BASE_URL}/runtime/sessions/victim-session/records`,
+    );
+
+    expect(absent.status).toBe(404);
+    expect(foreign.status).toBe(404);
+    expect(((await absent.json()) as { error: { code: string } }).error.code).toBe(
+      ((await foreign.json()) as { error: { code: string } }).error.code,
+    );
+  });
+
+  test('the client restores empty-list semantics for the concealed 404', async () => {
+    const { fetchAs } = makeHarness();
+    const client = new HttpRuntimeStore({
+      baseUrl: BASE_URL,
+      fetch: fetchAs('Bearer learner-probe'),
+    });
+
+    await expect(client.listRecords('no-such-session')).resolves.toEqual([]);
+  });
+});
+
 describe('reference HTTP handler DELETE /runtime authorization', () => {
   function makeHarness() {
     const store = new BrowserRuntimeStore({ indexedDB: new IDBFactory() });

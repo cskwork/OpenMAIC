@@ -503,8 +503,11 @@ async function route(
     if (method === 'GET' && parts.length === 4 && parts[3] === 'records') {
       requireLearnerCapability(principal);
       const session = await store.getSession(sessionId);
-      if (session !== undefined) {
-        if (session.learnerKey !== principal.learnerKey) throw missingSessionError(sessionId);
+      // Absent and foreign sessions answer identically (404), so the status
+      // cannot become an existence oracle; clients restore the store
+      // contract's "absent lists as empty" by mapping SESSION_NOT_FOUND to [].
+      if (session === undefined || session.learnerKey !== principal.learnerKey) {
+        throw missingSessionError(sessionId);
       }
       const sceneId = url.searchParams.get('sceneId');
       sendJson(

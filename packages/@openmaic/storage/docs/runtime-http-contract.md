@@ -18,7 +18,7 @@ This contract exposes the complete `RuntimeStore` interface over JSON HTTP. All 
 | `DELETE` | `/runtime/stages/{stageId}` | Cascade-delete every learner's sessions and records on one stage. | `204` |
 | `DELETE` | `/runtime` | Delete every runtime session and record. Idempotent; an administrative operation — servers MUST gate it behind an operator-level authorization check, never expose it to learner credentials. | `204` |
 
-`GET /runtime/sessions/{sessionId}/records` returns an empty array when the session has no records or is absent, matching `RuntimeStore.listRecords`. Deleting an absent target succeeds.
+`GET /runtime/sessions/{sessionId}/records` returns an empty array when the session has no records, matching `RuntimeStore.listRecords`. For an absent session a server MAY answer `404 SESSION_NOT_FOUND` instead of `200 []` — authorization-aware servers SHOULD, so absent and unowned sessions are indistinguishable — and the client MUST map that `404` back to an empty array, preserving the store contract. Deleting an absent target succeeds.
 
 ## Server-assigned sequence
 

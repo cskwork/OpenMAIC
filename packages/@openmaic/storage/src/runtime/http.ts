@@ -265,10 +265,20 @@ export class HttpRuntimeStore implements RuntimeStore {
 
   async listRecords(sessionId: string, opts?: { sceneId?: string }): Promise<RuntimeRecord[]> {
     const query = opts?.sceneId === undefined ? '' : `?sceneId=${encodeURIComponent(opts.sceneId)}`;
-    const response = await this.requestWithStatus<unknown>(
-      'GET',
-      `/runtime/sessions/${segment(sessionId)}/records${query}`,
-    );
+    let response;
+    try {
+      response = await this.requestWithStatus<unknown>(
+        'GET',
+        `/runtime/sessions/${segment(sessionId)}/records${query}`,
+      );
+    } catch (error) {
+      // Servers may conceal session existence by answering 404 for absent
+      // sessions on this route; the store contract lists them as empty.
+      if (error instanceof HttpRuntimeStoreError && error.code === 'SESSION_NOT_FOUND') {
+        return [];
+      }
+      throw error;
+    }
     if (!Array.isArray(response.body)) {
       throw new HttpRuntimeStoreError(
         response.status,
