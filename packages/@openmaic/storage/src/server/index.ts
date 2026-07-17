@@ -243,8 +243,75 @@ async function ownedSession(
 ): Promise<RuntimeSession> {
   const session = await existingSessionOwnedByPrincipal(store, principal, sessionId);
   if (session === undefined) throw missingSessionError(sessionId);
+  return session;
+}
+
+async function writableSession(
+  store: RuntimeStore,
+  principal: RuntimeHttpPrincipal,
+  sessionId: string,
+): Promise<RuntimeSession> {
+  const session = await ownedSession(store, principal, sessionId);
   assertNotFutureSession(session);
   return session;
+}
+
+async function rethrowClassifiedSessionWriteFailure(
+  store: RuntimeStore,
+  principal: RuntimeHttpPrincipal,
+  sessionId: string,
+  error: unknown,
+): Promise<never> {
+  let current: RuntimeSession | undefined;
+  try {
+    current = await existingSessionOwnedByPrincipal(store, principal, sessionId);
+  } catch (classificationError) {
+    if (classificationError instanceof RuntimeHttpError) throw classificationError;
+    throw error;
+  }
+  if (current === undefined) throw missingSessionError(sessionId);
+  assertNotFutureSession(current);
+  if (current.status !== 'active') {
+    throw validationFailure(
+      `@openmaic/storage: session ${JSON.stringify(sessionId)} is no longer active; ` +
+        `its current status is '${current.status}'`,
+    );
+  }
+  throw error;
+}
+
+async function rethrowClassifiedMergeFailure(
+  store: RuntimeStore,
+  fromLearnerKey: string,
+  error: unknown,
+): Promise<never> {
+  // RuntimeStore predates typed write errors. Narrowly extract the id from the
+  // contract's canonical future-version error, then use a structured read as
+  // the authority: message text alone never determines the HTTP response.
+  const match =
+    error instanceof Error
+      ? /^@openmaic\/storage: session ("(?:[^"\\]|\\.)*") was written at runtime DSL version /.exec(
+          error.message,
+        )
+      : null;
+  if (match?.[1] !== undefined) {
+    let sessionId: unknown;
+    try {
+      sessionId = JSON.parse(match[1]) as unknown;
+    } catch {
+      throw error;
+    }
+    if (typeof sessionId === 'string') {
+      let current: RuntimeSession | undefined;
+      try {
+        current = await store.getSession(sessionId);
+      } catch {
+        throw error;
+      }
+      if (current?.learnerKey === fromLearnerKey) assertNotFutureSession(current);
+    }
+  }
+  throw error;
 }
 
 function parsePath(req: IncomingMessage): { parts: string[]; url: URL } {
@@ -367,12 +434,16 @@ async function route(
     }
     if (method === 'PATCH' && parts.length === 4 && parts[3] === 'status') {
       const body = await readJson<{ status: RuntimeSessionStatus; updatedAt: string }>(req);
-      const session = await ownedSession(store, principal, sessionId);
+      const session = await writableSession(store, principal, sessionId);
       validationError(
         validateRuntimeSession({ ...session, status: body.status, updatedAt: body.updatedAt }),
         `@openmaic/storage: invalid runtime session ${JSON.stringify(sessionId)}`,
       );
-      await store.setSessionStatus(sessionId, body.status, body.updatedAt);
+      try {
+        await store.setSessionStatus(sessionId, body.status, body.updatedAt);
+      } catch (error) {
+        await rethrowClassifiedSessionWriteFailure(store, principal, sessionId, error);
+      }
       sendNoContent(res);
       return;
     }
@@ -382,7 +453,6 @@ async function route(
         sendNoContent(res);
         return;
       }
-      assertNotFutureSession(session);
       // Re-read ownership immediately before deletion. A concurrent merge after
       // this check is linearized after this delete; see the documented threat model.
       const rechecked = await existingSessionOwnedByPrincipal(store, principal, sessionId);
@@ -410,7 +480,7 @@ async function route(
         if (normalizedRecord[key] === undefined) delete normalizedRecord[key];
       }
       assertJsonRequestValue(normalizedRecord, `runtime record ${JSON.stringify(init.id)}`);
-      const session = await ownedSession(store, principal, sessionId);
+      const session = await writableSession(store, principal, sessionId);
       validatePayloadForKind(
         session,
         init.id,
@@ -423,7 +493,11 @@ async function route(
             `status '${session.status}' — records may only be appended to an active session`,
         );
       }
-      sendJson(res, 201, await store.appendRecord(init));
+      try {
+        sendJson(res, 201, await store.appendRecord(init));
+      } catch (error) {
+        await rethrowClassifiedSessionWriteFailure(store, principal, sessionId, error);
+      }
       return;
     }
     if (method === 'GET' && parts.length === 4 && parts[3] === 'records') {
@@ -431,7 +505,6 @@ async function route(
       const session = await store.getSession(sessionId);
       if (session !== undefined) {
         if (session.learnerKey !== principal.learnerKey) throw missingSessionError(sessionId);
-        assertNotFutureSession(session);
       }
       const sceneId = url.searchParams.get('sceneId');
       sendJson(
@@ -456,7 +529,6 @@ async function route(
     assertAddressableSegment(learnerKey);
     requireLearner(principal, learnerKey);
     const sessions = await store.listSessions(stageId, learnerKey);
-    for (const session of sessions) assertNotFutureSession(session);
     sendJson(res, 200, sessions);
     return;
   }
@@ -478,9 +550,13 @@ async function route(
     if (!(await options.authorizeMerge?.(principal, body.fromLearnerKey, body.toLearnerKey))) {
       throw forbiddenLearner();
     }
-    sendJson(res, 200, {
-      moved: await store.mergeLearner(body.fromLearnerKey, body.toLearnerKey),
-    });
+    try {
+      sendJson(res, 200, {
+        moved: await store.mergeLearner(body.fromLearnerKey, body.toLearnerKey),
+      });
+    } catch (error) {
+      await rethrowClassifiedMergeFailure(store, body.fromLearnerKey, error);
+    }
     return;
   }
 

@@ -350,6 +350,282 @@ describe('reference HTTP handler error disclosure', () => {
   });
 });
 
+describe('reference HTTP handler future-version semantics', () => {
+  const futureSession = {
+    ...makeSession({ id: 'future-session', learnerKey: 'learner-a', stageId: 'stage-1' }),
+    runtimeDslVersion: '999.0.0',
+  };
+
+  test('passes future-stamped session and record reads through unchanged', async () => {
+    const record = { ...makeRecordInit(futureSession.id), seq: 0 };
+    const store = {
+      getSession: async () => futureSession,
+      listRecords: async () => [record],
+      listSessions: async () => [futureSession],
+    } as unknown as RuntimeStore;
+    const handler = createRuntimeHttpHandler(store, {
+      authenticate: async () => ({ learnerKey: futureSession.learnerKey }),
+    });
+    const request = handlerFetch(handler, async () => `Bearer ${futureSession.learnerKey}`);
+
+    const sessionResponse = await request(`${BASE_URL}/runtime/sessions/${futureSession.id}`);
+    expect(sessionResponse.status).toBe(200);
+    await expect(sessionResponse.json()).resolves.toEqual(futureSession);
+
+    const recordsResponse = await request(
+      `${BASE_URL}/runtime/sessions/${futureSession.id}/records`,
+    );
+    expect(recordsResponse.status).toBe(200);
+    await expect(recordsResponse.json()).resolves.toEqual([record]);
+
+    const sessionsResponse = await request(
+      `${BASE_URL}/runtime/stages/${futureSession.stageId}/learners/${futureSession.learnerKey}/sessions`,
+    );
+    expect(sessionsResponse.status).toBe(200);
+    await expect(sessionsResponse.json()).resolves.toEqual([futureSession]);
+  });
+
+  test.each([
+    ['session', `/runtime/sessions/${futureSession.id}`, 'deleteSession'],
+    [
+      'learner partition',
+      `/runtime/stages/${futureSession.stageId}/learners/${futureSession.learnerKey}`,
+      'deleteLearnerRuntime',
+    ],
+    ['stage', `/runtime/stages/${futureSession.stageId}`, 'deleteStageRuntime'],
+    ['all runtime', '/runtime', 'deleteAllRuntime'],
+  ] as const)('keeps the %s delete version-independent', async (_label, path, methodName) => {
+    const calls: string[] = [];
+    const store = {
+      getSession: async () => futureSession,
+      deleteSession: async () => calls.push('deleteSession'),
+      deleteLearnerRuntime: async () => calls.push('deleteLearnerRuntime'),
+      deleteStageRuntime: async () => calls.push('deleteStageRuntime'),
+      deleteAllRuntime: async () => calls.push('deleteAllRuntime'),
+    } as unknown as RuntimeStore;
+    const handler = createRuntimeHttpHandler(store, {
+      authenticate: async () => ({ learnerKey: futureSession.learnerKey }),
+      authorizeAdmin: async () => true,
+    });
+    const response = await handlerFetch(handler, async () => `Bearer ${futureSession.learnerKey}`)(
+      `${BASE_URL}${path}`,
+      { method: 'DELETE' },
+    );
+
+    expect(response.status).toBe(204);
+    expect(calls).toEqual([methodName]);
+  });
+
+  test.each([
+    {
+      operation: 'appendRecord',
+      invoke: (request: typeof globalThis.fetch) =>
+        request(`${BASE_URL}/runtime/sessions/${futureSession.id}/records`, {
+          method: 'POST',
+          body: JSON.stringify(makeRecordInit(futureSession.id)),
+        }),
+    },
+    {
+      operation: 'setSessionStatus',
+      invoke: (request: typeof globalThis.fetch) =>
+        request(`${BASE_URL}/runtime/sessions/${futureSession.id}/status`, {
+          method: 'PATCH',
+          body: JSON.stringify({ status: 'completed', updatedAt: '2026-01-01T00:02:00.000Z' }),
+        }),
+    },
+  ])('$operation keeps the 409 FUTURE_VERSION write guard', async ({ operation, invoke }) => {
+    const called: string[] = [];
+    const store = {
+      getSession: async () => futureSession,
+      appendRecord: async () => called.push('appendRecord'),
+      setSessionStatus: async () => {
+        called.push('setSessionStatus');
+      },
+    } as unknown as RuntimeStore;
+    const handler = createRuntimeHttpHandler(store, {
+      authenticate: async () => ({ learnerKey: futureSession.learnerKey }),
+    });
+    const response = await invoke(
+      handlerFetch(handler, async () => `Bearer ${futureSession.learnerKey}`),
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'FUTURE_VERSION' },
+    });
+    expect(called).not.toContain(operation);
+  });
+
+  test('mergeLearner returns 409 only after a structured future-session re-fetch', async () => {
+    const storeError = new Error(
+      `@openmaic/storage: session ${JSON.stringify(futureSession.id)} was written at runtime DSL ` +
+        `version ${JSON.stringify(futureSession.runtimeDslVersion)}, newer than this client's ` +
+        RUNTIME_DSL_VERSION,
+    );
+    const store = {
+      getSession: async () => futureSession,
+      mergeLearner: async () => {
+        throw storeError;
+      },
+    } as unknown as RuntimeStore;
+    const handler = createRuntimeHttpHandler(store, {
+      authenticate: async () => ({ learnerKey: futureSession.learnerKey }),
+      authorizeMerge: async () => true,
+    });
+    const response = await handlerFetch(handler, async () => `Bearer ${futureSession.learnerKey}`)(
+      `${BASE_URL}/runtime/learners/merge`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          fromLearnerKey: futureSession.learnerKey,
+          toLearnerKey: 'learner-b',
+        }),
+      },
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'FUTURE_VERSION' },
+    });
+  });
+});
+
+describe('reference HTTP handler concurrent session-write classification', () => {
+  const operations = [
+    {
+      name: 'appendRecord',
+      invoke: (request: typeof globalThis.fetch, sessionId: string) =>
+        request(`${BASE_URL}/runtime/sessions/${sessionId}/records`, {
+          method: 'POST',
+          body: JSON.stringify(makeRecordInit(sessionId)),
+        }),
+    },
+    {
+      name: 'setSessionStatus',
+      invoke: (request: typeof globalThis.fetch, sessionId: string) =>
+        request(`${BASE_URL}/runtime/sessions/${sessionId}/status`, {
+          method: 'PATCH',
+          body: JSON.stringify({ status: 'completed', updatedAt: '2026-01-01T00:02:00.000Z' }),
+        }),
+    },
+  ];
+
+  test.each(operations)(
+    '$name returns 404 when the session is deleted before the write',
+    async ({ name, invoke }) => {
+      const session = {
+        ...makeSession({ id: `race-${name}` }),
+        runtimeDslVersion: RUNTIME_DSL_VERSION,
+      };
+      const underlying = new Error('session does not exist');
+      let reads = 0;
+      const store = {
+        getSession: async () => (++reads === 1 ? session : undefined),
+        appendRecord: async () => {
+          throw underlying;
+        },
+        setSessionStatus: async () => {
+          throw underlying;
+        },
+      } as unknown as RuntimeStore;
+      const handler = createRuntimeHttpHandler(store, {
+        authenticate: async () => ({ learnerKey: session.learnerKey }),
+      });
+      const response = await invoke(
+        handlerFetch(handler, async () => `Bearer ${session.learnerKey}`),
+        session.id,
+      );
+
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: 'SESSION_NOT_FOUND' },
+      });
+      expect(reads).toBe(2);
+    },
+  );
+
+  test.each(operations)(
+    '$name returns 400 with the current status when the session completes before the write',
+    async ({ name, invoke }) => {
+      const session = {
+        ...makeSession({ id: `race-${name}` }),
+        runtimeDslVersion: RUNTIME_DSL_VERSION,
+      };
+      const completed = { ...session, status: 'completed' as const };
+      const underlying = new Error('session not active');
+      let reads = 0;
+      const store = {
+        getSession: async () => (++reads === 1 ? session : completed),
+        appendRecord: async () => {
+          throw underlying;
+        },
+        setSessionStatus: async () => {
+          throw underlying;
+        },
+      } as unknown as RuntimeStore;
+      const handler = createRuntimeHttpHandler(store, {
+        authenticate: async () => ({ learnerKey: session.learnerKey }),
+      });
+      const response = await invoke(
+        handlerFetch(handler, async () => `Bearer ${session.learnerKey}`),
+        session.id,
+      );
+      const body = (await response.json()) as { error: { code: string; message: string } };
+
+      expect(response.status).toBe(400);
+      expect(body.error.code).toBe('VALIDATION_FAILED');
+      expect(body.error.message).toContain("current status is 'completed'");
+      expect(reads).toBe(2);
+    },
+  );
+
+  test.each(operations)(
+    '$name preserves 500 for an unclassified store failure',
+    async ({ name, invoke }) => {
+      const session = {
+        ...makeSession({ id: `race-${name}` }),
+        runtimeDslVersion: RUNTIME_DSL_VERSION,
+      };
+      const underlying = new Error('unexpected write failure');
+      let reads = 0;
+      const store = {
+        getSession: async () => {
+          reads += 1;
+          return session;
+        },
+        appendRecord: async () => {
+          throw underlying;
+        },
+        setSessionStatus: async () => {
+          throw underlying;
+        },
+      } as unknown as RuntimeStore;
+      const handler = createRuntimeHttpHandler(store, {
+        authenticate: async () => ({ learnerKey: session.learnerKey }),
+      });
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      try {
+        const response = await invoke(
+          handlerFetch(handler, async () => `Bearer ${session.learnerKey}`),
+          session.id,
+        );
+
+        expect(response.status).toBe(500);
+        await expect(response.json()).resolves.toMatchObject({
+          error: { code: 'INTERNAL_ERROR' },
+        });
+        expect(reads).toBe(2);
+        expect(consoleError).toHaveBeenCalledWith(
+          '@openmaic/storage: Runtime HTTP handler internal error',
+          underlying,
+        );
+      } finally {
+        consoleError.mockRestore();
+      }
+    },
+  );
+});
+
 describe('reference HTTP handler cross-learner rejection matrix', () => {
   function makeCrossLearnerHarness() {
     const store = new BrowserRuntimeStore({ indexedDB: new IDBFactory() });
