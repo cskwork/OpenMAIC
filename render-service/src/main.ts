@@ -29,26 +29,35 @@ import { Hono } from 'hono';
 import { config } from './config.js';
 import { InMemoryJobStore } from './job-store.js';
 import { LocalDiskArtifactStore } from './artifact-store.js';
-import { RenderManager, RenderRejectedError, makeProjectDir } from './render-manager.js';
-import { InvalidProjectError, unzipProject } from './unzip.js';
+import {
+  RenderManager,
+  RenderRejectedError,
+  makeProjectDir as defaultMakeProjectDir,
+} from './render-manager.js';
+import { InvalidProjectError, unzipProject as defaultUnzipProject } from './unzip.js';
 import { capBodyStream } from './capped-stream.js';
 import { Semaphore } from './semaphore.js';
+import type { JobStore } from './job-store.js';
+import type { ArtifactStore } from './artifact-store.js';
 import { isTerminal, type RenderOptions } from './types.js';
 
-const artifacts = new LocalDiskArtifactStore();
-const jobs = new InMemoryJobStore(config.jobTtlMs, (record) => {
-  // A reaped job's artifact + project dir go with it.
-  void artifacts.remove(record.id);
-  void manager.cleanupProject(record.projectDir);
-});
-const manager = new RenderManager(jobs, artifacts);
+/** Thrown inside the gated section for an oversized body (→ HTTP 413). */
+class UploadTooLargeError extends Error {}
+/** Thrown inside the gated section for a malformed request (→ HTTP 400). */
+class BadRequestError extends Error {}
 
-/** Bounds concurrent archive extractions so the per-archive RAM ceiling can't stack. */
-const extractionGate = new Semaphore(config.maxConcurrentExtractions);
-
-const app = new Hono();
-
-app.get('/health', (c) => c.json({ ok: true }));
+/** Collaborators the app depends on; injectable so the routes are testable. */
+export interface AppDeps {
+  jobs: JobStore;
+  artifacts: ArtifactStore;
+  manager: RenderManager;
+  /** Bounds concurrent *buffering + extraction* (the whole RAM-heavy section). */
+  extractionGate: Semaphore;
+  /** Extract a validated archive into a dir. Overridable in tests. */
+  unzipProject?: (zip: Uint8Array, destDir: string) => Promise<void>;
+  /** Create a fresh per-render scratch dir. Overridable in tests. */
+  makeProjectDir?: () => Promise<string>;
+}
 
 /** Parse + validate the multipart render options. Returns options or an error string. */
 function parseOptions(form: FormData): RenderOptions | string {
@@ -66,149 +75,194 @@ function parseOptions(form: FormData): RenderOptions | string {
   return { fps, quality, format };
 }
 
-app.post('/render', async (c) => {
-  // Reject an oversized body by declared length first (courtesy 413 for honest
-  // clients). The real bound is the byte-counting cap below, since
-  // Content-Length is client-supplied and absent on chunked uploads.
-  const declared = Number(c.req.header('content-length') ?? '0');
-  if (Number.isFinite(declared) && declared > config.maxUploadBytes) {
-    return c.json({ error: 'Upload too large' }, 413);
-  }
+/**
+ * Build the render-service HTTP app over injected collaborators.
+ *
+ * Admission ordering is the security boundary here:
+ *  1. `reserve()` (queue + per-identity) runs FIRST, before anything is read —
+ *     a rejected caller never buffers a byte.
+ *  2. The whole RAM-heavy section — buffering the multipart (`formData()` is
+ *     what materializes the uploaded file into memory), parsing, reading the
+ *     file bytes, and extracting — runs INSIDE `extractionGate`. So at most
+ *     `maxConcurrentExtractions` bodies are ever buffered at once; the rest wait
+ *     with their request body still unconsumed (backpressured on the socket),
+ *     not held in RAM. This is what stops a near-cap burst from OOMing the box.
+ */
+export function createApp(deps: AppDeps): Hono {
+  const { jobs, artifacts, manager, extractionGate } = deps;
+  const unzipProject = deps.unzipProject ?? defaultUnzipProject;
+  const makeProjectDir = deps.makeProjectDir ?? defaultMakeProjectDir;
 
-  // Identity is derived by the trusted proxy (client IP) and passed in a header;
-  // a client-supplied multipart `userId` is deliberately ignored so it can't be
-  // rotated to bypass the per-identity guard.
-  const identity = c.req.header('x-openmaic-client')?.trim() || 'anonymous';
+  const app = new Hono();
 
-  // Reserve an admission slot BEFORE reading/buffering the multipart body, so a
-  // rejected caller (queue full / per-identity limit) never buffers hundreds of
-  // MB and never triggers extraction. This bounds concurrent near-cap uploads to
-  // the queue depth, not just each individual body to the size cap.
-  let reservation;
-  try {
-    reservation = manager.reserve(identity);
-  } catch (error) {
-    if (error instanceof RenderRejectedError) return c.json({ error: error.message }, 429);
-    throw error;
-  }
+  app.get('/health', (c) => c.json({ ok: true }));
 
-  // From here every failure MUST release the reservation.
-  let projectDir: string | undefined;
-  try {
-    // Cap the raw body BEFORE formData()/arrayBuffer() can buffer it, so a
-    // chunked/length-lying upload can't OOM the process. We parse a rebuilt
-    // Request whose body is the capped stream.
-    const raw = c.req.raw;
-    let form: FormData;
-    let capped: ReturnType<typeof capBodyStream> | undefined;
+  app.post('/render', async (c) => {
+    // Reject an oversized body by declared length first (courtesy 413 for honest
+    // clients). The real bound is the byte-counting cap below, since
+    // Content-Length is client-supplied and absent on chunked uploads.
+    const declared = Number(c.req.header('content-length') ?? '0');
+    if (Number.isFinite(declared) && declared > config.maxUploadBytes) {
+      return c.json({ error: 'Upload too large' }, 413);
+    }
+
+    // Identity is derived by the trusted proxy (client IP) and passed in a header;
+    // a client-supplied multipart `userId` is deliberately ignored so it can't be
+    // rotated to bypass the per-identity guard.
+    const identity = c.req.header('x-openmaic-client')?.trim() || 'anonymous';
+
+    // Reserve a queue slot BEFORE the buffering permit, so a rejected caller
+    // (queue full / per-identity limit) never enters buffering or extraction.
+    let reservation;
     try {
-      if (raw.body) {
-        capped = capBodyStream(raw.body, config.maxUploadBytes);
-        const bounded = new Request(raw.url, {
-          method: raw.method,
-          headers: raw.headers,
-          body: capped.stream,
-          // duplex is required for a streaming request body.
-          duplex: 'half',
-        } as RequestInit);
-        form = await bounded.formData();
-      } else {
-        form = await c.req.formData();
-      }
-    } catch {
-      manager.release(reservation);
-      if (capped?.exceeded()) return c.json({ error: 'Upload too large' }, 413);
-      return c.json({ error: 'Expected multipart/form-data' }, 400);
+      reservation = manager.reserve(identity);
+    } catch (error) {
+      if (error instanceof RenderRejectedError) return c.json({ error: error.message }, 429);
+      throw error;
     }
 
-    const options = parseOptions(form);
-    if (typeof options === 'string') {
-      manager.release(reservation);
-      return c.json({ error: options }, 400);
-    }
+    // From here every failure MUST release the reservation.
+    let projectDir: string | undefined;
+    try {
+      // The ENTIRE memory-heavy section runs under the extraction permit:
+      // buffering the body (formData), reading the file, and unzipping. Requests
+      // beyond the permit wait here with their body still unconsumed, so only
+      // `maxConcurrentExtractions` bodies are buffered concurrently.
+      const jobId = await extractionGate.run(async () => {
+        const raw = c.req.raw;
+        let form: FormData;
+        let capped: ReturnType<typeof capBodyStream> | undefined;
+        try {
+          if (raw.body) {
+            // Cap the raw body as it streams into formData(), so a chunked /
+            // length-lying upload can't exceed the byte ceiling mid-parse.
+            capped = capBodyStream(raw.body, config.maxUploadBytes);
+            const bounded = new Request(raw.url, {
+              method: raw.method,
+              headers: raw.headers,
+              body: capped.stream,
+              // duplex is required for a streaming request body.
+              duplex: 'half',
+            } as RequestInit);
+            form = await bounded.formData();
+          } else {
+            form = await c.req.formData();
+          }
+        } catch {
+          if (capped?.exceeded()) throw new UploadTooLargeError('Upload too large');
+          throw new BadRequestError('Expected multipart/form-data');
+        }
 
-    const file = form.get('project');
-    if (!(file instanceof File)) {
-      manager.release(reservation);
-      return c.json({ error: 'Missing "project" file field' }, 400);
-    }
+        const options = parseOptions(form);
+        if (typeof options === 'string') throw new BadRequestError(options);
 
-    // Extraction (and the file buffering that feeds it) holds the expanded
-    // archive in RAM and is CPU-bound; gate the whole memory-heavy section so a
-    // burst of admitted jobs can't stack the per-archive memory ceiling.
-    projectDir = await makeProjectDir();
-    const dir = projectDir;
-    await extractionGate.run(async () => {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      await unzipProject(bytes, dir);
+        const file = form.get('project');
+        if (!(file instanceof File)) {
+          throw new BadRequestError('Missing "project" file field');
+        }
+
+        projectDir = await makeProjectDir();
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        await unzipProject(bytes, projectDir);
+        return manager.submit(reservation, projectDir, options);
+      });
+      return c.json({ jobId }, 202);
+    } catch (error) {
+      manager.release(reservation);
+      if (projectDir) await manager.cleanupProject(projectDir);
+      if (error instanceof UploadTooLargeError) return c.json({ error: error.message }, 413);
+      if (error instanceof BadRequestError) return c.json({ error: error.message }, 400);
+      if (error instanceof InvalidProjectError) return c.json({ error: error.message }, 400);
+      if (error instanceof RenderRejectedError) return c.json({ error: error.message }, 429);
+      throw error;
+    }
+  });
+
+  app.get('/render/:jobId', async (c) => {
+    const job = await jobs.get(c.req.param('jobId'));
+    if (!job) return c.json({ error: 'Job not found' }, 404);
+    return c.json({
+      jobId: job.id,
+      status: job.status,
+      progress: job.progress,
+      currentStage: job.currentStage,
+      framesRendered: job.framesRendered,
+      totalFrames: job.totalFrames,
+      error: job.error,
+      done: isTerminal(job.status),
     });
-    const jobId = await manager.submit(reservation, projectDir, options);
-    return c.json({ jobId }, 202);
-  } catch (error) {
-    manager.release(reservation);
-    if (projectDir) await manager.cleanupProject(projectDir);
-    if (error instanceof InvalidProjectError) return c.json({ error: error.message }, 400);
-    if (error instanceof RenderRejectedError) return c.json({ error: error.message }, 429);
-    throw error;
-  }
-});
-
-app.get('/render/:jobId', async (c) => {
-  const job = await jobs.get(c.req.param('jobId'));
-  if (!job) return c.json({ error: 'Job not found' }, 404);
-  return c.json({
-    jobId: job.id,
-    status: job.status,
-    progress: job.progress,
-    currentStage: job.currentStage,
-    framesRendered: job.framesRendered,
-    totalFrames: job.totalFrames,
-    error: job.error,
-    done: isTerminal(job.status),
   });
-});
 
-app.delete('/render/:jobId', async (c) => {
-  const ok = await manager.cancel(c.req.param('jobId'));
-  if (!ok) return c.json({ error: 'Job not found' }, 404);
-  return c.json({ cancelled: true });
-});
-
-app.get('/render/:jobId/download', async (c) => {
-  const jobId = c.req.param('jobId');
-  const job = await jobs.get(jobId);
-  if (!job) return c.json({ error: 'Job not found' }, 404);
-  if (job.status !== 'succeeded') {
-    return c.json({ error: `Job not ready (status: ${job.status})` }, 409);
-  }
-
-  const location = await artifacts.locate(jobId);
-  if (!location) return c.json({ error: 'Artifact expired or missing' }, 404);
-
-  // Presigned-URL stores (demo layer) redirect the browser straight to storage.
-  if (location.kind === 'url') return c.redirect(location.href, 302);
-
-  const { size } = await stat(location.path).catch(() => ({ size: 0 }));
-  if (!size) return c.json({ error: 'Artifact missing on disk' }, 404);
-
-  const webStream = Readable.toWeb(createReadStream(location.path)) as ReadableStream;
-  return new Response(webStream, {
-    headers: {
-      'Content-Type': 'video/mp4',
-      'Content-Length': String(size),
-      'Content-Disposition': `attachment; filename="${jobId}.mp4"`,
-    },
+  app.delete('/render/:jobId', async (c) => {
+    const ok = await manager.cancel(c.req.param('jobId'));
+    if (!ok) return c.json({ error: 'Job not found' }, 404);
+    return c.json({ cancelled: true });
   });
-});
 
-// Ensure the scratch root exists before accepting work. On the documented
-// standalone path nothing creates /tmp/openmaic-renders, so without this every
-// makeProjectDir() would ENOENT. mktemp still creates a fresh subdir per job.
-await mkdir(config.tmpDir, { recursive: true }).catch(() => {});
+  app.get('/render/:jobId/download', async (c) => {
+    const jobId = c.req.param('jobId');
+    const job = await jobs.get(jobId);
+    if (!job) return c.json({ error: 'Job not found' }, 404);
+    if (job.status !== 'succeeded') {
+      return c.json({ error: `Job not ready (status: ${job.status})` }, 409);
+    }
 
-serve({ fetch: app.fetch, port: config.port }, (info) => {
-  // eslint-disable-next-line no-console
-  console.log(
-    `[render-service] listening on :${info.port} (maxConcurrency=${config.maxConcurrency})`,
-  );
-});
+    const location = await artifacts.locate(jobId);
+    if (!location) return c.json({ error: 'Artifact expired or missing' }, 404);
+
+    // Presigned-URL stores (demo layer) redirect the browser straight to storage.
+    if (location.kind === 'url') return c.redirect(location.href, 302);
+
+    const { size } = await stat(location.path).catch(() => ({ size: 0 }));
+    if (!size) return c.json({ error: 'Artifact missing on disk' }, 404);
+
+    const webStream = Readable.toWeb(createReadStream(location.path)) as ReadableStream;
+    return new Response(webStream, {
+      headers: {
+        'Content-Type': 'video/mp4',
+        'Content-Length': String(size),
+        'Content-Disposition': `attachment; filename="${jobId}.mp4"`,
+      },
+    });
+  });
+
+  return app;
+}
+
+/** Wire the production collaborators and start the server (skipped under tests). */
+async function main(): Promise<void> {
+  const artifacts = new LocalDiskArtifactStore();
+  let manager: RenderManager;
+  const jobs = new InMemoryJobStore(config.jobTtlMs, (record) => {
+    // A reaped job's artifact + project dir go with it.
+    void artifacts.remove(record.id);
+    void manager.cleanupProject(record.projectDir);
+  });
+  manager = new RenderManager(jobs, artifacts);
+
+  const app = createApp({
+    jobs,
+    artifacts,
+    manager,
+    // Bounds concurrent buffering + extraction so the per-archive RAM ceiling
+    // can't stack across a burst of admitted requests.
+    extractionGate: new Semaphore(config.maxConcurrentExtractions),
+  });
+
+  // Ensure the scratch root exists before accepting work. On the documented
+  // standalone path nothing creates /tmp/openmaic-renders, so without this every
+  // makeProjectDir() would ENOENT. mktemp still creates a fresh subdir per job.
+  await mkdir(config.tmpDir, { recursive: true }).catch(() => {});
+
+  serve({ fetch: app.fetch, port: config.port }, (info) => {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[render-service] listening on :${info.port} (maxConcurrency=${config.maxConcurrency})`,
+    );
+  });
+}
+
+// Only auto-start when run as the entrypoint, not when imported by tests.
+if (process.env.RENDER_SERVICE_NO_LISTEN !== 'true') {
+  await main();
+}

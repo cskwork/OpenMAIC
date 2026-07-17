@@ -45,7 +45,7 @@ poll, then download. Job ids are opaque.
 | `RENDER_MAX_ENTRY_BYTES` | `209715200` | Max expanded size of any single entry (200 MB). |
 | `RENDER_MAX_EXPANDED_BYTES` | `536870912` | Max total expanded size across all entries (512 MB). |
 | `RENDER_MAX_COMPRESSION_RATIO` | `200` | Max expanded:compressed ratio per entry (ZIP-bomb guard). |
-| `RENDER_EGRESS_LOCKDOWN` | `true` | Install the iptables egress lockdown at startup (needs root + `CAP_NET_ADMIN`). |
+| `RENDER_EGRESS_LOCKDOWN` | `true` | Install the iptables egress lockdown at startup (needs root + `CAP_NET_ADMIN`); **fails closed** — the container exits if the rules can't be applied. Set `false` to run unisolated. |
 | `PRODUCER_TMP_PROJECT_DIR` | `/tmp/openmaic-renders` | Scratch dir for unzipped projects + outputs. |
 | `PUPPETEER_EXECUTABLE_PATH` | `/usr/bin/chromium` | System Chromium (set in the image). |
 
@@ -80,14 +80,20 @@ that untrusted page contained:
   connections), so Chromium can't open connections back to the app — even though
   they share the Compose network so the app can reach the service. This needs the
   container to run with `CAP_NET_ADMIN` (`cap_add: [NET_ADMIN]`, already set in
-  the Compose file); without it the service still boots but logs a warning and
-  does **not** block egress. Toggle with `RENDER_EGRESS_LOCKDOWN`.
+  the Compose file). With `RENDER_EGRESS_LOCKDOWN=true` (the default) the entrypoint
+  **fails closed**: if the rules can't be applied (missing capability, backend
+  mismatch) the container exits non-zero rather than start an unisolated service
+  the app would still advertise as healthy. An operator who knowingly accepts an
+  unisolated standalone setup opts out with `RENDER_EGRESS_LOCKDOWN=false`.
+  `scripts/egress-smoke.sh <image>` asserts the boundary end-to-end (lockdown
+  active, loopback works, a new outbound connection is blocked).
 - **No internet.** In Compose the `render` network is `internal: true` (no host
   or internet gateway). The export ZIP bundles every asset (and GSAP) at build
   time, so the render needs no outbound at all.
 
 **When running standalone, place the service on an isolated network yourself**
-(and keep the egress lockdown on) — it needs no outbound access.
+(and keep the egress lockdown on, or accept the risk with the toggle) — it needs
+no outbound access.
 
 ## Run
 

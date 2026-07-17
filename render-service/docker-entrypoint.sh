@@ -11,30 +11,49 @@
 #
 # Requires the container to start as root with CAP_NET_ADMIN (compose:
 # `cap_add: [NET_ADMIN]`). We install the rules as root, then drop to the
-# unprivileged `render` user for the Node process. If iptables or the capability
-# is unavailable, we log and continue WITHOUT lockdown rather than fail to boot —
-# so the service still runs in constrained environments (the operator is warned).
+# unprivileged `render` user for the Node process.
+#
+# FAIL CLOSED: when the lockdown is requested (RENDER_EGRESS_LOCKDOWN=true, the
+# default) but cannot be installed, we EXIT non-zero rather than start an
+# unisolated service that /health would still report as healthy — the app would
+# otherwise advertise MP4 rendering while Chromium could reach the app. An
+# operator who knowingly accepts an unisolated standalone setup must opt out
+# explicitly with RENDER_EGRESS_LOCKDOWN=false.
 set -eu
 
 lockdown() {
   # ESTABLISHED,RELATED lets the Hono API respond to the app's inbound requests;
   # loopback lets the producer's file server + Chromium talk locally. Everything
   # else outbound (new connections, DNS to resolve `openmaic`, etc.) is dropped.
-  iptables -A OUTPUT -o lo -j ACCEPT
-  iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-  iptables -P OUTPUT DROP
-  # Mirror for IPv6 where available; ignore if the stack/table is absent.
-  ip6tables -A OUTPUT -o lo -j ACCEPT 2>/dev/null || true
-  ip6tables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
-  ip6tables -P OUTPUT DROP 2>/dev/null || true
+  # IPv4 rules must all succeed; IPv6 is best-effort (the stack/table may be
+  # absent), but when present we still default-drop so v6 can't be an escape.
+  iptables -A OUTPUT -o lo -j ACCEPT || return 1
+  iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT || return 1
+  iptables -P OUTPUT DROP || return 1
+  if command -v ip6tables >/dev/null 2>&1; then
+    ip6tables -A OUTPUT -o lo -j ACCEPT 2>/dev/null || true
+    ip6tables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+    ip6tables -P OUTPUT DROP 2>/dev/null || true
+  fi
+  return 0
 }
 
 if [ "${RENDER_EGRESS_LOCKDOWN:-true}" = "true" ]; then
-  if [ "$(id -u)" = "0" ] && command -v iptables >/dev/null 2>&1 && lockdown 2>/dev/null; then
-    echo "[render-service] egress lockdown active (outbound blocked except loopback)"
-  else
-    echo "[render-service] WARNING: egress lockdown NOT applied (needs root + CAP_NET_ADMIN + iptables). Chromium can reach the Docker network." >&2
+  if [ "$(id -u)" != "0" ]; then
+    echo "[render-service] FATAL: egress lockdown requested but not running as root (need root + CAP_NET_ADMIN). Set RENDER_EGRESS_LOCKDOWN=false to run unisolated." >&2
+    exit 1
   fi
+  if ! command -v iptables >/dev/null 2>&1; then
+    echo "[render-service] FATAL: egress lockdown requested but iptables is not installed. Set RENDER_EGRESS_LOCKDOWN=false to run unisolated." >&2
+    exit 1
+  fi
+  if ! lockdown; then
+    echo "[render-service] FATAL: egress lockdown requested but iptables rules failed to apply (missing CAP_NET_ADMIN or backend mismatch). Refusing to start unisolated. Set RENDER_EGRESS_LOCKDOWN=false to override." >&2
+    exit 1
+  fi
+  echo "[render-service] egress lockdown active (outbound blocked except loopback)"
+else
+  echo "[render-service] WARNING: egress lockdown DISABLED (RENDER_EGRESS_LOCKDOWN=false). Chromium can reach the Docker network — only safe on a network you have isolated yourself." >&2
 fi
 
 # Drop privileges to the unprivileged render user for the Node process. When
