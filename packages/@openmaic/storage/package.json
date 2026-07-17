@@ -18,6 +18,14 @@
     "./runtime/pg": {
       "types": "./dist/runtime/pg.d.ts",
       "import": "./dist/runtime/pg.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js"
+    },
+    "./server/reference": {
+      "types": "./dist/server/reference.d.ts",
+      "import": "./dist/server/reference.js"
     }
   },
   "files": [
