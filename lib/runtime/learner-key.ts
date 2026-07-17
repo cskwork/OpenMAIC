@@ -24,6 +24,8 @@ let configuredInFlight: Promise<string> | undefined;
 
 registerRuntimeStorageResetHook(() => {
   configuredInFlight = undefined;
+  defaultInFlight = undefined;
+  defaultKv = undefined;
 });
 
 function mintLearnerKey(): string {
