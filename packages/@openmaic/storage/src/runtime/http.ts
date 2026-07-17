@@ -312,4 +312,8 @@ export class HttpRuntimeStore implements RuntimeStore {
   async deleteStageRuntime(stageId: string): Promise<void> {
     await this.request<void>('DELETE', `/runtime/stages/${segment(stageId)}`);
   }
+
+  async deleteAllRuntime(): Promise<void> {
+    await this.request<void>('DELETE', '/runtime');
+  }
 }
