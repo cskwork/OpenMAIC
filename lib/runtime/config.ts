@@ -1,9 +1,9 @@
 import type { RuntimeStore } from '@openmaic/storage';
 
 export interface RuntimeStorageOptions {
-  /** A RuntimeStore instance, or a factory that is evaluated lazily on first use. */
+  /** A RuntimeStore instance, or a factory evaluated lazily until it first succeeds. */
   store?: RuntimeStore | (() => RuntimeStore);
-  /** Resolves the current learner partition key (for example, a signed-in user ID). */
+  /** Resolves the client session's learner partition key on first resolution. */
   learnerKey?: () => string | Promise<string>;
 }
 
@@ -13,31 +13,53 @@ let resolutionStarted = false;
 /**
  * Configure the app-wide runtime persistence backend and learner identity.
  *
- * This is a single-shot bootstrap API: a second call always throws, even if
- * runtime storage has not been used yet. It must run before the first call to
- * either `getRuntimeStore()` or `getLearnerKey()`; once resolution has started,
- * configuration throws so a live app cannot split data across backends or
- * learner partitions. Omitted fields retain the browser IndexedDB backend and
- * anonymous device-key behavior.
+ * This is a client-bootstrap-only, single-shot API. It is not SSR-safe and is
+ * not intended for request-scoped stores or identity. Call it at module-level
+ * bootstrap, before rendering any runtime consumer; a component effect is too
+ * late. A second call always throws, even if runtime storage has not been used
+ * yet. Once resolution has started, configuration stays sealed so a live app
+ * cannot split data across backends or learner partitions. Omitted fields
+ * retain the browser IndexedDB backend and anonymous device-key behavior.
  *
- * A store factory is called lazily once by `getRuntimeStore()`.
+ * A store factory is called lazily by `getRuntimeStore()` until it first
+ * succeeds. The configured learner-key provider is invoked only on first
+ * resolution; concurrent callers share that resolution and its first resolved
+ * value is retained for the client session. Identity changes mid-session are
+ * the application layer's responsibility (reload or a `mergeLearner` flow).
+ *
+ * Dev-mode limitation: configuration and consumer caches live in separate
+ * modules, so partial HMR replacement can fragment their module-level state.
+ * Reload the page after changing bootstrap configuration.
  *
  * @example
  * ```ts
  * configureRuntimeStorage({
  *   store: new HttpRuntimeStore({ baseUrl: '/api' }),
- *   learnerKey: () => session.userId,
+ *   learnerKey: () => clientSessionStore.getState().userId,
  * });
  * ```
  */
 export function configureRuntimeStorage(next: RuntimeStorageOptions): void {
   if (resolutionStarted) {
-    throw new Error('Runtime storage has already been used and can no longer be configured');
+    throw new Error(
+      'configureRuntimeStorage must be called at module-level bootstrap, before any runtime consumer runs — a component effect is too late. Runtime storage resolution has already started; configuration remains sealed even if resolution failed. Retry the runtime consumer to retry resolution.',
+    );
   }
   if (options) {
     throw new Error('Runtime storage has already been configured');
   }
   options = next;
+}
+
+/** Whether client bootstrap has supplied runtime storage configuration. */
+export function isRuntimeStorageConfigured(): boolean {
+  return options !== undefined;
+}
+
+/** @internal Test-only reset for the configuration module's singleton state. */
+export function resetRuntimeStorageForTests(): void {
+  options = undefined;
+  resolutionStarted = false;
 }
 
 /** @internal Resolve and seal the configured store override, if any. */

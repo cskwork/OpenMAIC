@@ -11,7 +11,11 @@ import { BrowserRuntimeStore, type RuntimeStore } from '@openmaic/storage';
 
 import { resolveConfiguredRuntimeStore } from './config';
 
-export { configureRuntimeStorage } from './config';
+export {
+  configureRuntimeStorage,
+  isRuntimeStorageConfigured,
+  resetRuntimeStorageForTests,
+} from './config';
 export type { RuntimeStorageOptions } from './config';
 
 // BrowserRuntimeStore's default dbName; passed explicitly below so the probe
@@ -19,10 +23,18 @@ export type { RuntimeStorageOptions } from './config';
 const RUNTIME_DB_NAME = 'maic-runtime';
 
 let store: RuntimeStore | undefined;
+let usesDefaultBrowserStore = false;
+
+function createRuntimeStore(): RuntimeStore {
+  const configured = resolveConfiguredRuntimeStore();
+  usesDefaultBrowserStore = configured === undefined;
+  return configured ?? new BrowserRuntimeStore({ dbName: RUNTIME_DB_NAME });
+}
 
 export function getRuntimeStore(): RuntimeStore {
-  return (store ??=
-    resolveConfiguredRuntimeStore() ?? new BrowserRuntimeStore({ dbName: RUNTIME_DB_NAME }));
+  // `??=` assigns only after resolution succeeds: if a configured factory
+  // throws, the next call retries it rather than caching the failure.
+  return (store ??= createRuntimeStore());
 }
 
 /** How long the deletion cascade may run before the caller moves on. */
@@ -89,8 +101,14 @@ export function beginStageRuntimeDeletionSafely(
   // Probe + cascade share the same underlying work: a hanging databases()
   // probe is just as important to retain behind maintenance as a hanging delete.
   const work = (async () => {
-    if (!(await runtimeDbExists())) return;
-    await (runtimeStore ?? getRuntimeStore()).deleteStageRuntime(stageId);
+    if (runtimeStore) {
+      await runtimeStore.deleteStageRuntime(stageId);
+      return;
+    }
+
+    const resolvedStore = getRuntimeStore();
+    if (usesDefaultBrowserStore && !(await runtimeDbExists())) return;
+    await resolvedStore.deleteStageRuntime(stageId);
   })();
   let reported = false;
   const report = (error: unknown): void => {
