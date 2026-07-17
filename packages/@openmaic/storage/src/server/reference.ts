@@ -13,10 +13,24 @@ import { createServer, type Server } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { PgRuntimeStore, ensureSchema } from '../runtime/pg.js';
 import type { Queryable, WithTransaction } from '../runtime/pg.js';
+import type { RuntimePayloadValidator } from '../runtime/types.js';
 import { createRuntimeHttpHandler } from './index.js';
+import type {
+  RuntimeHttpAuthenticate,
+  RuntimeHttpAuthorizeAdmin,
+  RuntimeHttpAuthorizeMerge,
+} from './index.js';
 
 export interface ConnectableQueryable extends Queryable {
   connect(): Promise<Queryable & { release(): void }>;
+}
+
+export interface ReferenceRuntimeServerOptions {
+  authenticate?: RuntimeHttpAuthenticate;
+  authorizeMerge?: RuntimeHttpAuthorizeMerge;
+  authorizeAdmin?: RuntimeHttpAuthorizeAdmin;
+  /** Whole-table replacement; pass the same validator table to the store and handler. */
+  payloadValidators?: Record<string, RuntimePayloadValidator>;
 }
 
 /**
@@ -40,23 +54,44 @@ export function nodePostgresTransaction(pool: ConnectableQueryable): WithTransac
   };
 }
 
-/** Compose the reference handler around any host-injected PostgreSQL queryable. */
-export async function createReferenceRuntimeServer(pool: ConnectableQueryable): Promise<Server> {
+/**
+ * Compose the reference handler around any host-injected PostgreSQL queryable.
+ *
+ * **WARNING: the default example bearer authentication is fully impersonatable.**
+ * Replace it, and the default authorization hooks, before exposing the server.
+ * This factory creates an unbound Server; only main() binds it to an address.
+ */
+export async function createReferenceRuntimeServer(
+  pool: ConnectableQueryable,
+  options: ReferenceRuntimeServerOptions = {},
+): Promise<Server> {
   await ensureSchema(pool);
-  const store = new PgRuntimeStore(pool, { withTransaction: nodePostgresTransaction(pool) });
+  const store = new PgRuntimeStore(pool, {
+    withTransaction: nodePostgresTransaction(pool),
+    ...(options.payloadValidators === undefined
+      ? {}
+      : { payloadValidators: options.payloadValidators }),
+  });
   return createServer(
     createRuntimeHttpHandler(store, {
-      authenticate: async (req) => {
-        const authorization = req.headers.authorization;
-        if (typeof authorization !== 'string' || !authorization.startsWith('Bearer ')) {
-          return undefined;
-        }
-        const learnerKey = authorization.slice('Bearer '.length);
-        return learnerKey === '' ? undefined : { learnerKey };
-      },
-      authorizeMerge: async (principal, fromKey, toKey) =>
-        principal.learnerKey === fromKey && fromKey === toKey,
-      authorizeAdmin: async () => false,
+      authenticate:
+        options.authenticate ??
+        (async (req) => {
+          const authorization = req.headers.authorization;
+          if (typeof authorization !== 'string' || !authorization.startsWith('Bearer ')) {
+            return undefined;
+          }
+          const learnerKey = authorization.slice('Bearer '.length);
+          return learnerKey === '' ? undefined : { learnerKey };
+        }),
+      authorizeMerge:
+        options.authorizeMerge ??
+        (async (principal, fromKey, toKey) =>
+          principal.learnerKey === fromKey && fromKey === toKey),
+      authorizeAdmin: options.authorizeAdmin ?? (async () => false),
+      ...(options.payloadValidators === undefined
+        ? {}
+        : { payloadValidators: options.payloadValidators }),
     }),
   );
 }

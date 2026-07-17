@@ -15,10 +15,14 @@ import type {
   ValidationResult,
 } from '@openmaic/dsl';
 import { assertJsonValue } from '../runtime/json-value.js';
-import type { RuntimeSessionInit, RuntimeStore } from '../runtime/types.js';
+import type {
+  RuntimePayloadValidator,
+  RuntimeSessionInit,
+  RuntimeStore,
+} from '../runtime/types.js';
 
 export interface RuntimeHttpPrincipal {
-  learnerKey: string;
+  learnerKey?: string;
 }
 
 export type RuntimeHttpAuthenticate = (
@@ -39,6 +43,11 @@ export interface RuntimeHttpHandlerOptions {
   authenticate: RuntimeHttpAuthenticate;
   authorizeMerge?: RuntimeHttpAuthorizeMerge;
   authorizeAdmin?: RuntimeHttpAuthorizeAdmin;
+  /**
+   * Per-kind payload validators. This REPLACES the default DSL skeleton table;
+   * pass the same table configured on the injected store.
+   */
+  payloadValidators?: Record<string, RuntimePayloadValidator>;
 }
 
 interface ErrorBody {
@@ -125,6 +134,33 @@ function assertJsonRequestValue(value: unknown, label: string): void {
   }
 }
 
+const DEFAULT_PAYLOAD_VALIDATORS: Record<string, RuntimePayloadValidator> = {
+  chat: (payload) =>
+    isChatMessageSkeleton(payload)
+      ? { valid: true }
+      : {
+          valid: false,
+          errors: [
+            {
+              path: '/payload',
+              message: 'chat payload must match ChatMessageSkeleton (role + content)',
+            },
+          ],
+        },
+  quizAttempt: (payload) =>
+    isQuizAttemptSkeleton(payload)
+      ? { valid: true }
+      : {
+          valid: false,
+          errors: [
+            {
+              path: '/payload',
+              message: 'quizAttempt payload must match QuizAttemptSkeleton (phase + answers)',
+            },
+          ],
+        },
+};
+
 function missingSessionError(sessionId: string): RuntimeHttpError {
   return new RuntimeHttpError(
     404,
@@ -145,17 +181,19 @@ function assertNotFutureSession(session: RuntimeSession): void {
   }
 }
 
-function validatePayloadForKind(session: RuntimeSession, payload: unknown): void {
-  if (session.kind === 'chat' && !isChatMessageSkeleton(payload)) {
-    throw validationFailure(
-      '@openmaic/storage: invalid runtime record: /payload: chat payload must match ' +
-        'ChatMessageSkeleton (role + content)',
-    );
-  }
-  if (session.kind === 'quizAttempt' && !isQuizAttemptSkeleton(payload)) {
-    throw validationFailure(
-      '@openmaic/storage: invalid runtime record: /payload: quizAttempt payload must match ' +
-        'QuizAttemptSkeleton (phase + answers)',
+function validatePayloadForKind(
+  session: RuntimeSession,
+  recordId: string,
+  payload: unknown,
+  payloadValidators: Record<string, RuntimePayloadValidator>,
+): void {
+  const validator = Object.hasOwn(payloadValidators, session.kind)
+    ? payloadValidators[session.kind]
+    : undefined;
+  if (validator) {
+    validationError(
+      validator(payload),
+      `@openmaic/storage: invalid runtime record ${JSON.stringify(recordId)}`,
     );
   }
 }
@@ -180,10 +218,21 @@ function requireLearner(principal: RuntimeHttpPrincipal, learnerKey: string): vo
   if (principal.learnerKey !== learnerKey) throw forbiddenLearner();
 }
 
-async function requireSession(store: RuntimeStore, sessionId: string): Promise<RuntimeSession> {
+function requireLearnerCapability(principal: RuntimeHttpPrincipal): asserts principal is {
+  learnerKey: string;
+} {
+  if (principal.learnerKey === undefined) throw forbiddenLearner();
+}
+
+async function existingSessionOwnedByPrincipal(
+  store: RuntimeStore,
+  principal: RuntimeHttpPrincipal,
+  sessionId: string,
+): Promise<RuntimeSession | undefined> {
+  requireLearnerCapability(principal);
   const session = await store.getSession(sessionId);
-  if (session === undefined) throw missingSessionError(sessionId);
-  assertNotFutureSession(session);
+  if (session === undefined) return undefined;
+  if (session.learnerKey !== principal.learnerKey) throw missingSessionError(sessionId);
   return session;
 }
 
@@ -192,8 +241,9 @@ async function ownedSession(
   principal: RuntimeHttpPrincipal,
   sessionId: string,
 ): Promise<RuntimeSession> {
-  const session = await requireSession(store, sessionId);
-  requireLearner(principal, session.learnerKey);
+  const session = await existingSessionOwnedByPrincipal(store, principal, sessionId);
+  if (session === undefined) throw missingSessionError(sessionId);
+  assertNotFutureSession(session);
   return session;
 }
 
@@ -212,7 +262,7 @@ function parsePath(req: IncomingMessage): { parts: string[]; url: URL } {
 }
 
 function mappedError(error: unknown): { status: number; body: ErrorBody } {
-  if (error instanceof RuntimeHttpError) {
+  if (error instanceof RuntimeHttpError && error.status < 500) {
     return {
       status: error.status,
       body: {
@@ -229,7 +279,7 @@ function mappedError(error: unknown): { status: number; body: ErrorBody } {
     body: {
       error: {
         code: 'INTERNAL_ERROR',
-        message: error instanceof Error ? error.message : String(error),
+        message: '@openmaic/storage: internal server error',
       },
     },
   };
@@ -255,7 +305,10 @@ async function route(
       '@openmaic/storage: authentication required',
     );
   }
-  if (typeof principal.learnerKey !== 'string' || principal.learnerKey === '') {
+  if (
+    principal.learnerKey !== undefined &&
+    (typeof principal.learnerKey !== 'string' || principal.learnerKey === '')
+  ) {
     throw new RuntimeHttpError(
       500,
       'INTERNAL_ERROR',
@@ -272,6 +325,10 @@ async function route(
     validationError(
       validateRuntimeSession({ ...init, runtimeDslVersion: RUNTIME_DSL_VERSION }),
       `@openmaic/storage: invalid runtime session ${JSON.stringify(init.id)}`,
+    );
+    assertJsonRequestValue(
+      { ...init, runtimeDslVersion: RUNTIME_DSL_VERSION },
+      `runtime session ${JSON.stringify(init.id)}`,
     );
     const existing = await store.getSession(init.id);
     if (existing !== undefined) {
@@ -320,10 +377,18 @@ async function route(
       return;
     }
     if (method === 'DELETE' && parts.length === 3) {
-      const session = await store.getSession(sessionId);
-      if (session !== undefined) {
-        assertNotFutureSession(session);
-        requireLearner(principal, session.learnerKey);
+      const session = await existingSessionOwnedByPrincipal(store, principal, sessionId);
+      if (session === undefined) {
+        sendNoContent(res);
+        return;
+      }
+      assertNotFutureSession(session);
+      // Re-read ownership immediately before deletion. A concurrent merge after
+      // this check is linearized after this delete; see the documented threat model.
+      const rechecked = await existingSessionOwnedByPrincipal(store, principal, sessionId);
+      if (rechecked === undefined) {
+        sendNoContent(res);
+        return;
       }
       await store.deleteSession(sessionId);
       sendNoContent(res);
@@ -340,9 +405,18 @@ async function route(
         validateRuntimeRecord({ ...init, seq: 0 }),
         `@openmaic/storage: invalid runtime record ${JSON.stringify(init.id)}`,
       );
-      assertJsonRequestValue(init.payload, `runtime record ${JSON.stringify(init.id)} payload`);
+      const normalizedRecord = { ...init, seq: 0 } as Record<string, unknown>;
+      for (const key of ['sceneId', 'actionIndex', 'subAnchor']) {
+        if (normalizedRecord[key] === undefined) delete normalizedRecord[key];
+      }
+      assertJsonRequestValue(normalizedRecord, `runtime record ${JSON.stringify(init.id)}`);
       const session = await ownedSession(store, principal, sessionId);
-      validatePayloadForKind(session, init.payload);
+      validatePayloadForKind(
+        session,
+        init.id,
+        init.payload,
+        options.payloadValidators ?? DEFAULT_PAYLOAD_VALIDATORS,
+      );
       if (session.status !== 'active') {
         throw validationFailure(
           `@openmaic/storage: cannot append to session ${JSON.stringify(sessionId)} with ` +
@@ -353,10 +427,11 @@ async function route(
       return;
     }
     if (method === 'GET' && parts.length === 4 && parts[3] === 'records') {
+      requireLearnerCapability(principal);
       const session = await store.getSession(sessionId);
       if (session !== undefined) {
+        if (session.learnerKey !== principal.learnerKey) throw missingSessionError(sessionId);
         assertNotFutureSession(session);
-        requireLearner(principal, session.learnerKey);
       }
       const sceneId = url.searchParams.get('sceneId');
       sendJson(
@@ -457,6 +532,9 @@ export function createRuntimeHttpHandler(
       if (res.headersSent) {
         res.destroy(error instanceof Error ? error : undefined);
         return;
+      }
+      if (!(error instanceof RuntimeHttpError) || error.status >= 500) {
+        console.error('@openmaic/storage: Runtime HTTP handler internal error', error);
       }
       const mapped = mappedError(error);
       sendJson(res, mapped.status, mapped.body);

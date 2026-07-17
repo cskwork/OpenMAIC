@@ -2,7 +2,7 @@
 
 The `@openmaic/storage/server` subpath exports a Node-only HTTP request handler implementing the [RuntimeStore HTTP contract](./runtime-http-contract.md). It accepts any injected `RuntimeStore`; the runnable `@openmaic/storage/server/reference` composition uses `PgRuntimeStore`, initializes its schema, and demonstrates the required node-postgres checkout/transaction/release pattern.
 
-This module is a reference, not a production authentication service. A production host must supply its own authenticated identity and authorization policy. It must also terminate TLS, bound request sizes and timeouts, rate-limit abusive clients, keep database credentials outside the process image, and expose the service only through an appropriate application gateway.
+This module is a reference, not a production authentication service. **The example bearer authentication is fully impersonatable.** A production host must supply its own authenticated identity and authorization policy. It must also terminate TLS, bound request sizes and timeouts, rate-limit abusive clients, keep database credentials outside the process image, and expose the service only through an appropriate application gateway.
 
 ## Deployment
 
@@ -13,11 +13,13 @@ DATABASE_URL=postgres://user:password@host/database PORT=3000 \
   node packages/@openmaic/storage/dist/server/reference.js
 ```
 
-The example binds to `127.0.0.1`. Its bearer token payload is used directly as the demo `learnerKey`, self-merge is the only allowed merge, and admin operations are denied. Replace all three hooks before exposing a deployment:
+The executable `main()` binds to `127.0.0.1`; `createReferenceRuntimeServer()` only creates and returns an unbound Node `Server`. The default bearer token payload is used directly as the demo `learnerKey`, self-merge is the only allowed merge, and admin operations are denied. The factory accepts optional `authenticate`, `authorizeMerge`, `authorizeAdmin`, and `payloadValidators` overrides. Replace the three policy hooks before exposing a deployment:
 
 - `authenticate(req)` must validate a real credential and derive the canonical learner partition from server-controlled identity state.
 - `authorizeMerge(principal, fromKey, toKey)` must explicitly establish that the principal may migrate the complete source partition into the destination identity. Default denial is intentional.
 - `authorizeAdmin(principal)` must require a separately protected administrative role. Default denial is intentional.
+
+The handler's `payloadValidators` option has the same whole-table replacement semantics as the `BrowserRuntimeStore` and `PgRuntimeStore` constructor option, and defaults to the DSL `chat` / `quizAttempt` skeleton table. Whatever you pass to the store, pass the same thing to the handler. `createReferenceRuntimeServer()` applies its `payloadValidators` override to both automatically.
 
 The package has no PostgreSQL driver runtime dependency. A host injects its `Pool` (or another compatible `Queryable`) and owns driver lifecycle. Every transactional operation must check out a fresh connection, issue `BEGIN`, run all callback queries on that same connection, issue `COMMIT` or `ROLLBACK`, and release it in `finally`.
 
@@ -28,12 +30,12 @@ The matrix treats learner, merge, and admin credentials as separate capabilities
 | Method and path | No credential | Owning learner | Other learner | Merge-authorized | Admin-authorized |
 | --- | --- | --- | --- | --- | --- |
 | `POST /runtime/sessions` | Deny (`401`) | Allow | Deny (`403`) | Deny | Deny |
-| `GET /runtime/sessions/{sessionId}` | Deny (`401`) | Allow | Deny (`403`) | Deny | Deny |
-| `PATCH /runtime/sessions/{sessionId}/status` | Deny (`401`) | Allow | Deny (`403`) | Deny | Deny |
-| `DELETE /runtime/sessions/{sessionId}` | Deny (`401`) | Allow | Deny (`403`) | Deny | Deny |
+| `GET /runtime/sessions/{sessionId}` | Deny (`401`) | Allow | Not found (`404`) | Deny (`403`) | Deny (`403`) |
+| `PATCH /runtime/sessions/{sessionId}/status` | Deny (`401`) | Allow | Not found (`404`) | Deny (`403`) | Deny (`403`) |
+| `DELETE /runtime/sessions/{sessionId}` | Deny (`401`) | Allow | Not found (`404`) | Deny (`403`) | Deny (`403`) |
 | `GET /runtime/stages/{stageId}/learners/{learnerKey}/sessions` | Deny (`401`) | Allow | Deny (`403`) | Deny | Deny |
-| `POST /runtime/sessions/{sessionId}/records` | Deny (`401`) | Allow | Deny (`403`) | Deny | Deny |
-| `GET /runtime/sessions/{sessionId}/records` | Deny (`401`) | Allow | Deny (`403`) | Deny | Deny |
+| `POST /runtime/sessions/{sessionId}/records` | Deny (`401`) | Allow | Not found (`404`) | Deny (`403`) | Deny (`403`) |
+| `GET /runtime/sessions/{sessionId}/records` | Deny (`401`) | Allow | Not found (`404`) | Deny (`403`) | Deny (`403`) |
 | `POST /runtime/learners/merge` | Deny (`401`) | Deny by default | Deny by default | Allow | Deny |
 | `DELETE /runtime/stages/{stageId}/learners/{learnerKey}` | Deny (`401`) | Allow | Deny (`403`) | Deny | Deny |
 | `DELETE /runtime/stages/{stageId}` | Deny (`401`) | Deny (`403`) | Deny (`403`) | Deny (`403`) | Allow |
@@ -41,10 +43,20 @@ The matrix treats learner, merge, and admin credentials as separate capabilities
 
 ## Threat model
 
-`learnerKey` is an opaque partition key, never a credential. An attacker can alter path segments and JSON bodies, so trusting a submitted key enables lateral movement: reading another learner's sessions or records, writing records into their sessions, changing status, or deleting their data. The handler authenticates every contract operation and compares stored or submitted learner ownership before touching learner-scoped data. A mismatch returns `403 FORBIDDEN_LEARNER`; missing credentials return `401 UNAUTHENTICATED`.
+`learnerKey` is an opaque partition key, never a credential. An attacker can alter path segments and JSON bodies, so trusting a submitted key enables lateral movement: reading another learner's sessions or records, writing records into their sessions, changing status, or deleting their data. The handler authenticates every contract operation and compares stored or submitted learner ownership before touching learner-scoped data. Direct stage / learner partition mismatches return `403 FORBIDDEN_LEARNER`; missing credentials return `401 UNAUTHENTICATED`.
+
+Session-scoped routes deliberately conceal whether another learner's session ID exists. A credential with a different `learnerKey` receives the same `404 SESSION_NOT_FOUND` as an absent session, and ownership is checked before future-version classification so version metadata cannot disclose existence. A principal with no `learnerKey` is different: it lacks the learner capability entirely and receives `403 FORBIDDEN_LEARNER` on every learner-scoped route.
 
 Merge is a privilege-escalation boundary because it rewrites every source session across every stage. Merely owning either key is insufficient in a real identity system: the authorization hook must verify the account-linking or identity-upgrade proof for both the source and destination. The default is deny.
 
 Stage cascade deletion and whole-runtime deletion are admin-plane capabilities. If exposed to ordinary learners they can erase every partition on one stage or across the entire runtime store, so both routes are controlled by the separate admin authorization hook and denied by default. Production systems should isolate admin credentials, audit decisions, protect against confused-deputy use, and avoid deriving admin authority from a learner-controlled claim.
 
 Authentication failures and authorization denials should be logged without recording bearer credentials or sensitive request payloads. Operators should monitor repeated cross-learner denials, merge attempts, and admin-plane calls as possible account-enumeration or privilege-escalation signals.
+
+### Concurrency semantics during merge-time deletion
+
+`mergeLearner` and `deleteSession` may race. If deletion verifies ownership and a merge changes ownership immediately afterward, the resulting deletion is equivalent to the legal serial order in which delete happens before merge. The handler therefore re-reads and re-checks ownership immediately adjacent to the delete call to shrink the race window; this is treated as a linearizable ordering case, not as an API or schema defect. A store-level conditional delete such as delete-if-owner could further harden this boundary in the future.
+
+### Deferred mid-merge future-version classification
+
+Future-version classification during `mergeLearner` remains deferred. The store can encounter a future-stamped session partway through its transaction, but `RuntimeStore` currently exposes no typed error contract that lets the HTTP layer distinguish that case safely from other store or driver failures. The handler therefore rolls the transaction back and returns the generic `500 INTERNAL_ERROR`, without reflecting the underlying message. A future contract revision may add a typed store error that can be mapped to `409 FUTURE_VERSION` without depending on driver text.
