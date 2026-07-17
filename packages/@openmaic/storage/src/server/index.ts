@@ -103,9 +103,12 @@ function validationError(result: ValidationResult, label: string): void {
   throw validationFailure(`${label}: ${detail}`, details);
 }
 
-function assertAddressableSegment(value: unknown): asserts value is string {
+function assertAddressableSegment(
+  value: unknown,
+  label = 'URL path segment',
+): asserts value is string {
   if (typeof value !== 'string' || value === '') {
-    throw validationFailure('@openmaic/storage: URL path segment must be a non-empty string');
+    throw validationFailure(`@openmaic/storage: ${label} must be a non-empty string`);
   }
   if (value === '.' || value === '..') {
     throw validationFailure(
@@ -165,14 +168,19 @@ function forbiddenLearner(): RuntimeHttpError {
   );
 }
 
+function forbiddenAdmin(): RuntimeHttpError {
+  return new RuntimeHttpError(
+    403,
+    'FORBIDDEN_ADMIN',
+    '@openmaic/storage: admin authorization required',
+  );
+}
+
 function requireLearner(principal: RuntimeHttpPrincipal, learnerKey: string): void {
   if (principal.learnerKey !== learnerKey) throw forbiddenLearner();
 }
 
-async function requireSession(
-  store: RuntimeStore,
-  sessionId: string,
-): Promise<RuntimeSession> {
+async function requireSession(store: RuntimeStore, sessionId: string): Promise<RuntimeSession> {
   const session = await store.getSession(sessionId);
   if (session === undefined) throw missingSessionError(sessionId);
   assertNotFutureSession(session);
@@ -241,7 +249,11 @@ async function route(
 
   const principal = await options.authenticate(req);
   if (principal === undefined) {
-    throw new RuntimeHttpError(401, 'UNAUTHENTICATED', '@openmaic/storage: authentication required');
+    throw new RuntimeHttpError(
+      401,
+      'UNAUTHENTICATED',
+      '@openmaic/storage: authentication required',
+    );
   }
   if (typeof principal.learnerKey !== 'string' || principal.learnerKey === '') {
     throw new RuntimeHttpError(
@@ -255,7 +267,7 @@ async function route(
     const init = await readJson<RuntimeSessionInit & { runtimeDslVersion?: unknown }>(req);
     assertAddressableSegment(init.id);
     assertAddressableSegment(init.stageId);
-    assertAddressableSegment(init.learnerKey);
+    assertAddressableSegment(init.learnerKey, 'learnerKey');
     requireLearner(principal, init.learnerKey);
     validationError(
       validateRuntimeSession({ ...init, runtimeDslVersion: RUNTIME_DSL_VERSION }),
@@ -320,7 +332,9 @@ async function route(
     if (method === 'POST' && parts.length === 4 && parts[3] === 'records') {
       const init = await readJson<RuntimeRecordInit & { seq?: unknown }>(req);
       if (init.sessionId !== sessionId) {
-        throw validationFailure('invalid runtime record: body sessionId does not match the request path');
+        throw validationFailure(
+          'invalid runtime record: body sessionId does not match the request path',
+        );
       }
       validationError(
         validateRuntimeRecord({ ...init, seq: 0 }),
@@ -411,16 +425,17 @@ async function route(
     return;
   }
 
+  if (method === 'DELETE' && parts.length === 1) {
+    if (!(await options.authorizeAdmin?.(principal))) throw forbiddenAdmin();
+    await store.deleteAllRuntime();
+    sendNoContent(res);
+    return;
+  }
+
   if (method === 'DELETE' && parts.length === 3 && parts[1] === 'stages') {
     const stageId = parts[2]!;
     assertAddressableSegment(stageId);
-    if (!(await options.authorizeAdmin?.(principal))) {
-      throw new RuntimeHttpError(
-        403,
-        'FORBIDDEN_ADMIN',
-        '@openmaic/storage: admin authorization required',
-      );
-    }
+    if (!(await options.authorizeAdmin?.(principal))) throw forbiddenAdmin();
     await store.deleteStageRuntime(stageId);
     sendNoContent(res);
     return;

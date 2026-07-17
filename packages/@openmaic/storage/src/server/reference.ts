@@ -69,7 +69,11 @@ async function main(): Promise<void> {
   // of @openmaic/storage. This monorepo has it as a test/development dependency.
   const importHostModule = new Function('specifier', 'return import(specifier)') as (
     specifier: string,
-  ) => Promise<{ Pool: new (options: { connectionString: string }) => ConnectableQueryable & { end(): Promise<void> } }>;
+  ) => Promise<{
+    Pool: new (options: {
+      connectionString: string;
+    }) => ConnectableQueryable & { end(): Promise<void> };
+  }>;
   const { Pool } = await importHostModule('pg');
   const pool = new Pool({ connectionString });
   const server = await createReferenceRuntimeServer(pool as ConnectableQueryable);
