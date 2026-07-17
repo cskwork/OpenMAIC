@@ -16,6 +16,7 @@ This contract exposes the complete `RuntimeStore` interface over JSON HTTP. All 
 | `POST` | `/runtime/learners/merge` | Atomically re-key all sessions across all stages from `{ "fromLearnerKey", "toLearnerKey" }`. | `200` with `{ "moved": number }` |
 | `DELETE` | `/runtime/stages/{stageId}/learners/{learnerKey}` | Delete one learner's sessions and records on one stage. | `204` |
 | `DELETE` | `/runtime/stages/{stageId}` | Cascade-delete every learner's sessions and records on one stage. | `204` |
+| `DELETE` | `/runtime` | Delete every runtime session and record. Idempotent; an administrative operation — servers MUST gate it behind an operator-level authorization check, never expose it to learner credentials. | `204` |
 
 `GET /runtime/sessions/{sessionId}/records` returns an empty array when the session has no records or is absent, matching `RuntimeStore.listRecords`. Deleting an absent target succeeds.
 

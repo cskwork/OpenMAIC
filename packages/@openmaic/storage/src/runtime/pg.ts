@@ -544,4 +544,9 @@ export class PgRuntimeStore implements RuntimeStore {
     if (!isPgQueryableKey(stageId)) return;
     await this.queryable.query('DELETE FROM runtime_sessions WHERE stage_id = $1', [stageId]);
   }
+
+  async deleteAllRuntime(): Promise<void> {
+    // Single statement; the FK cascade clears runtime_records with it.
+    await this.queryable.query('DELETE FROM runtime_sessions');
+  }
 }
