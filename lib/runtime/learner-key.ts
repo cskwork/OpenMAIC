@@ -12,6 +12,8 @@
  */
 import { BrowserKVStore, type KVStore } from '@openmaic/storage';
 
+import { resolveConfiguredLearnerKey } from './config';
+
 export const LEARNER_KEY_KV_KEY = 'runtime.learnerKey';
 
 const LEARNER_KEY_LOCK = 'maic:learner-key';
@@ -57,6 +59,8 @@ async function readOrMint(store: KVStore): Promise<string> {
 }
 
 export function getLearnerKey(kv?: KVStore): Promise<string> {
+  const configured = resolveConfiguredLearnerKey();
+  if (configured) return configured;
   // Injected stores (tests, server-side callers) bypass the memo but stay
   // race-safe through the lock / read-after-write above.
   if (kv) return readOrMint(kv);

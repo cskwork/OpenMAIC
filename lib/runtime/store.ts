@@ -9,6 +9,11 @@
  */
 import { BrowserRuntimeStore, type RuntimeStore } from '@openmaic/storage';
 
+import { resolveConfiguredRuntimeStore } from './config';
+
+export { configureRuntimeStorage } from './config';
+export type { RuntimeStorageOptions } from './config';
+
 // BrowserRuntimeStore's default dbName; passed explicitly below so the probe
 // in deleteStageRuntimeSafely and the store itself can never drift apart.
 const RUNTIME_DB_NAME = 'maic-runtime';
@@ -16,7 +21,8 @@ const RUNTIME_DB_NAME = 'maic-runtime';
 let store: RuntimeStore | undefined;
 
 export function getRuntimeStore(): RuntimeStore {
-  return (store ??= new BrowserRuntimeStore({ dbName: RUNTIME_DB_NAME }));
+  return (store ??=
+    resolveConfiguredRuntimeStore() ?? new BrowserRuntimeStore({ dbName: RUNTIME_DB_NAME }));
 }
 
 /** How long the deletion cascade may run before the caller moves on. */
