@@ -28,6 +28,12 @@ import html2canvas from 'html2canvas-pro';
 import { SlideCanvas } from '../SlideCanvas';
 import type { Slide } from '@openmaic/dsl';
 
+export {
+  measureSlideElementGeometry,
+  type MeasuredGeometry,
+  type MeasureOptions,
+} from './measure';
+
 export interface SlideToPngOptions {
   /**
    * Output pixel width. Defaults to the slide's native `viewportSize`

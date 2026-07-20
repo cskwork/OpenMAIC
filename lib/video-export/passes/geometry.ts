@@ -13,7 +13,7 @@
  * Pure: no IO; reads only the scene's canvas elements.
  */
 import type { PPTElement } from '@openmaic/dsl';
-import type { CompilerScene } from '../deps';
+import type { CompilerScene, GeometryProbe } from '../deps';
 import { findElementGeometry, findElementPlacement } from '../geometry';
 import type { Diagnostic, EffectSegment, VideoSegment, VideoTimelineScene } from '../ir';
 
@@ -23,32 +23,40 @@ export interface GeometryResult {
 }
 
 /**
- * Resolve a single effect's geometry against a slide's elements. Returns the
- * enriched effect (never throws); `degraded: true` + `geometry: null` when the
- * element could not be located.
+ * Resolve a single effect's geometry against a slide's elements. Prefers the
+ * measured content-box geometry from the {@link GeometryProbe} (matches where
+ * the element actually paints), falling back to the pure authored-box calc.
+ * Returns the enriched effect (never throws); `degraded: true` + `geometry:
+ * null` when the element could not be located at all.
  */
 export function resolveEffectGeometry(
   effect: EffectSegment,
   elements: readonly PPTElement[] | undefined,
+  measured?: ReturnType<GeometryProbe['contentGeometry']>,
 ): { effect: EffectSegment; unresolved: boolean } {
-  const geometry = elements ? findElementGeometry([...elements], effect.elementId) : null;
+  const geometry =
+    measured ?? (elements ? findElementGeometry([...elements], effect.elementId) : null);
   if (geometry) return { effect: { ...effect, geometry, degraded: false }, unresolved: false };
   return { effect: { ...effect, geometry: null, degraded: true }, unresolved: true };
 }
 
 /**
- * Resolve a video segment's placement (geometry + rotation). Returns the
- * enriched segment (never throws); `degraded: true` + `geometry: null` +
- * `rotate: 0` when the element could not be located.
+ * Resolve a video segment's placement (geometry + rotation). Prefers the
+ * measured content-box geometry (rotation still comes from the authored element,
+ * as the rendered box is axis-aligned). Returns the enriched segment (never
+ * throws); `degraded: true` + `geometry: null` + `rotate: 0` when the element
+ * could not be located.
  */
 export function resolveVideoPlacement(
   video: VideoSegment,
   elements: readonly PPTElement[] | undefined,
+  measured?: ReturnType<GeometryProbe['contentGeometry']>,
 ): { video: VideoSegment; unresolved: boolean } {
   const placement = elements ? findElementPlacement([...elements], video.elementId) : null;
-  if (placement) {
+  const geometry = measured ?? placement?.geometry ?? null;
+  if (geometry) {
     return {
-      video: { ...video, geometry: placement.geometry, rotate: placement.rotate, degraded: false },
+      video: { ...video, geometry, rotate: placement?.rotate ?? 0, degraded: false },
       unresolved: false,
     };
   }
@@ -58,21 +66,32 @@ export function resolveVideoPlacement(
 /**
  * Fill every effect and video segment's geometry across all scenes.
  * `timelineScenes` and `sourceScenes` are aligned by index (both are the
- * normalized scene list).
+ * normalized scene list). When a {@link GeometryProbe} is supplied, each
+ * element's rendered content-box geometry is preferred over the authored box.
  */
 export function applyGeometry(
   timelineScenes: readonly VideoTimelineScene[],
   sourceScenes: readonly CompilerScene[],
+  geometryProbe?: GeometryProbe,
 ): GeometryResult {
   const diagnostics: Diagnostic[] = [];
 
   const scenes = timelineScenes.map((scene, index) => {
     if (scene.effects.length === 0 && scene.videos.length === 0) return scene;
 
-    const elements = sourceScenes[index]?.content?.canvas?.elements;
+    const sourceScene = sourceScenes[index];
+    const elements = sourceScene?.content?.canvas?.elements;
+    const measure = (elementId: string) =>
+      geometryProbe && sourceScene
+        ? geometryProbe.contentGeometry(elementId, sourceScene)
+        : null;
 
     const effects = scene.effects.map((effect) => {
-      const { effect: resolved, unresolved } = resolveEffectGeometry(effect, elements);
+      const { effect: resolved, unresolved } = resolveEffectGeometry(
+        effect,
+        elements,
+        measure(effect.elementId),
+      );
       if (unresolved) {
         diagnostics.push({
           severity: 'warn',
@@ -86,7 +105,11 @@ export function applyGeometry(
     });
 
     const videos = scene.videos.map((video) => {
-      const { video: resolved, unresolved } = resolveVideoPlacement(video, elements);
+      const { video: resolved, unresolved } = resolveVideoPlacement(
+        video,
+        elements,
+        measure(video.elementId),
+      );
       if (unresolved) {
         diagnostics.push({
           severity: 'warn',

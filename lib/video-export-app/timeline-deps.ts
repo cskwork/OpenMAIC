@@ -17,10 +17,17 @@
  * `@/lib/utils/database` and (for video probing) the DOM, the two concerns the
  * compiler's purity boundary keeps out.
  */
-import type { PlayVideoAction, SpeechAction, SceneCore } from '@openmaic/dsl';
-import type { AssetMeta, AssetSource, TimingProbe } from '@/lib/video-export';
+import type {
+  PlayVideoAction,
+  SpeechAction,
+  SceneCore,
+  SpotlightAction,
+  LaserAction,
+} from '@openmaic/dsl';
+import type { AssetMeta, AssetSource, GeometryProbe, TimingProbe } from '@/lib/video-export';
 import type { Scene, SlideContent } from '@/lib/types/stage';
 import { isMediaPlaceholder } from '@/lib/store/media-generation';
+import { measureSlideElementGeometry, type MeasuredGeometry } from '@openmaic/renderer/snapshot';
 import { db, type AudioFileRecord, type MediaFileRecord } from '@/lib/utils/database';
 
 /** Loaded source records, keyed for both metadata (compiler) and byte collection. */
@@ -36,6 +43,7 @@ export interface VideoTimelineRecords {
 export interface VideoTimelineDeps {
   timing: TimingProbe;
   assets: AssetSource;
+  geometry: GeometryProbe;
   records: VideoTimelineRecords;
 }
 
@@ -287,9 +295,44 @@ export async function createVideoTimelineDeps(input: {
     },
   };
 
+  // Pre-measure the rendered content-box geometry of every element a
+  // spotlight/laser/play_video targets, by scene. The compiler's GeometryProbe
+  // is synchronous, so (like durations) this async off-screen render happens up
+  // front and the probe is a table lookup. Measuring the `.element-content` box
+  // (auto-height text + 10px padding) — the same box the live overlay and the
+  // frame PNG use — aligns effects with where the element actually paints
+  // instead of its authored outer box (issue #867 item 5).
+  const geometryBySceneElement = new Map<string, Map<string, MeasuredGeometry>>();
+  for (const scene of scenes) {
+    if (scene.type !== 'slide') continue;
+    const targetIds = new Set<string>();
+    for (const action of scene.actions ?? []) {
+      if (action.type === 'spotlight') targetIds.add((action as SpotlightAction).elementId);
+      else if (action.type === 'laser') targetIds.add((action as LaserAction).elementId);
+      else if (action.type === 'play_video') targetIds.add((action as PlayVideoAction).elementId);
+    }
+    if (targetIds.size === 0) continue;
+    const slide = (scene.content as SlideContent)?.canvas;
+    if (!slide) continue;
+    try {
+      const measured = await measureSlideElementGeometry(slide, [...targetIds]);
+      if (measured.size > 0) geometryBySceneElement.set(scene.id, measured);
+    } catch {
+      // A measurement failure degrades to the compiler's authored-box calc — the
+      // effect still renders, just at the pre-#867 position. Never fail export.
+    }
+  }
+
+  const geometry: GeometryProbe = {
+    contentGeometry(elementId: string, scene: SceneCore) {
+      return geometryBySceneElement.get(scene.id)?.get(elementId) ?? null;
+    },
+  };
+
   return {
     timing,
     assets,
+    geometry,
     records: { audioById, mediaByElementId, videoDurationMsByElementId },
   };
 }

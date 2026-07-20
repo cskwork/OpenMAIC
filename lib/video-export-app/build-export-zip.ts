@@ -64,9 +64,12 @@ export async function buildExportZip(resolution: VideoResolution): Promise<Build
   const latest = await db.stages.get(stage.id).catch(() => undefined);
   const stageName = latest?.name || stage.name || 'classroom';
 
-  // 1. DI deps (Dexie durations + asset presence) → 2. pure compile to IR.
+  // 1. DI deps (Dexie durations + asset presence + measured geometry) → 2. pure compile.
   const deps = await createVideoTimelineDeps({ stage: { id: stage.id }, scenes });
-  const ir = compileVideoTimeline({ stage: { id: stage.id, name: stageName }, scenes }, deps);
+  const ir = compileVideoTimeline(
+    { stage: { id: stage.id, name: stageName }, scenes },
+    { timing: deps.timing, assets: deps.assets, geometry: deps.geometry },
+  );
 
   // 3. emit the Hyperframes project text.
   const project = emitHyperframes(ir, { width, height });
