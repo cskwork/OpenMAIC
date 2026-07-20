@@ -126,9 +126,7 @@ export async function measureSlideElementGeometry(
     if (containerRect.width === 0 || containerRect.height === 0) return result;
 
     for (const id of ids) {
-      const el = container.querySelector<HTMLElement>(
-        `#${cssEscape(ELEMENT_ID_PREFIX + id)}`,
-      );
+      const el = container.querySelector<HTMLElement>(`#${cssEscape(ELEMENT_ID_PREFIX + id)}`);
       if (!el) continue;
       const contentEl = el.querySelector<HTMLElement>('.element-content');
       const targetEl = contentEl ?? el;

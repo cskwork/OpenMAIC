@@ -194,10 +194,7 @@ export function splitCue(cue: SubtitleCue): SubtitleCue[] {
   // If the very first piece was the short one, it may still be < MIN; fold it in.
   if (merged.length > 1 && merged[0].endMs - merged[0].startMs < MIN_CUE_MS) {
     const [first, second, ...rest] = merged;
-    return [
-      { ...second, startMs: first.startMs, text: `${first.text} ${second.text}` },
-      ...rest,
-    ];
+    return [{ ...second, startMs: first.startMs, text: `${first.text} ${second.text}` }, ...rest];
   }
   return merged;
 }

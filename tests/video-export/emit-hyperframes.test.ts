@@ -96,9 +96,11 @@ describe('emitHyperframes', () => {
   });
 
   it('burns in a subtitle overlay when burnInSubtitles is enabled', () => {
-    const burned = emitHyperframes(ir, { width: 1920, height: 1080, burnInSubtitles: true }).files.find(
-      (f) => f.path === 'index.html',
-    )!.content;
+    const burned = emitHyperframes(ir, {
+      width: 1920,
+      height: 1080,
+      burnInSubtitles: true,
+    }).files.find((f) => f.path === 'index.html')!.content;
     // A caption container plus one cue div per non-empty speech action.
     expect(burned).toContain('id="subtitles"');
     expect(burned).toContain('id="subtitle-cue-0"');

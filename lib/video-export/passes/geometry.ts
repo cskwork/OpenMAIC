@@ -82,9 +82,7 @@ export function applyGeometry(
     const sourceScene = sourceScenes[index];
     const elements = sourceScene?.content?.canvas?.elements;
     const measure = (elementId: string) =>
-      geometryProbe && sourceScene
-        ? geometryProbe.contentGeometry(elementId, sourceScene)
-        : null;
+      geometryProbe && sourceScene ? geometryProbe.contentGeometry(elementId, sourceScene) : null;
 
     const effects = scene.effects.map((effect) => {
       const { effect: resolved, unresolved } = resolveEffectGeometry(

@@ -74,7 +74,8 @@ describe('splitCue — time distribution', () => {
   it('allocates more time to the heavier (longer) piece', () => {
     // Two separate sentences of clearly different length (both > flash floor),
     // in a window large enough that neither is merged.
-    const text = '这是一段非常详细的说明包含很多内容和细节需要较长的时间才能朗读完毕。这是较短第二句。';
+    const text =
+      '这是一段非常详细的说明包含很多内容和细节需要较长的时间才能朗读完毕。这是较短第二句。';
     const out = splitCue(cue({ startMs: 0, endMs: 12_000, text }));
     expect(out.length).toBeGreaterThanOrEqual(2);
     const first = out[0].endMs - out[0].startMs;
