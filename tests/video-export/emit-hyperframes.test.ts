@@ -86,18 +86,32 @@ describe('emitHyperframes', () => {
     expect(html).toContain('#00ff88'); // authored laser color survives into the DOM
   });
 
-  it('burns in a subtitle overlay driven by the timeline', () => {
+  it('does not burn in subtitles by default (clean video + sidecar files)', () => {
+    // Burn-in is opt-in (#867 item 2): no caption overlay in the composition,
+    // but the sidecar subtitle files are still written.
+    expect(html).not.toContain('id="subtitles"');
+    expect(html).not.toContain('id="subtitle-cue-0"');
+    expect(project.files.some((f) => f.path === 'subtitles.srt')).toBe(true);
+    expect(project.files.some((f) => f.path === 'subtitles.vtt')).toBe(true);
+  });
+
+  it('burns in a subtitle overlay when burnInSubtitles is enabled', () => {
+    const burned = emitHyperframes(ir, { width: 1920, height: 1080, burnInSubtitles: true }).files.find(
+      (f) => f.path === 'index.html',
+    )!.content;
     // A caption container plus one cue div per non-empty speech action.
-    expect(html).toContain('id="subtitles"');
-    expect(html).toContain('id="subtitle-cue-0"');
+    expect(burned).toContain('id="subtitles"');
+    expect(burned).toContain('id="subtitle-cue-0"');
     // Cues start hidden (display:none, out of layout) and are toggled by the
     // paused timeline — see the multi-cue positioning test below for why
-    // display (not visibility) matters.
-    expect(html).toMatch(/id="subtitle-cue-0"[^>]*display:none/);
-    expect(html).toMatch(/tl\.set\('#subtitle-cue-0',\{display:'inline-block'\},[\d.]+\);/);
-    expect(html).toMatch(/tl\.set\('#subtitle-cue-0',\{display:'none'\},[\d.]+\);/);
+    // display (not visibility) matters. Shown as -webkit-box so the 2-line
+    // clamp stays in force while visible.
+    expect(burned).toMatch(/id="subtitle-cue-0"[^>]*display:none/);
+    expect(burned).toMatch(/-webkit-line-clamp:2/);
+    expect(burned).toMatch(/tl\.set\('#subtitle-cue-0',\{display:'-webkit-box'\},[\d.]+\);/);
+    expect(burned).toMatch(/tl\.set\('#subtitle-cue-0',\{display:'none'\},[\d.]+\);/);
     // Narration text is rendered into the caption.
-    expect(html).toContain('Welcome to the lesson');
+    expect(burned).toContain('Welcome to the lesson');
   });
 
   it('references vendored GSAP, never a CDN', () => {
@@ -134,7 +148,7 @@ describe('emitHyperframes multi-cue subtitle positioning (regression)', () => {
       assets: stubAssets({ sp1: audioMeta('a1'), sp2: audioMeta('a2'), sp3: audioMeta('a3') }, {}),
     },
   );
-  const html = emitHyperframes(ir, { width: 1920, height: 1080 }).files.find(
+  const html = emitHyperframes(ir, { width: 1920, height: 1080, burnInSubtitles: true }).files.find(
     (f) => f.path === 'index.html',
   )!.content;
 
@@ -153,7 +167,7 @@ describe('emitHyperframes multi-cue subtitle positioning (regression)', () => {
     // a visibility-hidden cue would keep its box and push the active one out of slot.
     for (let i = 0; i < 3; i++) {
       expect(html).toMatch(new RegExp(`id="subtitle-cue-${i}"[^>]*display:none`));
-      expect(html).toContain(`tl.set('#subtitle-cue-${i}',{display:'inline-block'}`);
+      expect(html).toContain(`tl.set('#subtitle-cue-${i}',{display:'-webkit-box'}`);
       expect(html).toContain(`tl.set('#subtitle-cue-${i}',{display:'none'}`);
     }
     expect(html).not.toContain('visibility:hidden');

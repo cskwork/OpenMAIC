@@ -35,6 +35,7 @@ export {
 export { planAssets, sanitizeFilenamePart, type AssetsResult } from './passes/assets';
 export { emitManifest, emitManifestJson } from './passes/emit';
 export { toSrt, toVtt, usableCues } from './subtitles';
+export { splitCue, splitCues, splitCueText, textUnits } from './split-cue';
 export {
   emitHyperframes,
   assetUrl,

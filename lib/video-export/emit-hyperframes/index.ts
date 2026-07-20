@@ -44,6 +44,14 @@ export interface EmitHyperframesOptions {
   gsapVendorPath?: string;
   /** Manifest filename. Default `openmaic-video-manifest.json`. */
   manifestPath?: string;
+  /**
+   * Burn the subtitle overlay into the composition (baked into the video by the
+   * frame capture). Default `false`: the video renders clean and the narration
+   * subtitles ship only as the sidecar `subtitles.srt` / `.vtt`, which a user
+   * can add in an editor (#867 item 2 — burn-in off by default). When `true`,
+   * the bottom caption band is emitted and driven by the paused timeline.
+   */
+  burnInSubtitles?: boolean;
 }
 
 export interface EmittedProject {
@@ -160,10 +168,15 @@ function renderSubtitles(
 
   // Each cue occupies the same grid cell and is hidden (display:none) until its
   // window, so inactive cues take no layout space and never shift the active one.
+  // Cues are already short (split by the compiler), but clamp to 2 lines as a
+  // hard ceiling so an outlier can never grow into a tall block that covers the
+  // slide — the failure this whole change fixes.
+  const maxLines = 2;
+  const maxTextHeight = Math.ceil(fontPx * 1.3 * maxLines);
   const cueDivs = cues
     .map(
       (c, i) =>
-        `  <div id="subtitle-cue-${i}" style="grid-area:1/1;display:none;justify-self:center;max-width:80%;padding:${padV}px ${padH}px;background:rgba(0,0,0,0.66);color:#fff;font-size:${fontPx}px;line-height:1.3;border-radius:${padV}px;white-space:pre-wrap;text-shadow:0 1px 2px rgba(0,0,0,0.9)">${escapeHtml(c.text)}</div>`,
+        `  <div id="subtitle-cue-${i}" style="grid-area:1/1;display:none;justify-self:center;max-width:80%;max-height:${maxTextHeight}px;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:${maxLines};padding:${padV}px ${padH}px;background:rgba(0,0,0,0.66);color:#fff;font-size:${fontPx}px;line-height:1.3;border-radius:${padV}px;white-space:pre-wrap;text-shadow:0 1px 2px rgba(0,0,0,0.9)">${escapeHtml(c.text)}</div>`,
     )
     .join('\n');
 
@@ -175,10 +188,12 @@ function renderSubtitles(
 
   // Toggle each cue with `display` so hidden cues leave the flow entirely
   // (visibility:hidden would keep their box and push the active cue out of slot).
+  // Shown as `-webkit-box` (not inline-block) so the `-webkit-line-clamp:2`
+  // ceiling stays in force while visible.
   const statements: string[] = [];
   for (let i = 0; i < cues.length; i++) {
     const c = cues[i];
-    statements.push(`tl.set('#subtitle-cue-${i}',{display:'inline-block'},${sec(c.startMs)});`);
+    statements.push(`tl.set('#subtitle-cue-${i}',{display:'-webkit-box'},${sec(c.startMs)});`);
     statements.push(`tl.set('#subtitle-cue-${i}',{display:'none'},${sec(c.endMs)});`);
   }
   return { html, statements };
@@ -258,8 +273,13 @@ export function emitHyperframes(
     }
   }
 
-  // Burned-in subtitle overlay, driven by the same paused timeline.
-  const subtitles = renderSubtitles(ir, height);
+  // Burned-in subtitle overlay, driven by the same paused timeline. Off by
+  // default — a clean video plus sidecar SRT/VTT (#867 item 2). The SRT/VTT
+  // files are written regardless (below), so downloading subtitles never
+  // depends on this flag.
+  const subtitles = options.burnInSubtitles
+    ? renderSubtitles(ir, height)
+    : { html: '', statements: [] };
   statements.push(...subtitles.statements);
 
   // Extend the timeline to the full composition length even if the last tween
