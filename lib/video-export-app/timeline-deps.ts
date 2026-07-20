@@ -19,7 +19,8 @@
  */
 import type { PlayVideoAction, SpeechAction, SceneCore } from '@openmaic/dsl';
 import type { AssetMeta, AssetSource, TimingProbe } from '@/lib/video-export';
-import type { Scene } from '@/lib/types/stage';
+import type { Scene, SlideContent } from '@/lib/types/stage';
+import { isMediaPlaceholder } from '@/lib/store/media-generation';
 import { db, type AudioFileRecord, type MediaFileRecord } from '@/lib/utils/database';
 
 /** Loaded source records, keyed for both metadata (compiler) and byte collection. */
@@ -50,6 +51,22 @@ function mediaPresent(record: MediaFileRecord | undefined): record is MediaFileR
 /** File-extension hint from a mime type (`video/mp4` → `mp4`), for the asset-plan naming. */
 function formatFromMime(mimeType: string | undefined): string | undefined {
   return mimeType?.split('/')[1] || undefined;
+}
+
+/**
+ * The generated-media reference a slide element points at, mirroring the live
+ * playback engine's bridge (`lib/action/engine.ts` `resolveMediaPlaceholderId`):
+ * prefer the explicit `mediaRef`, then a legacy `src` that is itself a media
+ * placeholder id. Returns undefined for elements that carry no generated media.
+ *
+ * A `play_video` action targets the slide element by its `.id`, but the media
+ * records are keyed by this ref (`gen_vid_…`), so the asset/duration lookups must
+ * bridge id → ref or every generated video misses and is dropped from the export.
+ */
+function elementMediaRef(el: { mediaRef?: unknown; src?: unknown }): string | undefined {
+  if (typeof el.mediaRef === 'string' && el.mediaRef) return el.mediaRef;
+  if (typeof el.src === 'string' && isMediaPlaceholder(el.src)) return el.src;
+  return undefined;
 }
 
 /** Per-probe timeout (ms). A blob whose metadata never loads must not wedge export. */
@@ -181,13 +198,33 @@ export async function createVideoTimelineDeps(input: {
     if (ms !== null) audioDurationMsByAudioId.set(audioId, ms);
   });
 
-  // Media: all generated media for this stage, keyed by elementId.
+  // Media: all generated media for this stage, keyed by media ref (`gen_vid_…` /
+  // `gen_img_…` — the stored `stageId:` prefix stripped), NOT the slide element
+  // id that `play_video` actions target.
   const mediaRecords = await db.mediaFiles.where('stageId').equals(stage.id).toArray();
   const mediaByElementId = new Map<string, MediaFileRecord>();
   for (const record of mediaRecords) {
     const elementId = record.id.includes(':') ? record.id.split(':').slice(1).join(':') : record.id;
     mediaByElementId.set(elementId, record);
   }
+
+  // Bridge slide element `.id` → media ref, so a `play_video`/media lookup by the
+  // element id resolves to the record keyed by its ref. Without this every
+  // generated video misses and is silently dropped from the export (compile →
+  // present:false → no `<video>` emitted, no bytes collected). Mirrors the live
+  // engine's `resolveMediaPlaceholderId`.
+  const mediaRefByElementId = new Map<string, string>();
+  for (const scene of scenes) {
+    if (scene.type !== 'slide') continue;
+    const elements = (scene.content as SlideContent)?.canvas?.elements ?? [];
+    for (const el of elements) {
+      const ref = elementMediaRef(el as { mediaRef?: unknown; src?: unknown });
+      if (ref) mediaRefByElementId.set((el as { id: string }).id, ref);
+    }
+  }
+  /** Resolve a `play_video` element id to the media map's key (its ref), or pass through. */
+  const resolveMediaKey = (elementId: string): string =>
+    mediaRefByElementId.get(elementId) ?? elementId;
 
   // Probe video durations up front so `videoDurationMs` can be synchronous.
   // Only local blobs are probed; ossKey-only (evicted) records have no bytes to
@@ -214,7 +251,7 @@ export async function createVideoTimelineDeps(input: {
       return Math.round(record.duration * 1000);
     },
     videoDurationMs(action: PlayVideoAction): number | null {
-      return videoDurationMsByElementId.get(action.elementId) ?? null;
+      return videoDurationMsByElementId.get(resolveMediaKey(action.elementId)) ?? null;
     },
   };
 
@@ -235,13 +272,16 @@ export async function createVideoTimelineDeps(input: {
       };
     },
     media(elementId: string, _scene: SceneCore): AssetMeta | null {
-      const record = mediaByElementId.get(elementId);
+      // `elementId` is the slide element `.id` a `play_video` targets; the media
+      // records are keyed by the element's media ref, so bridge id → ref first.
+      const key = resolveMediaKey(elementId);
+      const record = mediaByElementId.get(key);
       if (!record) return null;
       return {
         id: record.id,
         mimeType: record.mimeType,
         format: formatFromMime(record.mimeType),
-        durationMs: videoDurationMsByElementId.get(elementId),
+        durationMs: videoDurationMsByElementId.get(key),
         present: mediaPresent(record),
       };
     },
