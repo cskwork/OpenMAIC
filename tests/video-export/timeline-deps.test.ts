@@ -37,7 +37,6 @@ vi.mock('@openmaic/renderer/snapshot', () => ({
 import { createVideoTimelineDeps } from '@/lib/video-export-app/timeline-deps';
 import type { MediaFileRecord } from '@/lib/utils/database';
 import type { Scene } from '@/lib/types/stage';
-import type { PlayVideoAction } from '@openmaic/dsl';
 
 const STAGE_ID = 'stage-1';
 const MEDIA_REF = 'gen_vid_abc123';
@@ -72,9 +71,6 @@ function slideScene(el: Record<string, unknown>, actions: unknown[] = []): Scene
     actions,
   } as unknown as Scene;
 }
-
-const playVideo = (elementId: string): PlayVideoAction =>
-  ({ type: 'play_video', elementId }) as PlayVideoAction;
 
 const spotlight = (elementId: string) => ({ type: 'spotlight', elementId });
 
