@@ -195,6 +195,14 @@ export async function slideToPng(
       ),
     );
 
+    // Let any font-triggered relayout settle before capture. KaTeX formulas
+    // re-run their shrink-to-fit measurement once the KaTeX_Size faces finish
+    // loading (BaseLatexElement); that's a React state update, so give it two
+    // frames to commit before html2canvas reads the DOM — otherwise a cold
+    // export can bake the stale fallback-metric scale (misaligned large braces).
+    await nextFrame();
+    await nextFrame();
+
     if (process.env.NODE_ENV !== 'production') {
       // eslint-disable-next-line no-console
       console.debug('[slideToPng] container ready', {
