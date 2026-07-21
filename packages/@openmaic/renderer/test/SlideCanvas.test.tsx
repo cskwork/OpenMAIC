@@ -96,9 +96,7 @@ describe('SlideCanvas', () => {
     vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(562.5);
     const onScaleChange = vi.fn();
 
-    const { rerender } = render(
-      <SlideCanvas slide={slide} onScaleChange={onScaleChange} />,
-    );
+    const { rerender } = render(<SlideCanvas slide={slide} onScaleChange={onScaleChange} />);
     expect(onScaleChange).toHaveBeenCalledTimes(1);
 
     rerender(<SlideCanvas slide={slide} scale={1} onScaleChange={onScaleChange} />);
@@ -127,9 +125,11 @@ describe('SlideCanvas', () => {
       <SlideCanvas slide={videoSlide} scale={1} onElementClick={vi.fn()} />,
     );
 
-    expect(container.querySelector<HTMLElement>('.slide-element-hit-target')?.style.pointerEvents)
-      .toBe('auto');
-    expect(container.querySelector<HTMLElement>('[data-video-element]')?.style.pointerEvents)
-      .toBe('none');
+    expect(
+      container.querySelector<HTMLElement>('.slide-element-hit-target')?.style.pointerEvents,
+    ).toBe('auto');
+    expect(container.querySelector<HTMLElement>('[data-video-element]')?.style.pointerEvents).toBe(
+      'none',
+    );
   });
 });

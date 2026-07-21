@@ -59,9 +59,7 @@ describe('SpotlightOverlay', () => {
     let targetRect = rect(10, 20, 30, 40);
     vi.spyOn(content, 'getBoundingClientRect').mockImplementation(() => targetRect);
 
-    const { container } = render(
-      <SpotlightOverlay options={{ elementId: 'target' }} />,
-    );
+    const { container } = render(<SpotlightOverlay options={{ elementId: 'target' }} />);
     const overlay = container.firstElementChild as HTMLDivElement;
     vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue(rect(0, 0, 100, 100));
 
