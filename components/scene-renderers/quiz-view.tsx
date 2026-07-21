@@ -32,10 +32,15 @@ import {
   writeSubmittedResults,
   type SubmittedState,
 } from '@/lib/quiz/persistence';
+import {
+  clearQuizRuntimePhase,
+  setQuizRuntimePhase,
+  type QuizRuntimePhase,
+} from '@/lib/quiz/runtime-phase';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-type Phase = 'not_started' | 'answering' | 'grading' | 'reviewing';
+type Phase = QuizRuntimePhase;
 
 interface QuizViewProps {
   readonly questions: QuizQuestion[];
@@ -703,6 +708,11 @@ export function QuizView({ questions, sceneId }: QuizViewProps) {
   const [results, setResults] = useState<QuestionResult[]>(() =>
     initialSubmitted?.kind === 'reviewing' ? initialSubmitted.results : [],
   );
+
+  useEffect(() => {
+    setQuizRuntimePhase(sceneId, phase);
+    return () => clearQuizRuntimePhase(sceneId);
+  }, [phase, sceneId]);
 
   // Draft cache for quiz answers, keyed by sceneId to isolate across classrooms
   const {

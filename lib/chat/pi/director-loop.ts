@@ -11,6 +11,7 @@ import type { SendEvent } from './types';
 import { buildCallAgentTool } from './tools/call-agent';
 import { buildCloseSessionTool } from './tools/close-session';
 import { buildCueUserTool } from './tools/cue-user';
+import { buildReadQuizStateTool } from './tools/read-quiz-state';
 
 export async function runPiDirectorLoop(opts: {
   body: StatelessChatRequest;
@@ -33,6 +34,11 @@ export async function runPiDirectorLoop(opts: {
   let teacherWrapUpUsed = false;
   let endReason: string | undefined;
   let directorToolCalls = 0;
+  let quizStateContext: string | null = null;
+  const currentScene = opts.body.storeState.scenes.find(
+    (scene) => scene.id === opts.body.storeState.currentSceneId,
+  );
+  const requiresQuizStateRead = currentScene?.content.type === 'quiz';
   const maxDirectorToolCalls = Math.max(opts.maxAgentTurns * 3, opts.maxAgentTurns + 3);
   const piAgentResponses: AgentTurnSummary[] = [];
   const piWhiteboardLedger: WhiteboardActionRecord[] = [];
@@ -111,6 +117,14 @@ export async function runPiDirectorLoop(opts: {
       },
       isUserCued: () => userCued,
       isSessionClosed: () => sessionClosed,
+      requiresQuizStateRead: () => requiresQuizStateRead,
+      getQuizStateContext: () => quizStateContext,
+    }),
+    buildReadQuizStateTool({
+      request: opts.body,
+      onRead: (context) => {
+        quizStateContext = context;
+      },
     }),
     buildCloseSessionTool({
       closeSession,

@@ -30,6 +30,7 @@ import type { AgentStartItem, ActionItem } from '@/lib/buffer/stream-buffer';
 import { runAgentLoop, type AgentLoopStoreState } from '@/lib/chat/agent-loop';
 import { ActionEngine } from '@/lib/action/engine';
 import { readSubmittedState } from '@/lib/quiz/persistence';
+import { getQuizRuntimePhase } from '@/lib/quiz/runtime-phase';
 import { toast } from 'sonner';
 import { createLogger } from '@/lib/logger';
 import { isPiChatEnabled } from '@/lib/config/feature-flags';
@@ -1197,6 +1198,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               currentSceneId: freshState.currentSceneId,
               mode: freshState.mode,
               whiteboardOpen: useCanvasStore.getState().whiteboardOpen,
+              quizPhase: getQuizRuntimePhase(freshState.currentSceneId),
               quizResults: buildQuizResultsForStoreState(
                 freshState.scenes,
                 freshState.currentSceneId,
@@ -1586,6 +1588,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               currentSceneId: currentState.currentSceneId,
               mode: currentState.mode,
               whiteboardOpen: useCanvasStore.getState().whiteboardOpen,
+              quizPhase: getQuizRuntimePhase(currentState.currentSceneId),
               quizResults: buildQuizResultsForStoreState(
                 currentState.scenes,
                 currentState.currentSceneId,
@@ -1806,6 +1809,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               currentSceneId: currentState.currentSceneId,
               mode: currentState.mode,
               whiteboardOpen: useCanvasStore.getState().whiteboardOpen,
+              quizPhase: getQuizRuntimePhase(currentState.currentSceneId),
               quizResults: buildQuizResultsForStoreState(
                 currentState.scenes,
                 currentState.currentSceneId,
@@ -1950,6 +1954,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               currentSceneId: currentState.currentSceneId,
               mode: currentState.mode,
               whiteboardOpen: useCanvasStore.getState().whiteboardOpen,
+              quizPhase: getQuizRuntimePhase(currentState.currentSceneId),
               quizResults: buildQuizResultsForStoreState(
                 currentState.scenes,
                 currentState.currentSceneId,

@@ -56,6 +56,10 @@ type ActionWarning = {
   message: string;
 };
 
+export function appendQuizStateContext(instruction: string, context?: string | null): string {
+  return context ? `${instruction}\n\n${context}` : instruction;
+}
+
 const SHAPE_TYPES = new Set(['rectangle', 'circle', 'triangle']);
 const CHART_TYPES = new Set(['bar', 'column', 'line', 'pie', 'ring', 'area', 'radar', 'scatter']);
 const LINE_STYLES = new Set(['solid', 'dashed']);
@@ -519,6 +523,8 @@ export function buildCallAgentTool(opts: {
   onTeacherWrapUpDone?: () => void;
   isUserCued?: () => boolean;
   isSessionClosed?: () => boolean;
+  requiresQuizStateRead?: () => boolean;
+  getQuizStateContext?: () => string | null;
 }): AgentTool<typeof CallAgentParams> {
   // Loop-guard (model-agnostic): an empty/errored child turn used to bypass onAgentDone,
   // so getNormalTurnCount never advanced and the maxAgentTurns guard was defeated — a model
@@ -536,6 +542,18 @@ export function buildCallAgentTool(opts: {
     parameters: CallAgentParams,
     executionMode: 'sequential',
     execute: async (_toolCallId: string, params: CallAgentParams, signal?: AbortSignal) => {
+      if (opts.requiresQuizStateRead?.() && !opts.getQuizStateContext?.()) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'Read the current Quiz state with read_quiz_state before calling a classroom agent.',
+            },
+          ],
+          details: { skipped: true, reason: 'quiz_state_not_read' },
+        };
+      }
+
       if (totalAgentAttempts >= maxAgentAttempts) {
         return {
           content: [
@@ -744,7 +762,11 @@ export function buildCallAgentTool(opts: {
 
       let childErrored = false;
       try {
-        await child.prompt(buildChildTurnPrompt(params.instruction, agent.role));
+        const instruction = appendQuizStateContext(
+          params.instruction,
+          opts.getQuizStateContext?.(),
+        );
+        await child.prompt(buildChildTurnPrompt(instruction, agent.role));
         await child.waitForIdle();
       } catch (error) {
         // Propagate genuine aborts; otherwise treat a failed child run as an empty turn

@@ -71,6 +71,9 @@ export function buildDirectorPrompt(
     '7. Never let one child agent impersonate other classroom agents. If another perspective is needed, call that agent separately.',
     '8. When the useful classroom agent turns are complete, call exactly one terminal tool. Do not keep calling agents after the answer is sufficient.',
     '9. Keep every call_agent instruction brief. Do not ask one child agent for a full lecture, multiple examples, or multiple named-student interactions.',
+    currentScene?.content.type === 'quiz'
+      ? '10. On this Quiz scene, call `read_quiz_state` before the first `call_agent` decision. Treat its phase and policy as authoritative: PRE_SUBMIT permits only Socratic guidance; REVIEWING permits result-specific feedback.'
+      : '',
     '',
     `Session type: ${body.config.sessionType ?? 'qa'}`,
     `Current scene: ${currentScene?.title ?? currentScene?.id ?? 'none'}`,

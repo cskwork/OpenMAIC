@@ -112,6 +112,34 @@ describe('Pi director prompt closure routing', () => {
   });
 });
 
+describe('Pi director Quiz routing', () => {
+  it('requires reading authoritative Quiz state before dispatching an agent', () => {
+    const body = makeBody({
+      storeState: {
+        stage: { id: 'stage-1', name: 'Quiz', createdAt: 1, updatedAt: 1 },
+        scenes: [
+          {
+            id: 'quiz-1',
+            stageId: 'stage-1',
+            type: 'quiz',
+            title: 'Quiz',
+            order: 0,
+            content: { type: 'quiz', questions: [] },
+          },
+        ],
+        currentSceneId: 'quiz-1',
+        mode: 'playback',
+        whiteboardOpen: false,
+      },
+    });
+
+    const prompt = buildDirectorPrompt(body, agents, 4);
+    expect(prompt).toContain('call `read_quiz_state` before');
+    expect(prompt).toContain('PRE_SUBMIT permits only Socratic guidance');
+    expect(prompt).toContain('REVIEWING permits result-specific feedback');
+  });
+});
+
 describe('Pi child prompt structured output', () => {
   it('requires JSON array output and lists available actions without tool-call wording', () => {
     const prompt = buildChildPrompt(makeBody(), agents[0], [], [], ['spotlight', 'wb_open']);

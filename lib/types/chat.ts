@@ -214,6 +214,8 @@ export interface SendMessageRequest {
     currentSceneId: string | null;
     mode: 'autonomous' | 'playback';
     whiteboardOpen: boolean;
+    /** Current QuizView phase from browser memory; diagnostic only for now. */
+    quizPhase?: import('@/lib/quiz/runtime-phase').QuizRuntimePhase;
   };
 }
 
@@ -316,6 +318,8 @@ export interface StatelessChatRequest {
     currentSceneId: string | null;
     mode: StageMode;
     whiteboardOpen: boolean;
+    /** Current QuizView phase from browser memory; diagnostic only for now. */
+    quizPhase?: import('@/lib/quiz/runtime-phase').QuizRuntimePhase;
     /**
      * Post-submit quiz state for the CURRENT scene, hydrated by the client
      * from localStorage when the active scene is a graded quiz. Lets the

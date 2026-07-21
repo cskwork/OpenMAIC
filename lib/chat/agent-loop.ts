@@ -26,6 +26,8 @@ export interface AgentLoopStoreState {
   currentSceneId: string | null;
   mode: string;
   whiteboardOpen: boolean;
+  /** Current QuizView phase from browser memory; diagnostic only for now. */
+  quizPhase?: import('@/lib/quiz/runtime-phase').QuizRuntimePhase;
   /**
    * Post-submit quiz state for the current scene. Hydrated from localStorage
    * client-side; absent when the active scene is not a graded quiz or the

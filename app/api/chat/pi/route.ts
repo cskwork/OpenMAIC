@@ -104,6 +104,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const currentScene = body.storeState.scenes.find(
+      (scene) => scene.id === body.storeState.currentSceneId,
+    );
+    const hasQuizResults =
+      body.storeState.quizResults?.sceneId === body.storeState.currentSceneId &&
+      body.storeState.quizResults.results.length > 0;
+    log.info(
+      `Quiz state: sceneType=${currentScene?.content.type ?? 'none'}, uiPhase=${body.storeState.quizPhase ?? 'unknown'}, hasResults=${hasQuizResults}, quizMode=${currentScene?.content.type === 'quiz' && !hasQuizResults ? 'pre-submit' : 'review-or-non-quiz'}, phaseResultMismatch=${currentScene?.content.type === 'quiz' && body.storeState.quizPhase !== undefined && (body.storeState.quizPhase === 'reviewing') !== hasQuizResults}`,
+    );
+
     const signal = req.signal;
     const abortController = new AbortController();
     signal.addEventListener('abort', () => abortController.abort(), { once: true });

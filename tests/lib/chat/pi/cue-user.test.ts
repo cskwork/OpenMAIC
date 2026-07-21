@@ -204,6 +204,45 @@ describe('Pi chat cue_user tool', () => {
     expect(result.details).toEqual({ skipped: true, reason: 'user_already_cued' });
   });
 
+  it('requires read_quiz_state before call_agent on a Quiz scene', async () => {
+    const tool = buildCallAgentTool({
+      body: {
+        messages: [],
+        storeState: {
+          stage: null,
+          scenes: [],
+          currentSceneId: 'quiz-1',
+          mode: 'playback',
+          whiteboardOpen: false,
+        },
+        config: { agentIds: ['default-1'] },
+        apiKey: '',
+      } as never,
+      agentConfigs: [],
+      send: async () => {},
+      languageModel: {} as never,
+      onAgentDone: () => {},
+      onActionDone: () => {},
+      thinkingConfig: { mode: 'disabled', enabled: false },
+      abortSignal: new AbortController().signal,
+      maxAgentTurns: 6,
+      getAgentTurnCount: () => 0,
+      getAgentResponses: () => [],
+      getWhiteboardLedger: () => [],
+      maxActionsPerAgent: 1,
+      enableWhiteboardTools: false,
+      requiresQuizStateRead: () => true,
+      getQuizStateContext: () => null,
+    });
+
+    const result = await tool.execute('call-quiz', {
+      agentId: 'default-1',
+      instruction: 'Answer the Quiz question.',
+    });
+
+    expect(result.details).toEqual({ skipped: true, reason: 'quiz_state_not_read' });
+  });
+
   it('skips call_agent after the session is closed', async () => {
     const tool = buildCallAgentTool({
       body: {
