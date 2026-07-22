@@ -14,6 +14,8 @@ import {
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import type { AgentTurnSummary, WhiteboardActionRecord } from '@/lib/orchestration/types';
 import type { ThinkingConfig } from '@/lib/types/provider';
+import type { DirectorSceneEvidenceMetadata } from './read-scene';
+import type { DirectorWebEvidenceMetadata } from './web-search';
 import type { ParsedAction, StatelessChatRequest } from '@/lib/types/chat';
 import {
   buildChildPrompt,
@@ -41,6 +43,11 @@ const CallAgentParams = Type.Object({
 });
 
 type CallAgentParams = Static<typeof CallAgentParams>;
+
+type RuntimeEvidenceAttachment<TMetadata> = {
+  content: string;
+  metadata: TMetadata;
+};
 
 type ChildActionTool = ReturnType<typeof buildChildActionTools>[number];
 type ChildMessageEvent = {
@@ -519,6 +526,8 @@ export function buildCallAgentTool(opts: {
   onTeacherWrapUpDone?: () => void;
   isUserCued?: () => boolean;
   isSessionClosed?: () => boolean;
+  takeSceneEvidence?: () => RuntimeEvidenceAttachment<DirectorSceneEvidenceMetadata[]> | undefined;
+  takeWebEvidence?: () => RuntimeEvidenceAttachment<DirectorWebEvidenceMetadata> | undefined;
 }): AgentTool<typeof CallAgentParams> {
   // Loop-guard (model-agnostic): an empty/errored child turn used to bypass onAgentDone,
   // so getNormalTurnCount never advanced and the maxAgentTurns guard was defeated — a model
@@ -650,6 +659,12 @@ export function buildCallAgentTool(opts: {
         };
       }
 
+      // Evidence is request-scoped and belongs to exactly one valid child delegation.
+      // Take it before starting/building the child so any downstream failure cannot
+      // leak the packet to a later agent.
+      const sceneEvidence = opts.takeSceneEvidence?.();
+      const webEvidence = opts.takeWebEvidence?.();
+
       const childAbort = new AbortController();
       const abortChild = () => childAbort.abort();
       opts.abortSignal.addEventListener('abort', abortChild, { once: true });
@@ -744,7 +759,12 @@ export function buildCallAgentTool(opts: {
 
       let childErrored = false;
       try {
-        await child.prompt(buildChildTurnPrompt(params.instruction, agent.role));
+        await child.prompt(
+          buildChildTurnPrompt(params.instruction, agent.role, {
+            scene: sceneEvidence?.content,
+            web: webEvidence?.content,
+          }),
+        );
         await child.waitForIdle();
       } catch (error) {
         // Propagate genuine aborts; otherwise treat a failed child run as an empty turn
@@ -823,6 +843,8 @@ export function buildCallAgentTool(opts: {
           text: finalText,
           actionWarnings,
           turnKind: isTeacherWrapUpTurn ? 'wrap_up' : 'normal',
+          ...(sceneEvidence ? { sceneEvidence: sceneEvidence.metadata } : {}),
+          ...(webEvidence ? { webEvidence: webEvidence.metadata } : {}),
         },
       };
     },
