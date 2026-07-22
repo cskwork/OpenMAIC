@@ -52,7 +52,7 @@ for (const [, body] of blocks) {
 }
 
 const cssString = out.join('\n');
-const module = `/**
+const fileContents = `/**
  * GENERATED FILE — do not edit by hand.
  * Source: KaTeX ${katexVersion} @font-face rules with woff2 inlined as data URLs.
  * Regenerate with \`pnpm run gen-katex-fonts\`.
@@ -68,7 +68,7 @@ const outFile = path.join(here, '..', 'src', 'snapshot', 'katex-fonts-embed.ts')
 // Format with the repo's Prettier config so the generated file is CI-clean and
 // stable across rebuilds (otherwise the long CSS literal fails `prettier --check`).
 const prettierConfig = await prettier.resolveConfig(outFile);
-const formatted = await prettier.format(module, { ...prettierConfig, parser: 'typescript' });
+const formatted = await prettier.format(fileContents, { ...prettierConfig, parser: 'typescript' });
 writeFileSync(outFile, formatted);
 console.log(
   `[gen-katex-fonts] embedded ${embedded} KaTeX ${katexVersion} faces → src/snapshot/katex-fonts-embed.ts ` +
