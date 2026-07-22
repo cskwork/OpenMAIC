@@ -8,6 +8,7 @@ type ResponsesWebSearchResponse = {
   error?: { message?: string } | null;
   output?: Array<{
     type?: string;
+    status?: string;
     content?: Array<{
       type?: string;
       text?: string;
@@ -16,6 +17,12 @@ type ResponsesWebSearchResponse = {
   }>;
   status?: string;
 };
+
+function hasCompletedWebSearchCall(data: ResponsesWebSearchResponse): boolean {
+  return (data.output || []).some(
+    (item) => item.type === 'web_search_call' && item.status === 'completed',
+  );
+}
 
 function buildResponsesUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim().replace(/\/+$/, '');
@@ -158,7 +165,7 @@ export async function searchWithResponsesWebSearch(params: {
           `Query: ${query.trim().slice(0, RESPONSES_WEB_SEARCH_MAX_QUERY_LENGTH)}`,
         ].join('\n'),
         tools: [{ type: 'web_search' }],
-        tool_choice: 'auto',
+        tool_choice: 'required',
       }),
       signal: request.signal,
     });
@@ -173,6 +180,9 @@ export async function searchWithResponsesWebSearch(params: {
       throw new Error(
         `Responses web search did not complete: ${data.error?.message || data.status}`,
       );
+    }
+    if (!hasCompletedWebSearchCall(data)) {
+      throw new Error('Responses web search returned no completed web_search_call');
     }
 
     const answer = extractOutputText(data);

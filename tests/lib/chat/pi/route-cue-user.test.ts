@@ -653,6 +653,7 @@ describe('POST /api/chat/pi cue_user', () => {
           JSON.stringify({
             status: 'completed',
             output: [
+              { type: 'web_search_call', status: 'completed' },
               {
                 type: 'message',
                 content: [
@@ -675,6 +676,7 @@ describe('POST /api/chat/pi cue_user', () => {
           JSON.stringify({
             status: 'completed',
             output: [
+              { type: 'web_search_call', status: 'completed' },
               {
                 type: 'message',
                 content: [{ type: 'output_text', text: 'Unsupported result.', annotations: [] }],
@@ -739,6 +741,7 @@ describe('POST /api/chat/pi cue_user', () => {
           JSON.stringify({
             status: 'completed',
             output: [
+              { type: 'web_search_call', status: 'completed' },
               {
                 type: 'message',
                 content: [

@@ -11,6 +11,7 @@ describe('Responses API web search', () => {
           JSON.stringify({
             status: 'completed',
             output: [
+              { type: 'web_search_call', status: 'completed' },
               {
                 type: 'message',
                 content: [
@@ -44,10 +45,12 @@ describe('Responses API web search', () => {
     const body = JSON.parse(String(init.body)) as {
       model: string;
       tools: Array<{ type: string }>;
+      tool_choice: string;
     };
     expect(body).toMatchObject({
       model: 'search-model',
       tools: [{ type: 'web_search' }],
+      tool_choice: 'required',
     });
     expect(result.answer).toContain('official result');
     expect(result.sources).toMatchObject([
@@ -65,6 +68,7 @@ describe('Responses API web search', () => {
             JSON.stringify({
               status: 'completed',
               output: [
+                { type: 'web_search_call', status: 'completed' },
                 {
                   type: 'message',
                   content: [
@@ -151,10 +155,16 @@ describe('Responses API web search', () => {
       'fetch',
       vi.fn(
         async () =>
-          new Response(JSON.stringify({ status: 'completed', output: [] }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          }),
+          new Response(
+            JSON.stringify({
+              status: 'completed',
+              output: [{ type: 'web_search_call', status: 'completed' }],
+            }),
+            {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            },
+          ),
       ),
     );
 
@@ -166,5 +176,40 @@ describe('Responses API web search', () => {
         model: 'search-model',
       }),
     ).rejects.toThrow('returned no answer text');
+  });
+
+  it('fails closed when a message contains a URL but no web_search_call completed', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              status: 'completed',
+              output: [
+                {
+                  type: 'message',
+                  content: [
+                    {
+                      type: 'output_text',
+                      text: 'An unsupported answer with https://example.test/invented.',
+                    },
+                  ],
+                },
+              ],
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          ),
+      ),
+    );
+
+    await expect(
+      searchWithResponsesWebSearch({
+        query: 'latest result',
+        apiKey: 'test-key',
+        baseUrl: 'https://responses-proxy.test/v1',
+        model: 'search-model',
+      }),
+    ).rejects.toThrow('no completed web_search_call');
   });
 });
