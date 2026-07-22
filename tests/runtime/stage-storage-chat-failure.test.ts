@@ -4,6 +4,26 @@ const { loadChatSessions } = vi.hoisted(() => ({
   loadChatSessions: vi.fn().mockRejectedValue(new Error('runtime unavailable')),
 }));
 
+vi.mock('@/lib/document-store', () => ({
+  accessDocument: vi.fn().mockResolvedValue({
+    document: {
+      stage: { id: 'stage-1', name: 'Persisted stage', createdAt: 1_000, updatedAt: 2_000 },
+      scenes: [
+        {
+          id: 'scene-1',
+          stageId: 'stage-1',
+          type: 'slide',
+          title: 'Persisted scene',
+          order: 0,
+          content: { type: 'slide', canvas: {} },
+        },
+      ],
+    },
+    readOnlyLegacy: false,
+  }),
+  loadCurrentScene: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock('@/lib/utils/database', () => ({
   db: {
     stages: {
@@ -35,9 +55,6 @@ vi.mock('@/lib/utils/chat-storage', () => ({
   saveChatSessions: vi.fn(),
   loadChatSessions,
   deleteChatSessions: vi.fn(),
-}));
-vi.mock('@/lib/utils/playback-storage', () => ({
-  clearPlaybackState: vi.fn(),
 }));
 vi.mock('@/lib/quiz/persistence', () => ({
   clearAllForScene: vi.fn(),

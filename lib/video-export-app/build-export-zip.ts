@@ -16,7 +16,7 @@
  */
 import { compileVideoTimeline, emitHyperframes, toSrt, toVtt } from '@/lib/video-export';
 import { useStageStore } from '@/lib/store';
-import { db } from '@/lib/utils/database';
+import { accessDocument } from '@/lib/document-store';
 import { createVideoTimelineDeps } from './timeline-deps';
 import { collectVideoAssets } from './collect';
 import { packageVideoZip } from './package-zip';
@@ -68,8 +68,8 @@ async function compileStageIr(): Promise<{
     throw new NoScenesError('No scenes to export');
   }
 
-  const latest = await db.stages.get(stage.id).catch(() => undefined);
-  const stageName = latest?.name || stage.name || 'classroom';
+  const latest = await accessDocument(stage.id).catch(() => undefined);
+  const stageName = latest?.document?.stage.name || stage.name || 'classroom';
 
   const deps = await createVideoTimelineDeps({ stage: { id: stage.id }, scenes });
   const ir = compileVideoTimeline(
