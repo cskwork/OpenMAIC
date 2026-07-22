@@ -246,6 +246,19 @@ export async function slideToPng(
             font-variant-east-asian: normal !important;
             text-rendering: geometricPrecision !important;
           }
+          /* KaTeX renders formulas (output:'html') as font glyphs positioned by
+             precise metrics; the neutral-kerning/geometricPrecision override above
+             was meant for CJK prose+table text, but it also reshapes math glyph
+             advances — so a burned-in formula diverges from the live canvas (which
+             has no such override). Empirically the override raised the formula's
+             mean per-pixel delta vs the live paint by ~16%. KaTeX lives inside
+             .slide-renderer-prose, so restore its native rendering here; prose and
+             table text keep the override. */
+          .slide-renderer-prose .katex,
+          .slide-renderer-prose .katex * {
+            font-kerning: auto !important;
+            text-rendering: auto !important;
+          }
         `;
         clonedDoc.head.appendChild(style);
       },
