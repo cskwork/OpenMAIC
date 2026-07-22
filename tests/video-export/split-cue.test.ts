@@ -102,6 +102,22 @@ describe('splitCue — time distribution', () => {
     expect(out[out.length - 1].endMs).toBe(2000);
   });
 
+  it('joins merged CJK pieces without a spurious space', () => {
+    // A short leading sentence folds into the next; the seam is between CJK
+    // glyphs, so no ASCII space should be inserted.
+    const text = '好。第一句话讲的是概念的基本定义和背景更详细的内容。';
+    const out = splitCue(cue({ startMs: 0, endMs: 2000, text }));
+    expect(out.some((c) => c.text.includes(' '))).toBe(false);
+    expect(out.map((c) => c.text).join('')).not.toContain(' ');
+  });
+
+  it('keeps a space when merging Latin pieces at a word boundary', () => {
+    // Narrow (Latin) glyphs on both sides of the seam keep the word space.
+    const text = 'Hi. Then we look at a much longer explanatory sentence here.';
+    const out = splitCue(cue({ startMs: 0, endMs: 2000, text }));
+    expect(out[0].text).toBe('Hi. Then we look at a much longer explanatory sentence here.');
+  });
+
   it('returns the original (trimmed) cue when the window is non-positive', () => {
     const out = splitCue(cue({ startMs: 5000, endMs: 5000, text: 'a。b。c。' }));
     expect(out).toHaveLength(1);

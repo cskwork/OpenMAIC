@@ -141,6 +141,20 @@ export function splitCueText(text: string): string[] {
 }
 
 /**
+ * Join two adjacent cue-text pieces being merged into one cue. A space is
+ * inserted only at a Latin word boundary (both sides narrow); CJK text is not
+ * space-separated, so if either side of the seam is a wide glyph the pieces are
+ * joined directly — otherwise merging e.g. `我们开始。` + `看这里` would inject a
+ * spurious space into the caption.
+ */
+function joinCueText(prev: string, next: string): string {
+  const left = [...prev].pop() ?? '';
+  const right = next[0] ?? '';
+  const gap = left && right && !isWide(left) && !isWide(right) ? ' ' : '';
+  return `${prev}${gap}${next}`;
+}
+
+/**
  * Split one cue into multiple, distributing its `[startMs, endMs]` window across
  * the text pieces in proportion to their reading weight. The pieces tile the
  * window with no gaps or overlaps; the last piece's `endMs` is pinned to the
@@ -186,7 +200,7 @@ export function splitCue(cue: SubtitleCue): SubtitleCue[] {
   for (const c of raw) {
     const prev = merged[merged.length - 1];
     if (prev && c.endMs - c.startMs < MIN_CUE_MS) {
-      merged[merged.length - 1] = { ...prev, endMs: c.endMs, text: `${prev.text} ${c.text}` };
+      merged[merged.length - 1] = { ...prev, endMs: c.endMs, text: joinCueText(prev.text, c.text) };
     } else {
       merged.push(c);
     }
@@ -194,7 +208,10 @@ export function splitCue(cue: SubtitleCue): SubtitleCue[] {
   // If the very first piece was the short one, it may still be < MIN; fold it in.
   if (merged.length > 1 && merged[0].endMs - merged[0].startMs < MIN_CUE_MS) {
     const [first, second, ...rest] = merged;
-    return [{ ...second, startMs: first.startMs, text: `${first.text} ${second.text}` }, ...rest];
+    return [
+      { ...second, startMs: first.startMs, text: joinCueText(first.text, second.text) },
+      ...rest,
+    ];
   }
   return merged;
 }

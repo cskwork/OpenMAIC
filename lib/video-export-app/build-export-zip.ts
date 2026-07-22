@@ -49,6 +49,37 @@ export interface BuildExportZipResult {
 
 export class NoScenesError extends Error {}
 
+/**
+ * Shared compile prologue for both export paths: read the current stage + scenes
+ * from the store (throwing {@link NoScenesError} when empty), resolve the display
+ * name from Dexie, load the DI deps (Dexie durations + asset presence + measured
+ * geometry), and pure-compile to the {@link VideoTimeline} IR. Both the full ZIP
+ * build and the subtitles-only path go through here so their timing/assets/
+ * geometry wiring can never drift.
+ */
+async function compileStageIr(): Promise<{
+  ir: ReturnType<typeof compileVideoTimeline>;
+  stageName: string;
+  scenes: ReturnType<typeof useStageStore.getState>['scenes'];
+  deps: Awaited<ReturnType<typeof createVideoTimelineDeps>>;
+}> {
+  const { stage, scenes } = useStageStore.getState();
+  if (!stage?.id || scenes.length === 0) {
+    throw new NoScenesError('No scenes to export');
+  }
+
+  const latest = await db.stages.get(stage.id).catch(() => undefined);
+  const stageName = latest?.name || stage.name || 'classroom';
+
+  const deps = await createVideoTimelineDeps({ stage: { id: stage.id }, scenes });
+  const ir = compileVideoTimeline(
+    { stage: { id: stage.id, name: stageName }, scenes },
+    { timing: deps.timing, assets: deps.assets, geometry: deps.geometry },
+  );
+
+  return { ir, stageName, scenes, deps };
+}
+
 /** Options for a full export-ZIP build. */
 export interface BuildExportZipOptions {
   resolution: VideoResolution;
@@ -64,22 +95,10 @@ export async function buildExportZip(
   options: BuildExportZipOptions,
 ): Promise<BuildExportZipResult> {
   const { resolution, burnInSubtitles = false } = options;
-  const { stage, scenes } = useStageStore.getState();
-  if (!stage?.id || scenes.length === 0) {
-    throw new NoScenesError('No scenes to export');
-  }
-
   const { width, height } = VIDEO_RESOLUTIONS[resolution];
 
-  const latest = await db.stages.get(stage.id).catch(() => undefined);
-  const stageName = latest?.name || stage.name || 'classroom';
-
   // 1. DI deps (Dexie durations + asset presence + measured geometry) → 2. pure compile.
-  const deps = await createVideoTimelineDeps({ stage: { id: stage.id }, scenes });
-  const ir = compileVideoTimeline(
-    { stage: { id: stage.id, name: stageName }, scenes },
-    { timing: deps.timing, assets: deps.assets, geometry: deps.geometry },
-  );
+  const { ir, stageName, scenes, deps } = await compileStageIr();
 
   // 3. emit the Hyperframes project text.
   const project = emitHyperframes(ir, { width, height, burnInSubtitles });
@@ -116,19 +135,7 @@ export interface CompiledSubtitles {
  * Throws {@link NoScenesError} when there's nothing to export.
  */
 export async function compileSubtitles(): Promise<CompiledSubtitles> {
-  const { stage, scenes } = useStageStore.getState();
-  if (!stage?.id || scenes.length === 0) {
-    throw new NoScenesError('No scenes to export');
-  }
-
-  const latest = await db.stages.get(stage.id).catch(() => undefined);
-  const stageName = latest?.name || stage.name || 'classroom';
-
-  const deps = await createVideoTimelineDeps({ stage: { id: stage.id }, scenes });
-  const ir = compileVideoTimeline(
-    { stage: { id: stage.id, name: stageName }, scenes },
-    { timing: deps.timing, assets: deps.assets, geometry: deps.geometry },
-  );
+  const { ir, stageName } = await compileStageIr();
 
   return {
     srt: toSrt(ir.subtitles),

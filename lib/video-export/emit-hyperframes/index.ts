@@ -133,6 +133,32 @@ function renderNarration(scene: VideoTimelineScene): string[] {
 }
 
 /**
+ * Burned-in subtitle band layout. All sizes derive from the render height so the
+ * captions read the same at any resolution; the fractions/ratios are the tuning
+ * knobs.
+ */
+const SUBTITLE = {
+  /** Font size as a fraction of render height, floored at {@link SUBTITLE.minFontPx}. */
+  fontHeightRatio: 0.033,
+  /** Never smaller than this many px, so captions stay legible at low resolutions. */
+  minFontPx: 16,
+  /** Vertical padding as a fraction of the font size. */
+  padVRatio: 0.35,
+  /** Horizontal padding as a fraction of the font size. */
+  padHRatio: 0.7,
+  /** Distance of the band from the bottom edge, as a fraction of render height. */
+  bottomRatio: 0.01,
+  /** Hard ceiling on caption lines (`-webkit-line-clamp`) so an outlier can't grow tall. */
+  maxLines: 2,
+  /** Caption line-height (unitless); also sizes the max-height clamp. */
+  lineHeight: 1.3,
+  /** Caption band max width, in % of the frame. */
+  maxWidthPct: 80,
+  /** Caption background opacity. */
+  bgOpacity: 0.66,
+} as const;
+
+/**
  * Subtitle overlay: one absolutely-positioned caption band at the bottom of the
  * stage, plus one `<div>` per cue stacked in the *same* absolute slot within it.
  * The captions are *burned in* — the paused GSAP timeline reveals each cue at
@@ -161,22 +187,26 @@ function renderSubtitles(
   if (cues.length === 0) return { html: '', statements: [] };
 
   // Scale caption type to the render height so it reads at any resolution.
-  const fontPx = Math.max(16, Math.round(height * 0.033));
-  const padV = Math.round(fontPx * 0.35);
-  const padH = Math.round(fontPx * 0.7);
-  const bottom = Math.round(height * 0.055);
+  const fontPx = Math.max(SUBTITLE.minFontPx, Math.round(height * SUBTITLE.fontHeightRatio));
+  const padV = Math.round(fontPx * SUBTITLE.padVRatio);
+  const padH = Math.round(fontPx * SUBTITLE.padHRatio);
+  // Kept very low so subtitles sit right near the bottom, clear of the slide/title area.
+  const bottom = Math.round(height * SUBTITLE.bottomRatio);
 
   // Each cue occupies the same grid cell and is hidden (display:none) until its
   // window, so inactive cues take no layout space and never shift the active one.
-  // Cues are already short (split by the compiler), but clamp to 2 lines as a
-  // hard ceiling so an outlier can never grow into a tall block that covers the
+  // The `-webkit-line-clamp` ceiling only engages once a cue is revealed as
+  // `display:-webkit-box` (see the reveal `tl.set` below); declaring only the
+  // clamp props here — not `display:-webkit-box` — keeps the initial state truly
+  // hidden (a second `display` would override the `none` and show every cue at
+  // t=0). Cues are already short (split by the compiler), but clamp to 2 lines as
+  // a hard ceiling so an outlier can never grow into a tall block that covers the
   // slide — the failure this whole change fixes.
-  const maxLines = 2;
-  const maxTextHeight = Math.ceil(fontPx * 1.3 * maxLines);
+  const maxTextHeight = Math.ceil(fontPx * SUBTITLE.lineHeight * SUBTITLE.maxLines);
   const cueDivs = cues
     .map(
       (c, i) =>
-        `  <div id="subtitle-cue-${i}" style="grid-area:1/1;display:none;justify-self:center;max-width:80%;max-height:${maxTextHeight}px;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:${maxLines};padding:${padV}px ${padH}px;background:rgba(0,0,0,0.66);color:#fff;font-size:${fontPx}px;line-height:1.3;border-radius:${padV}px;white-space:pre-wrap;text-shadow:0 1px 2px rgba(0,0,0,0.9)">${escapeHtml(c.text)}</div>`,
+        `  <div id="subtitle-cue-${i}" style="grid-area:1/1;display:none;justify-self:center;max-width:${SUBTITLE.maxWidthPct}%;max-height:${maxTextHeight}px;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:${SUBTITLE.maxLines};padding:${padV}px ${padH}px;background:rgba(0,0,0,${SUBTITLE.bgOpacity});color:#fff;font-size:${fontPx}px;line-height:${SUBTITLE.lineHeight};border-radius:${padV}px;white-space:pre-wrap;text-shadow:0 1px 2px rgba(0,0,0,0.9)">${escapeHtml(c.text)}</div>`,
     )
     .join('\n');
 

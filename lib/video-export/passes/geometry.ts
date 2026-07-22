@@ -41,11 +41,20 @@ export function resolveEffectGeometry(
 }
 
 /**
- * Resolve a video segment's placement (geometry + rotation). Prefers the
- * measured content-box geometry (rotation still comes from the authored element,
- * as the rendered box is axis-aligned). Returns the enriched segment (never
- * throws); `degraded: true` + `geometry: null` + `rotate: 0` when the element
- * could not be located.
+ * Resolve a video segment's placement (geometry + rotation).
+ *
+ * The measured content-box geometry from the {@link GeometryProbe} is the
+ * element's *axis-aligned bounding box* (`getBoundingClientRect`). For an
+ * unrotated element that box **is** the rendered box, so we prefer it (it carries
+ * the same padding/auto-height correction the effects rely on) and emit
+ * `rotate: 0`. For a rotated element the measured box already *encloses* the
+ * rotation, so re-applying the authored `rotate` downstream would rotate it a
+ * second time (a widened, skewed clip). To keep one source of truth and never
+ * double-count, a rotated element falls back to the pure authored box — the
+ * unrotated box plus its `rotate`, which reproduces the live element exactly.
+ *
+ * Returns the enriched segment (never throws); `degraded: true` + `geometry:
+ * null` + `rotate: 0` when the element could not be located.
  */
 export function resolveVideoPlacement(
   video: VideoSegment,
@@ -53,10 +62,13 @@ export function resolveVideoPlacement(
   measured?: ReturnType<GeometryProbe['contentGeometry']>,
 ): { video: VideoSegment; unresolved: boolean } {
   const placement = elements ? findElementPlacement([...elements], video.elementId) : null;
-  const geometry = measured ?? placement?.geometry ?? null;
+  const rotate = placement?.rotate ?? 0;
+  // The measured AABB is only compatible with a zero rotation; a rotated element
+  // must use its authored box so the single downstream `rotate` isn't doubled.
+  const geometry = (rotate === 0 ? measured : null) ?? placement?.geometry ?? null;
   if (geometry) {
     return {
-      video: { ...video, geometry, rotate: placement?.rotate ?? 0, degraded: false },
+      video: { ...video, geometry, rotate, degraded: false },
       unresolved: false,
     };
   }

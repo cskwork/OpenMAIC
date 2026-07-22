@@ -146,7 +146,31 @@ describe('applyGeometry — GeometryProbe (content-box) vs authored box', () => 
     expect(scenes[0].effects[0].degraded).toBe(false);
   });
 
-  it('uses measured geometry for a video clip but keeps rotation from the authored element', () => {
+  it('uses measured geometry for an unrotated video clip', () => {
+    const unrotated = el('v1', { left: 100, top: 100, width: 200, height: 100 });
+    const measured = { x: 11, y: 19.5, w: 18, h: 15, centerX: 20, centerY: 27 };
+    const seg: VideoSegment = {
+      actionId: 'pv',
+      actionIndex: 0,
+      startMs: 0,
+      durationMs: 100,
+      elementId: 'v1',
+      geometry: null,
+      rotate: 0,
+      present: true,
+      degraded: false,
+      durationSource: 'stored',
+    };
+    const { video } = resolveVideoPlacement(seg, [unrotated], measured);
+    expect(video.geometry).toEqual(measured); // rendered box wins for a zero rotation
+    expect(video.rotate).toBe(0);
+    expect(video.degraded).toBe(false);
+  });
+
+  it('falls back to the authored box for a rotated video, so rotation is never doubled', () => {
+    // The measured box is the AABB of the already-rotated element; re-applying
+    // `rotate` to it would rotate the clip twice. A rotated element must use its
+    // authored box + rotate — the single, un-doubled source of truth.
     const rotated = el('v1', { left: 100, top: 100, width: 200, height: 100, rotate: 30 });
     const measured = { x: 11, y: 19.5, w: 18, h: 15, centerX: 20, centerY: 27 };
     const seg: VideoSegment = {
@@ -162,8 +186,8 @@ describe('applyGeometry — GeometryProbe (content-box) vs authored box', () => 
       durationSource: 'stored',
     };
     const { video } = resolveVideoPlacement(seg, [rotated], measured);
-    expect(video.geometry).toEqual(measured); // rendered box wins
-    expect(video.rotate).toBe(30); // rotation still from the authored element
+    expect(video.geometry).toEqual(getElementPercentageGeometry(rotated)); // authored box, not measured
+    expect(video.rotate).toBe(30); // rotation from the authored element, applied once
     expect(video.degraded).toBe(false);
   });
 });

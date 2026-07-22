@@ -106,10 +106,16 @@ describe('emitHyperframes', () => {
     expect(burned).toContain('id="subtitle-cue-0"');
     // Cues start hidden (display:none, out of layout) and are toggled by the
     // paused timeline — see the multi-cue positioning test below for why
-    // display (not visibility) matters. Shown as -webkit-box so the 2-line
-    // clamp stays in force while visible.
+    // display (not visibility) matters. The reveal `tl.set` switches them to
+    // -webkit-box so the 2-line clamp stays in force while visible; the inline
+    // style must NOT also declare a second `display` (it would override the
+    // `none` and show every cue at t=0).
     expect(burned).toMatch(/id="subtitle-cue-0"[^>]*display:none/);
     expect(burned).toMatch(/-webkit-line-clamp:2/);
+    // Exactly one `display:` in the cue's inline style, and it is `none`.
+    const cue0Style = burned.match(/id="subtitle-cue-0" style="([^"]*)"/)![1];
+    expect(cue0Style.match(/display:/g)).toHaveLength(1);
+    expect(cue0Style).toContain('display:none');
     expect(burned).toMatch(/tl\.set\('#subtitle-cue-0',\{display:'-webkit-box'\},[\d.]+\);/);
     expect(burned).toMatch(/tl\.set\('#subtitle-cue-0',\{display:'none'\},[\d.]+\);/);
     // Narration text is rendered into the caption.
