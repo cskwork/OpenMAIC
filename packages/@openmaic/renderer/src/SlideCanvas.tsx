@@ -110,11 +110,16 @@ export function SlideCanvas(props: SlideCanvasProps) {
   // Plain derivations: when this package is consumed in a React Compiler build
   // these are auto-memoized; otherwise the cost (O(elements) lookups) is trivial.
   const laserGeometry: PercentageGeometry | null = effects?.laser
-    ? findElementGeometry(elements, effects.laser.elementId, slide.viewportSize)
+    ? findElementGeometry(
+        elements,
+        effects.laser.elementId,
+        slide.viewportSize,
+        slide.viewportRatio,
+      )
     : null;
 
   const zoomGeometry: PercentageGeometry | null = effects?.zoom
-    ? findElementGeometry(elements, effects.zoom.elementId, slide.viewportSize)
+    ? findElementGeometry(elements, effects.zoom.elementId, slide.viewportSize, slide.viewportRatio)
     : null;
 
   const highlights = effects?.highlights ?? (effects?.highlight ? [effects.highlight] : []);

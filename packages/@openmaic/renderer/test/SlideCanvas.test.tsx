@@ -107,7 +107,7 @@ describe('SlideCanvas', () => {
     expect(onScaleChange).toHaveBeenLastCalledWith(1);
   });
 
-  it('keeps video content non-interactive when element clicks are enabled', () => {
+  it('keeps video content interactive by default when element clicks are enabled', () => {
     const videoElement: PPTVideoElement = {
       id: 'video-1',
       type: 'video',
@@ -128,6 +128,34 @@ describe('SlideCanvas', () => {
     expect(
       container.querySelector<HTMLElement>('.slide-element-hit-target')?.style.pointerEvents,
     ).toBe('auto');
+    expect(container.querySelector<HTMLElement>('[data-video-element]')?.style.pointerEvents).toBe(
+      'auto',
+    );
+  });
+
+  it('keeps video content non-interactive when requested', () => {
+    const videoElement: PPTVideoElement = {
+      id: 'video-1',
+      type: 'video',
+      left: 0,
+      top: 0,
+      width: 160,
+      height: 90,
+      rotate: 0,
+      src: 'video.mp4',
+      autoplay: false,
+    };
+    const videoSlide = { ...slide, elements: [videoElement] };
+
+    const { container } = render(
+      <SlideCanvas
+        slide={videoSlide}
+        scale={1}
+        onElementClick={vi.fn()}
+        videoInteractive={false}
+      />,
+    );
+
     expect(container.querySelector<HTMLElement>('[data-video-element]')?.style.pointerEvents).toBe(
       'none',
     );

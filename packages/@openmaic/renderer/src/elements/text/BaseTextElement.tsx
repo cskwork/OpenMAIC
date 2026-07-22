@@ -13,7 +13,7 @@ export interface BaseTextElementProps {
 export function BaseTextElement({ elementInfo, target }: BaseTextElementProps) {
   const { shadowStyle } = useElementShadow(elementInfo.shadow);
 
-  const vAlign = elementInfo.vAlign ?? 'middle';
+  const vAlign = elementInfo.vAlign ?? 'top';
   const justifyContent =
     vAlign === 'middle' ? 'center' : vAlign === 'bottom' ? 'flex-end' : 'flex-start';
 

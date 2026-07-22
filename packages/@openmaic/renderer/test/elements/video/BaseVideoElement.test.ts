@@ -17,7 +17,7 @@ const video = {
 } as PPTVideoElement;
 
 describe('BaseVideoElement', () => {
-  it('keeps video content non-interactive by default', () => {
+  it('keeps video content interactive by default', () => {
     const nativeMarkup = renderToStaticMarkup(
       React.createElement(BaseVideoElement, { elementInfo: video }),
     );
@@ -28,22 +28,22 @@ describe('BaseVideoElement', () => {
       }),
     );
 
-    expect(nativeMarkup).toContain('pointer-events:none');
+    expect(nativeMarkup).toContain('pointer-events:auto');
     expect(nativeMarkup).toContain('<video');
-    expect(customMarkup).toContain('pointer-events:none');
+    expect(customMarkup).toContain('pointer-events:auto');
     expect(customMarkup).toContain('<button>Retry</button>');
   });
 
-  it('enables pointer events only when interaction is explicitly requested', () => {
+  it('disables pointer events when interaction is explicitly disabled', () => {
     const markup = renderToStaticMarkup(
       React.createElement(BaseVideoElement, {
         elementInfo: video,
         renderVideo: () => React.createElement('button', null, 'Retry'),
-        interactive: true,
+        interactive: false,
       }),
     );
 
-    expect(markup).toContain('pointer-events:auto');
+    expect(markup).toContain('pointer-events:none');
     expect(markup).toContain('<button>Retry</button>');
   });
 });

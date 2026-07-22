@@ -18,12 +18,12 @@ const textElement: PPTTextElement = {
 };
 
 describe('BaseTextElement', () => {
-  it('vertically centers text when vAlign is omitted', () => {
+  it('top-aligns text when vAlign is omitted', () => {
     const markup = renderToStaticMarkup(
       React.createElement(BaseTextElement, { elementInfo: textElement }),
     );
 
-    expect(markup).toContain('justify-content:center');
+    expect(markup).toContain('justify-content:flex-start');
   });
 
   it.each([

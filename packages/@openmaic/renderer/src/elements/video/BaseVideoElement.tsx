@@ -19,7 +19,7 @@ export interface BaseVideoElementProps {
 export function BaseVideoElement({
   elementInfo,
   renderVideo,
-  interactive = false,
+  interactive = true,
 }: BaseVideoElementProps) {
   return (
     <div

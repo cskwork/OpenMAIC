@@ -108,7 +108,12 @@ export function SlideThumbnail({
 
   return (
     <div className={containerClass} style={containerStyle}>
-      <SlideCanvas slide={resolvedSlide} chrome={false} renderVideo={renderThumbnailVideo} />
+      <SlideCanvas
+        slide={resolvedSlide}
+        chrome={false}
+        renderVideo={renderThumbnailVideo}
+        videoInteractive={false}
+      />
     </div>
   );
 }
