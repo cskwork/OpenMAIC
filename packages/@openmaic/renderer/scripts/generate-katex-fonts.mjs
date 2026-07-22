@@ -21,6 +21,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import prettier from 'prettier';
 
 const require = createRequire(import.meta.url);
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -64,7 +65,11 @@ export const KATEX_FONT_EMBED_CSS = ${JSON.stringify(cssString)};
 `;
 
 const outFile = path.join(here, '..', 'src', 'snapshot', 'katex-fonts-embed.ts');
-writeFileSync(outFile, module);
+// Format with the repo's Prettier config so the generated file is CI-clean and
+// stable across rebuilds (otherwise the long CSS literal fails `prettier --check`).
+const prettierConfig = await prettier.resolveConfig(outFile);
+const formatted = await prettier.format(module, { ...prettierConfig, parser: 'typescript' });
+writeFileSync(outFile, formatted);
 console.log(
   `[gen-katex-fonts] embedded ${embedded} KaTeX ${katexVersion} faces → src/snapshot/katex-fonts-embed.ts ` +
     `(${Math.round(cssString.length / 1024)} KB)`,
