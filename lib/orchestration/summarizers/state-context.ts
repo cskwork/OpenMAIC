@@ -133,7 +133,10 @@ export function summarizeElements(
 /**
  * Build context string from store state
  */
-export function buildStateContext(storeState: StatelessChatRequest['storeState']): string {
+export function buildStateContext(
+  storeState: StatelessChatRequest['storeState'],
+  options: { includeQuizContext?: boolean } = {},
+): string {
   const { stage, scenes, currentSceneId, mode, whiteboardOpen, quizResults } = storeState;
 
   const lines: string[] = [];
@@ -173,7 +176,7 @@ export function buildStateContext(storeState: StatelessChatRequest['storeState']
       // student has finished. Hydration of `quizResults` happens client-side in
       // use-chat-sessions; absent here means the student has not submitted (or
       // the active scene is not the quiz that owns the results).
-      if (currentScene.content.type === 'quiz') {
+      if (currentScene.content.type === 'quiz' && options.includeQuizContext !== false) {
         const questions = currentScene.content.questions;
         const hasGradedResults =
           !!quizResults && quizResults.sceneId === currentSceneId && quizResults.results.length > 0;

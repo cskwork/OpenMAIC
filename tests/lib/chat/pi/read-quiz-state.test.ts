@@ -97,6 +97,17 @@ describe('read_quiz_state', () => {
     expect(result.details).toEqual({ mode: 'pre_submit', phase: 'answering' });
   });
 
+  it('reports reviewing mode from graded results rather than rendered context text', async () => {
+    const tool = buildReadQuizStateTool({
+      request: request(true),
+      onRead: () => undefined,
+    });
+
+    const result = await tool.execute('read-1', {});
+
+    expect(result.details).toEqual({ mode: 'reviewing', phase: 'reviewing' });
+  });
+
   it('appends the authoritative tool result to the child-agent instruction', () => {
     const context = buildQuizStateContext(request());
     const instruction = appendQuizStateContext('Help the learner with question 1.', context);

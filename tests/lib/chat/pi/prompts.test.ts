@@ -141,6 +141,48 @@ describe('Pi director Quiz routing', () => {
 });
 
 describe('Pi child prompt structured output', () => {
+  it('leaves Quiz details to the mandatory read_quiz_state context', () => {
+    const body = makeBody({
+      storeState: {
+        stage: { id: 'stage-1', name: 'Quiz', createdAt: 1, updatedAt: 1 },
+        scenes: [
+          {
+            id: 'quiz-1',
+            stageId: 'stage-1',
+            type: 'quiz',
+            title: 'Quiz',
+            order: 0,
+            content: {
+              type: 'quiz',
+              questions: [
+                {
+                  id: 'q1',
+                  type: 'single',
+                  question: 'Which option is correct?',
+                  options: [
+                    { value: 'A', label: 'First' },
+                    { value: 'B', label: 'Second' },
+                  ],
+                  answer: ['B'],
+                  points: 1,
+                },
+              ],
+            },
+          },
+        ],
+        currentSceneId: 'quiz-1',
+        mode: 'playback',
+        whiteboardOpen: false,
+      },
+    });
+
+    const prompt = buildChildPrompt(body, agents[0], [], [], []);
+
+    expect(prompt).toContain('Current scene: "Quiz"');
+    expect(prompt).not.toContain('Which option is correct?');
+    expect(prompt).not.toContain('Strict rules while the quiz is unsubmitted');
+  });
+
   it('requires JSON array output and lists available actions without tool-call wording', () => {
     const prompt = buildChildPrompt(makeBody(), agents[0], [], [], ['spotlight', 'wb_open']);
 

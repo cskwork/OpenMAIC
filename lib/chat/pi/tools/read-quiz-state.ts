@@ -63,15 +63,24 @@ function formatReviewContext(request: StatelessChatRequest, questions: QuizQuest
   ].join('\n');
 }
 
+function hasGradedResultsForCurrentQuiz(request: StatelessChatRequest): boolean {
+  const currentScene = request.storeState.scenes.find(
+    (scene) => scene.id === request.storeState.currentSceneId,
+  );
+  return (
+    currentScene?.content.type === 'quiz' &&
+    request.storeState.quizResults?.sceneId === currentScene.id &&
+    request.storeState.quizResults.results.length > 0
+  );
+}
+
 export function buildQuizStateContext(request: StatelessChatRequest): string | null {
   const currentScene = request.storeState.scenes.find(
     (scene) => scene.id === request.storeState.currentSceneId,
   );
   if (currentScene?.content.type !== 'quiz') return null;
 
-  const hasResults =
-    request.storeState.quizResults?.sceneId === currentScene.id &&
-    request.storeState.quizResults.results.length > 0;
+  const hasResults = hasGradedResultsForCurrentQuiz(request);
   return hasResults
     ? formatReviewContext(request, currentScene.content.questions)
     : formatPreSubmitContext(request, currentScene.content.questions);
@@ -98,10 +107,11 @@ export function buildReadQuizStateTool(opts: {
       }
 
       opts.onRead(context);
+      const hasResults = hasGradedResultsForCurrentQuiz(opts.request);
       return {
         content: [{ type: 'text', text: context }],
         details: {
-          mode: context.includes('Mode: REVIEWING') ? 'reviewing' : 'pre_submit',
+          mode: hasResults ? 'reviewing' : 'pre_submit',
           phase: opts.request.storeState.quizPhase ?? 'unknown',
         },
       };

@@ -134,7 +134,9 @@ export function buildChildPrompt(
     '[{"type":"action","name":"spotlight","params":{"elementId":"text_1"}},{"type":"text","content":"看这里，这一步是后面机制成立的关键。"}]',
     '',
     '# Current State',
-    buildStateContext(body.storeState),
+    // Quiz details come from the mandatory read_quiz_state tool so the child
+    // receives one authoritative, phase-specific copy of that context.
+    buildStateContext(body.storeState, { includeQuizContext: false }),
     buildVirtualWhiteboardContext(body.storeState, whiteboardLedger),
     '',
     `Current scene: ${currentScene?.title ?? currentScene?.id ?? 'none'}`,
