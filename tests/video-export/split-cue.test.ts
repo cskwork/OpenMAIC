@@ -74,10 +74,7 @@ describe('splitCueText', () => {
   });
 
   it('still splits on a genuine sentence-ending period', () => {
-    expect(splitCueText('First point. Second point.')).toEqual([
-      'First point.',
-      'Second point.',
-    ]);
+    expect(splitCueText('First point. Second point.')).toEqual(['First point.', 'Second point.']);
   });
 });
 
