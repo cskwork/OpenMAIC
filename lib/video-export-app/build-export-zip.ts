@@ -57,7 +57,7 @@ export class NoScenesError extends Error {}
  * build and the subtitles-only path go through here so their timing/assets/
  * geometry wiring can never drift.
  */
-async function compileStageIr(): Promise<{
+async function compileStageIr(options: { skipGeometry?: boolean } = {}): Promise<{
   ir: ReturnType<typeof compileVideoTimeline>;
   stageName: string;
   scenes: ReturnType<typeof useStageStore.getState>['scenes'];
@@ -71,7 +71,11 @@ async function compileStageIr(): Promise<{
   const latest = await accessDocument(stage.id).catch(() => undefined);
   const stageName = latest?.document?.stage.name || stage.name || 'classroom';
 
-  const deps = await createVideoTimelineDeps({ stage: { id: stage.id }, scenes });
+  const deps = await createVideoTimelineDeps({
+    stage: { id: stage.id },
+    scenes,
+    skipGeometry: options.skipGeometry,
+  });
   const ir = compileVideoTimeline(
     { stage: { id: stage.id, name: stageName }, scenes },
     { timing: deps.timing, assets: deps.assets, geometry: deps.geometry },
@@ -133,9 +137,14 @@ export interface CompiledSubtitles {
  * touching the render service. Lets the user download SRT/VTT to add captions in
  * their own editor (the "clean video + sidecar subtitles" path, #867 item 2).
  * Throws {@link NoScenesError} when there's nothing to export.
+ *
+ * Passes `skipGeometry` so the compile skips the off-screen content-box
+ * measurement (an off-screen render per slide) that only positions effects —
+ * subtitles need only the timeline, and audio/video *duration* probes still run
+ * so these cues match the ones the burned-in video would carry.
  */
 export async function compileSubtitles(): Promise<CompiledSubtitles> {
-  const { ir, stageName } = await compileStageIr();
+  const { ir, stageName } = await compileStageIr({ skipGeometry: true });
 
   return {
     srt: toSrt(ir.subtitles),

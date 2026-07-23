@@ -49,6 +49,36 @@ describe('splitCueText', () => {
     expect(textUnits('中文')).toBe(2);
     expect(textUnits('abcd')).toBe(2);
   });
+
+  it('keeps a decimal number inside one cue (does not split 3.14)', () => {
+    expect(splitCueText('π is about 3.14 here.')).toEqual(['π is about 3.14 here.']);
+  });
+
+  it('keeps a dotted version inside one cue (does not split v1.2)', () => {
+    expect(splitCueText('Upgrade to v1.2 today.')).toEqual(['Upgrade to v1.2 today.']);
+  });
+
+  it('does not split a lowercase abbreviation dot (e.g.)', () => {
+    // `e.g.` must not fragment into `e.` / `g.` / trailing cues.
+    expect(splitCueText('Some fruit, e.g. apples and pears.')).toEqual([
+      'Some fruit, e.g. apples and pears.',
+    ]);
+  });
+
+  it('collapses a repeated ellipsis run into a single boundary (no empty cues)', () => {
+    const pieces = splitCueText('Wait... what happened?');
+    expect(pieces).toEqual(['Wait...', 'what happened?']);
+    // No empty or whitespace-only pieces from the consecutive dots.
+    for (const p of pieces) expect(p.trim()).toBe(p);
+    expect(pieces.every((p) => p.length > 0)).toBe(true);
+  });
+
+  it('still splits on a genuine sentence-ending period', () => {
+    expect(splitCueText('First point. Second point.')).toEqual([
+      'First point.',
+      'Second point.',
+    ]);
+  });
 });
 
 describe('splitCue — time distribution', () => {

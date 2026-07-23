@@ -30,10 +30,15 @@ const MAX_UNITS = 40;
 /** A piece shorter than this (ms) is merged into a neighbour so it doesn't flash. */
 const MIN_CUE_MS = 1200;
 
-/** Sentence-ending punctuation (primary split points), kept with the sentence. */
-const PRIMARY = /([。！？；…\n]|[.!?;])/;
+/** Sentence-ending punctuation set. ASCII `.` is conditional — see {@link splitSentences}. */
+const PRIMARY_PUNCT = new Set(['。', '！', '？', '；', '…', '\n', '.', '!', '?', ';']);
 /** Secondary punctuation for over-budget sentences, kept with the clause. */
 const SECONDARY = /([，、,:：—])/;
+
+/** A word char for the inter-token period guard: ASCII digits, Latin letters, `_`. */
+function isWordChar(ch: string | undefined): boolean {
+  return !!ch && /[0-9A-Za-z_]/.test(ch);
+}
 
 /** True for a wide (CJK / full-width) code point that occupies a full cell. */
 function isWide(ch: string): boolean {
@@ -104,6 +109,49 @@ function splitKeepingDelimiters(text: string, re: RegExp): string[] {
 }
 
 /**
+ * Split text into sentences at genuine boundaries, keeping the terminating
+ * punctuation with its sentence. A run of consecutive boundary punctuation
+ * (repeated ellipses `...`, a `?!`) collapses into a single boundary, so it never
+ * yields empty or lone-punctuation cues.
+ *
+ * A bare ASCII period is *not* always a boundary. `3.14`, `v1.2`, and the internal
+ * dots of `e.g.` / `U.S.` must stay inside their token — otherwise a decimal,
+ * version, or abbreviation is split into separately-timed cues (both the burned-in
+ * overlay and the SRT/VTT sidecar). A lone `.` ends a sentence only when it does
+ * not sit between word chars and is not an abbreviation dot (a single `.` before a
+ * lowercase continuation, as in `e.g. apples`). Full-width sentence punctuation,
+ * `\n`, and multi-dot ellipses are always boundaries.
+ */
+function splitSentences(text: string): string[] {
+  const chars = [...text];
+  const out: string[] = [];
+  let start = 0;
+  for (let i = 0; i < chars.length; i++) {
+    if (!PRIMARY_PUNCT.has(chars[i])) continue;
+
+    // Extent of the consecutive-punctuation run starting here (collapses `...`).
+    let end = i;
+    while (end + 1 < chars.length && PRIMARY_PUNCT.has(chars[end + 1])) end++;
+
+    // A single ASCII '.' may be an inter-token or abbreviation dot, not a boundary.
+    if (end === i && chars[i] === '.') {
+      if (isWordChar(chars[i - 1]) && isWordChar(chars[i + 1])) continue; // 3.14, v1.2, e.g
+      // Abbreviation dot: `e.g. apples`, `U.S. economy` — a lone period before a
+      // lowercase continuation abbreviates rather than ends the sentence.
+      let k = i + 1;
+      while (k < chars.length && /\s/.test(chars[k])) k++;
+      if (chars[k] && /[a-z]/.test(chars[k])) continue;
+    }
+
+    out.push(chars.slice(start, end + 1).join(''));
+    start = end + 1;
+    i = end;
+  }
+  if (start < chars.length) out.push(chars.slice(start).join(''));
+  return out.map((s) => s.trim()).filter(Boolean);
+}
+
+/**
  * Split narration text into short pieces (each ≤ ~MAX_UNITS), preferring
  * sentence boundaries, then clause punctuation, then a hard wrap. Whitespace-only
  * input yields no pieces. Adjacent under-budget sentences are greedily packed so
@@ -114,9 +162,7 @@ export function splitCueText(text: string): string[] {
   if (!trimmed) return [];
 
   // 1. Sentences.
-  const sentences = splitKeepingDelimiters(trimmed, PRIMARY)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const sentences = splitSentences(trimmed);
 
   // 2. Break any over-budget sentence on clause punctuation, then hard-wrap.
   //    Sentences within budget stay one-per-cue (line-by-line subtitles); a

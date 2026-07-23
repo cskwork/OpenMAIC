@@ -59,12 +59,34 @@ function videoRecord(over: Partial<MediaFileRecord> = {}): MediaFileRecord {
   } as MediaFileRecord;
 }
 
+/** A media record for an arbitrary ref (id is `stageId:ref`). */
+function videoRecordFor(ref: string, over: Partial<MediaFileRecord> = {}): MediaFileRecord {
+  return videoRecord({ id: `${STAGE_ID}:${ref}`, ...over });
+}
+
 /** A slide scene whose element points at the media ref via `mediaRef`. */
 function slideScene(el: Record<string, unknown>, actions: unknown[] = []): Scene {
   return {
     id: 'scene-1',
     stageId: STAGE_ID,
     title: 'Scene',
+    order: 0,
+    type: 'slide',
+    content: { type: 'slide', canvas: { elements: [el] } },
+    actions,
+  } as unknown as Scene;
+}
+
+/** A slide scene with an explicit id, one element, and optional actions. */
+function slideSceneWithId(
+  sceneId: string,
+  el: Record<string, unknown>,
+  actions: unknown[] = [],
+): Scene {
+  return {
+    id: sceneId,
+    stageId: STAGE_ID,
+    title: sceneId,
     order: 0,
     type: 'slide',
     content: { type: 'slide', canvas: { elements: [el] } },
@@ -108,6 +130,32 @@ describe('createVideoTimelineDeps — media ref bridge', () => {
 
     const deps = await createVideoTimelineDeps({ stage: { id: STAGE_ID }, scenes: [scene] });
     expect(deps.assets.media('plain_text', scene)).toBeNull();
+  });
+
+  it('scopes the bridge by scene: a shared element id resolves per-scene, not last-writer-wins', async () => {
+    // Two slides reuse the slide-local element id `video_001`, each pointing at a
+    // different generated video. A deck-wide bridge would collapse both to the
+    // last scene's ref; the scene-scoped bridge must keep them distinct.
+    const SHARED_ID = 'video_001';
+    const REF_A = 'gen_vid_aaa';
+    const REF_B = 'gen_vid_bbb';
+    mediaToArray.mockResolvedValue([videoRecordFor(REF_A), videoRecordFor(REF_B)]);
+
+    const play = (elementId: string) => ({ type: 'play_video', elementId });
+    const sceneA = slideSceneWithId('scene-a', { id: SHARED_ID, type: 'video', mediaRef: REF_A }, [
+      play(SHARED_ID),
+    ]);
+    const sceneB = slideSceneWithId('scene-b', { id: SHARED_ID, type: 'video', mediaRef: REF_B }, [
+      play(SHARED_ID),
+    ]);
+
+    const deps = await createVideoTimelineDeps({
+      stage: { id: STAGE_ID },
+      scenes: [sceneA, sceneB],
+    });
+
+    expect(deps.assets.media(SHARED_ID, sceneA)?.id).toBe(`${STAGE_ID}:${REF_A}`);
+    expect(deps.assets.media(SHARED_ID, sceneB)?.id).toBe(`${STAGE_ID}:${REF_B}`);
   });
 });
 

@@ -174,8 +174,17 @@ function probeAudioDurationMs(blob: Blob): Promise<number | null> {
 export async function createVideoTimelineDeps(input: {
   stage: { id: string };
   scenes: Scene[];
+  /**
+   * Skip the off-screen content-box geometry measurement (an off-screen React
+   * render per slide scene). Geometry only positions spotlight/laser/video
+   * effects — it never affects timing — so the subtitles-only path passes `true`
+   * to avoid that cost. Audio/video *duration* probes always run: they set the
+   * timeline (and thus cue timings), so the sidecar SRT/VTT stays in sync with
+   * the burned-in video. Defaults to false (full geometry for the ZIP/render).
+   */
+  skipGeometry?: boolean;
 }): Promise<VideoTimelineDeps> {
-  const { stage, scenes } = input;
+  const { stage, scenes, skipGeometry = false } = input;
 
   // Audio: load only the records referenced by speech actions.
   const audioIds = new Set<string>();
@@ -221,18 +230,42 @@ export async function createVideoTimelineDeps(input: {
   // generated video misses and is silently dropped from the export (compile →
   // present:false → no `<video>` emitted, no bytes collected). Mirrors the live
   // engine's `resolveMediaPlaceholderId`.
-  const mediaRefByElementId = new Map<string, string>();
+  //
+  // Scoped **by scene**, not deck-wide: element ids are only unique within a
+  // slide (e.g. `video_001` recurs across scenes), so a single flat map is
+  // last-writer-wins and would resolve an earlier scene's `play_video` to a
+  // later scene's media ref — the wrong asset and duration. Keying by scene id
+  // keeps each slide's bridge isolated.
+  const mediaRefBySceneElement = new Map<string, Map<string, string>>();
   for (const scene of scenes) {
     if (scene.type !== 'slide') continue;
     const elements = (scene.content as SlideContent)?.canvas?.elements ?? [];
+    const byElement = new Map<string, string>();
     for (const el of elements) {
       const ref = elementMediaRef(el as { mediaRef?: unknown; src?: unknown });
-      if (ref) mediaRefByElementId.set((el as { id: string }).id, ref);
+      if (ref) byElement.set((el as { id: string }).id, ref);
+    }
+    if (byElement.size > 0) mediaRefBySceneElement.set(scene.id, byElement);
+  }
+  /** Resolve a `play_video` element id to the media map's key (its ref) within a scene, or pass through. */
+  const resolveMediaKey = (elementId: string, sceneId: string): string =>
+    mediaRefBySceneElement.get(sceneId)?.get(elementId) ?? elementId;
+
+  // `timing.videoDurationMs` receives only the action (no scene), but the bridge
+  // above is now scene-scoped, so pre-resolve each `play_video`'s media ref by
+  // (scene, elementId) and key it on the action object. Action identity is
+  // stable end-to-end: the compiler's normalize pass preserves the same action
+  // references and the choreography passes them straight back to
+  // `getVideoDurationMs` — the same identity contract `resolveAvailableVideos`
+  // relies on. Falls back to the raw element id for any action not seen here.
+  const videoRefByAction = new Map<PlayVideoAction, string>();
+  for (const scene of scenes) {
+    for (const action of scene.actions ?? []) {
+      if (action.type !== 'play_video') continue;
+      const playVideo = action as PlayVideoAction;
+      videoRefByAction.set(playVideo, resolveMediaKey(playVideo.elementId, scene.id));
     }
   }
-  /** Resolve a `play_video` element id to the media map's key (its ref), or pass through. */
-  const resolveMediaKey = (elementId: string): string =>
-    mediaRefByElementId.get(elementId) ?? elementId;
 
   // Probe video durations up front so `videoDurationMs` can be synchronous.
   // Only local blobs are probed; ossKey-only (evicted) records have no bytes to
@@ -259,7 +292,8 @@ export async function createVideoTimelineDeps(input: {
       return Math.round(record.duration * 1000);
     },
     videoDurationMs(action: PlayVideoAction): number | null {
-      return videoDurationMsByElementId.get(resolveMediaKey(action.elementId)) ?? null;
+      const key = videoRefByAction.get(action) ?? action.elementId;
+      return videoDurationMsByElementId.get(key) ?? null;
     },
   };
 
@@ -279,10 +313,11 @@ export async function createVideoTimelineDeps(input: {
         present: record.blob.size > 0 || !!record.ossKey,
       };
     },
-    media(elementId: string, _scene: SceneCore): AssetMeta | null {
+    media(elementId: string, scene: SceneCore): AssetMeta | null {
       // `elementId` is the slide element `.id` a `play_video` targets; the media
-      // records are keyed by the element's media ref, so bridge id → ref first.
-      const key = resolveMediaKey(elementId);
+      // records are keyed by the element's media ref, so bridge id → ref first,
+      // scoped to this scene (element ids recur across slides).
+      const key = resolveMediaKey(elementId, scene.id);
       const record = mediaByElementId.get(key);
       if (!record) return null;
       return {
@@ -302,8 +337,14 @@ export async function createVideoTimelineDeps(input: {
   // (auto-height text + 10px padding) — the same box the live overlay and the
   // frame PNG use — aligns effects with where the element actually paints
   // instead of its authored outer box (issue #867 item 5).
+  //
+  // Skipped for the subtitles-only path (`skipGeometry`): geometry positions
+  // effects but never touches timing, so the empty probe just degrades every
+  // effect to the authored-box calc — irrelevant when no video/frames are
+  // emitted — while saving an off-screen React render per slide.
   const geometryBySceneElement = new Map<string, Map<string, MeasuredGeometry>>();
   for (const scene of scenes) {
+    if (skipGeometry) break;
     if (scene.type !== 'slide') continue;
     const targetIds = new Set<string>();
     for (const action of scene.actions ?? []) {

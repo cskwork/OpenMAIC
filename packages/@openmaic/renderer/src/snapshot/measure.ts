@@ -105,16 +105,37 @@ export async function measureSlideElementGeometry(
       root!.render(createElement(SlideCanvas, { slide, chrome: false }));
     });
 
-    // Let the ResizeObserver-driven fit settle, then wait for fonts so
-    // auto-height text has its final measured extent before we read rects.
+    // Let the ResizeObserver-driven fit settle, then settle fonts before we read
+    // rects. Auto-height text only reaches its final extent once the real faces
+    // load, and `document.fonts.ready` alone is racy — it can resolve before the
+    // off-screen render triggers a self-hosted woff2 fetch, leaving a fallback
+    // face whose Latin/digit advances differ and shift the measured content box.
+    // So force-load every (style, weight, family) actually used first (mirrors
+    // `slideToPng`), then await readiness, capped by the settle timeout.
     await nextFrame();
     await nextFrame();
+    if (document.fonts && typeof document.fonts.load === 'function') {
+      const fontSpecs = new Set<string>();
+      container.querySelectorAll<HTMLElement>('*').forEach((el) => {
+        if (!el.textContent || !el.textContent.trim()) return;
+        const cs = getComputedStyle(el);
+        if (!cs.fontFamily) return;
+        fontSpecs.add(`${cs.fontStyle} ${cs.fontWeight} 16px ${cs.fontFamily}`);
+      });
+      await Promise.race([
+        Promise.all([...fontSpecs].map((spec) => document.fonts.load(spec).catch(() => undefined))),
+        new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+      ]);
+    }
     if (document.fonts?.ready) {
       await Promise.race([
         document.fonts.ready,
         new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
       ]);
     }
+    // Let any font-triggered relayout settle (KaTeX re-fits once KaTeX_Size loads,
+    // a React state update) before reading rects — two frames to commit.
+    await nextFrame();
     await nextFrame();
 
     // The SlideCanvas inner container is the positioned box every element is

@@ -124,7 +124,9 @@ export function VideoExportDialog({
     };
   }, [open]);
 
-  const busy = isExportingVideo || rendering;
+  // Any in-flight export operation (ZIP build, in-app render, or subtitle
+  // download) blocks the others — they share one compile/store critical section.
+  const busy = isExportingVideo || rendering || downloading;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

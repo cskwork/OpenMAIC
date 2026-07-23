@@ -17,6 +17,7 @@ import { saveAs } from 'file-saver';
 import { toast } from 'sonner';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { createLogger } from '@/lib/logger';
+import { acquireExport, releaseExport } from './export-in-flight';
 import { compileSubtitles, NoScenesError, sanitizeFilename } from './build-export-zip';
 
 const log = createLogger('DownloadSubtitles');
@@ -30,6 +31,9 @@ export function useDownloadSubtitles() {
   const downloadSubtitles = useCallback(
     async (format: SubtitleFormat = 'srt') => {
       if (downloading) return;
+      // Shared with the ZIP export: both funnel through the same stage-store /
+      // Dexie compile, so only one export operation runs at a time.
+      if (!acquireExport()) return;
       setDownloading(true);
       const toastId = toast.loading(t('export.subtitlesCompiling'));
       try {
@@ -51,6 +55,7 @@ export function useDownloadSubtitles() {
           toast.error(t('export.subtitlesFailed'), { id: toastId });
         }
       } finally {
+        releaseExport();
         setDownloading(false);
       }
     },
