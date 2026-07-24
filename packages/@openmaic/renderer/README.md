@@ -83,7 +83,7 @@ interface SlideCanvasProps {
   effects?: SlideEffects;              // laser / spotlight / highlight / zoom, all default off
   renderImage?: (el, src, defaultContent) => ReactNode;
   renderVideo?: (el) => ReactNode;
-  videoInteractive?: boolean;           // opt in to video controls/custom video UI
+  videoInteractive?: boolean;           // defaults true; set false to disable video pointer interaction
   onElementClick?: (el, event) => void;
   elementIdPrefix?: string;
   className?: string;

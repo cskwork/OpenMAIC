@@ -225,8 +225,8 @@ export interface PPTTextElement extends PPTBaseElement {
   /**
    * @since-merge renderer + importer
    * Vertical anchor of the text within the box, parsed from `<a:bodyPr anchor="...">`.
-   * `middle` / undefined vertically centers the content. `top` and `bottom`
-   * explicitly align it to the corresponding edge.
+   * `top` / undefined keeps the legacy top-anchored behavior. `middle` and `bottom`
+   * vertically center / bottom-align the content inside the box.
    */
   vAlign?: 'top' | 'middle' | 'bottom';
 }
