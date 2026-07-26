@@ -1768,7 +1768,9 @@ export function getModel(config: ModelConfig): ModelWithInfo {
           }
           const normalizedReasoningResponse = streaming
             ? wrapResponseWithReasoning(response)
-            : await wrapJsonResponseWithReasoning(response);
+            : providerId === 'kimi' && config.modelId === 'kimi-k3'
+              ? await wrapJsonResponseWithReasoning(response)
+              : response;
 
           if (providerId !== 'lemonade') {
             return normalizedReasoningResponse;

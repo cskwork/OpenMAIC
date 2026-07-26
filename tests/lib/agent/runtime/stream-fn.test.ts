@@ -177,7 +177,7 @@ describe('toModelMessages', () => {
       },
     ];
 
-    const result = toModelMessages(messages);
+    const result = toModelMessages(messages, { includeReasoning: true });
     expect((result[0] as { content: unknown }).content).toEqual([
       { type: 'reasoning', text: 'keep this reasoning' },
       { type: 'text', text: 'answer' },
