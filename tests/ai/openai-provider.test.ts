@@ -312,6 +312,24 @@ describe('OpenAI provider defaults', () => {
     });
   });
 
+  it('includes latest official Grok models with explicit output limits', () => {
+    expect(getModelInfo('grok', 'grok-4.5')).toMatchObject({
+      id: 'grok-4.5',
+      contextWindow: 500000,
+      outputWindow: 500000,
+    });
+    expect(getModelInfo('grok', 'grok-4.3')).toMatchObject({
+      id: 'grok-4.3',
+      contextWindow: 1000000,
+      outputWindow: 30000,
+    });
+    expect(getModelInfo('grok', 'grok-build-0.1')).toMatchObject({
+      id: 'grok-build-0.1',
+      contextWindow: 256000,
+      outputWindow: 256000,
+    });
+  });
+
   it.each([
     ['kimi', 'kimi-k3', { mode: 'enabled', effort: 'high' }, { reasoning_effort: 'high' }],
     ['grok', 'grok-4.5', { mode: 'enabled', effort: 'medium' }, { reasoning_effort: 'medium' }],

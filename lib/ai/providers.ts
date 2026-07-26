@@ -1129,6 +1129,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         id: 'grok-4.5',
         name: 'Grok 4.5',
         contextWindow: 500000,
+        outputWindow: 500000,
         capabilities: {
           streaming: true,
           tools: true,
@@ -1144,6 +1145,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         id: 'grok-4.3',
         name: 'Grok 4.3',
         contextWindow: 1000000,
+        outputWindow: 30000,
         capabilities: {
           streaming: true,
           tools: true,
@@ -1159,6 +1161,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         id: 'grok-build-0.1',
         name: 'Grok Build 0.1',
         contextWindow: 256000,
+        outputWindow: 256000,
         capabilities: {
           streaming: true,
           tools: true,
