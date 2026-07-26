@@ -237,7 +237,9 @@ async function pump(
         system: context.systemPrompt,
         messages: toModelMessages(context.messages, {
           includeReasoning:
-            typeof opts.languageModel !== 'string' && opts.languageModel.provider === 'kimi.chat',
+            typeof opts.languageModel !== 'string' &&
+            opts.languageModel.provider === 'kimi.chat' &&
+            opts.languageModel.modelId === 'kimi-k3',
         }),
         tools: toAiTools(context.tools ?? []),
         toolChoice: 'auto',
