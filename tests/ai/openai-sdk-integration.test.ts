@@ -2,6 +2,9 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { generateText } from 'ai';
 import { describe, expect, it } from 'vitest';
 
+import { resolveThinkingProviderOptions } from '@/lib/ai/llm';
+import { getModel } from '@/lib/ai/providers';
+
 describe('OpenAI SDK integration', () => {
   it('accepts GPT-5.6 max reasoning effort and sends it to the Responses API', async () => {
     let requestBody: Record<string, unknown> | undefined;
@@ -47,6 +50,26 @@ describe('OpenAI SDK integration', () => {
     expect(requestBody).toMatchObject({
       model: 'gpt-5.6',
       reasoning: { effort: 'max' },
+    });
+  });
+
+  it('preserves compatible provider identity for direct thinking option resolution', () => {
+    const { model } = getModel({
+      providerId: 'kimi',
+      modelId: 'kimi-k3',
+      apiKey: 'sk-test',
+    });
+
+    expect((model as { provider: string }).provider).toBe('kimi.chat');
+    expect(
+      resolveThinkingProviderOptions(model, {
+        mode: 'enabled',
+        effort: 'high',
+      }),
+    ).toEqual({
+      openai: {
+        reasoningEffort: 'high',
+      },
     });
   });
 });

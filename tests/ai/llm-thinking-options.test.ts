@@ -195,4 +195,30 @@ describe('LLM thinking provider options', () => {
       }),
     );
   });
+
+  it('sends xhigh reasoning effort for Claude 5 models', async () => {
+    await callLLM(
+      {
+        model: {
+          provider: 'anthropic.messages',
+          modelId: 'claude-opus-5',
+        },
+        prompt: 'hi',
+      } as Parameters<typeof callLLM>[0],
+      'test',
+      undefined,
+      { mode: 'enabled', effort: 'xhigh' },
+    );
+
+    expect(aiMock.generateText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerOptions: {
+          anthropic: {
+            thinking: { type: 'adaptive' },
+            effort: 'xhigh',
+          },
+        },
+      }),
+    );
+  });
 });

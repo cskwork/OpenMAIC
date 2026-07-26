@@ -179,9 +179,6 @@ function buildThinkingProviderOptions(
       if (!effort) return undefined;
 
       if (thinking.anthropicThinking?.type === 'adaptive') {
-        // Some newly released Anthropic effort values can lag the local SDK
-        // schema. OpenAI-compatible transports still inject those at fetch time.
-        if (effort === 'xhigh') return undefined;
         return buildAnthropicOptions({
           thinking: { type: 'adaptive' },
           effort,

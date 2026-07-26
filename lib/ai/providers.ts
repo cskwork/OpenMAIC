@@ -1694,6 +1694,7 @@ export function getModel(config: ModelConfig): ModelWithInfo {
       const openaiOptions: Parameters<typeof createOpenAI>[0] = {
         apiKey: effectiveApiKey,
         baseURL: effectiveBaseUrl,
+        name: config.providerId,
       };
 
       // For OpenAI-compatible providers (not native OpenAI), add a fetch
