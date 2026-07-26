@@ -30,7 +30,12 @@ import { createAzure } from '@ai-sdk/azure';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { wrapLanguageModel, extractReasoningMiddleware } from 'ai';
-import { wrapResponseWithReasoning } from './reasoning-sse';
+import {
+  createKimiReasoningPreservationMiddleware,
+  restoreKimiReasoningInRequestBody,
+  wrapJsonResponseWithReasoning,
+  wrapResponseWithReasoning,
+} from './reasoning-sse';
 import type { LanguageModel } from 'ai';
 import type {
   ProviderId,
@@ -836,7 +841,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         id: 'kimi-k3',
         name: 'Kimi K3',
         contextWindow: 1048576,
-        outputWindow: 1048576,
+        outputWindow: 131072,
         capabilities: {
           streaming: true,
           tools: true,
@@ -1732,26 +1737,41 @@ export function getModel(config: ModelConfig): ModelWithInfo {
               }
             }
           }
+
+          if (
+            providerId === 'kimi' &&
+            config.modelId === 'kimi-k3' &&
+            init?.body &&
+            typeof init.body === 'string'
+          ) {
+            try {
+              const body = JSON.parse(init.body);
+              restoreKimiReasoningInRequestBody(body);
+              init = { ...init, body: JSON.stringify(body) };
+            } catch {
+              /* leave body as-is */
+            }
+          }
           const response = await globalThis.fetch(url, init);
 
           // Recover reasoning that @ai-sdk/openai's chat schema drops: rewrite
           // streamed `reasoning_content` deltas into an inline <think> block
           // (the model below is wrapped with extractReasoningMiddleware to split
           // it back into first-class reasoning parts). No-op when absent.
-          const streamingReasoned = (() => {
-            let streaming = false;
-            if (init?.body && typeof init.body === 'string') {
-              try {
-                streaming = JSON.parse(init.body)?.stream === true;
-              } catch {
-                /* ignore request-body inspection failure */
-              }
+          let streaming = false;
+          if (init?.body && typeof init.body === 'string') {
+            try {
+              streaming = JSON.parse(init.body)?.stream === true;
+            } catch {
+              /* ignore request-body inspection failure */
             }
-            return streaming ? wrapResponseWithReasoning(response) : response;
-          })();
+          }
+          const normalizedReasoningResponse = streaming
+            ? wrapResponseWithReasoning(response)
+            : await wrapJsonResponseWithReasoning(response);
 
           if (providerId !== 'lemonade') {
-            return streamingReasoned;
+            return normalizedReasoningResponse;
           }
 
           const contentType = response.headers.get('content-type') || '';
@@ -1801,9 +1821,16 @@ export function getModel(config: ModelConfig): ModelWithInfo {
       // show a thinking panel and the answer text stays clean. Native OpenAI
       // handles reasoning itself, so it is excluded.
       if (config.providerId !== 'openai') {
+        const middleware =
+          config.providerId === 'kimi' && config.modelId === 'kimi-k3'
+            ? [
+                createKimiReasoningPreservationMiddleware(),
+                extractReasoningMiddleware({ tagName: 'think' }),
+              ]
+            : extractReasoningMiddleware({ tagName: 'think' });
         model = wrapLanguageModel({
           model,
-          middleware: extractReasoningMiddleware({ tagName: 'think' }),
+          middleware,
         });
       }
       break;

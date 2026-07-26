@@ -256,7 +256,7 @@ describe('OpenAI provider defaults', () => {
       id: 'kimi-k3',
       name: 'Kimi K3',
       contextWindow: 1048576,
-      outputWindow: 1048576,
+      outputWindow: 131072,
       capabilities: {
         streaming: true,
         tools: true,

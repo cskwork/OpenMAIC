@@ -282,7 +282,9 @@ export function toModelMessages(messages: PiMessage[]): ModelMessage[] {
       const parts: Array<Record<string, unknown>> = [];
       for (const c of m.content) {
         if (c.type === 'text') parts.push({ type: 'text', text: c.text });
-        else if (c.type === 'toolCall') {
+        else if (c.type === 'thinking') {
+          parts.push({ type: 'reasoning', text: c.thinking });
+        } else if (c.type === 'toolCall') {
           const part: Record<string, unknown> = {
             type: 'tool-call',
             toolCallId: c.id,
