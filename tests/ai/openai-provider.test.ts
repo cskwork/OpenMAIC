@@ -218,7 +218,7 @@ describe('OpenAI provider defaults', () => {
     ).toBe('https://example.openai.azure.com/openai');
   });
 
-  it('includes latest official GLM and Kimi coding models', () => {
+  it('includes latest official GLM and Kimi models', () => {
     expect(getModelInfo('glm', 'glm-5.2')).toMatchObject({
       id: 'glm-5.2',
       name: 'GLM-5.2',
@@ -246,6 +246,17 @@ describe('OpenAI provider defaults', () => {
       name: 'Kimi K2.7 Code HighSpeed',
       contextWindow: 256000,
       outputWindow: 32768,
+      capabilities: {
+        streaming: true,
+        tools: true,
+        vision: true,
+      },
+    });
+    expect(getModelInfo('kimi', 'kimi-k3')).toMatchObject({
+      id: 'kimi-k3',
+      name: 'Kimi K3',
+      contextWindow: 1048576,
+      outputWindow: 1048576,
       capabilities: {
         streaming: true,
         tools: true,
@@ -302,6 +313,9 @@ describe('OpenAI provider defaults', () => {
   });
 
   it.each([
+    ['kimi', 'kimi-k3', { mode: 'enabled', effort: 'high' }, { reasoning_effort: 'high' }],
+    ['grok', 'grok-4.5', { mode: 'enabled', effort: 'medium' }, { reasoning_effort: 'medium' }],
+    ['grok', 'grok-4.3', { mode: 'disabled', effort: 'none' }, { reasoning_effort: 'none' }],
     ['kimi', 'kimi-k2.6', { mode: 'disabled' }, { thinking: { type: 'disabled' } }],
     ['glm', 'glm-5.1', { mode: 'enabled' }, { thinking: { type: 'enabled' } }],
     [

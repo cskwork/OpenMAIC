@@ -169,4 +169,30 @@ describe('LLM thinking provider options', () => {
       }),
     );
   });
+
+  it('coerces disabled thinking to the lowest supported effort for Claude Fable 5', async () => {
+    await callLLM(
+      {
+        model: {
+          provider: 'anthropic.messages',
+          modelId: 'claude-fable-5',
+        },
+        prompt: 'hi',
+      } as Parameters<typeof callLLM>[0],
+      'test',
+      undefined,
+      { mode: 'disabled' },
+    );
+
+    expect(aiMock.generateText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerOptions: {
+          anthropic: {
+            thinking: { type: 'adaptive' },
+            effort: 'low',
+          },
+        },
+      }),
+    );
+  });
 });

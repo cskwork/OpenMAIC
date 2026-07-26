@@ -164,7 +164,9 @@ function buildThinkingProviderOptions(
         anthropic: options,
       });
 
-      if (mode === 'disabled') return buildAnthropicOptions({ thinking: { type: 'disabled' } });
+      if (mode === 'disabled' && thinking.toggleable !== false) {
+        return buildAnthropicOptions({ thinking: { type: 'disabled' } });
+      }
 
       if (thinking.control === 'toggle-budget' || thinking.control === 'budget-only') {
         const budget = pickThinkingBudget(thinking, config);
