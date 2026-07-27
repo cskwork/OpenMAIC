@@ -51,12 +51,14 @@ interface RuntimeAppendConflictDetails {
 export class HttpRuntimeStoreError extends Error {
   readonly status: number;
   readonly code: string;
+  readonly details: unknown;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, details?: unknown) {
     super(message);
     this.name = 'HttpRuntimeStoreError';
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -145,10 +147,17 @@ export class HttpRuntimeStore implements RuntimeStore {
     if (options.baseUrl === '') {
       throw new Error('@openmaic/storage: HttpRuntimeStore baseUrl must be non-empty');
     }
-    const fetchImpl = options.fetch ?? globalThis.fetch;
-    if (typeof fetchImpl !== 'function') {
+    // Bind explicitly: browsers require fetch to be invoked with `this === globalThis`
+    // (calling a stored reference as `this.fetchImpl(...)` throws "Illegal
+    // invocation"), while node's undici does not care — which is exactly why
+    // node-only test suites cannot catch the unbound form.
+    // Validate BEFORE binding: .bind on a non-function throws a native
+    // TypeError that would preempt the documented error below.
+    const selectedFetch = options.fetch ?? globalThis.fetch;
+    if (typeof selectedFetch !== 'function') {
       throw new Error('@openmaic/storage: HttpRuntimeStore requires a fetch implementation');
     }
+    const fetchImpl = selectedFetch.bind(globalThis);
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
     this.fetchImpl = fetchImpl;
     this.headersHook = options.headers;
@@ -203,7 +212,7 @@ export class HttpRuntimeStore implements RuntimeStore {
           );
         }
       }
-      throw new HttpRuntimeStoreError(response.status, code, message);
+      throw new HttpRuntimeStoreError(response.status, code, message, errorBody?.error?.details);
     }
     if (response.status === 204) return { body: undefined as T, status: response.status };
     return { body: (await response.json()) as T, status: response.status };
