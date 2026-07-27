@@ -30,10 +30,32 @@ export type {
   DocumentSummary,
   SceneLike,
   SceneValidator,
+  StageValidator,
 } from './document/types.js';
+export { DocumentNotFoundError, DocumentVersionError } from './document/types.js';
 export { BrowserDocumentStore, type BrowserDocumentStoreOptions } from './document/browser.js';
+export {
+  HttpDocumentStore,
+  HttpDocumentStoreError,
+  type HttpDocumentHeadersContext,
+  type HttpDocumentHeadersHook,
+  type HttpDocumentStoreOptions,
+} from './document/http.js';
+export {
+  PgDocumentStore,
+  DOCUMENT_PG_SCHEMA,
+  ensureDocumentSchema,
+  type PgDocumentStoreOptions,
+} from './document/pg.js';
 
-export type { RuntimeStore, RuntimeSessionInit, RuntimePayloadValidator } from './runtime/types.js';
+export type {
+  RuntimeStore,
+  RuntimeSessionInit,
+  RuntimePayloadValidator,
+  RuntimeAppendOptions,
+  RuntimeTailOptions,
+} from './runtime/types.js';
+export { RuntimeAppendConflictError } from './runtime/types.js';
 export { BrowserRuntimeStore, type BrowserRuntimeStoreOptions } from './runtime/browser.js';
 
 // Re-export the DSL-owned asset contract for convenience, so consumers can get
