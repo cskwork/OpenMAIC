@@ -325,6 +325,22 @@ describe('Pi child prompt structured output', () => {
     expect(prompt).not.toContain('- discussion:');
   });
 
+  it('keeps the whiteboard open across agent handoffs unless closing is explicitly needed', () => {
+    const prompt = buildChildPrompt(
+      makeBody(),
+      agents[0],
+      [],
+      [],
+      ['spotlight', 'laser', 'wb_open', 'wb_draw_text', 'wb_close'],
+    );
+
+    expect(prompt).not.toContain('Always close after you finish drawing');
+    expect(prompt).toContain('Do not close merely because your own drawing is complete');
+    expect(prompt).toContain('a later classroom agent still needs the board');
+    expect(prompt).toContain('Close only when explicitly requested');
+    expect(prompt).toContain('before returning to slide-only actions such as spotlight or laser');
+  });
+
   it('renders first-request session context alongside the current slide and persisted board', () => {
     const body = makeBody({
       piSessionBoundary: {
