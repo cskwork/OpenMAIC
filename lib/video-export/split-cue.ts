@@ -30,14 +30,41 @@ const MAX_UNITS = 40;
 /** A piece shorter than this (ms) is merged into a neighbour so it doesn't flash. */
 const MIN_CUE_MS = 1200;
 
-/** Sentence-ending punctuation set. ASCII `.` is conditional — see {@link splitSentences}. */
-const PRIMARY_PUNCT = new Set(['。', '！', '？', '；', '…', '\n', '.', '!', '?', ';']);
-/** Secondary punctuation for over-budget sentences, kept with the clause. */
-const SECONDARY = /([，、,:：—])/;
+/**
+ * Clause punctuation used to break an *over-budget* sentence into cue-sized
+ * pieces, kept with the preceding clause. Includes both semicolons (`；;`),
+ * which {@link splitSentences} intentionally does not treat as sentence ends
+ * (they join clauses, not sentences), so a long semicolon-joined sentence still
+ * breaks here rather than overflowing the readability budget.
+ */
+const SECONDARY = /([，、,:：；;—])/;
 
-/** A word char for the inter-token period guard: ASCII digits, Latin letters, `_`. */
-function isWordChar(ch: string | undefined): boolean {
-  return !!ch && /[0-9A-Za-z_]/.test(ch);
+/**
+ * Locale-agnostic ICU sentence segmenter, constructed once. Its Unicode
+ * sentence-boundary rules already preserve decimals (`3.14`), versions (`v1.2`),
+ * acronyms (`U.S.`), inline abbreviations (`e.g.`), ellipses, and CJK terminators
+ * (`。！？…`) — so the boundary logic no longer needs a hand-rolled punctuation
+ * heuristic. See {@link splitSentences} for the one gap it leaves.
+ */
+const SENTENCE_SEGMENTER = new Intl.Segmenter(undefined, { granularity: 'sentence' });
+
+/**
+ * Abbreviations whose trailing period ICU still (incorrectly) treats as a
+ * sentence end when a capitalized word follows — e.g. `Dr. Smith`, `Prof. Lee`,
+ * `Fig. 3`. These are re-joined by the post-merge in {@link splitSentences}.
+ * Lower-cased, period stripped; single-letter initials are covered by ICU itself.
+ */
+const ABBREVIATIONS = new Set([
+  'mr', 'mrs', 'ms', 'dr', 'prof', 'sr', 'jr', 'st', 'vs', 'etc', 'inc', 'ltd',
+  'co', 'corp', 'fig', 'eq', 'no', 'vol', 'dept', 'approx', 'al', 'e.g', 'i.e',
+]);
+
+/** True when `text`'s final token is an abbreviation dot, so the next segment continues it. */
+function endsWithAbbreviation(text: string): boolean {
+  const m = /(\S+)\.\s*$/.exec(text);
+  if (!m) return false;
+  const token = m[1].toLowerCase().replace(/^[^\p{L}.]+/u, '');
+  return ABBREVIATIONS.has(token) || ABBREVIATIONS.has(token.replace(/\.$/, ''));
 }
 
 /** True for a wide (CJK / full-width) code point that occupies a full cell. */
@@ -110,45 +137,29 @@ function splitKeepingDelimiters(text: string, re: RegExp): string[] {
 
 /**
  * Split text into sentences at genuine boundaries, keeping the terminating
- * punctuation with its sentence. A run of consecutive boundary punctuation
- * (repeated ellipses `...`, a `?!`) collapses into a single boundary, so it never
- * yields empty or lone-punctuation cues.
+ * punctuation with its sentence.
  *
- * A bare ASCII period is *not* always a boundary. `3.14`, `v1.2`, and the internal
- * dots of `e.g.` / `U.S.` must stay inside their token — otherwise a decimal,
- * version, or abbreviation is split into separately-timed cues (both the burned-in
- * overlay and the SRT/VTT sidecar). A lone `.` ends a sentence only when it does
- * not sit between word chars and is not an abbreviation dot (a single `.` before a
- * lowercase continuation, as in `e.g. apples`). Full-width sentence punctuation,
- * `\n`, and multi-dot ellipses are always boundaries.
+ * Boundary detection is delegated to ICU via {@link SENTENCE_SEGMENTER}, which
+ * handles the multilingual/CJK cases (`。！？…`, decimals, versions, `e.g.`,
+ * `U.S.`, ellipses) that a hand-rolled punctuation scan got wrong. ICU leaves one
+ * gap for our narration: it ends a sentence after an abbreviation like `Dr.` or
+ * `Fig.` when a capitalized word follows (`Dr. Smith` → `Dr.` / `Smith …`). A
+ * post-merge re-joins a segment onto its predecessor when that predecessor ends
+ * in a known abbreviation (see {@link ABBREVIATIONS}), so `Dr. Smith` stays one
+ * sentence. Blank segments (whitespace between sentences) are dropped.
  */
 function splitSentences(text: string): string[] {
-  const chars = [...text];
-  const out: string[] = [];
-  let start = 0;
-  for (let i = 0; i < chars.length; i++) {
-    if (!PRIMARY_PUNCT.has(chars[i])) continue;
-
-    // Extent of the consecutive-punctuation run starting here (collapses `...`).
-    let end = i;
-    while (end + 1 < chars.length && PRIMARY_PUNCT.has(chars[end + 1])) end++;
-
-    // A single ASCII '.' may be an inter-token or abbreviation dot, not a boundary.
-    if (end === i && chars[i] === '.') {
-      if (isWordChar(chars[i - 1]) && isWordChar(chars[i + 1])) continue; // 3.14, v1.2, e.g
-      // Abbreviation dot: `e.g. apples`, `U.S. economy` — a lone period before a
-      // lowercase continuation abbreviates rather than ends the sentence.
-      let k = i + 1;
-      while (k < chars.length && /\s/.test(chars[k])) k++;
-      if (chars[k] && /[a-z]/.test(chars[k])) continue;
+  const segments = [...SENTENCE_SEGMENTER.segment(text)].map((s) => s.segment);
+  const merged: string[] = [];
+  for (const seg of segments) {
+    const prev = merged[merged.length - 1];
+    if (prev !== undefined && endsWithAbbreviation(prev)) {
+      merged[merged.length - 1] = prev + seg;
+    } else {
+      merged.push(seg);
     }
-
-    out.push(chars.slice(start, end + 1).join(''));
-    start = end + 1;
-    i = end;
   }
-  if (start < chars.length) out.push(chars.slice(start).join(''));
-  return out.map((s) => s.trim()).filter(Boolean);
+  return merged.map((s) => s.trim()).filter(Boolean);
 }
 
 /**

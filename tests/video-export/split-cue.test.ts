@@ -65,12 +65,33 @@ describe('splitCueText', () => {
     ]);
   });
 
-  it('collapses a repeated ellipsis run into a single boundary (no empty cues)', () => {
-    const pieces = splitCueText('Wait... what happened?');
-    expect(pieces).toEqual(['Wait...', 'what happened?']);
-    // No empty or whitespace-only pieces from the consecutive dots.
-    for (const p of pieces) expect(p.trim()).toBe(p);
-    expect(pieces.every((p) => p.length > 0)).toBe(true);
+  it('does not split after a titlecase abbreviation before a name (Dr. Smith)', () => {
+    // ICU alone ends the sentence at `Dr.`; the abbreviation post-merge re-joins it.
+    expect(splitCueText('Ask Dr. Smith about it.')).toEqual(['Ask Dr. Smith about it.']);
+    expect(splitCueText('See Fig. 3 for the details.')).toEqual([
+      'See Fig. 3 for the details.',
+    ]);
+  });
+
+  it('keeps an acronym with internal periods inside one cue (U.S.)', () => {
+    expect(splitCueText('The U.S. economy grew.')).toEqual(['The U.S. economy grew.']);
+  });
+
+  it('keeps a rhetorical ellipsis as one cue (under budget)', () => {
+    // ICU treats `Wait... what happened?` as a single sentence; under the
+    // readability budget it stays one cue rather than fragmenting on the dots.
+    expect(splitCueText('Wait... what happened?')).toEqual(['Wait... what happened?']);
+  });
+
+  it('splits a semicolon-joined sentence only when over budget', () => {
+    // `；` is a clause join, not a sentence end: a short one stays whole,
+    // but an over-budget one breaks at the semicolon via the clause splitter.
+    expect(splitCueText('前半；后半。')).toEqual(['前半；后半。']);
+    const long =
+      '第一段讲的是概念的基本定义和背景说明内容较多；第二段进一步展开它的应用场景和典型例子。';
+    const pieces = splitCueText(long);
+    expect(pieces.length).toBeGreaterThan(1);
+    for (const p of pieces) expect(textUnits(p)).toBeLessThanOrEqual(40);
   });
 
   it('still splits on a genuine sentence-ending period', () => {
