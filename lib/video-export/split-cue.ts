@@ -49,43 +49,23 @@ const SECONDARY = /([，、,:：；;—])/;
 const SENTENCE_SEGMENTER = new Intl.Segmenter(undefined, { granularity: 'sentence' });
 
 /**
- * Abbreviations whose trailing period ICU still (incorrectly) treats as a
- * sentence end when a capitalized word follows — e.g. `Dr. Smith`, `Prof. Lee`,
- * `Fig. 3`. These are re-joined by the post-merge in {@link splitSentences}.
- * Lower-cased, period stripped; single-letter initials are covered by ICU itself.
+ * Titles that take a following proper noun in the *same* sentence — `Dr. Smith`,
+ * `Prof. Wang`, `Mr. Lee`. ICU ends a sentence at their trailing dot when a
+ * capitalized word follows, so {@link splitSentences} re-joins that one segment.
+ *
+ * Deliberately narrow: only titles, not sentence-*trailing* abbreviations like
+ * `Inc.`, `Ltd.`, `etc.`, `vs.`, or `No.`. Those legitimately end sentences
+ * (`…made by Acme Inc. Next point.`), and a capitalized word after them is
+ * usually a new sentence — merging them would delete real boundaries. Titles
+ * before a *number* (`No. 5`, `Fig. 3`) or a *lowercase* word (`etc. and…`) are
+ * already kept whole by ICU and need no merge. Lower-cased, no trailing dot.
  */
-const ABBREVIATIONS = new Set([
-  'mr',
-  'mrs',
-  'ms',
-  'dr',
-  'prof',
-  'sr',
-  'jr',
-  'st',
-  'vs',
-  'etc',
-  'inc',
-  'ltd',
-  'co',
-  'corp',
-  'fig',
-  'eq',
-  'no',
-  'vol',
-  'dept',
-  'approx',
-  'al',
-  'e.g',
-  'i.e',
-]);
+const CONTINUING_TITLES = new Set(['mr', 'mrs', 'ms', 'dr', 'prof', 'sr', 'jr']);
 
-/** True when `text`'s final token is an abbreviation dot, so the next segment continues it. */
-function endsWithAbbreviation(text: string): boolean {
-  const m = /(\S+)\.\s*$/.exec(text);
-  if (!m) return false;
-  const token = m[1].toLowerCase().replace(/^[^\p{L}.]+/u, '');
-  return ABBREVIATIONS.has(token) || ABBREVIATIONS.has(token.replace(/\.$/, ''));
+/** The previous segment ends in a title abbreviation whose sentence continues (`… Dr.`). */
+function endsWithContinuingTitle(text: string): boolean {
+  const m = /(\p{L}+)\.\s*$/u.exec(text);
+  return !!m && CONTINUING_TITLES.has(m[1].toLowerCase());
 }
 
 /** True for a wide (CJK / full-width) code point that occupies a full cell. */
@@ -163,18 +143,28 @@ function splitKeepingDelimiters(text: string, re: RegExp): string[] {
  * Boundary detection is delegated to ICU via {@link SENTENCE_SEGMENTER}, which
  * handles the multilingual/CJK cases (`。！？…`, decimals, versions, `e.g.`,
  * `U.S.`, ellipses) that a hand-rolled punctuation scan got wrong. ICU leaves one
- * gap for our narration: it ends a sentence after an abbreviation like `Dr.` or
- * `Fig.` when a capitalized word follows (`Dr. Smith` → `Dr.` / `Smith …`). A
- * post-merge re-joins a segment onto its predecessor when that predecessor ends
- * in a known abbreviation (see {@link ABBREVIATIONS}), so `Dr. Smith` stays one
- * sentence. Blank segments (whitespace between sentences) are dropped.
+ * narration gap: it ends a sentence after a title like `Dr.` / `Prof.` when a
+ * capitalized word follows (`Dr. Smith` → `Dr.` / `Smith …`). A narrow post-merge
+ * re-joins *that* segment — but only when all of these hold, so it never deletes a
+ * real boundary:
+ *   - the previous segment ends in a continuing title ({@link CONTINUING_TITLES}),
+ *     not a sentence-trailing abbreviation like `Inc.`/`etc.`;
+ *   - the previous segment does not end at an explicit newline (a hard boundary);
+ *   - the next segment starts with a capital (the proper noun that ICU mis-split;
+ *     a lowercase or numeric continuation was never split by ICU in the first place).
+ * Blank segments (whitespace between sentences) are dropped.
  */
 function splitSentences(text: string): string[] {
   const segments = [...SENTENCE_SEGMENTER.segment(text)].map((s) => s.segment);
   const merged: string[] = [];
   for (const seg of segments) {
     const prev = merged[merged.length - 1];
-    if (prev !== undefined && endsWithAbbreviation(prev)) {
+    const continuesTitle =
+      prev !== undefined &&
+      !/\n\s*$/.test(prev) &&
+      /^\s*\p{Lu}/u.test(seg) &&
+      endsWithContinuingTitle(prev);
+    if (continuesTitle) {
       merged[merged.length - 1] = prev + seg;
     } else {
       merged.push(seg);

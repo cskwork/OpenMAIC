@@ -65,10 +65,46 @@ describe('splitCueText', () => {
     ]);
   });
 
-  it('does not split after a titlecase abbreviation before a name (Dr. Smith)', () => {
-    // ICU alone ends the sentence at `Dr.`; the abbreviation post-merge re-joins it.
+  it('does not split after a title before a name (Dr. Smith)', () => {
+    // ICU alone ends the sentence at `Dr.`; the title post-merge re-joins the
+    // capitalized continuation.
     expect(splitCueText('Ask Dr. Smith about it.')).toEqual(['Ask Dr. Smith about it.']);
+    expect(splitCueText('Then Prof. Wang spoke up.')).toEqual(['Then Prof. Wang spoke up.']);
+  });
+
+  it('keeps a title before a number as one cue (Fig. 3, No. 5)', () => {
+    // ICU never splits a title before a digit, so no merge is involved.
     expect(splitCueText('See Fig. 3 for the details.')).toEqual(['See Fig. 3 for the details.']);
+    expect(splitCueText('Open room No. 5 now.')).toEqual(['Open room No. 5 now.']);
+  });
+
+  it('preserves a real boundary after a trailing abbreviation (Inc. Next)', () => {
+    // `Inc.`/`etc.`/`Ltd.` legitimately end sentences — the title merge must not
+    // swallow the following sentence.
+    expect(splitCueText('It was made by Acme Inc. Next point.')).toEqual([
+      'It was made by Acme Inc.',
+      'Next point.',
+    ]);
+    expect(splitCueText('Bring pens, etc. Then leave.')).toEqual([
+      'Bring pens, etc.',
+      'Then leave.',
+    ]);
+  });
+
+  it('keeps a lowercase continuation after an abbreviation as one cue (etc. and)', () => {
+    // ICU does not split before a lowercase word, so these stay whole regardless.
+    expect(splitCueText('Bring pens, etc. and then leave.')).toEqual([
+      'Bring pens, etc. and then leave.',
+    ]);
+    expect(splitCueText('Some fruit, e.g. apples and pears.')).toEqual([
+      'Some fruit, e.g. apples and pears.',
+    ]);
+  });
+
+  it('treats an explicit newline as a hard boundary, even after a title', () => {
+    // A newline after `Inc.` or a title ends the cue — the merge must not rejoin it.
+    expect(splitCueText('Acme Inc.\nNext topic here.')).toEqual(['Acme Inc.', 'Next topic here.']);
+    expect(splitCueText('Dr.\nSmith arrived later.')).toEqual(['Dr.', 'Smith arrived later.']);
   });
 
   it('keeps an acronym with internal periods inside one cue (U.S.)', () => {
