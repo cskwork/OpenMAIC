@@ -50,7 +50,7 @@ python -m vllm_omni.server --model openbmb/VoxCPM2 --port 8000
 TTS_VOXCPM_BASE_URL=http://localhost:8000/v1
 ```
 
-القيمة الافتراضية على الخادم تملأ Settings UI للمستخدمين الجدد. لا يزال بإمكان المستخدمين تجاوزها محليا.
+القيمة الافتراضية على الخادم تملأ Settings UI للمستخدمين الجدد. عندما يكون provider مُدارا من الخادم، لا يمكن للعميل تجاوز هذه الإعدادات.
 
 ## 3. إدارة الأصوات
 
@@ -78,4 +78,3 @@ TTS_VOXCPM_BASE_URL=http://localhost:8000/v1
 | أول clone request يتوقف نحو 30s | cold-start في backend. الطلبات التالية تعيد استخدام warm runtime.              |
 | ينقطع الصوت في منتصف الجملة     | حد output token في backend. ارفع `--max-tokens` أو ما يكافئه في VoxCPM config. |
 | 401 / 403                       | ضبطت `TTS_VOXCPM_API_KEY` لـ backend لا يتوقعه. اتركه فارغا.                   |
-

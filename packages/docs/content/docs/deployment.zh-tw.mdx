@@ -23,6 +23,26 @@ docker run -p 3000:3000 \
   openmaic
 ```
 
+`NEXT_PUBLIC_*` 功能開關會在 Docker 建置時編譯進用戶端，必須透過 build args 傳入，僅在容器執行時設定不會生效。例如：
+
+```bash
+docker build \
+  --build-arg NEXT_PUBLIC_ENABLE_VIDEO_EXPORT=true \
+  --build-arg NEXT_PUBLIC_ENABLE_PPTX_IMPORT=true \
+  -t openmaic .
+```
+
+Compose 的 `video-export` profile 會啟動渲染服務；同時啟用對應的建置開關，應用程式才會顯示匯出入口。
+
+若使用服務端 provider 設定，請掛載到 `/app/server-providers.yml`：
+
+```yaml
+volumes:
+  - ./server-providers.yml:/app/server-providers.yml:ro
+```
+
+容器內的 `localhost` 指向 OpenMAIC 容器本身。若 Ollama、Lemonade、VoxCPM 或 ComfyUI 執行在主機上，請使用 `host.docker.internal`；Linux 通常還要加入 `extra_hosts: ["host.docker.internal:host-gateway"]`。主機 ComfyUI 使用 `host.docker.internal:8188` 時，請設定 `ALLOW_LOCAL_NETWORKS=true`，因為 `comfyui-image` 不是服務端託管 provider，否則生產環境的 SSRF 防護會拒絕該網址。
+
 多容器部署（例如搭配反向代理或其他服務）可使用 `docker-compose`：
 
 ```yaml title="docker-compose.yml"
@@ -56,3 +76,8 @@ pnpm start      # 預設監聽 3000 連接埠
 
 共享 demo 可以設定 `ACCESS_CODE`，讓整個站點先經過密碼驗證。請見[設定說明](./configuration.mdx)。
 
+## 可選 profile
+
+`server-persistence` Compose profile 會啟動 OpenMAIC 與 PostgreSQL。設定 `DATABASE_URL`、`PERSISTENCE_DEV_TOKEN`，以及建置時的 `NEXT_PUBLIC_PERSISTENCE`／`NEXT_PUBLIC_PERSISTENCE_TOKEN`；dev token 僅適合本機或可信網路。`video-export` profile 會啟動渲染服務並輸出 MP4；未啟用時會退回下載專案 ZIP 供本機渲染。需求請見 `render-service/README.md`。
+
+自託管 TTS 與聲音複製請見 [VoxCPM2](./voxcpm.mdx)。

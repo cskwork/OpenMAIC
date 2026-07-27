@@ -23,6 +23,26 @@ docker run -p 3000:3000 \
   openmaic
 ```
 
+Флаги `NEXT_PUBLIC_*` компилируются в клиент во время сборки Docker. Передавайте их как build args: настройка только во время запуска контейнера не действует.
+
+```bash
+docker build \
+  --build-arg NEXT_PUBLIC_ENABLE_VIDEO_EXPORT=true \
+  --build-arg NEXT_PUBLIC_ENABLE_PPTX_IMPORT=true \
+  -t openmaic .
+```
+
+Профиль Compose `video-export` запускает render service; соответствующий build flag также нужен, чтобы пункт экспорта отображался в приложении.
+
+Конфигурацию server-side provider монтируйте в `/app/server-providers.yml`:
+
+```yaml
+volumes:
+  - ./server-providers.yml:/app/server-providers.yml:ro
+```
+
+В контейнере `localhost` означает сам контейнер OpenMAIC. Для Ollama, Lemonade, VoxCPM или ComfyUI на хосте используйте `host.docker.internal`; в Linux обычно добавьте `extra_hosts: ["host.docker.internal:host-gateway"]`. Для ComfyUI на хосте по адресу `host.docker.internal:8188` задайте `ALLOW_LOCAL_NETWORKS=true`: `comfyui-image` не является server-managed provider, поэтому production SSRF guard иначе отклонит URL.
+
 Для multi-container setups (например, с reverse proxy или другими сервисами рядом) используйте `docker-compose`:
 
 ```yaml title="docker-compose.yml"
@@ -56,3 +76,8 @@ pnpm start      # по умолчанию слушает port 3000
 
 Для общих demo задайте `ACCESS_CODE`, чтобы закрыть весь сайт паролем. См. [Конфигурацию](./configuration.mdx).
 
+## Необязательные профили
+
+Compose profile `server-persistence` запускает OpenMAIC и PostgreSQL. Задайте `DATABASE_URL`, `PERSISTENCE_DEV_TOKEN` и build-time значения `NEXT_PUBLIC_PERSISTENCE`/`NEXT_PUBLIC_PERSISTENCE_TOKEN`; dev token предназначен для локальных или доверенных сетей. Profile `video-export` запускает render service и создаёт MP4, а без него экспорт возвращается к project ZIP для локального рендеринга. Требования см. в `render-service/README.md`.
+
+Self-hosted TTS и клонирование голоса описаны в [VoxCPM2](./voxcpm.mdx).

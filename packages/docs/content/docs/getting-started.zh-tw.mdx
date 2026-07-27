@@ -7,8 +7,8 @@ OpenMAIC 是一個 Next.js 應用程式，可以在自己的機器上執行。�
 
 ## 前置條件
 
-- **Node.js** 20 或更高版本
-- **pnpm** 10 或更高版本（如果尚未安裝，先執行 `npm install -g pnpm`）
+- **Node.js** 20.9.0 或更高版本
+- **pnpm** 10.28.0（如果尚未安裝，先執行 `npm install -g pnpm@10.28.0`）
 - 至少一個 LLM 供應商的 API key —— OpenAI、Anthropic、Google、DeepSeek、Zhipu、MiniMax、Qwen、Doubao、Groq、SiliconFlow，或本機 Ollama
 
 ## 安裝
@@ -41,7 +41,7 @@ ANTHROPIC_API_KEY=sk-ant-...
 OLLAMA_BASE_URL=http://localhost:11434/v1
 ```
 
-完整的 provider、TTS、ASR 和 feature flag 設定請見[設定說明](./configuration.mdx)。
+完整的 provider、圖片／影片生成、TTS、ASR、文件解析、網路搜尋、存取控制和 feature flag 設定請見[設定說明](./configuration.mdx)。
 
 ## 執行
 
@@ -51,7 +51,7 @@ OLLAMA_BASE_URL=http://localhost:11434/v1
 pnpm dev
 ```
 
-打開 [http://localhost:3000](http://localhost:3000)，應該能看到 OpenMAIC 的課堂生成器。輸入一個主題或上傳 PDF，點選 Generate，AI 教師就會建立一場完整的多場景課堂。
+打開 [http://localhost:3000](http://localhost:3000)，輸入主題或上傳學習材料後點選 Generate，AI 教師就會建立一場完整的多場景課堂。支援格式取決於所選解析器，通常包括 PDF、Office 文件、Markdown／純文字、圖片及部分音訊／影片。
 
 ## 生產建置
 
@@ -67,4 +67,3 @@ pnpm start
 - [設定 provider、TTS、ACCESS_CODE →](./configuration.mdx)
 - [部署到 Vercel 或 Docker →](./deployment.mdx)
 - 想了解架構或貢獻程式碼，請前往 [GitHub](https://github.com/THU-MAIC/OpenMAIC#-contributing)
-

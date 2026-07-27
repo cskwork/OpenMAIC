@@ -174,3 +174,26 @@ web-search:
 ```
 
 環境變數會逐欄位覆蓋 YAML 中對應的 provider 設定。鍵名使用 provider ID，例如 `openai`、`doubao-tts`、`openai-whisper`、`mineru`、`tavily` 或 `minimax`。
+
+## 其他 provider 與服務端選項
+
+自訂 OpenAI 相容的 LLM provider 可在設定中新增，不能透過任意環境變數前綴或未知的 `server-providers.yml` ID 註冊。自訂 OpenAI 相容的 TTS 與 ASR provider 也只能在用戶端設定中新增。
+
+ComfyUI Image 會從 `public/` 掃描 workflow（檔名可用 `comfyui-*.json` 或包含 `workflow`），不需要 API key。Docker 生產環境連接主機 ComfyUI 時，請使用 `host.docker.internal:8188` 並設定 `ALLOW_LOCAL_NETWORKS=true`，否則 SSRF 防護會拒絕用戶端提供的本機網址。
+
+文件解析支援文字、PDF、Office 文件、圖片及部分音訊／影片格式，具體取決於解析器。AliDocMind 支援 PDF、DOCX、PPTX、XLSX；PNG、JPG/JPEG、BMP、GIF；媒體則支援 MP4、MOV、AVI、MKV、WMV、MP3、WAV、AAC。
+
+功能開關接受 `true` 或 `1`，其他值視為關閉。`NEXT_PUBLIC_*` 是建置時設定；Docker 部署時要以 build args 傳入，包括 `NEXT_PUBLIC_ENABLE_PPTX_IMPORT` 和 `NEXT_PUBLIC_ENABLE_VIDEO_EXPORT`。
+
+Azure OpenAI 使用 `AZURE_OPENAI_API_KEY`、資源 endpoint（`AZURE_OPENAI_BASE_URL`）及 deployment name（`AZURE_OPENAI_MODELS`）。Ollama 與 Lemonade 是本機 provider，不需要 API key。圖片／影片生成、自訂 TTS／ASR、文件／媒體解析、SearXNG，以及 `DEFAULT_MODEL`／`MODEL_ROUTES` 均依 `.env.example` 的 provider 專用設定；SearXNG 只能由伺服器託管，Brave 不需要 key。
+
+其他服務端選項：
+
+```bash
+PARALLEL_SCENE_CONCURRENCY=3  # 0 或未設定：串行生成
+ALLOW_LOCAL_NETWORKS=true     # 僅限自託管／內網部署
+RENDER_SERVICE_URL=http://render-service:9000
+LOG_LEVEL=info
+LOG_FORMAT=pretty
+LLM_THINKING_DISABLED=false
+```

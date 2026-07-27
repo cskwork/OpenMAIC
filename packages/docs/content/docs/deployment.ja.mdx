@@ -23,6 +23,26 @@ docker run -p 3000:3000 \
   openmaic
 ```
 
+`NEXT_PUBLIC_*` feature flag は Docker のビルド時にクライアントへコンパイルされます。build args として渡してください。コンテナ実行時だけ設定しても反映されません。例：
+
+```bash
+docker build \
+  --build-arg NEXT_PUBLIC_ENABLE_VIDEO_EXPORT=true \
+  --build-arg NEXT_PUBLIC_ENABLE_PPTX_IMPORT=true \
+  -t openmaic .
+```
+
+Compose の `video-export` profile は render service を起動します。アプリに export の入口を表示するには対応する build flag も有効にしてください。
+
+server-side provider 設定を使う場合は `/app/server-providers.yml` に mount します：
+
+```yaml
+volumes:
+  - ./server-providers.yml:/app/server-providers.yml:ro
+```
+
+コンテナ内の `localhost` は OpenMAIC コンテナ自身を指します。ホスト上の Ollama、Lemonade、VoxCPM、ComfyUI へ接続する場合は `host.docker.internal` を使い、Linux では通常 `extra_hosts: ["host.docker.internal:host-gateway"]` も追加します。ホストの ComfyUI (`host.docker.internal:8188`) には `ALLOW_LOCAL_NETWORKS=true` が必要です。`comfyui-image` は server-managed provider ではないため、本番の SSRF 保護がこの URL を拒否します。
+
 リバースプロキシや他サービスを含むマルチコンテナ構成では `docker-compose` を使います。
 
 ```yaml title="docker-compose.yml"
@@ -56,3 +76,8 @@ TLS 終端には前段に nginx または Caddy を置いてください。ト�
 
 共有デモでは `ACCESS_CODE` を設定して、サイト全体をパスワードで保護できます。詳しくは[設定](./configuration.mdx)を参照してください。
 
+## オプション profile
+
+`server-persistence` Compose profile は OpenMAIC と PostgreSQL を起動します。`DATABASE_URL`、`PERSISTENCE_DEV_TOKEN`、ビルド時の `NEXT_PUBLIC_PERSISTENCE`／`NEXT_PUBLIC_PERSISTENCE_TOKEN` を設定してください。dev token はローカルまたは信頼できるネットワーク向けです。`video-export` profile は render service を起動して MP4 を生成します。無効時はローカル render 用の project ZIP にフォールバックします。要件は `render-service/README.md` を参照してください。
+
+セルフホスト TTS と音声クローンは [VoxCPM2](./voxcpm.mdx) を参照してください。

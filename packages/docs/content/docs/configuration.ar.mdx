@@ -174,3 +174,26 @@ web-search:
 ```
 
 تتجاوز متغيرات البيئة حقول YAML المطابقة حقلا بحقل. ترتبط المفاتيح بمعرّفات provider مثل `openai` أو `doubao-tts` أو `openai-whisper` أو `mineru` أو `tavily` أو `minimax`.
+
+## Providers إضافية وخيارات الخادم
+
+يمكن إضافة custom OpenAI-compatible LLM provider من Settings. لا يمكن تسجيله عبر prefixes عشوائية لمتغيرات البيئة أو IDs غير معروفة في `server-providers.yml`. وتُضاف custom TTS/ASR providers أيضًا من إعدادات العميل.
+
+يكتشف ComfyUI Image ملفات workflow من `public/` (مثل `comfyui-*.json` أو اسم يحتوي على `workflow`) ولا يحتاج إلى API key. عند تشغيل ComfyUI على المضيف مع Docker في الإنتاج، استخدم `host.docker.internal:8188` واضبط `ALLOW_LOCAL_NETWORKS=true`؛ وإلا سيرفض SSRF guard العنوان المحلي الذي يرسله العميل.
+
+يعتمد تحليل المواد على parser المختار، وقد يشمل النصوص وPDF ومستندات Office والصور وبعض صيغ الصوت والفيديو. يدعم AliDocMind صيغ PDF وDOCX وPPTX وXLSX، والصور PNG وJPG/JPEG وBMP وGIF، والوسائط MP4 وMOV وAVI وMKV وWMV وMP3 وWAV وAAC.
+
+تقبل feature flags القيمة `true` أو `1`، وتُعد القيم الأخرى معطلة. تُحقن متغيرات `NEXT_PUBLIC_*` وقت البناء؛ وفي Docker مررها كـ build args، بما في ذلك `NEXT_PUBLIC_ENABLE_PPTX_IMPORT` و`NEXT_PUBLIC_ENABLE_VIDEO_EXPORT`.
+
+يستخدم Azure OpenAI المتغير `AZURE_OPENAI_API_KEY` وresource endpoint في `AZURE_OPENAI_BASE_URL` وأسماء deployment في `AZURE_OPENAI_MODELS`. Ollama وLemonade providers محليان ولا يحتاجان إلى API key. تعتمد إعدادات توليد الصور/الفيديو وTTS/ASR المخصص وتحليل المستندات/الوسائط وSearXNG و`DEFAULT_MODEL`/`MODEL_ROUTES` على إعدادات provider في `.env.example`؛ SearXNG مُدار من الخادم وBrave لا يحتاج إلى key.
+
+خيارات خادم أخرى:
+
+```bash
+PARALLEL_SCENE_CONCURRENCY=3  # القيمة 0 أو عدم الإعداد: توليد تسلسلي
+ALLOW_LOCAL_NETWORKS=true     # للنشر الذاتي/الشبكات الداخلية فقط
+RENDER_SERVICE_URL=http://render-service:9000
+LOG_LEVEL=info
+LOG_FORMAT=pretty
+LLM_THINKING_DISABLED=false
+```

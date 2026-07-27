@@ -23,6 +23,26 @@ docker run -p 3000:3000 \
   openmaic
 ```
 
+يتم تضمين أعلام `NEXT_PUBLIC_*` في العميل أثناء بناء Docker. مررها كـ build args؛ ضبطها وقت تشغيل الحاوية فقط لا يكفي.
+
+```bash
+docker build \
+  --build-arg NEXT_PUBLIC_ENABLE_VIDEO_EXPORT=true \
+  --build-arg NEXT_PUBLIC_ENABLE_PPTX_IMPORT=true \
+  -t openmaic .
+```
+
+يشغّل ملف Compose باسم `video-export` خدمة التصيير، ويجب تفعيل علم البناء المقابل حتى يظهر مدخل التصدير في التطبيق.
+
+عند استخدام إعداد provider من الخادم، اربط الملف إلى `/app/server-providers.yml`:
+
+```yaml
+volumes:
+  - ./server-providers.yml:/app/server-providers.yml:ro
+```
+
+داخل الحاوية، يشير `localhost` إلى حاوية OpenMAIC نفسها. للوصول إلى Ollama أو Lemonade أو VoxCPM أو ComfyUI على المضيف، استخدم `host.docker.internal`، وعلى Linux أضف عادة `extra_hosts: ["host.docker.internal:host-gateway"]`. عند استخدام ComfyUI على المضيف عبر `host.docker.internal:8188`، اضبط `ALLOW_LOCAL_NETWORKS=true` لأن `comfyui-image` ليس provider مُدارا من الخادم، وإلا سيرفض production SSRF guard العنوان.
+
 للإعدادات متعددة الحاويات (مع reverse proxy أو خدمات أخرى بجانبه)، استخدم `docker-compose`:
 
 ```yaml title="docker-compose.yml"
@@ -56,3 +76,8 @@ pnpm start      # يستمع على port 3000 افتراضيا
 
 للعروض المشتركة، اضبط `ACCESS_CODE` لحماية الموقع كله بكلمة مرور. راجع [الإعدادات](./configuration.mdx).
 
+## Profiles اختيارية
+
+يشغّل Compose profile `server-persistence` تطبيق OpenMAIC مع PostgreSQL. اضبط `DATABASE_URL` و`PERSISTENCE_DEV_TOKEN` وقيم البناء `NEXT_PUBLIC_PERSISTENCE` و`NEXT_PUBLIC_PERSISTENCE_TOKEN`؛ إعداد dev token مناسب للشبكات المحلية أو الموثوقة فقط. يشغّل profile `video-export` خدمة التصيير وينشئ MP4، وبدونه يعود التصدير إلى project ZIP للتصيير المحلي. راجع `render-service/README.md` للمتطلبات.
+
+راجع [VoxCPM2](./voxcpm.mdx) لإعداد TTS ذاتي الاستضافة واستنساخ الصوت.

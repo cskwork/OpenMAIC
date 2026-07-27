@@ -175,3 +175,26 @@ web-search:
 ```
 
 Environment variables override matching YAML fields field-by-field. Keys map to provider IDs such as `openai`, `doubao-tts`, `openai-whisper`, `mineru`, `tavily`, or `minimax`.
+
+## Additional providers and server options
+
+Custom OpenAI-compatible LLM providers can be added in Settings. They are not registered through arbitrary environment-variable prefixes or unknown `server-providers.yml` IDs. Custom OpenAI-compatible TTS and ASR providers are also client-side Settings entries.
+
+ComfyUI Image uses workflows discovered from `public/` (filenames such as `comfyui-*.json` or names containing `workflow`) and does not require an API key. For a host-side ComfyUI in production Docker, use `host.docker.internal:8188` and set `ALLOW_LOCAL_NETWORKS=true`; otherwise the SSRF guard rejects the client-supplied local URL.
+
+Document parsing supports text, PDF, Office documents, images, and some audio/video formats depending on the parser. AliDocMind supports PDF, DOCX, PPTX, XLSX; PNG, JPG/JPEG, BMP, GIF; and (for media) MP4, MOV, AVI, MKV, WMV, MP3, WAV, and AAC.
+
+Feature flags accept `true` or `1`; other values are off. `NEXT_PUBLIC_*` flags are build-time values. In Docker, pass them as build args, including `NEXT_PUBLIC_ENABLE_PPTX_IMPORT` and `NEXT_PUBLIC_ENABLE_VIDEO_EXPORT`.
+
+Azure OpenAI uses `AZURE_OPENAI_API_KEY`, a resource endpoint in `AZURE_OPENAI_BASE_URL`, and deployment names in `AZURE_OPENAI_MODELS`. Ollama and Lemonade are local providers and do not need API keys. Image/video generation, custom TTS/ASR, document/media parsing, SearXNG, and `DEFAULT_MODEL`/`MODEL_ROUTES` use the same provider-specific settings described in `.env.example`; SearXNG is server-managed and Brave is keyless.
+
+Other server options:
+
+```bash
+PARALLEL_SCENE_CONCURRENCY=3  # 0 or unset: serial generation
+ALLOW_LOCAL_NETWORKS=true     # self-hosted/internal deployments only
+RENDER_SERVICE_URL=http://render-service:9000
+LOG_LEVEL=info
+LOG_FORMAT=pretty
+LLM_THINKING_DISABLED=false
+```

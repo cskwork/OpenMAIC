@@ -174,3 +174,26 @@ web-search:
 ```
 
 環境変数は対応する YAML フィールドをフィールド単位で上書きします。キーは `openai`、`doubao-tts`、`openai-whisper`、`mineru`、`tavily`、`minimax` のような provider ID に対応します。
+
+## 追加 provider とサーバーオプション
+
+カスタム OpenAI 互換 LLM provider は Settings から追加できます。任意の環境変数 prefix や未知の `server-providers.yml` ID から登録することはできません。カスタム TTS/ASR provider もクライアントの Settings に追加します。
+
+ComfyUI Image は `public/` にある workflow（`comfyui-*.json`、または名前に `workflow` を含むファイル）を検出し、API key は不要です。Docker 本番環境でホストの ComfyUI (`host.docker.internal:8188`) に接続する場合は `ALLOW_LOCAL_NETWORKS=true` を設定してください。`comfyui-image` は server-managed provider ではないため、設定しないと SSRF 保護により拒否されます。
+
+ドキュメント解析は parser に応じてテキスト、PDF、Office 文書、画像、一部の音声・動画形式をサポートします。AliDocMind は PDF、DOCX、PPTX、XLSX、PNG、JPG/JPEG、BMP、GIF、さらに MP4、MOV、AVI、MKV、WMV、MP3、WAV、AAC に対応します。
+
+feature flag は `true` または `1` を受け付け、それ以外は無効です。`NEXT_PUBLIC_*` はビルド時の設定なので、Docker では `NEXT_PUBLIC_ENABLE_PPTX_IMPORT` や `NEXT_PUBLIC_ENABLE_VIDEO_EXPORT` などを build args で渡します。
+
+Azure OpenAI は `AZURE_OPENAI_API_KEY`、リソース endpoint（`AZURE_OPENAI_BASE_URL`）、deployment name（`AZURE_OPENAI_MODELS`）を使用します。Ollama と Lemonade はローカル provider のため API key 不要です。画像／動画生成、カスタム TTS/ASR、ドキュメント／メディア解析、SearXNG、`DEFAULT_MODEL`／`MODEL_ROUTES` は `.env.example` の provider 別設定に従います。SearXNG は server-managed、Brave は keyless です。
+
+その他のサーバーオプション：
+
+```bash
+PARALLEL_SCENE_CONCURRENCY=3  # 0 または未設定：逐次生成
+ALLOW_LOCAL_NETWORKS=true     # self-hosted／内部ネットワーク向け
+RENDER_SERVICE_URL=http://render-service:9000
+LOG_LEVEL=info
+LOG_FORMAT=pretty
+LLM_THINKING_DISABLED=false
+```

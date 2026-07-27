@@ -7,8 +7,8 @@ OpenMAIC هو تطبيق Next.js يمكنك تشغيله على جهازك. تح
 
 ## المتطلبات
 
-- **Node.js** 20 أو أحدث
-- **pnpm** 10 أو أحدث (ثبّته عبر `npm install -g pnpm` عند الحاجة)
+- **Node.js** 20.9.0 أو أحدث
+- **pnpm** 10.28.0 (ثبّته عبر `npm install -g pnpm@10.28.0` عند الحاجة)
 - مفتاح API من موفر LLM واحد على الأقل — OpenAI أو Anthropic أو Google أو DeepSeek أو Zhipu أو MiniMax أو Qwen أو Doubao أو Groq أو SiliconFlow أو Ollama محلي
 
 ## التثبيت
@@ -41,7 +41,7 @@ ANTHROPIC_API_KEY=sk-ant-...
 OLLAMA_BASE_URL=http://localhost:11434/v1
 ```
 
-راجع [الإعدادات](./configuration.mdx) للقائمة الكاملة من providers و TTS و ASR و feature flags.
+راجع [الإعدادات](./configuration.mdx) لإعدادات providers وتوليد الصور/الفيديو وTTS وASR وتحليل المستندات والبحث على الويب والتحكم بالوصول وfeature flags.
 
 ## التشغيل
 
@@ -51,7 +51,7 @@ OLLAMA_BASE_URL=http://localhost:11434/v1
 pnpm dev
 ```
 
-افتح [http://localhost:3000](http://localhost:3000). سترى مولّد الصفوف في OpenMAIC. أدخل موضوعا أو PDF، اضغط Generate، وسيبني AI teacher صفا كاملا من عدة مشاهد.
+افتح [http://localhost:3000](http://localhost:3000)، وأدخل موضوعا أو ارفع مادة تعليمية ثم اضغط Generate. سيبني AI teacher صفا كاملا من عدة مشاهد. تعتمد الصيغ المدعومة على parser المختار، وتشمل عادة PDF ومستندات Office وMarkdown/النص العادي والصور وبعض الصوت/الفيديو.
 
 ## بناء الإنتاج
 
@@ -67,4 +67,3 @@ pnpm start
 - [اضبط providers و TTS و ACCESS_CODE →](./configuration.mdx)
 - [انشر على Vercel أو Docker →](./deployment.mdx)
 - [استكشف البنية وساهم على GitHub](https://github.com/THU-MAIC/OpenMAIC#-contributing)
-

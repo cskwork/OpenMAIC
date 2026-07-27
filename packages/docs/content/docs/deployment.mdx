@@ -23,6 +23,26 @@ docker run -p 3000:3000 \
   openmaic
 ```
 
+The `NEXT_PUBLIC_*` flags are compiled into the client during the Docker build. Pass them as build arguments; setting them only at container runtime has no effect. For example:
+
+```bash
+docker build \
+  --build-arg NEXT_PUBLIC_ENABLE_VIDEO_EXPORT=true \
+  --build-arg NEXT_PUBLIC_ENABLE_PPTX_IMPORT=true \
+  -t openmaic .
+```
+
+The Compose `video-export` profile starts the render service; enable the corresponding build flag to show the export entry in the app.
+
+If you use server-side provider configuration, mount it at `/app/server-providers.yml`:
+
+```yaml
+volumes:
+  - ./server-providers.yml:/app/server-providers.yml:ro
+```
+
+Inside a container, `localhost` refers to the OpenMAIC container. For Ollama, Lemonade, VoxCPM, or ComfyUI running on the host, use `host.docker.internal` (and on Linux add `extra_hosts: ["host.docker.internal:host-gateway"]`). For a host-side ComfyUI at `host.docker.internal:8188`, set `ALLOW_LOCAL_NETWORKS=true` because `comfyui-image` is not server-managed and production SSRF protection otherwise rejects the URL.
+
 For multi-container setups (with a reverse proxy or other services alongside), use `docker-compose`:
 
 ```yaml title="docker-compose.yml"
@@ -56,3 +76,8 @@ See [Configuration](./configuration.mdx) for the full list. At minimum you need 
 
 For shared demos, set `ACCESS_CODE` to gate the whole site behind a password. See [Configuration → ACCESS_CODE](./configuration.mdx#access_code--site-wide-password).
 
+## Optional profiles
+
+The `server-persistence` Compose profile runs OpenMAIC with PostgreSQL. Set `DATABASE_URL`, `PERSISTENCE_DEV_TOKEN`, and the build-time `NEXT_PUBLIC_PERSISTENCE`/`NEXT_PUBLIC_PERSISTENCE_TOKEN` values; the dev-token setup is for local or trusted networks. The `video-export` profile starts the render service and produces MP4; without it, export falls back to a project ZIP for local rendering. See `render-service/README.md` for its requirements.
+
+For self-hosted TTS and voice cloning, see [VoxCPM2](./voxcpm.mdx).

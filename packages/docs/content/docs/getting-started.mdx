@@ -7,9 +7,9 @@ OpenMAIC is a Next.js application you can run on your own machine. You need Node
 
 ## Prerequisites
 
-- **Node.js** 20 or later
-- **pnpm** 10 or later (install with `npm install -g pnpm` if needed)
-- An API key from at least one LLM provider — OpenAI, Anthropic, Google, DeepSeek, Zhipu, MiniMax, Qwen, Doubao, Groq, SiliconFlow, or Ollama (local)
+- **Node.js** 20.9.0 or later
+- **pnpm** 10.28.0 (install with `npm install -g pnpm@10.28.0` if needed)
+- At least one LLM provider. Cloud providers usually need an API key; local Ollama and Lemonade do not.
 
 ## Install
 
@@ -21,7 +21,7 @@ cd OpenMAIC
 pnpm install
 ```
 
-The install step also builds the two workspace packages (`mathml2omml` and `pptxgenjs`). This takes a minute on first run.
+The install step also builds the workspace packages required by the project and may take some time on the first run.
 
 ## Configure
 
@@ -41,7 +41,7 @@ ANTHROPIC_API_KEY=sk-ant-...
 OLLAMA_BASE_URL=http://localhost:11434/v1
 ```
 
-See [Configuration](./configuration.mdx) for the full list of providers, TTS, ASR, and feature flags.
+See [Configuration](./configuration.mdx) for provider, image/video generation, TTS, ASR, document parsing, web search, access control, and feature flag settings.
 
 ## Run
 
@@ -51,7 +51,7 @@ Start the dev server:
 pnpm dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). You should see the OpenMAIC classroom generator. Drop a topic or PDF, click Generate, and watch an AI teacher build a full multi-scene classroom.
+Open [http://localhost:3000](http://localhost:3000). Enter a topic or upload learning material, click Generate, and an AI teacher will build a complete multi-scene classroom. Supported formats depend on the selected parser and commonly include PDF, Office documents, Markdown/plain text, images, and some audio/video.
 
 ## Troubleshooting
 
@@ -91,4 +91,3 @@ Or deploy to Vercel, Docker, or your own server — see [Deployment](./deploymen
 - [Configure providers, TTS, and ACCESS_CODE →](./configuration.mdx)
 - [Deploy to Vercel or Docker →](./deployment.mdx)
 - Explore the [architecture and contribute on GitHub](https://github.com/THU-MAIC/OpenMAIC#-contributing)
-

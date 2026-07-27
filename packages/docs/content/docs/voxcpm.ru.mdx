@@ -50,7 +50,7 @@ python -m vllm_omni.server --model openbmb/VoxCPM2 --port 8000
 TTS_VOXCPM_BASE_URL=http://localhost:8000/v1
 ```
 
-Серверное значение по умолчанию заполняет Settings UI для новых пользователей. Пользователи все еще могут переопределить его локально.
+Серверное значение по умолчанию заполняет Settings UI для новых пользователей. Если provider управляется сервером, клиент не может переопределить эти настройки.
 
 ## 3. Управление голосами
 
@@ -78,4 +78,3 @@ OpenMAIC генерирует voice prompt из persona каждого agent в�
 | Первый clone request висит ~30s | Cold-start на backend. Последующие clone requests используют warm runtime.                             |
 | Audio обрывается посреди фразы  | Лимит output tokens на backend. Увеличьте `--max-tokens` или соответствующий параметр в VoxCPM config. |
 | 401 / 403                       | Вы задали `TTS_VOXCPM_API_KEY` для backend, который его не ожидает. Оставьте пустым.                   |
-

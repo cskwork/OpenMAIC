@@ -50,7 +50,7 @@ Set the following in `.env.local` (or your YAML config). No API key is required.
 TTS_VOXCPM_BASE_URL=http://localhost:8000/v1
 ```
 
-The server-side default seeds the Settings UI for first-time users. Users can still override it locally.
+The server-side default seeds the Settings UI for first-time users. When the provider is server-managed, clients cannot override these settings.
 
 ## 3. Voice management
 
@@ -78,4 +78,3 @@ Upload a short reference audio clip (≤ 60 seconds, ≤ 10 MB) or record one in
 | First clone request hangs ~30s | Cold-start on the backend. Subsequent clones reuse the warm runtime.                             |
 | Audio cuts off mid-sentence    | Output token limit on the backend. Raise `--max-tokens` or the equivalent in your VoxCPM config. |
 | 401 / 403                      | You set `TTS_VOXCPM_API_KEY` for a backend that doesn't expect one. Leave it empty.              |
-

@@ -174,3 +174,26 @@ web-search:
 ```
 
 Переменные окружения переопределяют совпадающие YAML fields по отдельным полям. Ключи соответствуют provider ID, например `openai`, `doubao-tts`, `openai-whisper`, `mineru`, `tavily` или `minimax`.
+
+## Дополнительные provider и параметры сервера
+
+Custom OpenAI-compatible LLM provider можно добавить в Settings. Произвольные prefixes переменных окружения и неизвестные ID в `server-providers.yml` для регистрации не поддерживаются. Custom OpenAI-compatible TTS и ASR provider также добавляются только в клиентских Settings.
+
+ComfyUI Image обнаруживает workflow в `public/` (например, `comfyui-*.json` или имя с `workflow`) и не требует API key. В production Docker для ComfyUI на хосте используйте `host.docker.internal:8188` и задайте `ALLOW_LOCAL_NETWORKS=true`; иначе SSRF guard отклонит переданный клиентом локальный URL.
+
+Разбор материалов зависит от parser и может включать текст, PDF, Office-документы, изображения и некоторые аудио/видео форматы. AliDocMind поддерживает PDF, DOCX, PPTX, XLSX; PNG, JPG/JPEG, BMP, GIF; а также MP4, MOV, AVI, MKV, WMV, MP3, WAV и AAC.
+
+Feature flags принимают `true` или `1`, остальные значения выключают функцию. `NEXT_PUBLIC_*` задаются во время сборки; в Docker передавайте их как build args, включая `NEXT_PUBLIC_ENABLE_PPTX_IMPORT` и `NEXT_PUBLIC_ENABLE_VIDEO_EXPORT`.
+
+Azure OpenAI использует `AZURE_OPENAI_API_KEY`, resource endpoint в `AZURE_OPENAI_BASE_URL` и deployment names в `AZURE_OPENAI_MODELS`. Ollama и Lemonade — локальные provider без API key. Настройки генерации изображений/видео, custom TTS/ASR, разбора документов и media, SearXNG, а также `DEFAULT_MODEL`/`MODEL_ROUTES` описаны в `.env.example`; SearXNG управляется сервером, Brave не требует key.
+
+Другие параметры сервера:
+
+```bash
+PARALLEL_SCENE_CONCURRENCY=3  # 0 или unset: последовательная генерация
+ALLOW_LOCAL_NETWORKS=true     # только self-hosted/внутренние сети
+RENDER_SERVICE_URL=http://render-service:9000
+LOG_LEVEL=info
+LOG_FORMAT=pretty
+LLM_THINKING_DISABLED=false
+```

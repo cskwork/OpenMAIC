@@ -50,7 +50,7 @@ python -m vllm_omni.server --model openbmb/VoxCPM2 --port 8000
 TTS_VOXCPM_BASE_URL=http://localhost:8000/v1
 ```
 
-伺服器端預設值會作為新使用者首次進入 Settings UI 時的初始值。使用者仍可在本機覆蓋。
+伺服器端預設值會作為新使用者首次進入 Settings UI 時的初始值。若 provider 由伺服器託管，用戶端無法覆蓋這些設定。
 
 ## 3. 聲音管理
 
@@ -78,4 +78,3 @@ OpenMAIC 會在合成時根據每個 agent 的人設動態生成 voice prompt。
 | 第一次複製請求等待約 30 秒 | 後端冷啟動；後續複製會重用已暖機的 runtime。                      |
 | 音訊說到一半就中斷         | 後端輸出 token 數受限，調高 `--max-tokens` 或 VoxCPM 的對應設定。 |
 | 401 / 403                  | 為不需要 key 的後端設定了 `TTS_VOXCPM_API_KEY`，留空即可。        |
-
