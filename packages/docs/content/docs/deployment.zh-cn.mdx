@@ -33,6 +33,27 @@ docker compose up --build
 
 默认 Compose 部署会启动 OpenMAIC 应用，并挂载 `openmaic-data` 数据卷。其他 provider 和功能按需配置，详见[配置说明](./configuration.mdx)。
 
+`NEXT_PUBLIC_*` 功能开关会在 Docker 构建时注入，不能只写在运行时的 `.env.local` 中。例如启用视频导出和实验性 PPTX 导入：
+
+```bash
+NEXT_PUBLIC_ENABLE_VIDEO_EXPORT=true \
+NEXT_PUBLIC_ENABLE_PPTX_IMPORT=true \
+docker compose --profile video-export up --build
+```
+
+其他客户端功能开关也可以用同样方式传入。若使用 `docker build`，请改用对应的 `--build-arg`。
+
+如需使用服务端 provider 配置，把文件挂载到容器内的固定路径：
+
+```yaml
+services:
+  openmaic:
+    volumes:
+      - ./server-providers.yml:/app/server-providers.yml:ro
+```
+
+Docker 容器中的 `localhost` 指向容器自身。若 Ollama、Lemonade、VoxCPM 或 ComfyUI 运行在宿主机上，请使用 `host.docker.internal`，例如 `http://host.docker.internal:11434/v1` 或 `http://host.docker.internal:8188`。Linux Docker 通常还需要为 `openmaic` 服务添加 `extra_hosts: ["host.docker.internal:host-gateway"]`。
+
 ## 自建虚拟机
 
 主机需要 Node.js `20.9.0` 或更高版本，以及 pnpm `10.28.0`。用 `pnpm` 构建并启动：

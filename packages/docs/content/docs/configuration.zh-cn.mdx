@@ -5,7 +5,7 @@ description: LLM 提供方、媒体生成、文档解析、TTS、ASR、访问控
 
 OpenMAIC 在服务器启动时读取环境变量。所有项都是可选的——按需启用。环境变量示例见仓库里的 [`.env.example`](https://github.com/THU-MAIC/OpenMAIC/blob/main/.env.example)。内置模型 ID 请见[支持模型](./supported-models.mdx)。
 
-除环境变量外，也可以使用项目根目录下的 `server-providers.yml` 配置服务端 provider。环境变量会逐字段覆盖 YAML 中的同名配置。
+除环境变量外，也可以使用项目根目录下的 `server-providers.yml` 配置代码中已注册的服务端 provider。环境变量会逐字段覆盖 YAML 中的同名配置；自定义 OpenAI 兼容 provider 只能在设置中添加，不能通过任意环境变量前缀或未知 YAML provider ID 注册。
 
 ## LLM 提供方
 
@@ -49,6 +49,8 @@ AZURE_OPENAI_BASE_URL=https://YOUR-RESOURCE.openai.azure.com/openai
 AZURE_OPENAI_MODELS=your-deployment-name
 ```
 
+如需连接其他 OpenAI 兼容的 LLM 服务，请在 **设置 → 模型提供方** 中添加自定义 provider，并选择对应的协议类型。
+
 ## 本地模型（Ollama 和 Lemonade）
 
 Ollama 和 Lemonade 不需要 API key；本地服务的 base URL 应写在服务端配置中，以通过 SSRF 校验：
@@ -85,6 +87,8 @@ TTS_VOXCPM_BASE_URL=http://localhost:8000
 
 管理员可以使用 `TTS_<PROVIDER>_ENABLED=false` 在服务端强制关闭某个 TTS 提供方。VoxCPM2（自托管 TTS + 声音克隆）请见单独的 [VoxCPM2](./voxcpm.mdx) 章节。
 
+也可以在设置中添加自定义 OpenAI 兼容 TTS provider，填写 Base URL、模型和音色。这类自定义 provider 保存在客户端设置中，不通过任意 `TTS_*` 环境变量或 YAML provider ID 注册。
+
 ## ASR（语音转文字）
 
 ```bash
@@ -106,6 +110,8 @@ ASR_LEMONADE_BASE_URL=http://localhost:13305/v1
 
 浏览器原生 ASR 不需要服务端配置。
 
+也可以在设置中添加自定义 OpenAI 兼容 ASR provider，填写 Base URL、模型和支持语言；该配置保存在客户端设置中。
+
 ## 图像生成提供方
 
 图像生成提供方使用 `IMAGE_<PROVIDER>_API_KEY`，可选 `IMAGE_<PROVIDER>_BASE_URL`。支持的前缀包括：
@@ -117,6 +123,8 @@ Lemonade 是本地服务，不需要 key：
 ```bash
 IMAGE_LEMONADE_BASE_URL=http://localhost:13305/v1
 ```
+
+ComfyUI Image 不需要 API key，默认连接 `http://localhost:8188`。在设置中填写 ComfyUI Base URL，并把以 API 格式导出的 workflow JSON 放入 OpenMAIC 的 `public/` 目录；文件名使用 `comfyui-*.json` 或包含 `workflow`，设置页会自动发现这些文件并将其作为可选 workflow。Docker 部署时还需要在构建镜像前加入 workflow，或把单个 workflow 文件挂载到容器的 `/app/public/` 目录。
 
 ## 视频生成提供方
 
@@ -147,6 +155,8 @@ ALIDOCMIND_BASE_URL=       # 可选覆盖
 
 `unpdf` 内置于 OpenMAIC，可用于基础 PDF 解析。Office 文档、图片和需要 OCR、表格、公式或版面分析的材料，应选择兼容的 MinerU 或 AliDocMind provider。
 
+AliDocMind 的文档解析支持 PDF、DOCX、PPTX、XLSX，以及 PNG、JPG/JPEG、BMP、GIF。当前音视频材料仅支持通过 AliDocMind 解析：视频格式为 MP4、MOV、AVI、MKV、WMV，音频格式为 MP3、WAV、AAC；不支持 M4A。
+
 ## 联网搜索
 
 配置 Tavily、Bocha、Brave、Baidu、SearXNG 或 MiniMax：
@@ -157,8 +167,6 @@ TAVILY_BASE_URL=           # 可选覆盖
 
 BOCHA_API_KEY=
 BOCHA_BASE_URL=            # 可选覆盖
-
-BRAVE_API_KEY=
 
 BAIDU_API_KEY=
 BAIDU_BASE_URL=https://qianfan.baidubce.com  # 可选覆盖
@@ -211,7 +219,12 @@ NEXT_PUBLIC_SHOW_VOCATIONAL_TEST_UI=true
 
 # 显示视频导出入口
 NEXT_PUBLIC_ENABLE_VIDEO_EXPORT=true
+
+# 显示实验性 PPTX 导入入口
+NEXT_PUBLIC_ENABLE_PPTX_IMPORT=true
 ```
+
+PPTX 导入目前仍是实验性入口，解析结果尚未完整接入课堂数据流。以上 `NEXT_PUBLIC_*` 变量都是构建时开关；Docker 部署还需要通过 build args 传入，不能只写在容器运行时环境变量中。
 
 ## 其他服务端选项
 
@@ -235,7 +248,7 @@ LLM_THINKING_DISABLED=false
 
 ## 用 YAML 配置文件
 
-除了环境变量，你也可以把配置放在项目根目录下的 `server-providers.yml` 文件里。服务端启动时加载，结构与环境变量分类对应：
+除了环境变量，你也可以把代码中已注册 provider 的配置放在项目根目录下的 `server-providers.yml` 文件里。服务端启动时加载，结构与环境变量分类对应：
 
 ```yaml title="server-providers.yml"
 providers:
@@ -277,4 +290,4 @@ web-search:
     baseUrl: http://localhost:8080
 ```
 
-环境变量会逐字段覆盖 YAML 中的同名 provider 配置。键名使用 provider ID，例如 `openai`、`doubao-tts`、`openai-whisper`、`mineru`、`alidocmind`、`seedream`、`seedance`、`tavily` 或 `searxng`。
+环境变量会逐字段覆盖 YAML 中的同名 provider 配置。键名必须使用代码中已注册的 provider ID，例如 `openai`、`doubao-tts`、`openai-whisper`、`mineru`、`alidocmind`、`seedream`、`seedance`、`tavily` 或 `searxng`；未知 ID 不能在这里注册为自定义 LLM provider。
