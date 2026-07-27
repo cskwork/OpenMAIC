@@ -255,13 +255,14 @@ describe('Pi director prompt closure routing', () => {
     expect(prompt).toContain('do not let a student take the first substantive explanation');
   });
 
-  it('teaches teacher wrap-up as the only turn allowed after normal turn budget', () => {
+  it('keeps every classroom agent turn inside one hard budget', () => {
     const prompt = buildDirectorPrompt(makeBody(), agents, 4);
 
-    expect(prompt).toContain('normal classroom agent turns');
-    expect(prompt).toContain('turnKind: "wrap_up"');
-    expect(prompt).toContain('do not call more students or assistants');
-    expect(prompt).toContain('final teacher summary');
+    expect(prompt).toContain('at most 4 classroom agent turns');
+    expect(prompt).toContain('Once the classroom agent turn limit is reached');
+    expect(prompt).toContain('Finish the director loop with exactly one terminal tool');
+    expect(prompt).not.toContain('turnKind');
+    expect(prompt).not.toContain('wrap_up');
   });
 });
 

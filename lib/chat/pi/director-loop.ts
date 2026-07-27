@@ -62,7 +62,6 @@ export async function runPiDirectorLoop(opts: {
   let agentHadContent = false;
   let userCued = false;
   let sessionClosed = false;
-  let teacherWrapUpUsed = false;
   let endReason: string | undefined;
   let directorToolCalls = 0;
   const pendingSceneEvidence = new Map<string, DirectorSceneEvidencePacket>();
@@ -71,8 +70,7 @@ export async function runPiDirectorLoop(opts: {
   const maxDirectorToolCalls = Math.max(opts.maxAgentTurns * 3, opts.maxAgentTurns + 3);
   const piAgentResponses: AgentTurnSummary[] = [];
   const piWhiteboardLedger: WhiteboardActionRecord[] = [];
-  const getNormalTurnCount = (): number =>
-    piAgentResponses.filter((summary) => summary.turnKind !== 'wrap_up').length;
+  const getAgentTurnCount = (): number => piAgentResponses.length;
   const isTeachingSubstantiveTurn = (summary: AgentTurnSummary): boolean => {
     const agent = opts.agentConfigs.find((candidate) => candidate.id === summary.agentId);
     return (
@@ -154,7 +152,7 @@ export async function runPiDirectorLoop(opts: {
       maxOutputTokens: opts.maxOutputTokens,
       abortSignal: opts.abortSignal,
       maxAgentTurns: opts.maxAgentTurns,
-      getAgentTurnCount: getNormalTurnCount,
+      getAgentTurnCount,
       getAgentResponses: () => [
         ...(opts.body.directorState?.agentResponses ?? []),
         ...piAgentResponses,
@@ -164,10 +162,6 @@ export async function runPiDirectorLoop(opts: {
       getWhiteboardLedger: () => piWhiteboardLedger,
       maxActionsPerAgent: opts.maxActionsPerAgent,
       enableWhiteboardTools: opts.enableWhiteboardTools,
-      isTeacherWrapUpUsed: () => teacherWrapUpUsed,
-      onTeacherWrapUpDone: () => {
-        teacherWrapUpUsed = true;
-      },
       isUserCued: () => userCued,
       isSessionClosed: () => sessionClosed,
       takeSceneEvidence: () => {
@@ -281,7 +275,7 @@ export async function runPiDirectorLoop(opts: {
       directorCompaction: compactionRuntime.getTrace(),
       directorToolTrace,
       directorState: {
-        turnCount: getNormalTurnCount(),
+        turnCount: getAgentTurnCount(),
         agentResponses: [...(opts.body.directorState?.agentResponses ?? []), ...piAgentResponses],
         // Return only this turn's whiteboard mutations. The cross-turn board
         // state is carried by storeState's request-start snapshot, and Pi child

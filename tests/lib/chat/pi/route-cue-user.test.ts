@@ -1054,7 +1054,7 @@ describe('POST /api/chat/pi cue_user', () => {
     ]);
   });
 
-  it('uses only this loop turn count for the normal turn cap', async () => {
+  it('uses only this loop turn count for the classroom agent turn cap', async () => {
     mockDirectorWithTwoTeacherTurns();
 
     const { POST } = await import('@/app/api/chat/pi/route');
@@ -1109,7 +1109,6 @@ describe('POST /api/chat/pi cue_user', () => {
       }),
     );
     expect(doneEvent?.data.directorState.turnCount).toBe(1);
-    expect(doneEvent?.data.directorState.teacherWrapUpUsed).toBeUndefined();
   });
 
   it('returns only this turn whiteboard ledger, not the carried-forward history', async () => {
