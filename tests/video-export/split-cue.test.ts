@@ -68,9 +68,7 @@ describe('splitCueText', () => {
   it('does not split after a titlecase abbreviation before a name (Dr. Smith)', () => {
     // ICU alone ends the sentence at `Dr.`; the abbreviation post-merge re-joins it.
     expect(splitCueText('Ask Dr. Smith about it.')).toEqual(['Ask Dr. Smith about it.']);
-    expect(splitCueText('See Fig. 3 for the details.')).toEqual([
-      'See Fig. 3 for the details.',
-    ]);
+    expect(splitCueText('See Fig. 3 for the details.')).toEqual(['See Fig. 3 for the details.']);
   });
 
   it('keeps an acronym with internal periods inside one cue (U.S.)', () => {

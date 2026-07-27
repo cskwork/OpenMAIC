@@ -55,8 +55,29 @@ const SENTENCE_SEGMENTER = new Intl.Segmenter(undefined, { granularity: 'sentenc
  * Lower-cased, period stripped; single-letter initials are covered by ICU itself.
  */
 const ABBREVIATIONS = new Set([
-  'mr', 'mrs', 'ms', 'dr', 'prof', 'sr', 'jr', 'st', 'vs', 'etc', 'inc', 'ltd',
-  'co', 'corp', 'fig', 'eq', 'no', 'vol', 'dept', 'approx', 'al', 'e.g', 'i.e',
+  'mr',
+  'mrs',
+  'ms',
+  'dr',
+  'prof',
+  'sr',
+  'jr',
+  'st',
+  'vs',
+  'etc',
+  'inc',
+  'ltd',
+  'co',
+  'corp',
+  'fig',
+  'eq',
+  'no',
+  'vol',
+  'dept',
+  'approx',
+  'al',
+  'e.g',
+  'i.e',
 ]);
 
 /** True when `text`'s final token is an abbreviation dot, so the next segment continues it. */
