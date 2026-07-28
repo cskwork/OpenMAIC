@@ -328,7 +328,7 @@ describe('HttpAssetProvider resolved-url safety', () => {
   ])('refuses a %s url that would resolve to another origin', async (_name, url) => {
     const failure = providerReturning(url).resolve('ref');
     await expect(failure).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' });
-    await expect(failure).rejects.toThrow(/protocol-relative/);
+    await expect(failure).rejects.toThrow(/not a reference to another origin/);
   });
 
   test.each([
@@ -339,13 +339,47 @@ describe('HttpAssetProvider resolved-url safety', () => {
   ])('refuses a %s: url, which would execute rather than render', async (_name, url) => {
     const failure = providerReturning(url).resolve('ref');
     await expect(failure).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' });
-    await expect(failure).rejects.toThrow(/not http\(s\)/);
+    await expect(failure).rejects.toThrow(/must use the http\(s\) scheme/);
   });
 
   test('accepts an http url as well as an https one', async () => {
     await expect(providerReturning('http://cdn.invalid/o/abc').resolve('ref')).resolves.toBe(
       'http://cdn.invalid/o/abc',
     );
+  });
+
+  // The parser strips ASCII tab, LF and CR *before* parsing, so each of these
+  // reads as `//evil.invalid/x` to a browser while sailing past any "does it
+  // start with //" text check. The app-mounted deployment shape uses a
+  // path-only base URL, where that text check was the only thing left.
+  test.each([
+    ['tab', '/\t/evil.invalid/x'],
+    ['newline', '/\n/evil.invalid/x'],
+    ['carriage return', '/\r/evil.invalid/x'],
+    ['tab inside the authority', '//evil\t.invalid/x'],
+  ])('refuses a url smuggling a cross-origin authority past a %s', async (_name, url) => {
+    for (const base of ['https://assets.invalid', '/api/persistence']) {
+      const failure = providerReturning(url, base).resolve('ref');
+      await expect(failure, base).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' });
+    }
+  });
+
+  test.each([
+    // Parses standalone to host `cdn.invalid`, but a browser on a same-scheme
+    // page reads it as a relative path — one string, two destinations.
+    ['scheme-relative', 'https:cdn.invalid/x'],
+    ['empty host', 'https://'],
+  ])('refuses an ambiguous or hostless absolute url (%s)', async (_name, url) => {
+    const failure = providerReturning(url).resolve('ref');
+    await expect(failure).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' });
+  });
+
+  test('a signed url with userinfo or a lookalike host is still returned verbatim', async () => {
+    // Documented as in-scope behaviour, not an oversight: the client validates
+    // that a URL is a fetchable http(s) URL, and cannot adjudicate which hosts a
+    // deployment legitimately serves assets from.
+    const signed = 'https://user:pass@xn--80ak6aa92e.invalid/o/abc?sig=deadbeef';
+    await expect(providerReturning(signed).resolve('ref')).resolves.toBe(signed);
   });
 
   test('a path-only base url still refuses a cross-origin reference', async () => {
@@ -503,6 +537,46 @@ describe('HttpAssetProvider mutation invalidates in-flight resolution', () => {
     // delete; nobody arriving afterwards may receive it.
     expect(await first).toBe('https://assets.invalid/assets/ref/content');
     expect(await second).toBeNull();
+  });
+});
+
+describe('in-flight resolution is evicted by identity, not blindly', () => {
+  test('a settling stale resolve does not evict the resolution that replaced it', async () => {
+    // The eviction after a mutation and the eviction on settle race: a resolve
+    // issued *before* a write settles *after* the write, and a blind
+    // `delete(ref)` in its `finally` would throw away the resolution started
+    // afterwards. Nothing breaks visibly — the next caller just silently stops
+    // sharing and issues its own request — so this counts requests rather than
+    // comparing URLs, which is the only way the difference is observable.
+    let urlRequests = 0;
+    const gates: (() => void)[] = [];
+    const provider = new HttpAssetProvider({
+      baseUrl: 'https://assets.invalid',
+      fetch: async (input, init) => {
+        if (init?.method === 'PUT') return new Response(null, { status: 204 });
+        urlRequests += 1;
+        await new Promise<void>((release) => gates.push(release));
+        return new Response(JSON.stringify({ url: '/assets/ref/content' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+
+    const payload = 'evicted by identity';
+    const ref = `sha256-${createHash('sha256').update(payload).digest('hex')}`;
+
+    const stale = provider.resolve(ref); // request 1, in flight
+    await provider.put(new Blob([payload], { type: 'image/png' })); // evicts it
+    const fresh = provider.resolve(ref); // request 2, now the memoized one
+    gates[0]!(); // the stale request settles, and must not evict request 2
+    await stale;
+    const joined = provider.resolve(ref); // must join request 2, not open a third
+
+    gates[1]!();
+    expect(await fresh).toBe('https://assets.invalid/assets/ref/content');
+    expect(await joined).toBe('https://assets.invalid/assets/ref/content');
+    expect(urlRequests).toBe(2);
   });
 });
 
@@ -717,6 +791,208 @@ describe('proxied asset urls are loadable by a browser', () => {
     // shape cannot authenticate the load, which is why a header-authenticated
     // deployment has to use the signed shape instead.
     expect(await proxyServer.fetch(url!).then((r) => r.status)).toBe(401);
+  });
+});
+
+describe('asset media types are constrained on the way out', () => {
+  async function serveContentType(
+    uploadType: string,
+    storageNamespace: string,
+  ): Promise<{ type: string | null; disposition: string | null; nosniff: string | null }> {
+    const provider = new HttpAssetProvider({
+      baseUrl: proxyServer.baseUrl,
+      fetch: proxyServer.fetch,
+      headers: () => sessionCookie(storageNamespace),
+    });
+    const ref = await provider.put(new Blob(['payload'], { type: uploadType }));
+    const url = await provider.resolve(ref);
+    const response = await proxyServer.fetch(url!, { headers: sessionCookie(storageNamespace) });
+    return {
+      type: response.headers.get('content-type'),
+      disposition: response.headers.get('content-disposition'),
+      nosniff: response.headers.get('x-content-type-options'),
+    };
+  }
+
+  test.each([
+    ['text/html', 'text/html'],
+    ['image/svg+xml', 'image/svg+xml'],
+    ['application/javascript', 'application/javascript'],
+    ['a metadata-less upload', ''],
+  ])('serves %s opaquely, as an attachment', async (_name, uploadType) => {
+    // The stored type is caller-influenced and the proxied route is served from
+    // the application's own origin, so a type outside the renderable allowlist
+    // must not come back as itself — otherwise re-uploading bytes as text/html
+    // is stored XSS.
+    const served = await serveContentType(uploadType, `media-type-${namespace++}`);
+    expect(served.type).toBe('application/octet-stream');
+    expect(served.disposition).toBe('attachment');
+    expect(served.nosniff).toBe('nosniff');
+  });
+
+  test.each([['image/png'], ['audio/mpeg'], ['video/mp4']])(
+    'serves the renderable type %s as itself',
+    async (uploadType) => {
+      const served = await serveContentType(uploadType, `media-type-${namespace++}`);
+      expect(served.type).toBe(uploadType);
+      expect(served.disposition).toBeNull();
+      expect(served.nosniff).toBe('nosniff');
+    },
+  );
+
+  test('a re-upload cannot rewrite the media type another principal resolves', async () => {
+    const victim = `victim-${namespace++}`;
+    const attacker = `attacker-${namespace++}`;
+    const bytes = new Blob(['<h1>shared bytes</h1>'], { type: 'image/png' });
+
+    const victimProvider = new HttpAssetProvider({
+      baseUrl: proxyServer.baseUrl,
+      fetch: proxyServer.fetch,
+      headers: () => sessionCookie(victim),
+    });
+    const attackerProvider = new HttpAssetProvider({
+      baseUrl: proxyServer.baseUrl,
+      fetch: proxyServer.fetch,
+      headers: () => sessionCookie(attacker),
+    });
+
+    const ref = await victimProvider.put(bytes);
+    // Same bytes, same ref, hostile media type.
+    await attackerProvider.put(new Blob(['<h1>shared bytes</h1>'], { type: 'text/html' }));
+
+    const url = await victimProvider.resolve(ref);
+    const served = await proxyServer.fetch(url!, { headers: sessionCookie(victim) });
+    expect(served.headers.get('content-type')).toBe('image/png');
+  });
+});
+
+describe('the per-principal claim model', () => {
+  function providerFor(principal: string): HttpAssetProvider {
+    return new HttpAssetProvider({
+      baseUrl: proxyServer.baseUrl,
+      fetch: proxyServer.fetch,
+      headers: () => sessionCookie(principal),
+    });
+  }
+
+  test('a claim is created by PUT and by nothing else', async () => {
+    const owner = providerFor(`claim-owner-${namespace++}`);
+    const stranger = providerFor(`claim-stranger-${namespace++}`);
+    const ref = await owner.put(new Blob(['claimed bytes'], { type: 'image/png' }));
+
+    expect(await owner.resolve(ref)).not.toBeNull();
+    // Knowing the ref is not authorization: a stranger who read it out of a
+    // shared document gets the same answer as for an asset that never existed.
+    expect(await stranger.resolve(ref)).toBeNull();
+  });
+
+  test('a stranger resolving is indistinguishable from an absent asset', async () => {
+    const stranger = providerFor(`claim-absent-${namespace++}`);
+    const owner = providerFor(`claim-present-${namespace++}`);
+    const ref = await owner.put(new Blob(['hidden'], { type: 'image/png' }));
+    const neverStored = `sha256-${'b'.repeat(64)}`;
+
+    expect(await stranger.resolve(ref)).toBeNull();
+    expect(await stranger.resolve(neverStored)).toBeNull();
+  });
+
+  test("one principal's remove does not break another's document", async () => {
+    const first = providerFor(`claim-first-${namespace++}`);
+    const second = providerFor(`claim-second-${namespace++}`);
+    const payload = 'bytes two principals share';
+    const ref = await first.put(new Blob([payload], { type: 'image/png' }));
+    expect(await second.put(new Blob([payload], { type: 'image/png' }))).toBe(ref);
+
+    await first.remove(ref);
+
+    expect(await first.resolve(ref)).toBeNull();
+    // The bytes are still there for the other claimholder.
+    expect(await second.resolve(ref)).not.toBeNull();
+  });
+
+  test('re-uploading after a remove restores the claim at the same ref', async () => {
+    const principal = `claim-restore-${namespace++}`;
+    const provider = providerFor(principal);
+    const payload = 'restored bytes';
+
+    const ref = await provider.put(new Blob([payload], { type: 'image/png' }));
+    await provider.remove(ref);
+    expect(await provider.resolve(ref)).toBeNull();
+
+    expect(await provider.put(new Blob([payload], { type: 'image/png' }))).toBe(ref);
+    expect(await provider.resolve(ref)).not.toBeNull();
+  });
+
+  test('bytes are reclaimable once the last claim is released', async () => {
+    const first = providerFor(`claim-last-a-${namespace++}`);
+    const second = providerFor(`claim-last-b-${namespace++}`);
+    const payload = 'transient bytes';
+    const ref = await first.put(new Blob([payload], { type: 'image/png' }));
+    await second.put(new Blob([payload], { type: 'image/png' }));
+
+    await first.remove(ref);
+    await second.remove(ref);
+
+    // No claim remains, so the ref resolves for nobody — including a third
+    // principal who never held one.
+    expect(await first.resolve(ref)).toBeNull();
+    expect(await second.resolve(ref)).toBeNull();
+    expect(await providerFor(`claim-last-c-${namespace++}`).resolve(ref)).toBeNull();
+  });
+
+  test("a signed url carries its own claim and does not leak another principal's", async () => {
+    const owner = `signed-claim-${namespace++}`;
+    const stranger = `signed-stranger-${namespace++}`;
+    const ownerProvider = new HttpAssetProvider({
+      baseUrl: signedServer.baseUrl,
+      fetch: signedServer.fetch,
+      headers: () => ({ 'x-storage-namespace': owner }),
+    });
+    const strangerProvider = new HttpAssetProvider({
+      baseUrl: signedServer.baseUrl,
+      fetch: signedServer.fetch,
+      headers: () => ({ 'x-storage-namespace': stranger }),
+    });
+
+    const ref = await ownerProvider.put(new Blob(['signed bytes'], { type: 'image/png' }));
+    expect(await strangerProvider.resolve(ref)).toBeNull();
+
+    const url = await ownerProvider.resolve(ref);
+    // The URL works without any credential — that is what makes it loadable —
+    // but only because the token itself carries the owner's claim.
+    expect(await signedServer.fetch(url!).then((r) => r.status)).toBe(200);
+  });
+});
+
+describe('conformance server request hygiene', () => {
+  test('a malformed percent-escape is a 400, not a 500', async () => {
+    // decodeURIComponent throws a native URIError on `%`; unmapped it would
+    // surface as the contract's INTERNAL_ERROR row for an ordinary bad request.
+    for (const path of ['/assets/%', '/kv/entries/%zz']) {
+      const response = await proxyServer.fetch(`${proxyServer.baseUrl}${path}`, {
+        headers: sessionCookie(`percent-${namespace++}`),
+      });
+      expect(response.status, path).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: 'VALIDATION_FAILED' },
+      });
+    }
+  });
+
+  test('the server refuses a percent-encoded surrogate identifier', async () => {
+    // A lone surrogate has no UTF-8 encoding, so `encodeURIComponent` refuses to
+    // produce one and the raw CESU-8 form below is the only way it can arrive.
+    // Either way the answer is a bad request, never a 500 — and never a decoded
+    // identifier the storage layer has to reason about.
+    const response = await proxyServer.fetch(`${proxyServer.baseUrl}/assets/%ED%A0%80`, {
+      method: 'DELETE',
+      headers: sessionCookie(`surrogate-${namespace++}`),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'VALIDATION_FAILED' },
+    });
   });
 });
 

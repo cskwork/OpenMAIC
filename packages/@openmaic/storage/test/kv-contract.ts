@@ -119,6 +119,40 @@ export function runKVStoreContract(name: string, makeStore: () => KVStore): void
       expect(await kv.keys('a_')).toEqual(['a_b']);
     });
 
+    // The key domain belongs to the primitive, not to one backend. A key the
+    // browser accepted but a server cannot address would become unreachable the
+    // moment a deployment moved — the exact failure "every backend passes the
+    // same suite" is supposed to rule out — so both backends refuse the same
+    // keys, and both do it before storing anything.
+    test.each([
+      ['an empty key', '', /must not be empty/],
+      ['a key containing "/"', 'a/b', /must not contain/],
+      ['a key containing "\\"', 'a\\b', /must not contain/],
+      ['a traversal-shaped key', 'a/../../b', /must not contain/],
+      ['the dot segment "."', '.', /URL path segment/],
+      ['the dot segment ".."', '..', /URL path segment/],
+      ['a key containing NUL', 'bad\u0000key', /NUL/],
+      ['a key containing an unpaired surrogate', '\uD800', /surrogate/],
+      ['an over-long key', 'k'.repeat(513), /exceeds 512 UTF-8 bytes/],
+      // Bounded in bytes, not characters: 256 three-byte characters is 768.
+      ['an over-long multi-byte key', '\u20AC'.repeat(256), /exceeds 512 UTF-8 bytes/],
+    ])('refuses %s', async (_name, key, message) => {
+      const kv = makeStore();
+
+      await expect(kv.set(key, 'v')).rejects.toThrow(message);
+      await expect(kv.get(key)).rejects.toThrow(message);
+      await expect(kv.remove(key)).rejects.toThrow(message);
+      expect(await kv.keys()).not.toContain(key);
+    });
+
+    test('refuses a prefix that could never match a legal key', async () => {
+      const kv = makeStore();
+      await expect(kv.keys('a/b')).rejects.toThrow(/must not contain/);
+      await expect(kv.keys('\uD800')).rejects.toThrow(/surrogate/);
+      // The empty prefix is what "list everything" means, so it stays legal.
+      await expect(kv.keys('')).resolves.toEqual([]);
+    });
+
     test('keys() does not repeat a key', async () => {
       const kv = makeStore();
       await kv.set('one', 1);

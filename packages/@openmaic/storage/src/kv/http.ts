@@ -1,7 +1,10 @@
 import { assertJsonValue } from '../runtime/json-value.js';
 import {
+  assertKVKey,
+  assertKVKeyPrefix,
   assertKVScope,
   DEFAULT_KV_SCOPE,
+  KVScopeViolationError,
   type KVScope,
   type KVStore,
   type LocalKVStore,
@@ -63,41 +66,25 @@ export class HttpKVStoreError extends Error {
 }
 
 /**
- * Upper bound on a key, in UTF-8 bytes. Keys become URL path segments and,
- * server-side, index entries; an unbounded key is both a denial-of-service knob
- * and an index-size hazard. A configuration key needing more than this is a
- * sign the caller is modelling something that does not belong in KV.
+ * The scope this transport serves, and the only one it can be asked for.
+ *
+ * Declaring it narrows a direct call — `set(key, value, 'device')` on a
+ * `HttpAccountKV` is a type error. It cannot do more than that, because
+ * TypeScript compares method parameters bivariantly: this object stands in for
+ * the wider `KVStore` wherever one is expected, and a caller holding it that
+ * way passes `KVScope`. That is precisely how a device value reached the wire —
+ * the extra argument was accepted by the language and dropped on the floor. So
+ * the parameter exists at runtime too, and is checked.
  */
-const MAX_KV_KEY_BYTES = 512;
+export type AccountScope = 'account';
 
-const UTF8 = new TextEncoder();
-
-/**
- * Constrain a key to something that survives a URL round trip and can never be
- * mistaken for structure by a server. `/` and `\` are refused because a decoded
- * key must not be able to introduce a path segment: the reason dot segments are
- * refused applies verbatim to separators, and a server that used the key as a
- * path component would otherwise inherit a traversal.
- */
-function assertAddressableKey(key: string): void {
-  assertJsonValue(key, `kv key ${JSON.stringify(key)}`);
-  if (key === '') {
-    throw new Error('@openmaic/storage: kv key must not be empty');
-  }
-  if (key === '.' || key === '..') {
-    throw new Error(`@openmaic/storage: URL path segment must not be ${JSON.stringify(key)}`);
-  }
-  if (key.includes('/') || key.includes('\\')) {
-    throw new Error(
-      `@openmaic/storage: kv key ${JSON.stringify(key)} must not contain '/' or '\\'`,
-    );
-  }
-  const bytes = UTF8.encode(key).length;
-  if (bytes > MAX_KV_KEY_BYTES) {
-    throw new Error(
-      `@openmaic/storage: kv key exceeds ${MAX_KV_KEY_BYTES} UTF-8 bytes (got ${bytes})`,
-    );
-  }
+function assertAccountScope(scope: AccountScope | undefined): void {
+  if (scope === undefined || scope === 'account') return;
+  throw new KVScopeViolationError(
+    `@openmaic/storage: HttpAccountKV serves the account scope only and was asked for ` +
+      `${JSON.stringify(scope as string)} — device values never leave the device. Route the ` +
+      `device scope through HttpKVStore, which keeps it on a LocalKVStore.`,
+  );
 }
 
 function normalizeHeaders(init: HeadersInit | undefined): Record<string, string> {
@@ -217,8 +204,9 @@ export class HttpAccountKV {
   }
 
   /** Read one account value, or `null` when the server holds no entry. */
-  async get<T>(key: string): Promise<T | null> {
-    assertAddressableKey(key);
+  async get<T>(key: string, scope?: AccountScope): Promise<T | null> {
+    assertAccountScope(scope);
+    assertKVKey(key);
     let response: { body: unknown; status: number };
     try {
       response = await this.request<unknown>('GET', `/kv/entries/${encodeURIComponent(key)}`);
@@ -238,8 +226,11 @@ export class HttpAccountKV {
   }
 
   /** Write one account value. */
-  async set<T>(key: string, value: T): Promise<void> {
-    assertAddressableKey(key);
+  async set<T>(key: string, value: T, scope?: AccountScope): Promise<void> {
+    // Before anything else, including the delete-detection below: a device
+    // write must fail, not quietly become a device delete.
+    assertAccountScope(scope);
+    assertKVKey(key);
     // A value with no JSON representation at all (`undefined`, a function, a
     // symbol) is a removal, matching `BrowserKVStore`, which would otherwise
     // store the literal string "undefined" and throw on the next read.
@@ -258,14 +249,16 @@ export class HttpAccountKV {
   }
 
   /** Delete one account value. Absent keys succeed. */
-  async remove(key: string): Promise<void> {
-    assertAddressableKey(key);
+  async remove(key: string, scope?: AccountScope): Promise<void> {
+    assertAccountScope(scope);
+    assertKVKey(key);
     await this.request<void>('DELETE', `/kv/entries/${encodeURIComponent(key)}`);
   }
 
   /** List the account keys, optionally restricted to those under `prefix`. */
-  async keys(prefix = ''): Promise<string[]> {
-    assertJsonValue(prefix, 'kv key prefix');
+  async keys(prefix = '', scope?: AccountScope): Promise<string[]> {
+    assertAccountScope(scope);
+    assertKVKeyPrefix(prefix);
     const query = prefix === '' ? '' : `?prefix=${encodeURIComponent(prefix)}`;
     const response = await this.request<unknown>('GET', `/kv/keys${query}`);
     if (!Array.isArray(response.body) || response.body.some((key) => typeof key !== 'string')) {

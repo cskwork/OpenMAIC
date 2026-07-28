@@ -12,13 +12,17 @@ This contract therefore has **no scope at all**: no scope path segment, no scope
 
 The client half mirrors this in three layers, only the last of which actually carries the weight:
 
-1. `HttpAccountKV` is the only object in `@openmaic/storage` that can reach this contract, and none of its methods takes a scope.
+1. `HttpAccountKV` is the only object in `@openmaic/storage` that can reach this contract, and its scope parameter admits `'account'` alone — a literal `'device'` at a call site is a type error. It also **refuses one at runtime**, because the type is not enough: TypeScript compares method parameters bivariantly, so this transport stands in for the wider `KVStore` wherever one is expected, and a caller holding it that way can pass any scope. Silently dropping that argument is how a device value reaches a server, so the transport takes the scope and fails loud on anything but `account`.
 2. `HttpKVStore` — the full `KVStore` — is the one place the two scopes are told apart. An unrecognized scope is refused rather than folded into the account path: guessing would send a value the caller believed was device-local to a server.
 3. `HttpKVStore` requires a **`LocalKVStore`** for the `device` scope — a store branded as keeping its values on this machine. `KVStore` alone is not enough, because a networked store satisfies it structurally: `HttpAccountKV` *is* a `KVStore` with one optional parameter fewer, so a `KVStore`-typed parameter would accept the very transport this design exists to exclude. The brand makes that a type error, and a runtime check refuses a remote store that a cast smuggled past the types.
 
 There is no default and no fallback, so a deployment cannot end up with device values that have nowhere local to go.
 
+The same pairing rule reaches the zustand adapter, which is where a store and a scope are chosen as separate arguments and therefore the easiest place to pair them wrongly: `kvPersistStorage(store, 'device')` requires a `LocalKVStore` at the type level and checks the brand at runtime.
+
 ## A key is an identifier, never structure
+
+The key domain belongs to the `KVStore` primitive, not to this contract — **every** backend enforces it, including the browser one. A key that the browser accepted but a server could not address would become unreachable the moment a deployment moved, and the claim that one shared contract suite proves the backends equivalent would be false in the one place it matters. The shared suite therefore asserts the rules against every backend.
 
 Keys appear as path segments and arrive at the server percent-decoded, so their shape is part of the contract. A key MUST NOT be empty, MUST NOT be exactly `.` or `..` (URL parsers normalize those before routing), MUST NOT contain `/` or `\`, MUST NOT contain U+0000 or an unpaired UTF-16 surrogate, and MUST NOT exceed 512 UTF-8 bytes — a bound in bytes rather than characters, so a multi-byte key cannot exceed it while appearing to comply. Clients reject a violating key before sending; servers MUST reject one with `400 VALIDATION_FAILED`.
 

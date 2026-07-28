@@ -43,18 +43,25 @@ export interface KvAssetConformanceServerOptions {
   authorize?: (req: IncomingMessage, area: 'assets' | 'kv') => boolean;
 }
 
-interface StoredAsset {
+/**
+ * Bytes are stored once per ref and shared, which is the whole point of content
+ * addressing — and exactly the arrangement the claim model exists to make safe.
+ */
+interface SharedAsset {
   bytes: Buffer;
-  contentType: string;
+  /** Principals holding a claim, each with the media type it uploaded under. */
+  claims: Map<string, string>;
 }
 
+/** One principal's view. The namespace header/cookie stands in for a principal. */
 interface Namespace {
-  assets: Map<string, StoredAsset>;
   kv: Map<string, string>;
 }
 
 interface SignedToken {
   ref: string;
+  /** The principal the URL was minted for; a signed URL carries its own claim. */
+  principal: string;
   /**
    * A signed URL identifies the object completely — that is what makes it
    * loadable by a browser carrying no credentials at all — so the namespace
@@ -135,6 +142,36 @@ async function readJson<T>(req: IncomingMessage, maxBodyBytes: number): Promise<
   return body as T;
 }
 
+/**
+ * Media types served back as themselves. Deliberately narrow: these are the
+ * types a browser renders in an <img>/<audio>/<video> without being able to
+ * execute anything. `image/svg+xml` is absent on purpose — it is a document
+ * format, and serving one from the application's origin is a scripting
+ * surface, not an image.
+ */
+const RENDERABLE_MEDIA_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/avif',
+  'audio/mpeg',
+  'audio/ogg',
+  'audio/wav',
+  'audio/webm',
+  'video/mp4',
+  'video/webm',
+  'video/ogg',
+]);
+
+const OPAQUE_MEDIA_TYPE = 'application/octet-stream';
+
+/** Strip any parameters (`; charset=…`) and normalize for the allowlist check. */
+function mediaTypeOf(header: string | undefined): string {
+  if (typeof header !== 'string') return OPAQUE_MEDIA_TYPE;
+  return header.split(';')[0]!.trim().toLowerCase();
+}
+
 const MAX_IDENTIFIER_BYTES = 512;
 
 /**
@@ -173,6 +210,13 @@ function assertAddressableIdentifier(value: string, label: string): void {
       `@openmaic/storage: ${label} must not contain the NUL code point`,
     );
   }
+  if (/[\uD800-\uDFFF]/u.test(value)) {
+    throw new ConformanceHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `@openmaic/storage: ${label} must not contain an unpaired UTF-16 surrogate`,
+    );
+  }
   const bytes = Buffer.byteLength(value, 'utf8');
   if (bytes > MAX_IDENTIFIER_BYTES) {
     throw new ConformanceHttpError(
@@ -191,7 +235,17 @@ function pathParts(req: IncomingMessage): { parts: string[]; url: URL } {
   const url = new URL(req.url ?? '/', 'http://conformance.invalid');
   const parts = url.pathname.split('/');
   if (parts[0] === '') parts.shift();
-  return { parts: parts.map((part) => decodeURIComponent(part)), url };
+  try {
+    return { parts: parts.map((part) => decodeURIComponent(part)), url };
+  } catch {
+    // A malformed escape (`%`, `%zz`) is a bad request, not a server fault; the
+    // native URIError would otherwise surface as the contract's 500 row.
+    throw new ConformanceHttpError(
+      400,
+      'VALIDATION_FAILED',
+      '@openmaic/storage: request path is not valid percent-encoded UTF-8',
+    );
+  }
 }
 
 function cookieValue(req: IncomingMessage, name: string): string | undefined {
@@ -230,8 +284,10 @@ function assertNoScopeChannel(req: IncomingMessage, url: URL): void {
 
 interface RouteContext {
   state: Namespace;
+  /** The principal, for the claim model. The namespace header/cookie stands in. */
   namespaceName: string;
   namespaceFor: (name: string) => Namespace;
+  assets: Map<string, SharedAsset>;
   parts: string[];
   url: URL;
   baseUrl: string;
@@ -246,7 +302,8 @@ async function routeAssets(
   res: ServerResponse,
   context: RouteContext,
 ): Promise<boolean> {
-  const { state, parts, url, baseUrl, resolveMode, signedTtlMs, maxBodyBytes, tokens } = context;
+  const { parts, url, baseUrl, resolveMode, signedTtlMs, maxBodyBytes, tokens, assets } = context;
+  const principal = context.namespaceName;
   const method = req.method ?? 'GET';
   if (parts.length < 2) return false;
   const ref = parts[1]!;
@@ -276,17 +333,26 @@ async function routeAssets(
           `requested ref ${JSON.stringify(ref)}`,
       );
     }
-    const header = req.headers['content-type'];
-    state.assets.set(ref, {
-      bytes,
-      contentType: typeof header === 'string' ? header : 'application/octet-stream',
-    });
+    const mediaType = mediaTypeOf(req.headers['content-type']);
+    const existing = assets.get(ref);
+    if (existing) {
+      // Bytes are already here (content addressing guarantees they are the same
+      // bytes). What the PUT establishes is this principal's claim, and the
+      // media type it filed them under — per principal, so re-uploading cannot
+      // rewrite what anyone else's document resolves to.
+      existing.claims.set(principal, mediaType);
+    } else {
+      assets.set(ref, { bytes, claims: new Map([[principal, mediaType]]) });
+    }
     sendNoContent(res);
     return true;
   }
 
   if (method === 'GET' && parts.length === 3 && parts[2] === 'url') {
-    if (!state.assets.has(ref)) {
+    // Holding no claim is indistinguishable from the asset not existing:
+    // knowing a ref is not authorization, so a ref copied out of a shared
+    // document does not read back someone else's asset.
+    if (!assets.get(ref)?.claims.has(principal)) {
       throw new ConformanceHttpError(
         404,
         'ASSET_NOT_FOUND',
@@ -304,7 +370,8 @@ async function routeAssets(
     const token = `tok-${tokens.size}-${Math.random().toString(36).slice(2)}`;
     tokens.set(token, {
       ref,
-      namespace: context.namespaceName,
+      principal,
+      namespace: principal,
       expiresAt: Date.now() + signedTtlMs,
     });
     sendJson(res, 200, { url: `${baseUrl}${path}?token=${encodeURIComponent(token)}` });
@@ -312,7 +379,7 @@ async function routeAssets(
   }
 
   if (method === 'GET' && parts.length === 3 && parts[2] === 'content') {
-    let contents = state;
+    let claimant = principal;
     if (resolveMode === 'signed') {
       // Validate the token for real. A server that only checked for presence
       // would let any string through, and the contract's "short-lived" promise
@@ -326,7 +393,7 @@ async function routeAssets(
           '@openmaic/storage: asset content requires a valid, unexpired signed url',
         );
       }
-      contents = context.namespaceFor(minted.namespace);
+      claimant = minted.principal;
     } else if (cookieValue(req, 'session') === undefined) {
       // The proxied shape is only sound where the browser can authenticate the
       // media load by itself. A media element sends cookies, never the client's
@@ -337,26 +404,39 @@ async function routeAssets(
         '@openmaic/storage: proxied asset content requires a session cookie',
       );
     }
-    const asset = contents.assets.get(ref);
-    if (!asset) {
+    const asset = assets.get(ref);
+    const mediaType = asset?.claims.get(claimant);
+    if (!asset || mediaType === undefined) {
       throw new ConformanceHttpError(
         404,
         'ASSET_NOT_FOUND',
         `@openmaic/storage: no asset ${JSON.stringify(ref)}`,
       );
     }
+    // Only an allowlisted type is served as itself. Anything else — including
+    // the octet-stream a metadata-less upload lands on — is served opaquely and
+    // marked as a download, so a `text/html` upload cannot come back as a
+    // document in the application's own origin.
+    const renderable = RENDERABLE_MEDIA_TYPES.has(mediaType);
     res.writeHead(200, {
-      'content-type': asset.contentType,
-      // Mandated by the contract: the stored type is caller-influenced, so the
-      // browser must not be allowed to sniff its way to a different one.
+      'content-type': renderable ? mediaType : OPAQUE_MEDIA_TYPE,
+      // The stored type is caller-influenced, so the browser must not be able to
+      // sniff its way to a different one.
       'x-content-type-options': 'nosniff',
+      ...(renderable ? {} : { 'content-disposition': 'attachment' }),
     });
     res.end(asset.bytes);
     return true;
   }
 
   if (method === 'DELETE' && parts.length === 2) {
-    state.assets.delete(ref);
+    const asset = assets.get(ref);
+    if (asset) {
+      asset.claims.delete(principal);
+      // Reclaim the bytes once nobody holds a claim. Until then one principal's
+      // delete must not break another principal's document.
+      if (asset.claims.size === 0) assets.delete(ref);
+    }
     sendNoContent(res);
     return true;
   }
@@ -449,6 +529,8 @@ export async function startKvAssetConformanceServer(
   options: KvAssetConformanceServerOptions = {},
 ): Promise<KvAssetConformanceServer> {
   const namespaces = new Map<string, Namespace>();
+  // Bytes are shared across principals by ref; claims live inside each entry.
+  const assets = new Map<string, SharedAsset>();
   const tokens = new Map<string, SignedToken>();
   const resolveMode = options.resolveMode ?? 'proxy';
   const signedTtlMs = options.signedTtlMs ?? 60_000;
@@ -459,7 +541,7 @@ export async function startKvAssetConformanceServer(
   const namespaceFor = (name: string): Namespace => {
     let state = namespaces.get(name);
     if (!state) {
-      state = { assets: new Map(), kv: new Map() };
+      state = { kv: new Map() };
       namespaces.set(name, state);
     }
     return state;
@@ -499,6 +581,7 @@ export async function startKvAssetConformanceServer(
       state: namespaceFor(namespaceName),
       namespaceName,
       namespaceFor,
+      assets,
       parts,
       url,
       baseUrl,

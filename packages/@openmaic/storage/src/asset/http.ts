@@ -50,6 +50,12 @@ const UNKNOWN_CONTENT_TYPE = 'application/octet-stream';
 const ABSOLUTE_URL = /^[a-z][a-z0-9+.-]*:/i;
 
 /**
+ * Origin used only to ask the URL parser whether a relative reference stays on
+ * the origin it was resolved against. Never fetched, and never returned.
+ */
+const PROBE_ORIGIN = 'https://asset-url-probe.invalid';
+
+/**
  * Schemes a resolved asset URL may use. A ref resolves into something the
  * application hands to an `<img>` / `<audio>` / `<video>` `src`, so a server
  * (or anything that can answer for one) returning `javascript:` or `data:`
@@ -177,7 +183,10 @@ export class HttpAssetProvider implements StorageProvider {
       // `application/json` renders nowhere and there is nothing to notice. A
       // hook that sets it is misconfigured, so say so rather than pick a winner.
       if (headers['content-type'] !== undefined) {
-        throw new Error(
+        throw new HttpAssetProviderError(
+          // No exchange happened, so there is no status to report.
+          0,
+          'CONTENT_TYPE_CONFLICT',
           '@openmaic/storage: the headers hook must not set Content-Type on an asset upload — ' +
             "it carries the asset's media type",
         );
@@ -218,38 +227,81 @@ export class HttpAssetProvider implements StorageProvider {
   }
 
   /**
-   * A resolved URL is either absolute (a signed URL, which must be handed back
-   * byte-for-byte or its signature breaks) or a root-relative path a proxying
-   * deployment serves itself. Only the latter is joined to the base URL.
+   * Validate a resolved URL and, when it is a path, join it to the base URL.
    *
-   * Both branches are validated, because the value ends up in a media `src`.
-   * The absolute branch is restricted to http(s), so a compromised or confused
-   * server cannot resolve a ref into `javascript:` or `data:` and get script
-   * execution in the application's origin. The relative branch refuses anything
-   * that is not purely a path: `//host/x` and `/\host/x` both *look* relative
-   * and both resolve to a different origin, since URL parsers treat a leading
-   * `//` as protocol-relative and normalize the backslash form into it.
+   * Everything here is decided by *parsing*, not by inspecting the text. Text
+   * checks are the wrong tool for this: the URL parser strips ASCII tab, LF and
+   * CR before it parses, so `/\t/evil.example/x` passes a "does it start with
+   * //" test and then loads cross-origin anyway; and a bare `https:host/x` is
+   * read as a relative path when the page shares its scheme, so a prefix test
+   * and a browser disagree about where it points. A prefix test can only be
+   * patched one bypass at a time, so the parser decides instead.
+   *
+   * It matters because the result goes into a media `src`. A URL that resolves
+   * somewhere other than the deployment is an exfiltration channel, and a
+   * `javascript:` or `data:` URL is script execution in the app's own origin.
    */
   private absolutize(url: string, status: number): string {
-    if (ABSOLUTE_URL.test(url)) {
-      const scheme = url.slice(0, url.indexOf(':') + 1).toLowerCase();
-      if (!RESOLVABLE_SCHEMES.has(scheme)) {
-        throw this.malformed(
-          `asset resolve url scheme ${JSON.stringify(scheme)} is not http(s)`,
-          status,
-        );
-      }
-      return url;
-    }
-    if (!url.startsWith('/')) {
-      throw this.malformed('asset resolve url must be absolute or start with "/"', status);
-    }
-    if (url.startsWith('//') || url.startsWith('/\\')) {
+    // Strip-then-parse is the parser's own first step, so any of these makes
+    // the text and the parse disagree. Refuse before that can happen.
+    if (/[\t\n\r]/.test(url)) {
       throw this.malformed(
-        'asset resolve url must be a path, not a protocol-relative reference to another origin',
+        'asset resolve url must not contain a tab, newline or carriage return',
         status,
       );
     }
+
+    if (ABSOLUTE_URL.test(url)) {
+      // Require the unambiguous `scheme://host` form. `https:cdn.example/x`
+      // parses standalone as host `cdn.example`, but a browser resolving it
+      // against a same-scheme page reads it as a relative path — two different
+      // destinations for one string, so it is not a URL this client will hand on.
+      if (!/^https?:\/\//i.test(url)) {
+        throw this.malformed(
+          'absolute asset resolve url must use the http(s) scheme and the "scheme://" form',
+          status,
+        );
+      }
+      let parsed: URL;
+      try {
+        parsed = new URL(url);
+      } catch {
+        throw this.malformed('asset resolve url is not a parseable absolute URL', status);
+      }
+      if (!RESOLVABLE_SCHEMES.has(parsed.protocol)) {
+        throw this.malformed(
+          `asset resolve url scheme ${JSON.stringify(parsed.protocol)} is not http(s)`,
+          status,
+        );
+      }
+      if (parsed.host === '') {
+        throw this.malformed('absolute asset resolve url must carry a host', status);
+      }
+      // Returned as received: re-serializing can normalize a signed URL into
+      // one whose signature no longer verifies.
+      return url;
+    }
+
+    if (!url.startsWith('/')) {
+      throw this.malformed('asset resolve url must be absolute or start with "/"', status);
+    }
+    // Resolve against a probe origin to ask the parser the only question that
+    // matters: is this actually a same-origin path? `//host/x`, `/\host/x` and
+    // anything else that reaches for an authority lands on a different origin
+    // and is refused here, whatever it looked like as text.
+    let probed: URL;
+    try {
+      probed = new URL(url, PROBE_ORIGIN);
+    } catch {
+      throw this.malformed('asset resolve url is not a parseable path', status);
+    }
+    if (probed.origin !== PROBE_ORIGIN) {
+      throw this.malformed(
+        'asset resolve url must be a path, not a reference to another origin',
+        status,
+      );
+    }
+
     // An app-mounted deployment may be configured with a path-only base URL
     // (e.g. `/api/persistence`); the browser resolves the path against the
     // document itself, so leave it alone rather than inventing an origin.

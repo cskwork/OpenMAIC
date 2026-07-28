@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { BrowserKVStore } from '../src/kv/browser.js';
 import type { KVStore, LocalKVStore } from '../src/kv/types.js';
+import { KVScopeViolationError } from '../src/kv/types.js';
+import { kvPersistStorage } from '../src/zustand/persist.js';
 import { HttpAccountKV, HttpKVStore, HttpKVStoreError } from '../src/kv/http.js';
 import { runKVStoreContract } from './kv-contract.js';
 import { MemoryStorage } from './setup.js';
@@ -32,7 +34,7 @@ afterAll(async () => {
 runKVStoreContract('HTTP (account) + local (device)', () => makeStore());
 
 describe('HttpKVStore device-scope invariant', () => {
-  test('device values are structurally unable to reach the transport', () => {
+  test('a device scope is a type error at a direct call on the transport', () => {
     const account = new HttpAccountKV({
       baseUrl: 'https://kv.invalid',
       fetch: async () => {
@@ -40,20 +42,24 @@ describe('HttpKVStore device-scope invariant', () => {
       },
     });
 
-    // The whole invariant in one assertion: the object that owns the network is
-    // typed without a scope, so "send this device value" is not a call anyone
-    // can write. These are never invoked — they exist to be type-checked. If a
-    // scope parameter is ever added, the directives become unused and `tsc`
-    // fails the build, so the guard cannot rot silently.
+    // Never invoked — these exist to be type-checked. The scope parameter is
+    // declared as `'account'` precisely so a literal `'device'` cannot be
+    // written here; if that narrowing is ever widened the directives go unused
+    // and `tsc` fails the build, so the guard cannot rot silently. It only
+    // covers *direct* calls, which is why the runtime refusal below exists too.
     const deviceCalls = (): unknown[] => [
-      // @ts-expect-error `set` takes (key, value); there is no scope to pass.
+      // @ts-expect-error this transport serves the account scope only.
       account.set('theme', 'dark', 'device'),
-      // @ts-expect-error `get` takes (key); there is no scope to pass.
+      // @ts-expect-error this transport serves the account scope only.
       account.get('theme', 'device'),
-      // @ts-expect-error `remove` takes (key); there is no scope to pass.
+      // @ts-expect-error this transport serves the account scope only.
       account.remove('theme', 'device'),
-      // @ts-expect-error `keys` takes (prefix?); there is no scope to pass.
+      // @ts-expect-error this transport serves the account scope only.
       account.keys('ui:', 'device'),
+      // An options-shaped scope is no more expressible than a positional one:
+      // the parameter is `'account'`, not an object with a scope in it.
+      // @ts-expect-error there is no options form that carries a scope.
+      account.set('theme', 'dark', { scope: 'device' }),
     ];
 
     expect(typeof deviceCalls).toBe('function');
@@ -119,6 +125,83 @@ describe('HttpKVStore device-scope invariant', () => {
           deviceStore: outer as unknown as LocalKVStore,
         }),
     ).toThrow(/must be a local KVStore/);
+  });
+
+  // The transport is publicly exported and structurally a `KVStore`, so its
+  // missing scope parameter was never "inexpressible" — the extra argument was
+  // accepted by the language and dropped on the floor. Both sequences below
+  // compiled without a cast and put a device value on the wire.
+  test('the transport refuses a device scope handed to it through a KVStore reference', async () => {
+    const sent: string[] = [];
+    const account = new HttpAccountKV({
+      baseUrl: 'https://kv.invalid',
+      fetch: async (input, init) => {
+        sent.push(`${String(input)} ${String(init?.body ?? '')}`);
+        return new Response(null, { status: 204 });
+      },
+    });
+    // Assignable, because TypeScript compares method parameters bivariantly.
+    const asKvStore: KVStore = account;
+
+    await expect(asKvStore.set('theme', 'DEVICE-ONLY', 'device')).rejects.toBeInstanceOf(
+      KVScopeViolationError,
+    );
+    await expect(asKvStore.get('theme', 'device')).rejects.toThrow(/account scope only/);
+    await expect(asKvStore.remove('theme', 'device')).rejects.toThrow(/account scope only/);
+    await expect(asKvStore.keys('ui:', 'device')).rejects.toThrow(/account scope only/);
+
+    expect(sent).toEqual([]);
+  });
+
+  test('the transport still serves an explicitly account-scoped call', async () => {
+    const paths: string[] = [];
+    const account = new HttpAccountKV({
+      baseUrl: 'https://kv.invalid',
+      fetch: async (input) => {
+        paths.push(new URL(String(input)).pathname);
+        return new Response(null, { status: 204 });
+      },
+    });
+
+    await account.set('k', 'v', 'account');
+    await account.remove('k', 'account');
+    expect(paths).toEqual(['/kv/entries/k', '/kv/entries/k']);
+  });
+
+  test('the persist adapter refuses to pair a device scope with a remote store', () => {
+    const sent: string[] = [];
+    const account = new HttpAccountKV({
+      baseUrl: 'https://kv.invalid',
+      fetch: async (input, init) => {
+        sent.push(`${String(input)} ${String(init?.body ?? '')}`);
+        return new Response(null, { status: 204 });
+      },
+    });
+
+    // The documented persist wiring, and the shortest path to a device value on
+    // the wire: the adapter takes the store and the scope as separate arguments,
+    // so nothing else was checking that they belong together.
+    const pairing = (): unknown =>
+      // @ts-expect-error the `device` overload requires a LocalKVStore.
+      kvPersistStorage(account, 'device');
+    expect(pairing).toThrow(/requires a LocalKVStore/);
+
+    // And the cast that erases the type error is refused at runtime.
+    expect(() => kvPersistStorage(account as unknown as LocalKVStore, 'device')).toThrow(
+      KVScopeViolationError,
+    );
+    expect(sent).toEqual([]);
+  });
+
+  test('the persist adapter still accepts the legitimate pairings', async () => {
+    const local = new BrowserKVStore({ storage: new MemoryStorage() });
+    const deviceStorage = kvPersistStorage<{ theme: string }>(local, 'device');
+    await deviceStorage.setItem('settings-storage', { state: { theme: 'dark' } });
+    expect(await deviceStorage.getItem('settings-storage')).toEqual({ state: { theme: 'dark' } });
+
+    // A remote store with the account scope is exactly what the adapter is for.
+    expect(() => kvPersistStorage(makeStore(), 'account')).not.toThrow();
+    expect(() => kvPersistStorage(makeStore())).not.toThrow();
   });
 
   test('a hand-rolled store lying about being local is the only way through', async () => {
@@ -499,8 +582,8 @@ describe('HttpKVStore transport semantics', () => {
       deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
     });
 
-    await expect(store.set('bad\u0000key', 'v')).rejects.toThrow(/not a plain JSON value/);
-    await expect(store.get('\uD800')).rejects.toThrow(/not a plain JSON value/);
+    await expect(store.set('bad\u0000key', 'v')).rejects.toThrow(/must not contain the NUL/);
+    await expect(store.get('\uD800')).rejects.toThrow(/unpaired UTF-16 surrogate/);
   });
 
   test('rejects dot-only keys before URL construction', async () => {

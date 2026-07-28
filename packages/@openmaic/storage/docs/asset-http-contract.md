@@ -44,14 +44,17 @@ On an upload the header is the asset's recorded media type, not transport decora
 
 Because the stored type is caller-influenced and a proxied asset is served from the application's own origin, a server MUST NOT serve back whatever it was given:
 
-- The server MUST validate `Content-Type` against an allowlist of renderable media types (the image, audio, and video types the deployment actually serves). A type outside the allowlist MUST either be rejected at upload with `400 VALIDATION_FAILED` or stored and served as `application/octet-stream` with `Content-Disposition: attachment`.
+- The server MUST hold `Content-Type` against an allowlist of **renderable** media types — the image, audio and video types the deployment actually renders, and nothing a browser would treat as a document. `image/svg+xml` does not belong on it: it is a document format, and serving one from the application's origin is a scripting surface rather than an image.
+- A type outside the allowlist MUST either be rejected at upload with `400 VALIDATION_FAILED`, or stored and served as `application/octet-stream` with `Content-Disposition: attachment`. An upload carrying no media type lands here by definition, since `application/octet-stream` is not renderable — such an asset is stored and served, but as a download rather than as something a page will render.
 - Every response from `GET /assets/{ref}/content` MUST carry `X-Content-Type-Options: nosniff`, so a browser cannot sniff its way past the recorded type.
+
+This is what bounds the promise made under [Resolved URLs](#resolved-urls): a resolved URL is usable directly as an `<img>` / `<audio>` / `<video>` `src` **for an asset stored under an allowlisted type**. For anything else `resolve` still returns a working URL, and the bytes are still served — but as an attachment, because the alternative is letting a caller choose what the application's own origin executes.
 
 A later re-upload with a corrected `Content-Type` wins for the uploading principal, so a resolved media type never depends on which write happened first. In a deployment that shares bytes across principals, that metadata MUST be recorded per principal: without it, re-uploading identical bytes under a `text/html` type would rewrite what every other principal's document resolves to, which in the proxied shape is stored XSS in the application's origin.
 
 ## Resolved URLs
 
-`resolve` returns a URL the browser can use directly as an `<img>` / `<audio>` / `<video>` `src`. The contract accommodates both deployment shapes without the document ever storing a raw URL — the document stores the ref, and the URL is minted per resolution:
+`resolve` returns a URL the browser can load — usable directly as an `<img>` / `<audio>` / `<video>` `src` when the asset was stored under a renderable media type (see [Media type](#media-type)). The contract accommodates both deployment shapes without the document ever storing a raw URL — the document stores the ref, and the URL is minted per resolution:
 
 - **Signed URL.** `url` is absolute and points wherever the bytes live (object storage, a CDN). It MAY be short-lived, and the token MUST be validated — bound to the ref it was minted for and to its expiry — not merely checked for presence. It MUST NOT be single-use: `resolve` makes no promise about how many times its result is fetched, and a caller holding an expired URL re-resolves the ref rather than expecting the same URL to be reissued. The client returns it **byte-for-byte** and never re-serializes it, because normalizing a URL can invalidate its signature.
 - **Proxied path.** `url` is root-relative (begins with `/`) and is served by the deployment itself, typically at `GET /assets/{ref}/content`. The path MUST already be correct for the deployment's mount point, since the client joins it to the base URL's **origin**, not to the base URL's path.
@@ -66,14 +69,19 @@ A deployment authenticating with a bearer token or any other header MUST use the
 
 ### Client-side validation
 
-A resolved URL ends up in a media `src`, so the client validates before returning it, and any failure is a `MALFORMED_RESPONSE`:
+A resolved URL ends up in a media `src`, so the client validates before returning it, and every failure below is a `MALFORMED_RESPONSE`.
 
-- An absolute `url` MUST use the `http:` or `https:` scheme. `javascript:`, `data:`, `blob:` and anything else are refused — resolving a ref must render an asset, never execute in the application's origin.
-- A relative `url` MUST begin with `/` and MUST NOT begin with `//` or `/\`. Both of the latter *look* like paths and both resolve to a different origin, because URL parsers read a leading `//` as protocol-relative and normalize the backslash form into it.
+The checks are decided by **parsing**, not by inspecting the text, because text checks and URL parsers disagree in ways an attacker picks:
+
+- A URL containing an ASCII tab, LF or CR is refused outright. The parser strips those *before* parsing, so `/⟨tab⟩/evil.example/x` fails a "does it start with `//`" test and then loads cross-origin anyway.
+- An absolute `url` MUST be in the unambiguous `http://` or `https://` form, MUST parse, and MUST carry a host. `javascript:`, `data:`, `blob:` and anything else are refused — resolving a ref must render an asset, never execute in the application's origin. The `scheme://` requirement is separate: a bare `https:cdn.example/x` parses standalone to the host `cdn.example`, but a browser resolving it against a same-scheme page reads it as a relative path, so one string names two destinations.
+- A relative `url` MUST begin with `/` and, when resolved against a probe origin, MUST still be on that origin. This is what rejects `//host/x` and `/\host/x`, and anything else that reaches for an authority, without the contract having to enumerate the spellings.
 - After joining a relative `url` to the base URL, the result MUST still be on the base URL's origin.
-- An empty or non-string `url`, or a relative one without a leading `/`, is refused as before.
+- An empty or non-string `url` is refused as before.
 
-A deployment configured with a path-only base URL (an app-mounted route such as `/api/persistence`) receives root-relative paths unchanged, because the browser resolves them against the document itself; the prefix rules above still apply to them.
+A validated absolute URL is returned exactly as received. In particular the client does not adjudicate *which* http(s) host a deployment may serve assets from, so a signed URL carrying userinfo (`https://user:pass@host/…`) or a homograph host is passed through: whether that host is legitimate is knowledge only the deployment has, and re-serializing the URL to normalize it would break the signature the shape exists to carry.
+
+A deployment configured with a path-only base URL (an app-mounted route such as `/api/persistence`) receives root-relative paths unchanged, because the browser resolves them against the document itself. Every rule above still applies to them — that shape has no base origin to fall back on, so the parse-based check is the only thing standing between it and another origin.
 
 Because a resolved URL may expire, the HTTP client caches nothing across calls. It coalesces **concurrent** `resolve(ref)` calls onto one request so they share a single URL — matching `BrowserAssetProvider`, whose object URL must not be minted twice — and then forgets it. Handing back an expired signed URL later would be worse than asking again. A successful `put` or `remove` invalidates any in-flight resolution of that ref, so a caller arriving after the write never inherits an answer computed before it.
 

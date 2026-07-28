@@ -38,6 +38,19 @@ export interface LocalKVStore extends KVStore {
 export const DEFAULT_KV_SCOPE: KVScope = 'account';
 
 /**
+ * A scope a store was asked to serve and cannot. Its own class because the two
+ * cases it covers are refusals to route data, not transport failures: an
+ * unrecognized scope, and a `device` scope handed to a backend that only serves
+ * `account`.
+ */
+export class KVScopeViolationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'KVScopeViolationError';
+  }
+}
+
+/**
  * Narrow an untrusted scope to the two the primitive defines, failing closed.
  *
  * Scopes reach backends as ordinary values (the zustand adapter passes one
@@ -53,6 +66,84 @@ export function assertKVScope(scope: KVScope): KVScope {
     case 'account':
       return scope;
     default:
-      throw new Error(`@openmaic/storage: unknown KV scope ${JSON.stringify(scope as string)}`);
+      throw new KVScopeViolationError(
+        `@openmaic/storage: unknown KV scope ${JSON.stringify(scope as string)}`,
+      );
+  }
+}
+
+/**
+ * Upper bound on a key, in UTF-8 bytes rather than characters, so a multi-byte
+ * key cannot exceed the limit while appearing to comply. Keys become URL path
+ * segments and server-side index entries; an unbounded key is a
+ * denial-of-service knob and an index-size hazard.
+ */
+export const MAX_KV_KEY_BYTES = 512;
+
+const UTF8 = new TextEncoder();
+const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
+
+/**
+ * The key domain, enforced by **every** backend.
+ *
+ * It lives here rather than in the HTTP client because a key that one backend
+ * accepts and another cannot address is not a portable primitive: a document
+ * written in the browser under a key containing `/` would become unreachable
+ * the moment a deployment moved to a server, and "the same contract suite
+ * proves the backends equivalent" would be false in the one place it matters.
+ *
+ * The rules follow from a key becoming a URL path segment somewhere: separators
+ * and dot segments would introduce structure a server could mistake for a path,
+ * and NUL or an unpaired surrogate does not survive the transports underneath.
+ */
+export function assertKVKey(key: string): void {
+  if (key === '') {
+    throw new Error('@openmaic/storage: kv key must not be empty');
+  }
+  if (key === '.' || key === '..') {
+    throw new Error(`@openmaic/storage: URL path segment must not be ${JSON.stringify(key)}`);
+  }
+  if (key.includes('/') || key.includes('\\')) {
+    throw new Error(
+      `@openmaic/storage: kv key ${JSON.stringify(key)} must not contain '/' or '\\'`,
+    );
+  }
+  assertKVKeyCharacters(key, 'kv key');
+  const bytes = UTF8.encode(key).length;
+  if (bytes > MAX_KV_KEY_BYTES) {
+    throw new Error(
+      `@openmaic/storage: kv key exceeds ${MAX_KV_KEY_BYTES} UTF-8 bytes (got ${bytes})`,
+    );
+  }
+}
+
+function assertKVKeyCharacters(value: string, label: string): void {
+  if (value.includes('\u0000')) {
+    throw new Error(`@openmaic/storage: ${label} must not contain the NUL code point (\\u0000)`);
+  }
+  if (LONE_SURROGATE.test(value)) {
+    throw new Error(`@openmaic/storage: ${label} must not contain an unpaired UTF-16 surrogate`);
+  }
+}
+
+/**
+ * A `keys()` prefix is held to the key rules it is a prefix *of*, minus the
+ * non-empty requirement: listing everything is what an empty prefix means. A
+ * prefix that could never match a legal key is a caller mistake worth reporting
+ * rather than an empty result to puzzle over.
+ */
+export function assertKVKeyPrefix(prefix: string): void {
+  if (prefix === '') return;
+  if (prefix.includes('/') || prefix.includes('\\')) {
+    throw new Error(
+      `@openmaic/storage: kv key prefix ${JSON.stringify(prefix)} must not contain '/' or '\\'`,
+    );
+  }
+  assertKVKeyCharacters(prefix, 'kv key prefix');
+  const bytes = UTF8.encode(prefix).length;
+  if (bytes > MAX_KV_KEY_BYTES) {
+    throw new Error(
+      `@openmaic/storage: kv key prefix exceeds ${MAX_KV_KEY_BYTES} UTF-8 bytes (got ${bytes})`,
+    );
   }
 }

@@ -13,12 +13,20 @@
  * scope has an HTTP backend, because `device` values never leave the device.
  */
 export type { KVScope, KVStore, LocalKVStore } from './kv/types.js';
-export { assertKVScope, DEFAULT_KV_SCOPE } from './kv/types.js';
+export {
+  assertKVKey,
+  assertKVKeyPrefix,
+  assertKVScope,
+  DEFAULT_KV_SCOPE,
+  KVScopeViolationError,
+  MAX_KV_KEY_BYTES,
+} from './kv/types.js';
 export { BrowserKVStore, type BrowserKVStoreOptions } from './kv/browser.js';
 export {
   HttpAccountKV,
   HttpKVStore,
   HttpKVStoreError,
+  type AccountScope,
   type HttpAccountKVOptions,
   type HttpKVHeadersContext,
   type HttpKVHeadersHook,

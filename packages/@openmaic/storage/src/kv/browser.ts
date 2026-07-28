@@ -1,4 +1,11 @@
-import { assertKVScope, DEFAULT_KV_SCOPE, type KVScope, type LocalKVStore } from './types.js';
+import {
+  assertKVKey,
+  assertKVKeyPrefix,
+  assertKVScope,
+  DEFAULT_KV_SCOPE,
+  type KVScope,
+  type LocalKVStore,
+} from './types.js';
 
 export interface BrowserKVStoreOptions {
   /**
@@ -39,6 +46,11 @@ export class BrowserKVStore implements LocalKVStore {
   }
 
   private storageKey(key: string, scope: KVScope): string {
+    // The key domain is the primitive's, not the HTTP client's: a key this
+    // backend accepted but a server could not address would silently become
+    // unreachable the moment a deployment moved, so both backends refuse the
+    // same keys.
+    assertKVKey(key);
     return this.prefix(scope) + key;
   }
 
@@ -66,6 +78,7 @@ export class BrowserKVStore implements LocalKVStore {
 
   async keys(prefix = '', scope: KVScope = DEFAULT_KV_SCOPE): Promise<string[]> {
     const scopePrefix = this.prefix(scope);
+    assertKVKeyPrefix(prefix);
     const out: string[] = [];
     for (let i = 0; i < this.storage.length; i++) {
       const full = this.storage.key(i);
