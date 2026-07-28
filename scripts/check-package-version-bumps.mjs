@@ -6,11 +6,15 @@ const commonIgnoredInputs = {
   directories: ['docs/', 'test/'],
 };
 
+// Keep this package set in lockstep with publish-packages.yml. The release
+// workflow intentionally publishes only these four owned packages.
 const ignoredPackageInputs = {
   dsl: commonIgnoredInputs,
   storage: commonIgnoredInputs,
   renderer: commonIgnoredInputs,
   importer: {
+    // These are local tooling, demo assets, or the legacy reference
+    // implementation. The importer build and package files exclude all of them.
     files: [
       ...commonIgnoredInputs.files,
       '.babelrc.cjs',
