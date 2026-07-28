@@ -1,8 +1,8 @@
 name: Publish @openmaic packages
 
-# Publishes the @openmaic/* package family (dsl, renderer, importer) to npm.
+# Publishes the @openmaic/* package family (dsl, storage, renderer, importer) to npm.
 #
-# Scope is pinned to those three packages by name on purpose: the workspace also
+# Scope is pinned to those four packages by name on purpose: the workspace also
 # contains vendored forks (mathml2omml, pptxgenjs) whose names we do NOT own, so
 # a recursive publish must never touch them.
 #
@@ -10,7 +10,7 @@ name: Publish @openmaic packages
 #   - merge a change to one of the @openmaic/* package manifests on `main`
 #     (real publish). This is the normal path for version-bump releases.
 #   - push a tag like `@openmaic/dsl@0.1.0` (real publish). NOTE: any @openmaic/*
-#     tag runs `pnpm -r publish` over all three packages — pnpm skips versions
+#     tag runs `pnpm -r publish` over all four packages — pnpm skips versions
 #     already on the registry, so in steady state this is idempotent. The tag is a
 #     release marker, not a per-package gate: an unpublished version bump for a
 #     sibling package sitting in the repo will also be published by any tag. Bump
@@ -29,6 +29,7 @@ on:
       - "@openmaic/*@*"
     paths:
       - "packages/@openmaic/dsl/package.json"
+      - "packages/@openmaic/storage/package.json"
       - "packages/@openmaic/renderer/package.json"
       - "packages/@openmaic/importer/package.json"
   workflow_dispatch:
@@ -62,12 +63,13 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Build in dependency order (dsl first); renderer/importer resolve
+      # Build in dependency order (dsl first); storage/renderer/importer resolve
       # @openmaic/dsl through the workspace link.
       - name: Build @openmaic packages
         run: >-
           pnpm -r
           --filter "@openmaic/dsl"
+          --filter "@openmaic/storage"
           --filter "@openmaic/renderer"
           --filter "@openmaic/importer"
           run build
@@ -77,17 +79,20 @@ jobs:
       # partial release (e.g. dsl published, then a sibling's test fails).
       - name: Test & typecheck (pre-publish gate)
         run: |
-          pnpm --filter "@openmaic/dsl" --filter "@openmaic/importer" run test
-          pnpm --filter "@openmaic/dsl" --filter "@openmaic/renderer" run typecheck
+          pnpm --filter "@openmaic/dsl" --filter "@openmaic/storage" --filter "@openmaic/importer" run test
+          pnpm --filter "@openmaic/dsl" --filter "@openmaic/storage" --filter "@openmaic/renderer" run typecheck
 
       # Always review tarball contents before any publish.
       - name: Inspect tarball contents (dry-run pack)
         run: |
-          for pkg in dsl renderer importer; do
+          for pkg in dsl storage renderer importer; do
             echo "::group::@openmaic/$pkg"
             ( cd "packages/@openmaic/$pkg" && pnpm pack --dry-run )
             echo "::endgroup::"
           done
+
+      - name: Smoke-test publishable tarballs
+        run: pnpm test:package-tarballs
 
       # Real publish. pnpm rewrites the workspace:* dep on @openmaic/dsl to the
       # concrete published version and publishes in topological order.
@@ -96,6 +101,7 @@ jobs:
         run: >-
           pnpm -r
           --filter "@openmaic/dsl"
+          --filter "@openmaic/storage"
           --filter "@openmaic/renderer"
           --filter "@openmaic/importer"
           publish --access public --provenance --no-git-checks

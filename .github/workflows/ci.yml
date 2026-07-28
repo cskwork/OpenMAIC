@@ -17,6 +17,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Fetch pull request base
+        if: github.event_name == 'pull_request'
+        run: git fetch --no-tags --depth=1 origin "$BASE_SHA"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+
+      - name: Package version bumps
+        if: github.event_name == 'pull_request'
+        run: node scripts/check-package-version-bumps.mjs "$BASE_SHA"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
