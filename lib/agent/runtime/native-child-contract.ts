@@ -33,6 +33,16 @@ export interface ServerExecutionRequest extends ToolExecutionEnvelope {
   kind: 'server';
 }
 
+export interface ClientEffectExecutionRequest extends ToolExecutionEnvelope {
+  kind: 'client_effect';
+}
+
+export type NativeClientEffectHandler = (opts: {
+  request: ClientEffectExecutionRequest;
+  params: unknown;
+  signal?: AbortSignal;
+}) => Promise<RuntimeAgentToolResult>;
+
 export type ServerToolExecutionStatus =
   | 'succeeded'
   | 'rejected'
@@ -41,7 +51,7 @@ export type ServerToolExecutionStatus =
   | 'cancelled';
 
 export interface ToolExecutionSummary {
-  request: ServerExecutionRequest;
+  request: ServerExecutionRequest | ClientEffectExecutionRequest;
   status: ServerToolExecutionStatus;
   isError: boolean;
   startedAt: number;
@@ -73,6 +83,8 @@ export interface ChildRunResult {
   agentInvocationId: string;
   status: ChildRunStatus;
   finalOutput?: string;
+  /** Exact visible deltas forwarded to the classroom bubble across Pi turns. */
+  visibleOutput?: string;
   toolExecutions: ToolExecutionSummary[];
   stopReason: string;
   usage?: AgentUsage;
@@ -92,6 +104,12 @@ export interface RunNativeChildOptions {
   maxToolExecutions: number;
   maxToolCallAttempts: number;
   allowedToolNames?: ReadonlySet<string>;
+  clientEffectHandlers?: ReadonlyMap<string, NativeClientEffectHandler>;
+  onVisibleTextDelta?: (event: {
+    agentInvocationId: string;
+    assistantTurnSequence: number;
+    delta: string;
+  }) => string | Promise<string>;
   history?: AgentMessage[];
   abortSignal?: AbortSignal;
   now?: () => number;

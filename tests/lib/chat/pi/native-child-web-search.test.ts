@@ -9,7 +9,7 @@ import type { LanguageModel } from 'ai';
 import { buildAgent } from '@/lib/agent/runtime/build-agent';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import { resolvePiWebSearchMode } from '@/lib/chat/pi/director-loop';
-import { buildCallAgentTool } from '@/lib/chat/pi/tools/call-agent';
+import { buildCallAgentTool, resolveNativeChildCapabilities } from '@/lib/chat/pi/tools/call-agent';
 import { buildChildWebSearchTool } from '@/lib/chat/pi/tools/web-search';
 import type { StatelessChatRequest, StatelessEvent } from '@/lib/types/chat';
 
@@ -186,6 +186,49 @@ function childSearchStream(contexts: Context[]): StreamFn {
 describe('Phase 1 Child native web_search', () => {
   it.each([
     {
+      role: 'teacher' as const,
+      allowedActions: ['wb_draw_text'],
+      expected: {
+        nativeWhiteboardEnabled: true,
+        childWebSearchEnabled: true,
+        nativeChildEnabled: true,
+      },
+    },
+    {
+      role: 'assistant' as const,
+      allowedActions: ['wb_draw_text'],
+      expected: {
+        nativeWhiteboardEnabled: false,
+        childWebSearchEnabled: false,
+        nativeChildEnabled: false,
+      },
+    },
+    {
+      role: 'student' as const,
+      allowedActions: [],
+      expected: {
+        nativeWhiteboardEnabled: false,
+        childWebSearchEnabled: false,
+        nativeChildEnabled: false,
+      },
+    },
+  ])(
+    'keeps $role on the correct runtime when native web and whiteboard flags coexist',
+    ({ role, allowedActions, expected }) => {
+      expect(
+        resolveNativeChildCapabilities({
+          agent: { role, allowedActions },
+          enableNativeChildWebSearch: true,
+          enableNativeChildWhiteboard: true,
+          enableWhiteboardTools: true,
+          maxActionsPerAgent: 1,
+        }),
+      ).toEqual(expected);
+    },
+  );
+
+  it.each([
+    {
       name: 'master off overrides native mode',
       input: {
         enableWebSearch: false,
@@ -204,13 +247,23 @@ describe('Phase 1 Child native web_search', () => {
       expected: 'child',
     },
     {
-      name: 'whiteboard keeps legacy Child and Director search',
+      name: 'whiteboard without native effect mode keeps legacy Child and Director search',
       input: {
         enableWebSearch: true,
         enableNativeChildWebSearch: true,
         enableWhiteboardTools: true,
       },
       expected: 'director',
+    },
+    {
+      name: 'native whiteboard lets Child web search coexist in the same Pi run',
+      input: {
+        enableWebSearch: true,
+        enableNativeChildWebSearch: true,
+        enableNativeChildWhiteboard: true,
+        enableWhiteboardTools: true,
+      },
+      expected: 'hybrid',
     },
     {
       name: 'master on without native mode keeps Director search',

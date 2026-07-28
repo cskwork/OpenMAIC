@@ -10,6 +10,7 @@ import { isProviderKeyRequired } from '@/lib/ai/providers';
 import {
   isPiChatEnabled,
   isPiNativeChildWebSearchEnabled,
+  isPiNativeChildWhiteboardEnabled,
   isPiWebSearchEnabled,
 } from '@/lib/config/feature-flags';
 import { createLogger } from '@/lib/logger';
@@ -172,6 +173,7 @@ export async function POST(req: NextRequest) {
           enableWhiteboardTools,
           enableWebSearch: isPiWebSearchEnabled(),
           enableNativeChildWebSearch: isPiNativeChildWebSearchEnabled(),
+          enableNativeChildWhiteboard: isPiNativeChildWhiteboardEnabled(),
         });
 
         if (signal.aborted) {

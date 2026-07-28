@@ -372,6 +372,9 @@ export interface StatelessChatRequest {
     piMaxActionsPerAgent?: number;
     /** Pi PoC: opt in to whiteboard tools; defaults off to keep the first A/B pass comparable. */
     piEnableWhiteboardTools?: boolean;
+    /** Browser identity binding for native client-effect delivery and ACK. */
+    piSessionId?: string;
+    piRequestId?: string;
     /** Phase 0T: request-scoped desired outcomes and trusted user-intent facts. */
     piTaskContract?: InclassTaskContractSeed;
   };

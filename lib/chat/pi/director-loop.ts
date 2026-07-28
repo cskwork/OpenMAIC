@@ -49,15 +49,25 @@ function formatSceneEvidenceForDelegation(evidence: DirectorSceneEvidencePacket[
   return evidence.map((packet) => packet.content).join('\n\n');
 }
 
-export type PiWebSearchMode = 'disabled' | 'director' | 'child';
+export type PiWebSearchMode = 'disabled' | 'director' | 'child' | 'hybrid';
 
 export function resolvePiWebSearchMode(opts: {
   enableWebSearch?: boolean;
   enableNativeChildWebSearch?: boolean;
+  enableNativeChildWhiteboard?: boolean;
   enableWhiteboardTools: boolean;
 }): PiWebSearchMode {
   if (opts.enableWebSearch !== true) return 'disabled';
-  if (opts.enableNativeChildWebSearch === true && !opts.enableWhiteboardTools) return 'child';
+  if (
+    opts.enableNativeChildWebSearch === true &&
+    opts.enableWhiteboardTools &&
+    opts.enableNativeChildWhiteboard === true
+  ) {
+    return 'hybrid';
+  }
+  if (opts.enableNativeChildWebSearch === true && !opts.enableWhiteboardTools) {
+    return 'child';
+  }
   return 'director';
 }
 
@@ -76,17 +86,19 @@ export async function runPiDirectorLoop(opts: {
   enableWhiteboardTools: boolean;
   enableWebSearch?: boolean;
   enableNativeChildWebSearch?: boolean;
+  enableNativeChildWhiteboard?: boolean;
 }): Promise<void> {
-  // OPENMAIC_ENABLE_PI_WEB_SEARCH remains the capability master switch. Phase 1
-  // only changes its execution mode. Until Phase 2 introduces native
-  // client-effect ACKs, whiteboard-enabled turns stay on the existing JSON Child
-  // path and retain the Director search tool.
+  // OPENMAIC_ENABLE_PI_WEB_SEARCH remains the capability master switch. Child
+  // search can coexist with whiteboard tools only when the native client-effect
+  // closure is enabled; otherwise the legacy JSON Child retains Director search.
   const webSearchMode = resolvePiWebSearchMode({
     enableWebSearch: opts.enableWebSearch,
     enableNativeChildWebSearch: opts.enableNativeChildWebSearch,
+    enableNativeChildWhiteboard: opts.enableNativeChildWhiteboard,
     enableWhiteboardTools: opts.enableWhiteboardTools,
   });
-  const nativeChildWebSearchEnabled = webSearchMode === 'child';
+  const nativeChildWebSearchEnabled = webSearchMode === 'child' || webSearchMode === 'hybrid';
+  const directorWebSearchEnabled = webSearchMode === 'director' || webSearchMode === 'hybrid';
   let totalAgents = 0;
   let totalActions = 0;
   let agentHadContent = false;
@@ -162,7 +174,7 @@ export async function runPiDirectorLoop(opts: {
         pendingSceneEvidence.set(evidence.details.sceneId, evidence);
       },
     }),
-    ...(webSearchMode === 'director'
+    ...(directorWebSearchEnabled
       ? [
           buildDirectorWebSearchTool({
             stageId: opts.body.storeState.stage?.id,
@@ -207,6 +219,7 @@ export async function runPiDirectorLoop(opts: {
       maxActionsPerAgent: opts.maxActionsPerAgent,
       enableWhiteboardTools: opts.enableWhiteboardTools,
       enableNativeChildWebSearch: nativeChildWebSearchEnabled,
+      enableNativeChildWhiteboard: opts.enableNativeChildWhiteboard,
       createNativeChildWebSearchTool: nativeChildWebSearchEnabled
         ? () =>
             buildChildWebSearchTool({
@@ -277,7 +290,7 @@ export async function runPiDirectorLoop(opts: {
   const director = buildAgent({
     streamFn,
     systemPrompt: buildDirectorPrompt(opts.body, opts.agentConfigs, opts.maxAgentTurns, {
-      enableWebSearch: webSearchMode === 'director',
+      enableWebSearch: directorWebSearchEnabled,
       enableChildWebSearch: nativeChildWebSearchEnabled,
       taskState: terminalController.getPromptState(),
     }),

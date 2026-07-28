@@ -232,6 +232,23 @@ describe('Pi director prompt closure routing', () => {
     expect(childPrompt).not.toContain('Return ONLY a valid JSON array');
   });
 
+  it('describes hybrid Web Search without giving legacy agents a native tool', () => {
+    const directorPrompt = buildDirectorPrompt(makeBody(), agents, 4, {
+      enableWebSearch: true,
+      enableChildWebSearch: true,
+    });
+
+    expect(directorPrompt).toContain(
+      'only an eligible native Teacher can use `web_search` inside its own Child run',
+    );
+    expect(directorPrompt).toContain(
+      'For an Assistant or Student delegation, first use the Director `web_search`',
+    );
+    expect(directorPrompt).not.toContain(
+      'call the appropriate classroom agent directly and instruct that agent',
+    );
+  });
+
   it('teaches close_session as the terminal alternative to cue_user', () => {
     const prompt = buildDirectorPrompt(makeBody(), agents, 4);
 

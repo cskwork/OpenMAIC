@@ -1,4 +1,5 @@
 import type { DirectorState } from '@/lib/types/chat';
+import type { ClientEffectDelivery } from '@/lib/agent/runtime/client-effect-contract';
 
 /**
  * StreamBuffer — unified presentation pacing layer.
@@ -53,6 +54,12 @@ export interface ActionItem {
   agentId: string;
 }
 
+export interface ClientEffectItem {
+  kind: 'client_effect';
+  messageId: string;
+  delivery: ClientEffectDelivery;
+}
+
 export interface ThinkingItem {
   kind: 'thinking';
   stage: string;
@@ -86,6 +93,7 @@ export type BufferItem =
   | AgentEndItem
   | TextItem
   | ActionItem
+  | ClientEffectItem
   | ThinkingItem
   | CueUserItem
   | DoneItem
@@ -106,6 +114,16 @@ export interface StreamBufferCallbacks {
   onTextReveal(messageId: string, partId: string, revealedText: string, isComplete: boolean): void;
   /** Fired when tick reaches an action item. Callers should execute the effect + add badge. */
   onActionReady(messageId: string, data: ActionItem, signal: AbortSignal): void | Promise<void>;
+  /** Runs a browser-backed effect after preceding text has visibly committed. */
+  onClientEffectReady?(
+    messageId: string,
+    delivery: ClientEffectDelivery,
+    signal: AbortSignal,
+  ): void | Promise<void>;
+  /** Synchronous reservation hook; runs as soon as SSE delivery is queued. */
+  onClientEffectQueued?(delivery: ClientEffectDelivery): void;
+  /** Mirrors presentation pause/resume into the active client-effect budget. */
+  onPauseChange?(paused: boolean): void | Promise<void>;
   /**
    * Unified speech feed for the Roundtable bubble.
    * Reports only the CURRENT segment text (resets on action / agent switch).
@@ -265,6 +283,17 @@ export class StreamBuffer {
     this.items.push({ kind: 'action', ...data });
   }
 
+  pushClientEffect(delivery: ClientEffectDelivery): void {
+    if (this._disposed) return;
+    this.cb.onClientEffectQueued?.(delivery);
+    this.sealLastText();
+    this.items.push({
+      kind: 'client_effect',
+      messageId: delivery.request.target.messageId,
+      delivery,
+    });
+  }
+
   pushThinking(data: { stage: string; agentId?: string }): void {
     if (this._disposed) return;
     this.items.push({ kind: 'thinking', ...data });
@@ -304,12 +333,16 @@ export class StreamBuffer {
 
   /** Instantly pause — tick becomes a no-op. */
   pause(): void {
+    if (this._paused) return;
     this._paused = true;
+    void this.cb.onPauseChange?.(true);
   }
 
   /** Resume from exactly where we left off. */
   resume(): void {
+    if (!this._paused) return;
     this._paused = false;
+    void this.cb.onPauseChange?.(false);
   }
 
   /**
@@ -385,6 +418,12 @@ export class StreamBuffer {
           case 'action':
             this.currentSegmentText = '';
             await this.trackAction(item);
+            if (this._disposed) return;
+            this.cb.onLiveSpeech(null, this.currentAgentId);
+            break;
+          case 'client_effect':
+            this.currentSegmentText = '';
+            await this.trackClientEffect(item);
             if (this._disposed) return;
             this.cb.onLiveSpeech(null, this.currentAgentId);
             break;
@@ -562,10 +601,11 @@ export class StreamBuffer {
         if (isComplete) {
           this.readIndex++;
           this.charCursor = 0;
+          const nextIsClientEffect = this.items[this.readIndex]?.kind === 'client_effect';
 
           // Fixed pause after text finishes — gives the reader a breathing gap
           // before the next action or agent turn fires.
-          if (this.postTextDelayTicks > 0) {
+          if (!nextIsClientEffect && this.postTextDelayTicks > 0) {
             this._dwellTicksRemaining = this.postTextDelayTicks;
             // If TTS hold callback exists, mark that we need to check it after delay
             if (this.cb.shouldHoldAfterReveal) {
@@ -577,7 +617,7 @@ export class StreamBuffer {
           }
 
           // No post-text delay — check TTS hold immediately
-          {
+          if (!nextIsClientEffect) {
             const result = this.cb.shouldHoldAfterReveal?.();
             if (result) {
               this._holdingForTTS = true;
@@ -615,6 +655,9 @@ export class StreamBuffer {
 
       case 'action':
         this.startAction(item);
+        break;
+      case 'client_effect':
+        this.startClientEffect(item);
         break;
 
       case 'thinking':
@@ -682,6 +725,9 @@ export class StreamBuffer {
         case 'action':
           this.startAction(next);
           return;
+        case 'client_effect':
+          this.startClientEffect(next);
+          return;
         case 'thinking':
           this.cb.onThinking(next);
           break;
@@ -742,8 +788,47 @@ export class StreamBuffer {
     return trackedCompletion;
   }
 
+  private startClientEffect(item: ClientEffectItem): void {
+    this.currentSegmentText = '';
+    this.cb.onLiveSpeech(null, this.currentAgentId);
+    this.readIndex++;
+    this.charCursor = 0;
+    void this.trackClientEffect(item);
+  }
+
+  private trackClientEffect(item: ClientEffectItem): Promise<void> {
+    let completion: Promise<void>;
+    try {
+      if (!this.cb.onClientEffectReady) {
+        throw new Error('No client-effect executor is configured.');
+      }
+      completion = Promise.resolve(
+        this.cb.onClientEffectReady(
+          item.messageId,
+          item.delivery,
+          this.lifecycleAbortController.signal,
+        ),
+      );
+    } catch (error) {
+      this.reportClientEffectError(item, error);
+      completion = Promise.resolve();
+    }
+    const trackedCompletion = completion
+      .catch((error) => this.reportClientEffectError(item, error))
+      .finally(() => {
+        if (this._actionCompletion === trackedCompletion) this._actionCompletion = null;
+      });
+    this._actionCompletion = trackedCompletion;
+    return trackedCompletion;
+  }
+
   private reportActionError(item: ActionItem, error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
     this.cb.onError(`Action ${item.actionName} failed: ${message}`);
+  }
+
+  private reportClientEffectError(item: ClientEffectItem, error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    this.cb.onError(`Client effect ${item.delivery.request.toolName} failed: ${message}`);
   }
 }

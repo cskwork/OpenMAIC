@@ -6,12 +6,14 @@ import {
   createPiSessionBoundaryContext,
   getPiSessionBoundaryContext,
   getPiSingleRequestOutcome,
+  interruptLiveSessionForScopeChange,
   isOpenLiveSession,
   normalizeStoredSessionsForRestore,
   retireLiveRequestResources,
   resumeSoftClosingSessionForFollowUp,
   resumeSoftClosingSessionWithoutMessage,
   runPiSingleRequest,
+  schedulePresentationCommitFlush,
   shouldAwaitPresentationAction,
   withPiInclassWhiteboardTools,
   MANUAL_STOP_END_OPTIONS,
@@ -313,11 +315,60 @@ describe('retireLiveRequestResources', () => {
   });
 });
 
+describe('interruptLiveSessionForScopeChange', () => {
+  it('marks only the active request session interrupted', () => {
+    const sessions = [
+      makeSession({ id: 'active-request', status: 'active' }),
+      makeSession({ id: 'other-active', status: 'active' }),
+      makeSession({ id: 'completed', status: 'completed' }),
+    ];
+
+    expect(interruptLiveSessionForScopeChange(sessions, 'active-request')).toEqual([
+      expect.objectContaining({ id: 'active-request', status: 'interrupted' }),
+      expect.objectContaining({ id: 'other-active', status: 'active' }),
+      expect.objectContaining({ id: 'completed', status: 'completed' }),
+    ]);
+  });
+});
+
 describe('shouldAwaitPresentationAction', () => {
   it('waits for shared whiteboard mutations without blocking on long media playback', () => {
     expect(shouldAwaitPresentationAction('wb_clear')).toBe(true);
     expect(shouldAwaitPresentationAction('wb_edit_code')).toBe(true);
     expect(shouldAwaitPresentationAction('play_video')).toBe(false);
+  });
+});
+
+describe('schedulePresentationCommitFlush', () => {
+  it('flushes after a frame when the document is visible', () => {
+    const flush = vi.fn();
+    let frameCallback: FrameRequestCallback | undefined;
+    const cancelFrame = vi.fn();
+    const dispose = schedulePresentationCommitFlush(
+      'visible',
+      flush,
+      (callback) => {
+        frameCallback = callback;
+        return 7;
+      },
+      cancelFrame,
+    );
+
+    expect(flush).not.toHaveBeenCalled();
+    frameCallback?.(0);
+    expect(flush).toHaveBeenCalledOnce();
+    dispose();
+    expect(cancelFrame).toHaveBeenCalledWith(7);
+  });
+
+  it('does not depend on requestAnimationFrame while the document is hidden', async () => {
+    const flush = vi.fn();
+    const scheduleFrame = vi.fn();
+    schedulePresentationCommitFlush('hidden', flush, scheduleFrame);
+
+    await Promise.resolve();
+    expect(scheduleFrame).not.toHaveBeenCalled();
+    expect(flush).toHaveBeenCalledOnce();
   });
 });
 
@@ -328,6 +379,10 @@ describe('runPiSingleRequest', () => {
       vi.fn(async () => Promise.reject(new Error('network down'))),
     );
     const onResponseAccepted = vi.fn();
+    const createConsumer = vi.fn(() => ({
+      onEvent: vi.fn(),
+      onIterationEnd: vi.fn(),
+    }));
 
     try {
       await expect(
@@ -336,12 +391,12 @@ describe('runPiSingleRequest', () => {
           {
             messages: [],
             storeState: {},
-            config: { agentIds: ['teacher-1'] },
+            config: { agentIds: ['teacher-1'], piRequestId: 'request-1' },
             apiKey: '',
           } as unknown as Parameters<typeof runPiSingleRequest>[1],
           new AbortController(),
           'qa',
-          () => ({ onEvent: vi.fn(), onIterationEnd: vi.fn() }),
+          createConsumer,
           vi.fn(),
           vi.fn(),
           vi.fn(),
@@ -356,6 +411,12 @@ describe('runPiSingleRequest', () => {
     }
 
     expect(onResponseAccepted).not.toHaveBeenCalled();
+    expect(createConsumer).toHaveBeenCalledWith(
+      'session-1',
+      expect.any(AbortController),
+      'qa',
+      'request-1',
+    );
   });
 
   it('treats EOF without a done event as interrupted without waiting for drain', async () => {

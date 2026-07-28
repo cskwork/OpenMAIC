@@ -60,6 +60,39 @@ function streamMessage(
   return stream;
 }
 
+function streamMessageWithVisibleDelta(
+  message: AssistantMessage,
+  delta: string,
+): ReturnType<typeof createAssistantMessageEventStream> {
+  const stream = createAssistantMessageEventStream();
+  queueMicrotask(() => {
+    stream.push({ type: 'start', partial: { ...message, content: [] } });
+    stream.push({
+      type: 'text_start',
+      contentIndex: 0,
+      partial: { ...message, content: [{ type: 'text', text: '' }] },
+    });
+    stream.push({
+      type: 'text_delta',
+      contentIndex: 0,
+      delta,
+      partial: { ...message, content: [{ type: 'text', text: delta }] },
+    });
+    stream.push({
+      type: 'text_end',
+      contentIndex: 0,
+      content: delta,
+      partial: message,
+    });
+    stream.push({
+      type: 'done',
+      reason: message.stopReason === 'toolUse' ? 'toolUse' : 'stop',
+      message,
+    });
+  });
+  return stream;
+}
+
 function contextHasToolResult(context: Context, toolName: string): boolean {
   return context.messages.some(
     (message) => message.role === 'toolResult' && message.toolName === toolName,
@@ -114,6 +147,97 @@ function baseOptions(overrides: Partial<RunNativeChildOptions> = {}): RunNativeC
 }
 
 describe('runNativeChild Phase 0', () => {
+  it('waits for a client effect result and streams same-Child text on both sides', async () => {
+    const visible: Array<{ delta: string; sequence: number }> = [];
+    const EffectParams = Type.Object({ content: Type.String() });
+    const tool: AgentTool<typeof EffectParams> = {
+      name: 'wb_draw_text',
+      label: 'Draw text',
+      description: 'Draw text in the browser.',
+      parameters: EffectParams,
+      execute: vi.fn(async () => {
+        throw new Error('The direct executor must not run.');
+      }),
+    };
+    const handler = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'effect committed' }],
+      details: { status: 'effect_committed' },
+      isError: false,
+    }));
+    const contexts: Context[] = [];
+    const streamFn = ((_model, context) => {
+      contexts.push(context);
+      if (contextHasToolResult(context, tool.name)) {
+        return streamMessageWithVisibleDelta(
+          assistantText('白板已经显示，我们继续解释。'),
+          '白板已经显示，我们继续解释。',
+        );
+      }
+      const message = {
+        ...assistantToolCall('effect-call-1', tool.name, { content: 'k 决定方向' }),
+        content: [
+          { type: 'text' as const, text: '我先把结论写到白板上。' },
+          {
+            type: 'toolCall' as const,
+            id: 'effect-call-1',
+            name: tool.name,
+            arguments: { content: 'k 决定方向' },
+          },
+        ],
+      };
+      return streamMessageWithVisibleDelta(message, '我先把结论写到白板上。');
+    }) as StreamFn;
+
+    const result = await runNativeChild(
+      baseOptions({
+        streamFn,
+        tools: [tool],
+        clientEffectHandlers: new Map([[tool.name, handler]]),
+        onVisibleTextDelta: (event) => {
+          visible.push({
+            delta: event.delta,
+            sequence: event.assistantTurnSequence,
+          });
+          return event.delta;
+        },
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(tool.execute).not.toHaveBeenCalled();
+    expect(contexts).toHaveLength(2);
+    expect(visible).toEqual([
+      { delta: '我先把结论写到白板上。', sequence: 1 },
+      { delta: '白板已经显示，我们继续解释。', sequence: 2 },
+    ]);
+    expect(result.status).toBe('completed');
+    expect(result.visibleOutput).toBe('我先把结论写到白板上。白板已经显示，我们继续解释。');
+    expect(result.toolExecutions[0]).toMatchObject({
+      request: { kind: 'client_effect', toolName: 'wb_draw_text' },
+      status: 'succeeded',
+      isError: false,
+    });
+  });
+
+  it('does not restore sanitizer-suppressed raw text into visibleOutput', async () => {
+    const streamFn = (() =>
+      streamMessageWithVisibleDelta(
+        assistantText('<action>hidden</action>'),
+        '<action>',
+      )) as StreamFn;
+
+    const result = await runNativeChild(
+      baseOptions({
+        streamFn,
+        onVisibleTextDelta: () => '',
+      }),
+    );
+
+    expect(result.status).toBe('completed');
+    expect(result.visibleOutput).toBeUndefined();
+    expect(result.finalOutput).toBe('<action>hidden</action>');
+  });
+
   it('uses Pi native tool execution and continues in the same Child context', async () => {
     const contexts: Context[] = [];
     const LookupParams = Type.Object({ topic: Type.String() });

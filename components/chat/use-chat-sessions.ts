@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
 import {
   nextChatUpdatedAt,
   withChatSegmentReveal,
@@ -38,9 +38,30 @@ import { createLogger } from '@/lib/logger';
 import { isPiChatEnabled } from '@/lib/config/feature-flags';
 import type { CleanupSource } from '@/lib/playback/auto-resume';
 import { nanoid } from 'nanoid';
+import { BrowserClientEffectRuntime } from '@/lib/agent/client/client-effect-runtime';
+import type {
+  ClientEffectDelivery,
+  ClientEffectStatus,
+} from '@/lib/agent/runtime/client-effect-contract';
+import { WB_OPEN_MS } from '@/lib/choreography/timing';
 
 const log = createLogger('ChatSessions');
 const SOFT_CLOSE_TIMEOUT_MS = 15_000;
+
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new DOMException('Operation aborted', 'AbortError'));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException('Operation aborted', 'AbortError'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
 
 export interface SoftCloseRegistration {
   token: string;
@@ -147,6 +168,8 @@ export type ChatRequestTemplate = {
     sessionType?: string;
     agentConfigs?: Record<string, unknown>[];
     piEnableWhiteboardTools?: boolean;
+    piSessionId?: string;
+    piRequestId?: string;
     [key: string]: unknown;
   };
   userProfile?: { nickname?: string; bio?: string };
@@ -204,6 +227,25 @@ export function shouldAwaitPresentationAction(actionName: string): boolean {
   return actionName.startsWith('wb_');
 }
 
+export function schedulePresentationCommitFlush(
+  visibilityState: DocumentVisibilityState,
+  flush: () => void,
+  scheduleFrame?: (callback: FrameRequestCallback) => number,
+  cancelFrame?: (handle: number) => void,
+): () => void {
+  if (visibilityState === 'hidden') {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) flush();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }
+  const frame = (scheduleFrame ?? requestAnimationFrame)(flush);
+  return () => (cancelFrame ?? cancelAnimationFrame)(frame);
+}
+
 export async function retireLiveRequestResources<
   T extends { shutdown(): void; waitForCurrentAction?(): Promise<void> },
 >(
@@ -219,10 +261,23 @@ export async function retireLiveRequestResources<
   await buffer?.waitForCurrentAction?.();
 }
 
+export function interruptLiveSessionForScopeChange(
+  sessions: ChatSession[],
+  interruptedSessionId: string | null,
+): ChatSession[] {
+  if (!interruptedSessionId) return sessions;
+  return sessions.map((session) =>
+    session.id === interruptedSessionId && session.status === 'active'
+      ? withChatSessionStatus(session, 'interrupted')
+      : session,
+  );
+}
+
 type StatelessStreamConsumerFactory = (
   sessionId: string,
   controller: AbortController,
   sessionType: SessionType,
+  requestId?: string,
 ) => {
   onEvent: (event: StatelessEvent) => void;
   onIterationEnd: () => Promise<{
@@ -340,7 +395,12 @@ export async function runPiSingleRequest(
   t: (key: string) => string,
   onResponseAccepted?: () => void,
 ): Promise<void> {
-  const consumer = createConsumer(sessionId, controller, sessionType);
+  const consumer = createConsumer(
+    sessionId,
+    controller,
+    sessionType,
+    requestTemplate.config.piRequestId,
+  );
   const response = await fetch('/api/chat/pi', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -446,6 +506,62 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     options.shouldHoldAfterReveal,
   ]);
   const { t } = useI18n();
+  const [presentationBarrierRevision, setPresentationBarrierRevision] = useState(0);
+  const presentationBarriersRef = useRef<
+    Map<
+      string,
+      {
+        resolve: () => void;
+        reject: (error: Error) => void;
+        signal: AbortSignal;
+        onAbort: () => void;
+      }
+    >
+  >(new Map());
+  useLayoutEffect(() => {
+    if (presentationBarriersRef.current.size === 0) return;
+    return schedulePresentationCommitFlush(document.visibilityState, () => {
+      for (const [executionId, barrier] of presentationBarriersRef.current) {
+        presentationBarriersRef.current.delete(executionId);
+        barrier.signal.removeEventListener('abort', barrier.onAbort);
+        if (barrier.signal.aborted) {
+          barrier.reject(new DOMException('Operation aborted', 'AbortError'));
+        } else {
+          barrier.resolve();
+        }
+      }
+    });
+  }, [presentationBarrierRevision]);
+  useEffect(
+    () => () => {
+      for (const barrier of presentationBarriersRef.current.values()) {
+        barrier.signal.removeEventListener('abort', barrier.onAbort);
+        barrier.reject(new DOMException('Operation aborted', 'AbortError'));
+      }
+      presentationBarriersRef.current.clear();
+    },
+    [],
+  );
+
+  const waitForPresentationCommit = useCallback(
+    (executionId: string, signal: AbortSignal): Promise<void> =>
+      new Promise<void>((resolve, reject) => {
+        const onAbort = () => {
+          presentationBarriersRef.current.delete(executionId);
+          reject(new DOMException('Operation aborted', 'AbortError'));
+        };
+        presentationBarriersRef.current.set(executionId, {
+          resolve,
+          reject,
+          signal,
+          onAbort,
+        });
+        signal.addEventListener('abort', onAbort, { once: true });
+        if (signal.aborted) onAbort();
+        setPresentationBarrierRevision((revision) => revision + 1);
+      }),
+    [],
+  );
 
   // Track current stageId for data isolation
   const stageId = useStageStore((s) => s.stage?.id);
@@ -470,6 +586,9 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   const sessionsRef = useRef<ChatSession[]>(sessions);
   const previousLiveSessionRef = useRef<PreviousLiveSessionContext | undefined>(undefined);
   const piSessionBoundariesRef = useRef<Map<string, PiSessionBoundaryContext>>(new Map());
+  const retireActiveLiveRequestRef = useRef<(fallbackSessionId?: string | null) => string | null>(
+    () => null,
+  );
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
@@ -489,6 +608,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   // an external store (IndexedDB) when the stageId dependency changes.
   useEffect(() => {
     if (stageId === stageIdRef.current) return;
+    retireActiveLiveRequestRef.current();
     stageIdRef.current = stageId;
     softCloseRegistrationsRef.current.forEach(({ timer }) => clearTimeout(timer));
     softCloseRegistrationsRef.current.clear();
@@ -504,6 +624,10 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
 
   useEffect(() => {
     if (currentSceneId === currentSceneIdRef.current) return;
+    const interruptedSessionId = retireActiveLiveRequestRef.current();
+    if (interruptedSessionId) {
+      setSessions((previous) => interruptLiveSessionForScopeChange(previous, interruptedSessionId));
+    }
     currentSceneIdRef.current = currentSceneId;
   }, [currentSceneId]);
 
@@ -549,6 +673,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     },
     [],
   );
+  retireActiveLiveRequestRef.current = retireActiveLiveRequest;
 
   // Abort active stream and destroy buffers on unmount
   useEffect(() => {
@@ -800,7 +925,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
    * Returns the buffer instance (also stored in buffersRef).
    */
   const createBufferForSession = useCallback(
-    (sessionId: string, type?: SessionType): StreamBuffer => {
+    (sessionId: string, type?: SessionType, requestId?: string): StreamBuffer => {
       // Dispose previous buffer if any
       // Shutdown (not dispose) — avoids stale onLiveSpeech(null,null) callback
       const prev = buffersRef.current.get(sessionId);
@@ -809,6 +934,77 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       // For discussion/QA sessions, add pacing delays so fast models don't
       // rush through text and actions. Lecture pacing is handled by PlaybackEngine.
       const pacingOptions = type === 'lecture' ? {} : { postTextDelayMs: 1200, actionDelayMs: 800 };
+      const setClientEffectState = (
+        messageId: string,
+        delivery: ClientEffectDelivery,
+        status: ClientEffectStatus,
+        error?: string,
+      ) => {
+        const partState =
+          status === 'pending'
+            ? 'input-available'
+            : status === 'accepted'
+              ? 'running'
+              : status === 'effect_committed'
+                ? 'result'
+                : status === 'cancelled'
+                  ? 'cancelled'
+                  : 'output-error';
+        const actionPart = {
+          type: `action-${delivery.request.toolName}`,
+          actionId: delivery.request.executionId,
+          actionName: delivery.request.toolName,
+          input: delivery.request.args,
+          state: partState,
+          ...(status === 'effect_committed'
+            ? { output: { success: true } }
+            : error
+              ? { errorText: error }
+              : {}),
+        } as unknown as UIMessage<ChatMessageMetadata>['parts'][number];
+        setSessions((prev) =>
+          prev.map((session) => {
+            if (session.id !== sessionId) return session;
+            return {
+              ...session,
+              messages: session.messages.map((message) => {
+                if (message.id !== messageId) return message;
+                const existing = message.parts.findIndex(
+                  (part) =>
+                    (part as unknown as { actionId?: string }).actionId ===
+                    delivery.request.executionId,
+                );
+                const parts = [...message.parts];
+                if (existing >= 0) parts[existing] = actionPart;
+                else parts.push(actionPart);
+                return { ...message, parts };
+              }),
+              updatedAt: nextChatUpdatedAt(session),
+            };
+          }),
+        );
+      };
+      const effectDeliveries = new Map<string, ClientEffectDelivery>();
+
+      const effectRuntime = requestId
+        ? new BrowserClientEffectRuntime({
+            sessionId,
+            requestId,
+            store: useStageStore,
+            waitForPresentation: waitForPresentationCommit,
+            ensureWhiteboardVisible: async (signal) => {
+              const canvas = useCanvasStore.getState();
+              if (canvas.whiteboardOpen) return;
+              canvas.setWhiteboardOpen(true);
+              await abortableDelay(WB_OPEN_MS, signal);
+            },
+            onState: (executionId, status, error) => {
+              const delivery = effectDeliveries.get(executionId);
+              if (!delivery) return;
+              setClientEffectState(delivery.request.target.messageId, delivery, status, error);
+            },
+          })
+        : null;
 
       const buffer = new StreamBuffer(
         {
@@ -938,6 +1134,26 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             }
           },
 
+          async onClientEffectReady(
+            messageId: string,
+            delivery: ClientEffectDelivery,
+            signal: AbortSignal,
+          ) {
+            if (!effectRuntime) throw new Error('CLIENT_EFFECT_RUNTIME_UNAVAILABLE');
+            setClientEffectState(messageId, delivery, 'pending');
+            await effectRuntime.execute(delivery, signal);
+          },
+
+          onClientEffectQueued(delivery: ClientEffectDelivery) {
+            effectDeliveries.set(delivery.request.executionId, delivery);
+            effectRuntime?.reserve(delivery);
+          },
+
+          onPauseChange(paused: boolean) {
+            if (paused) effectRuntime?.pause();
+            else effectRuntime?.resume();
+          },
+
           onLiveSpeech(text: string | null, agentId: string | null) {
             // Lecture sessions: roundtable text is managed by PlaybackEngine → setLectureSpeech
             // in stage.tsx. Buffer only drives chat area pacing for lectures.
@@ -1020,17 +1236,22 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
 
       return buffer;
     },
-    [],
+    [waitForPresentationCommit],
   );
 
   const createStatelessStreamConsumer = useCallback(
-    (sessionId: string, controller: AbortController, sessionType: SessionType) => {
+    (
+      sessionId: string,
+      controller: AbortController,
+      sessionType: SessionType,
+      requestId?: string,
+    ) => {
       let currentBuffer: StreamBuffer | null = null;
       let currentMessageId: string | null = null;
 
       const onEvent = (event: StatelessEvent) => {
         if (!currentBuffer) {
-          currentBuffer = createBufferForSession(sessionId, sessionType);
+          currentBuffer = createBufferForSession(sessionId, sessionType, requestId);
         }
 
         switch (event.type) {
@@ -1070,6 +1291,12 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               messageId: targetId,
               agentId: event.data.agentId,
             });
+            break;
+          }
+          case 'client_effect': {
+            if (controller.signal.aborted || !requestId) break;
+            if (!currentBuffer) break;
+            currentBuffer.pushClientEffect(event.data);
             break;
           }
           case 'thinking':
@@ -1148,9 +1375,18 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         // without storeState.
         const storeState = await buildFreshAgentLoopStoreState();
         const firstRequestContext = getFirstPiRequestContext(sessionId);
+        const piRequestId = nanoid();
+        const boundRequestTemplate = {
+          ...requestTemplate,
+          config: {
+            ...requestTemplate.config,
+            piSessionId: sessionId,
+            piRequestId,
+          },
+        };
         const piRequestTemplate = firstRequestContext
-          ? { ...requestTemplate, storeState, piSessionBoundary: firstRequestContext }
-          : { ...requestTemplate, storeState };
+          ? { ...boundRequestTemplate, storeState, piSessionBoundary: firstRequestContext }
+          : { ...boundRequestTemplate, storeState };
         await runPiSingleRequest(
           sessionId,
           withPiInclassWhiteboardTools(piRequestTemplate),

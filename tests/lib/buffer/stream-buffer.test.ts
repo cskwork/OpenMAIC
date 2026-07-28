@@ -1,7 +1,100 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { StreamBuffer } from '@/lib/buffer/stream-buffer';
+import type { ClientEffectDelivery } from '@/lib/agent/runtime/client-effect-contract';
+import { TOOL_EXECUTION_PROTOCOL_VERSION } from '@/lib/agent/runtime/native-child-contract';
+
+const clientEffectDelivery = {
+  acknowledgementToken: 'token',
+  request: {
+    protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
+    kind: 'client_effect',
+    traceId: 'trace',
+    runId: 'run',
+    agentInvocationId: 'message-1',
+    agentId: 'teacher-1',
+    depth: 1,
+    sequence: 1,
+    toolCallId: 'tool-call-1',
+    executionId: 'execution-1',
+    idempotencyKey: 'idempotency-1',
+    toolName: 'wb_draw_text',
+    args: { content: 'hello', x: 1, y: 1 },
+    argsDigest: 'sha256:args',
+    issuedAt: 1,
+    deadlineAt: 10_000,
+    attempt: 1,
+    target: {
+      requestId: 'request-1',
+      sessionId: 'session-1',
+      stageId: 'stage-1',
+      sceneId: 'scene-1',
+      messageId: 'message-1',
+    },
+    activeEffectBudgetMs: 1_000,
+    postcondition: {
+      kind: 'whiteboard_text_exists',
+      stableElementId: 'element-1',
+      elementType: 'text',
+      normalizationVersion: 'maic.visible-text.v1',
+      expectedContentDigest: 'sha256:text',
+    },
+  },
+} satisfies ClientEffectDelivery;
 
 describe('StreamBuffer Pi wrap-up ordering', () => {
+  it('presents pre-tool text before a client effect without waiting for TTS dwell', async () => {
+    const lifecycle: string[] = [];
+    let releaseEffect!: () => void;
+    const effectCompletion = new Promise<void>((resolve) => {
+      releaseEffect = resolve;
+    });
+    const buffer = new StreamBuffer(
+      {
+        onAgentStart() {},
+        onAgentEnd() {},
+        onTextReveal(_messageId, _partId, text, complete) {
+          if (complete) lifecycle.push(`text:${text}`);
+        },
+        onActionReady() {},
+        onClientEffectQueued() {
+          lifecycle.push('reserved');
+        },
+        onClientEffectReady() {
+          lifecycle.push('effect');
+          return effectCompletion;
+        },
+        onLiveSpeech() {},
+        onSpeechProgress() {},
+        onThinking() {},
+        onCueUser() {},
+        onDone() {
+          lifecycle.push('done');
+        },
+        onError(message) {
+          throw new Error(message);
+        },
+        shouldHoldAfterReveal: () => true,
+      },
+      { tickMs: 1, charsPerTick: 100, postTextDelayMs: 5_000 },
+    );
+    buffer.pushAgentStart({
+      messageId: 'message-1',
+      agentId: 'teacher-1',
+      agentName: 'Teacher',
+    });
+    buffer.pushText('message-1', '先看这个要点。');
+    buffer.pushClientEffect(clientEffectDelivery);
+    buffer.pushAgentEnd({ messageId: 'message-1', agentId: 'teacher-1' });
+    buffer.pushDone({ totalActions: 1, totalAgents: 1 });
+    buffer.start();
+
+    await vi.waitFor(() =>
+      expect(lifecycle).toEqual(['reserved', 'text:先看这个要点。', 'effect']),
+    );
+    releaseEffect();
+    await buffer.waitUntilDrained();
+    expect(lifecycle).toEqual(['reserved', 'text:先看这个要点。', 'effect', 'done']);
+  });
   it('resolves immediately when done was processed before the drain waiter was registered', async () => {
     const lifecycle: string[] = [];
     const buffer = new StreamBuffer({

@@ -17,6 +17,8 @@ import {
   TOOL_EXECUTION_PROTOCOL_VERSION,
   type AgentUsage,
   type ChildRunResult,
+  type ClientEffectExecutionRequest,
+  type NativeClientEffectHandler,
   type RuntimeAgentToolResult,
   type RunNativeChildOptions,
   type ServerExecutionRequest,
@@ -25,7 +27,7 @@ import {
 } from './native-child-contract';
 
 type PendingExecution = {
-  request: ServerExecutionRequest;
+  request: ServerExecutionRequest | ClientEffectExecutionRequest;
   startedAt: number;
 };
 
@@ -234,8 +236,8 @@ function resultDetails(result: AgentToolResult<unknown>): unknown {
 /**
  * Run one native-tool-capable Child through Pi's production Agent loop.
  *
- * This seam intentionally handles only server-side tools. Client-backed effects
- * require the ACK/commit lifecycle introduced in Phase 2.
+ * Server-side tools execute directly. Client-backed effects are delegated to a
+ * request-scoped handler which settles only after the browser ACK lifecycle.
  */
 export async function runNativeChild(opts: RunNativeChildOptions): Promise<ChildRunResult> {
   if (!Number.isFinite(opts.timeoutMs) || opts.timeoutMs <= 0) {
@@ -258,6 +260,8 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Child
   const createExecutionId = opts.createExecutionId ?? nanoid;
   const allowedToolNames = opts.allowedToolNames ?? new Set(opts.tools.map((tool) => tool.name));
   const registeredToolNames = new Set(opts.tools.map((tool) => tool.name));
+  const clientEffectHandlers =
+    opts.clientEffectHandlers ?? new Map<string, NativeClientEffectHandler>();
   const deadlineAt = now() + opts.timeoutMs;
   const pendingExecutions = new Map<string, PendingExecution>();
   const toolExecutions: ToolExecutionSummary[] = [];
@@ -273,6 +277,8 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Child
   const budgetRejectedToolCalls = new Set<string>();
   const attemptRejectedToolCalls = new Set<string>();
   const toolReportedErrors = new Set<string>();
+  let assistantTurnSequence = 0;
+  let visibleOutput = '';
 
   const boundedTools = opts.tools.map(
     (tool): AgentTool => ({
@@ -309,10 +315,21 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Child
         executedToolCount += 1;
         startedToolExecutions.add(toolCallId);
         try {
-          const result = await executeWithAbort(
-            () => tool.execute(toolCallId, params, signal, onUpdate),
-            signal,
-          );
+          const pending = pendingExecutions.get(toolCallId);
+          const clientEffectHandler = clientEffectHandlers.get(tool.name);
+          const result = await executeWithAbort(() => {
+            if (clientEffectHandler) {
+              if (!pending || pending.request.kind !== 'client_effect') {
+                throw new Error('Native Child client effect is missing its execution envelope.');
+              }
+              return clientEffectHandler({
+                request: pending.request,
+                params,
+                signal,
+              });
+            }
+            return tool.execute(toolCallId, params, signal, onUpdate);
+          }, signal);
           const reportedError = (result as RuntimeAgentToolResult).isError === true;
           if (reportedError) toolReportedErrors.add(toolCallId);
           toolSettlements.set(toolCallId, reportedError ? 'execution_failed' : 'succeeded');
@@ -377,7 +394,24 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Child
     return isError ? 'execution_failed' : 'succeeded';
   };
 
-  const unsubscribe = child.subscribe((event: AgentEvent) => {
+  const unsubscribe = child.subscribe(async (event: AgentEvent) => {
+    if (event.type === 'turn_start') {
+      assistantTurnSequence += 1;
+      return;
+    }
+    if (
+      event.type === 'message_update' &&
+      event.assistantMessageEvent.type === 'text_delta' &&
+      opts.onVisibleTextDelta
+    ) {
+      const forwarded = await opts.onVisibleTextDelta({
+        agentInvocationId: opts.agentInvocationId,
+        assistantTurnSequence: Math.max(assistantTurnSequence, 1),
+        delta: event.assistantMessageEvent.delta,
+      });
+      visibleOutput += forwarded;
+      return;
+    }
     if (event.type === 'tool_execution_start') {
       const issuedAt = now();
       sequence += 1;
@@ -389,7 +423,7 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Child
       pendingExecutions.set(event.toolCallId, {
         request: {
           protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
-          kind: 'server',
+          kind: clientEffectHandlers.has(event.toolName) ? 'client_effect' : 'server',
           traceId: opts.traceId,
           runId: opts.runId,
           agentInvocationId: opts.agentInvocationId,
@@ -475,11 +509,13 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Child
   const finalAssistant = lastAssistantMessage(messages);
   const finalOutput = assistantText(messages);
   const usage = collectUsage(messages);
+  const forwardedVisibleOutput = visibleOutput || undefined;
 
   if (timedOut) {
     return {
       agentInvocationId: opts.agentInvocationId,
       status: 'exhausted',
+      visibleOutput: forwardedVisibleOutput,
       toolExecutions,
       stopReason: 'timeout',
       usage,
@@ -489,6 +525,7 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Child
     return {
       agentInvocationId: opts.agentInvocationId,
       status: 'cancelled',
+      visibleOutput: forwardedVisibleOutput,
       toolExecutions,
       stopReason: 'aborted',
       usage,
@@ -502,6 +539,7 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Child
     return {
       agentInvocationId: opts.agentInvocationId,
       status: 'exhausted',
+      visibleOutput: forwardedVisibleOutput,
       toolExecutions,
       stopReason: toolCallAttemptBudgetExhausted
         ? 'tool_call_attempt_budget'
@@ -515,6 +553,7 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Child
     return {
       agentInvocationId: opts.agentInvocationId,
       status: 'cancelled',
+      visibleOutput: forwardedVisibleOutput,
       toolExecutions,
       stopReason: 'aborted',
       usage,
@@ -525,6 +564,7 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Child
       agentInvocationId: opts.agentInvocationId,
       status: 'failed',
       finalOutput,
+      visibleOutput: forwardedVisibleOutput,
       toolExecutions,
       stopReason:
         finalAssistant?.errorMessage ??
@@ -537,6 +577,7 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Child
     agentInvocationId: opts.agentInvocationId,
     status: 'completed',
     finalOutput,
+    visibleOutput: forwardedVisibleOutput,
     toolExecutions,
     stopReason: finalAssistant?.stopReason ?? 'stop',
     usage,

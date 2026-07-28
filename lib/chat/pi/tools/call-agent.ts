@@ -4,7 +4,10 @@ import type { LanguageModel } from 'ai';
 import { nanoid } from 'nanoid';
 import { buildAgent } from '@/lib/agent/runtime/build-agent';
 import { runNativeChild } from '@/lib/agent/runtime/run-native-child';
-import type { ChildRunResult } from '@/lib/agent/runtime/native-child-contract';
+import type {
+  ChildRunResult,
+  NativeClientEffectHandler,
+} from '@/lib/agent/runtime/native-child-contract';
 import { createCallLlmStreamFn } from '@/lib/agent/runtime/stream-fn';
 import {
   createParserState,
@@ -24,6 +27,7 @@ import {
   buildChildTurnPrompt,
   buildNativeWebChildPrompt,
   buildNativeWebChildTurnPrompt,
+  createVisibleSpeechDeltaSanitizer,
   extractLastAssistantText,
   sanitizeVisibleSpeech,
   toHistoryMessages,
@@ -31,6 +35,7 @@ import {
 import type { SendEvent } from '../types';
 import type { TrustedChildResultEvent } from '../terminal-control';
 import { buildChildActionTools, createPiWhiteboardRuntimeState } from './classroom-actions';
+import { buildNativeWhiteboardTextTool } from './native-whiteboard';
 
 const CallAgentParams = Type.Object({
   agentId: Type.String({
@@ -53,6 +58,33 @@ type RuntimeEvidenceAttachment<TMetadata> = {
   content: string;
   metadata: TMetadata;
 };
+
+export function resolveNativeChildCapabilities(opts: {
+  agent: Pick<AgentConfig, 'role' | 'allowedActions'>;
+  enableNativeChildWebSearch?: boolean;
+  enableNativeChildWhiteboard?: boolean;
+  enableWhiteboardTools: boolean;
+  maxActionsPerAgent: number;
+}): {
+  nativeWhiteboardEnabled: boolean;
+  childWebSearchEnabled: boolean;
+  nativeChildEnabled: boolean;
+} {
+  const nativeWhiteboardEnabled =
+    opts.enableNativeChildWhiteboard === true &&
+    opts.enableWhiteboardTools &&
+    opts.maxActionsPerAgent > 0 &&
+    opts.agent.role === 'teacher' &&
+    opts.agent.allowedActions.includes('wb_draw_text');
+  const childWebSearchEnabled =
+    opts.enableNativeChildWebSearch === true &&
+    (!opts.enableWhiteboardTools || nativeWhiteboardEnabled);
+  return {
+    nativeWhiteboardEnabled,
+    childWebSearchEnabled,
+    nativeChildEnabled: nativeWhiteboardEnabled || childWebSearchEnabled,
+  };
+}
 
 type ChildActionTool = ReturnType<typeof buildChildActionTools>[number];
 type ChildMessageEvent = {
@@ -77,6 +109,17 @@ const CODE_EDIT_OPERATIONS = new Set([
   'delete_lines',
   'replace_lines',
 ]);
+
+function sanitizeNativeFinalOutput(raw: string): string {
+  const trimmed = raw.trim();
+  if (
+    looksLikeStructuredFragment(trimmed) ||
+    /^<\/?(?:action|tool_call|tool-call)\b/i.test(trimmed)
+  ) {
+    return '';
+  }
+  return sanitizeVisibleSpeech(raw).trim();
+}
 
 function getAssistantTextDelta(event: ChildMessageEvent): string | null {
   if (event.type !== 'message_update') return null;
@@ -533,6 +576,7 @@ export function buildCallAgentTool(opts: {
   takeSceneEvidence?: () => RuntimeEvidenceAttachment<DirectorSceneEvidenceMetadata[]> | undefined;
   takeWebEvidence?: () => RuntimeEvidenceAttachment<DirectorWebEvidenceMetadata> | undefined;
   enableNativeChildWebSearch?: boolean;
+  enableNativeChildWhiteboard?: boolean;
   createNativeChildWebSearchTool?: () => AgentTool;
   nativeChildStreamFn?: StreamFn;
   nativeChildTimeoutMs?: number;
@@ -638,11 +682,21 @@ export function buildCallAgentTool(opts: {
         };
       }
 
+      const { nativeWhiteboardEnabled, childWebSearchEnabled, nativeChildEnabled } =
+        resolveNativeChildCapabilities({
+          agent,
+          enableNativeChildWebSearch: opts.enableNativeChildWebSearch,
+          enableNativeChildWhiteboard: opts.enableNativeChildWhiteboard,
+          enableWhiteboardTools: opts.enableWhiteboardTools,
+          maxActionsPerAgent: opts.maxActionsPerAgent,
+        });
+
       // Evidence is request-scoped and belongs to exactly one valid child delegation.
       // Take it before starting/building the child so any downstream failure cannot
       // leak the packet to a later agent.
       const sceneEvidence = opts.takeSceneEvidence?.();
-      const webEvidence = opts.enableNativeChildWebSearch ? undefined : opts.takeWebEvidence?.();
+      const pendingWebEvidence = opts.takeWebEvidence?.();
+      const webEvidence = nativeChildEnabled ? undefined : pendingWebEvidence;
 
       const childAbort = new AbortController();
       const abortChild = () => childAbort.abort();
@@ -680,13 +734,40 @@ export function buildCallAgentTool(opts: {
         },
       });
 
-      if (opts.enableNativeChildWebSearch) {
-        const nativeWebSearchTool = opts.createNativeChildWebSearchTool?.();
-        if (!nativeWebSearchTool) {
+      if (nativeChildEnabled) {
+        const nativeTools: AgentTool[] = [];
+        const clientEffectHandlers = new Map<string, NativeClientEffectHandler>();
+        const nativeWebSearchTool = childWebSearchEnabled
+          ? opts.createNativeChildWebSearchTool?.()
+          : undefined;
+        if (childWebSearchEnabled && !nativeWebSearchTool) {
           opts.abortSignal.removeEventListener('abort', abortChild);
           signal?.removeEventListener('abort', abortChild);
           await opts.send({ type: 'agent_end', data: { messageId, agentId: agent.id } });
           throw new Error('Native Child web_search is enabled without a tool factory');
+        }
+        if (nativeWebSearchTool) nativeTools.push(nativeWebSearchTool);
+        if (nativeWhiteboardEnabled) {
+          const nativeWhiteboard = buildNativeWhiteboardTextTool({
+            body: opts.body,
+            messageId,
+            send: opts.send,
+            canExecute: () => actionCount < opts.maxActionsPerAgent,
+            onCommitted: (params) => {
+              actionCount += 1;
+              const record: WhiteboardActionRecord = {
+                actionName: 'wb_draw_text',
+                agentId: agent.id,
+                agentName: agent.name,
+                params,
+              };
+              whiteboardActions.push(record);
+              opts.onActionDone(record);
+            },
+            onCancelled: abortChild,
+          });
+          nativeTools.push(nativeWhiteboard.tool);
+          clientEffectHandlers.set(nativeWhiteboard.tool.name, nativeWhiteboard.handler);
         }
 
         const nativeStreamFn =
@@ -698,6 +779,7 @@ export function buildCallAgentTool(opts: {
             maxOutputTokens: opts.maxOutputTokens,
             abortSignal: childAbort.signal,
           });
+        const sanitizeNativeDelta = createVisibleSpeechDeltaSanitizer();
         let nativeResult: ChildRunResult;
         try {
           nativeResult = await runNativeChild({
@@ -707,12 +789,37 @@ export function buildCallAgentTool(opts: {
             agentId: agent.id,
             depth: 1,
             streamFn: nativeStreamFn,
-            systemPrompt: buildNativeWebChildPrompt(opts.body, agent, opts.getAgentResponses()),
-            prompt: buildNativeWebChildTurnPrompt(params.instruction, agent.role, {
-              scene: sceneEvidence?.content,
+            systemPrompt: buildNativeWebChildPrompt(opts.body, agent, opts.getAgentResponses(), {
+              enableWebSearch: childWebSearchEnabled,
+              enableWhiteboardText: nativeWhiteboardEnabled,
             }),
-            tools: [nativeWebSearchTool],
-            allowedToolNames: new Set([nativeWebSearchTool.name]),
+            prompt: buildNativeWebChildTurnPrompt(
+              params.instruction,
+              agent.role,
+              {
+                scene: sceneEvidence?.content,
+              },
+              {
+                enableWebSearch: childWebSearchEnabled,
+                enableWhiteboardText: nativeWhiteboardEnabled,
+              },
+            ),
+            tools: nativeTools,
+            allowedToolNames: new Set(nativeTools.map((tool) => tool.name)),
+            clientEffectHandlers,
+            onVisibleTextDelta: async (event) => {
+              const visibleDelta = sanitizeNativeDelta(event.delta);
+              if (!visibleDelta) return '';
+              await emitTextDelta({
+                content: visibleDelta,
+                messageId,
+                send: opts.send,
+                appendText: (content) => {
+                  text += content;
+                },
+              });
+              return visibleDelta;
+            },
             history: toHistoryMessages(opts.body.messages),
             timeoutMs: opts.nativeChildTimeoutMs ?? 60_000,
             maxToolExecutions: 2,
@@ -724,8 +831,8 @@ export function buildCallAgentTool(opts: {
           signal?.removeEventListener('abort', abortChild);
         }
 
-        const finalText = nativeResult.finalOutput?.trim() ?? '';
-        if (finalText) {
+        const finalText = text.trim() || sanitizeNativeFinalOutput(nativeResult.finalOutput ?? '');
+        if (!text && finalText) {
           await opts.send({ type: 'text_delta', data: { content: finalText, messageId } });
         }
         const isEmptyTurn = nativeResult.status !== 'completed' || finalText.length === 0;
@@ -735,8 +842,8 @@ export function buildCallAgentTool(opts: {
           agentId: agent.id,
           agentName: agent.name,
           contentPreview: finalText.slice(0, 300),
-          actionCount: 0,
-          whiteboardActions: [],
+          actionCount,
+          whiteboardActions,
           actionWarnings: [],
         });
         opts.onTrustedChildResult?.({
