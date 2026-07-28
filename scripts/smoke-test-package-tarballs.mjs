@@ -32,6 +32,10 @@ function pack(name) {
 
 try {
   const packageNames = ['dsl', 'storage', 'renderer', 'importer'];
+  // The smoke program executes the renderer root, whose optional chart and
+  // highlighting peers are imported by that entry. Other optional peers remain
+  // optional unless the smoke program starts executing their owning entry.
+  const installOptionalPeersFor = new Set(['renderer']);
   const peerDependencies = {};
   for (const name of packageNames) {
     const manifest = JSON.parse(
@@ -39,8 +43,10 @@ try {
     );
     for (const [peer, range] of Object.entries(manifest.peerDependencies ?? {})) {
       const isOptional = manifest.peerDependenciesMeta?.[peer]?.optional === true;
-      if (isOptional && name !== 'renderer') continue;
+      if (isOptional && !installOptionalPeersFor.has(name)) continue;
       const existing = peerDependencies[peer];
+      // Keep peer declarations aligned across the package family. Attempting to
+      // synthesize an intersection here is unsafe for ranges containing `||`.
       assert(
         existing === undefined || existing === range,
         `@openmaic packages declare different ${peer} peer ranges: ${existing} and ${range}`,

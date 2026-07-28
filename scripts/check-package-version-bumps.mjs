@@ -39,11 +39,9 @@ function git(args) {
 }
 
 function gitFileAt(ref, file) {
-  try {
-    return git(['show', `${ref}:${file}`]);
-  } catch {
-    return undefined;
-  }
+  const path = git(['ls-tree', '--name-only', ref, '--', file]);
+  if (path === '') return undefined;
+  return git(['show', `${ref}:${file}`]);
 }
 
 try {
