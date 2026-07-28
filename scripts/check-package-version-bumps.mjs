@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 const commonIgnoredInputs = {
   files: ['.gitignore', 'vitest.config.ts'],
@@ -39,6 +39,14 @@ function git(args) {
   return execFileSync('git', args, { encoding: 'utf8' }).trim();
 }
 
+function gitFileAt(ref, file) {
+  try {
+    return git(['show', `${ref}:${file}`]);
+  } catch {
+    return undefined;
+  }
+}
+
 function readVersion(contents, source) {
   const version = JSON.parse(contents).version;
   const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
@@ -56,7 +64,7 @@ function compareVersions(left, right) {
 }
 
 const changedFiles = new Set(
-  git(['diff', '--name-only', '--no-renames', '--diff-filter=ACDMR', base, 'HEAD'])
+  git(['diff', '--name-only', '--no-renames', '--diff-filter=ACDMRT', base, 'HEAD'])
     .split('\n')
     .filter(Boolean),
 );
@@ -76,8 +84,25 @@ for (const [name, ignored] of Object.entries(ignoredPackageInputs)) {
   if (!packageChanged) continue;
 
   const manifest = `${directory}/package.json`;
-  const before = readVersion(git(['show', `${base}:${manifest}`]), `${manifest} at ${base}`);
-  const after = readVersion(readFileSync(manifest, 'utf8'), manifest);
+  const beforeContents = gitFileAt(base, manifest);
+  if (beforeContents === undefined) {
+    failures.push(`${name}: ${manifest} does not exist at ${base}`);
+    continue;
+  }
+  if (!existsSync(manifest)) {
+    failures.push(`${name}: ${manifest} was removed`);
+    continue;
+  }
+
+  let before;
+  let after;
+  try {
+    before = readVersion(beforeContents, `${manifest} at ${base}`);
+    after = readVersion(readFileSync(manifest, 'utf8'), manifest);
+  } catch (error) {
+    failures.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+    continue;
+  }
 
   if (compareVersions(after, before) <= 0) {
     failures.push(

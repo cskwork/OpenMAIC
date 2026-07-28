@@ -31,9 +31,17 @@ function pack(name) {
 }
 
 try {
-  const rendererManifest = JSON.parse(
-    readFileSync(join(root, 'packages/@openmaic/renderer/package.json'), 'utf8'),
-  );
+  const packageNames = ['dsl', 'storage', 'renderer', 'importer'];
+  const peerDependencies = {};
+  for (const name of packageNames) {
+    const manifest = JSON.parse(
+      readFileSync(join(root, 'packages/@openmaic', name, 'package.json'), 'utf8'),
+    );
+    for (const [peer, range] of Object.entries(manifest.peerDependencies ?? {})) {
+      const existing = peerDependencies[peer];
+      peerDependencies[peer] = existing === undefined ? range : `${existing} ${range}`;
+    }
+  }
   const dslTarball = pack('dsl');
   const storageTarball = pack('storage');
   const rendererTarball = pack('renderer');
@@ -48,7 +56,7 @@ try {
         private: true,
         type: 'module',
         dependencies: {
-          ...rendererManifest.peerDependencies,
+          ...peerDependencies,
           '@openmaic/dsl': `file:${dslTarball}`,
           '@openmaic/storage': `file:${storageTarball}`,
           '@openmaic/renderer': `file:${rendererTarball}`,
