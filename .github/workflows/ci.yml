@@ -2,7 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # Integration branches are listed here as well as below: a pull_request run
+    # only ever proves one part merged into the branch, so without a push
+    # trigger the accumulated state of the branch that eventually reaches main
+    # is never built on its own.
+    branches: [main, integration/kv-asset-server-backend]
   pull_request:
     branches:
       [

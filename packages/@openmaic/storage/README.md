@@ -35,8 +35,9 @@ a browser.
   device — every backend honours that, so the scope is part of the primitive,
   not the backend choice. The [KV HTTP contract](./docs/kv-http-contract.md) is
   `account`-only and carries no scope on the wire at all, so `HttpKVStore`
-  routes `device` to a local backend it requires at construction: shipping a
-  device value is not a request the transport can express.
+  routes `device` to a `LocalKVStore` it requires at construction — a *branded*
+  local backend, because a networked store satisfies plain `KVStore`
+  structurally and would otherwise be accepted as the place device values live.
 - **Content-addressed assets.** Asset refs are `sha256-<hex>` over the bytes, so
   identical bytes de-duplicate to one stored asset — and since every backend
   computes the ref by the same rule, a ref minted in the browser addresses the

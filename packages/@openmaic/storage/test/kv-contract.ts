@@ -1,8 +1,8 @@
-// Implementation-agnostic contract for `KVStore`. Every backend (browser today,
-// HTTP later) is proven equivalent by running this same suite against it, so a
-// new backend cannot silently diverge from the primitive's semantics.
+// Implementation-agnostic contract for `KVStore`. Every backend (browser and
+// HTTP) is proven equivalent by running this same suite against it, so a new
+// backend cannot silently diverge from the primitive's semantics.
 import { describe, expect, test } from 'vitest';
-import type { KVStore } from '../src/index.js';
+import type { KVScope, KVStore } from '../src/index.js';
 
 export function runKVStoreContract(name: string, makeStore: () => KVStore): void {
   describe(`KVStore contract: ${name}`, () => {
@@ -87,6 +87,47 @@ export function runKVStoreContract(name: string, makeStore: () => KVStore): void
       await kv.remove('k', 'device');
       expect(await kv.get('k', 'device')).toBeNull();
       expect(await kv.get('k', 'account')).toBe('account-val');
+    });
+
+    // Scopes arrive as ordinary values (the zustand adapter passes one through
+    // verbatim), so a typo is a runtime possibility the type cannot prevent.
+    // Every backend must fail closed on one, and identically: a backend that
+    // guessed would either strand data in an invisible namespace or — worse for
+    // a server-backed one — send a value the caller believed was device-local.
+    test('an unknown scope fails closed rather than being guessed', async () => {
+      const kv = makeStore();
+      const unknownScope = 'Device' as KVScope;
+
+      await expect(kv.set('k', 'v', unknownScope)).rejects.toThrow(/unknown KV scope/);
+      await expect(kv.get('k', unknownScope)).rejects.toThrow(/unknown KV scope/);
+      await expect(kv.remove('k', unknownScope)).rejects.toThrow(/unknown KV scope/);
+      await expect(kv.keys('', unknownScope)).rejects.toThrow(/unknown KV scope/);
+    });
+
+    // The prefix is a literal, byte-for-byte comparison. Spelled out as a case
+    // because the obvious SQL translation is `LIKE prefix || '%'`, where `%` and
+    // `_` in a caller-supplied prefix silently become wildcards and the listing
+    // starts returning keys it was never asked for.
+    test('keys() treats the prefix literally, not as a pattern', async () => {
+      const kv = makeStore();
+      await kv.set('50%-done', 1);
+      await kv.set('50x-done', 2);
+      await kv.set('a_b', 3);
+      await kv.set('axb', 4);
+
+      expect(await kv.keys('50%')).toEqual(['50%-done']);
+      expect(await kv.keys('a_')).toEqual(['a_b']);
+    });
+
+    test('keys() does not repeat a key', async () => {
+      const kv = makeStore();
+      await kv.set('one', 1);
+      await kv.set('one', 2);
+      await kv.set('two', 3);
+
+      const keys = await kv.keys();
+      expect([...new Set(keys)]).toHaveLength(keys.length);
+      expect([...keys].sort()).toEqual(['one', 'two']);
     });
   });
 }

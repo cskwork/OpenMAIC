@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { BrowserKVStore } from '../src/kv/browser.js';
+import type { KVStore, LocalKVStore } from '../src/kv/types.js';
 import { HttpAccountKV, HttpKVStore, HttpKVStoreError } from '../src/kv/http.js';
 import { runKVStoreContract } from './kv-contract.js';
 import { MemoryStorage } from './setup.js';
@@ -65,6 +66,86 @@ describe('HttpKVStore device-scope invariant', () => {
       new HttpKVStore({ baseUrl: 'https://kv.invalid' });
 
     expect(typeof withoutDeviceStore).toBe('function');
+  });
+
+  // The transport's missing scope parameter only protects the *positional*
+  // call. What actually keeps device values off the wire is that a networked
+  // store cannot be the deviceStore at all — and that has to be checked, because
+  // `HttpAccountKV` satisfies `KVStore` structurally (its methods are the same
+  // methods minus an optional parameter), so before the `LocalKVStore` brand it
+  // could be injected as the device backend with zero type errors.
+  test('a networked store cannot be injected as the device backend', () => {
+    const remote = new HttpAccountKV({
+      baseUrl: 'https://kv.invalid',
+      fetch: async () => new Response(null, { status: 204 }),
+    });
+
+    const injectTransport = (): HttpKVStore =>
+      new HttpKVStore({
+        baseUrl: 'https://kv.invalid',
+        // @ts-expect-error a remote transport is not a LocalKVStore.
+        deviceStore: remote,
+      });
+    // Assignability to the *bare* `KVStore` is what made this reachable, so the
+    // probe goes through a `KVStore` annotation as well.
+    const asPlainKvStore: KVStore = remote;
+    const injectViaKVStore = (): HttpKVStore =>
+      new HttpKVStore({
+        baseUrl: 'https://kv.invalid',
+        // @ts-expect-error `KVStore` is not `LocalKVStore` either.
+        deviceStore: asPlainKvStore,
+      });
+
+    // And the cast that would erase both type errors is refused at runtime.
+    expect(injectTransport).toThrow(/must be a local KVStore/);
+    expect(injectViaKVStore).toThrow(/must be a local KVStore/);
+    expect(
+      () =>
+        new HttpKVStore({
+          baseUrl: 'https://kv.invalid',
+          deviceStore: remote as unknown as LocalKVStore,
+        }),
+    ).toThrow(/must be a local KVStore/);
+  });
+
+  test('an HttpKVStore cannot be nested as its own device backend', () => {
+    const outer = makeStore();
+
+    expect(
+      () =>
+        new HttpKVStore({
+          baseUrl: 'https://kv.invalid',
+          fetch: async () => new Response(null, { status: 204 }),
+          deviceStore: outer as unknown as LocalKVStore,
+        }),
+    ).toThrow(/must be a local KVStore/);
+  });
+
+  test('a hand-rolled store lying about being local is the only way through', async () => {
+    // Documented, not endorsed: the brand stops accidents and casts, not an
+    // author who writes the lie out. The point of the assertion is that the lie
+    // has to be *authored* — nothing in the package hands it to you.
+    const sent: string[] = [];
+    const liar = {
+      isLocalKVStore: true as const,
+      get: async () => null,
+      set: async (key: string, value: unknown) => {
+        sent.push(`${key}=${JSON.stringify(value)}`);
+      },
+      remove: async () => undefined,
+      keys: async () => [],
+    } satisfies LocalKVStore;
+
+    const store = new HttpKVStore({
+      baseUrl: 'https://kv.invalid',
+      fetch: async () => {
+        throw new Error('fetch must not be called');
+      },
+      deviceStore: liar,
+    });
+    await store.set('theme', 'dark', 'device');
+
+    expect(sent).toEqual(['theme="dark"']);
   });
 
   test('device reads and writes issue no request at all', async () => {
@@ -154,6 +235,178 @@ describe('HttpKVStore device-scope invariant', () => {
       error: { code: 'VALIDATION_FAILED', message: expect.stringContaining('scope') },
     });
   });
+
+  test.each([
+    ['a query parameter', '/kv/entries/k?scope=device', {}],
+    ['a header', '/kv/entries/k', { 'x-scope': 'device' }],
+  ])('the server refuses a scope smuggled in %s', async (_name, path, extraHeaders) => {
+    // The body is not the only channel a scope could hide in, and a server that
+    // ignored the others would silently discard a caller's stated intent.
+    const response = await server.fetch(`${server.baseUrl}${path}`, {
+      method: 'PUT',
+      headers: {
+        'content-type': 'application/json',
+        'x-storage-namespace': `scope-channel-${namespace++}`,
+        ...extraHeaders,
+      },
+      body: JSON.stringify({ value: 'v' }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'VALIDATION_FAILED', message: expect.stringContaining('scope') },
+    });
+  });
+});
+
+describe('HttpKVStore key constraints', () => {
+  const store = (): HttpKVStore =>
+    new HttpKVStore({
+      baseUrl: 'https://kv.invalid',
+      fetch: async () => {
+        throw new Error('fetch must not be called');
+      },
+      deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
+    });
+
+  test('refuses an empty key', async () => {
+    await expect(store().get('')).rejects.toThrow(/must not be empty/);
+    await expect(store().set('', 'v')).rejects.toThrow(/must not be empty/);
+  });
+
+  test.each([
+    ['forward slash', 'a/../../b'],
+    ['backslash', 'a\\..\\b'],
+    ['bare separator', 'a/b'],
+  ])('refuses a key containing a %s', async (_name, key) => {
+    await expect(store().get(key)).rejects.toThrow(/must not contain/);
+    await expect(store().set(key, 'v')).rejects.toThrow(/must not contain/);
+    await expect(store().remove(key)).rejects.toThrow(/must not contain/);
+  });
+
+  test('refuses an over-long key', async () => {
+    await expect(store().set('k'.repeat(513), 'v')).rejects.toThrow(/exceeds 512 UTF-8 bytes/);
+  });
+
+  test('bounds the key by bytes, not characters', async () => {
+    // 256 three-byte characters (U+20AC) is 768 bytes: a character-counting bound would
+    // wave it through and hand the server a key half again its stated limit.
+    await expect(store().set('\u20AC'.repeat(256), 'v')).rejects.toThrow(/exceeds 512 UTF-8 bytes/);
+  });
+
+  test('the server refuses a percent-encoded traversal in a key', async () => {
+    const response = await server.fetch(
+      `${server.baseUrl}/kv/entries/${encodeURIComponent('../../etc/passwd')}`,
+      { method: 'DELETE', headers: { 'x-storage-namespace': `kv-traversal-${namespace++}` } },
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'VALIDATION_FAILED', message: expect.stringContaining('must not contain') },
+    });
+  });
+});
+
+describe('HttpKVStore error-table coverage', () => {
+  function respondWith(status: number, code: string): HttpKVStore {
+    return new HttpKVStore({
+      baseUrl: 'https://kv.invalid',
+      fetch: async () =>
+        new Response(JSON.stringify({ error: { code, message: `${code} from server` } }), {
+          status,
+          headers: { 'content-type': 'application/json' },
+        }),
+      deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
+    });
+  }
+
+  test('a 404 ROUTE_NOT_FOUND throws instead of masquerading as a missing key', async () => {
+    // The MUST a status-only client would break: both rows are 404, and only
+    // KEY_NOT_FOUND means "no such entry".
+    const failure = respondWith(404, 'ROUTE_NOT_FOUND').get('k');
+    await expect(failure).rejects.toBeInstanceOf(HttpKVStoreError);
+    await expect(failure).rejects.toMatchObject({ status: 404, code: 'ROUTE_NOT_FOUND' });
+  });
+
+  test.each([
+    [401, 'UNAUTHENTICATED'],
+    [403, 'FORBIDDEN_KV'],
+    [413, 'PAYLOAD_TOO_LARGE'],
+    [500, 'INTERNAL_ERROR'],
+  ])('maps %i %s to a typed error', async (status, code) => {
+    await expect(respondWith(status, code).get('k')).rejects.toMatchObject({ status, code });
+  });
+
+  test('an unauthenticated deployment answers 401 on the contract routes', async () => {
+    const guarded = await startKvAssetConformanceServer({
+      listen: false,
+      authenticate: (req) => req.headers.authorization !== undefined,
+    });
+    try {
+      const store = new HttpKVStore({
+        baseUrl: guarded.baseUrl,
+        fetch: guarded.fetch,
+        deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
+      });
+      // Not null: an authentication failure must never look like a missing key.
+      await expect(store.get('k')).rejects.toMatchObject({
+        status: 401,
+        code: 'UNAUTHENTICATED',
+      });
+    } finally {
+      await guarded.close();
+    }
+  });
+
+  test('a denied principal receives 403 rather than a missing key', async () => {
+    const guarded = await startKvAssetConformanceServer({
+      listen: false,
+      authorize: (_req, area) => area !== 'kv',
+    });
+    try {
+      const store = new HttpKVStore({
+        baseUrl: guarded.baseUrl,
+        fetch: guarded.fetch,
+        deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
+      });
+      await expect(store.get('k')).rejects.toMatchObject({ status: 403, code: 'FORBIDDEN_KV' });
+    } finally {
+      await guarded.close();
+    }
+  });
+
+  test('a write past the body ceiling is rejected with 413', async () => {
+    const bounded = await startKvAssetConformanceServer({ listen: false, maxBodyBytes: 8 });
+    try {
+      const store = new HttpKVStore({
+        baseUrl: bounded.baseUrl,
+        fetch: bounded.fetch,
+        deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
+      });
+      await expect(store.set('k', 'a value well past eight bytes')).rejects.toMatchObject({
+        status: 413,
+        code: 'PAYLOAD_TOO_LARGE',
+      });
+    } finally {
+      await bounded.close();
+    }
+  });
+
+  test('a 2xx with an unparseable body becomes a typed malformed response', async () => {
+    const store = new HttpKVStore({
+      baseUrl: 'https://kv.invalid',
+      fetch: async () =>
+        new Response('<html>a proxy error page</html>', {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        }),
+      deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
+    });
+
+    const failure = store.get('k');
+    await expect(failure).rejects.not.toBeInstanceOf(SyntaxError);
+    await expect(failure).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' });
+  });
 });
 
 describe('HttpKVStore transport semantics', () => {
@@ -174,6 +427,8 @@ describe('HttpKVStore transport semantics', () => {
     // Narrower than BrowserKVStore on purpose: structured values that survive
     // `localStorage` round-trips only because `JSON.stringify` silently drops or
     // rewrites them must fail loud before they are sent.
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
     const rejected: [string, unknown][] = [
       ['Map', new Map([['k', 'v']])],
       ['Set', new Set(['v'])],
@@ -183,11 +438,56 @@ describe('HttpKVStore transport semantics', () => {
       ['nested undefined', { nested: undefined }],
       ['NUL string', 'before\u0000after'],
       ['unpaired surrogate', '\uD800'],
+      // The three a `JSON.stringify` pre-flight would mishandle: two throw a
+      // native TypeError before the gate can produce its message, and the third
+      // stringifies to `undefined` and would be reclassified as a delete.
+      ['bigint', BigInt(1)],
+      ['circular reference', circular],
+      ['toJSON returning undefined', { toJSON: () => undefined }],
     ];
 
     for (const [name, value] of rejected) {
-      await expect(store.set('k', value), name).rejects.toThrow(/not a plain JSON value/);
+      const failure = store.set('k', value);
+      await expect(failure, name).rejects.toThrow(/not a plain JSON value/);
+      await expect(failure, name).rejects.not.toBeInstanceOf(TypeError);
     }
+  });
+
+  test('the JSON gate runs before anything reads the value', async () => {
+    const store = new HttpKVStore({
+      baseUrl: 'https://kv.invalid',
+      fetch: async () => {
+        throw new Error('fetch must not be called');
+      },
+      deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
+    });
+
+    // A pre-flight `JSON.stringify` would invoke this before the gate looked,
+    // letting caller code run — and change its mind — between the check and the
+    // serialization the check was supposed to cover.
+    let reads = 0;
+    const spy = {
+      get value() {
+        reads += 1;
+        return reads;
+      },
+    };
+
+    await expect(store.set('k', spy)).rejects.toThrow(/not a plain JSON value/);
+    expect(reads).toBe(0);
+  });
+
+  test.each([
+    ['undefined', undefined],
+    ['a function', () => 'x'],
+    ['a symbol', Symbol('s')],
+  ])('treats %s as a delete, matching the browser backend', async (_name, value) => {
+    const store = makeStore();
+    await store.set('k', 'present');
+    await store.set('k', value);
+
+    expect(await store.get('k')).toBeNull();
+    expect(await store.keys()).not.toContain('k');
   });
 
   test('rejects keys JSON cannot carry faithfully', async () => {

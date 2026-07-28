@@ -1,4 +1,4 @@
-import { DEFAULT_KV_SCOPE, type KVScope, type KVStore } from './types.js';
+import { assertKVScope, DEFAULT_KV_SCOPE, type KVScope, type LocalKVStore } from './types.js';
 
 export interface BrowserKVStoreOptions {
   /**
@@ -21,7 +21,9 @@ export interface BrowserKVStoreOptions {
  * backend like this one — hence the scope is part of the primitive, not the
  * backend choice.
  */
-export class BrowserKVStore implements KVStore {
+export class BrowserKVStore implements LocalKVStore {
+  /** Brand: this backend never leaves the machine, so it may hold `device` values. */
+  readonly isLocalKVStore = true as const;
   private readonly storage: Storage;
   private readonly namespace: string;
 
@@ -31,7 +33,9 @@ export class BrowserKVStore implements KVStore {
   }
 
   private prefix(scope: KVScope): string {
-    return `${this.namespace}:${scope}:`;
+    // Fail closed rather than folding an unknown scope into a new key prefix,
+    // where it would silently create a third, invisible namespace.
+    return `${this.namespace}:${assertKVScope(scope)}:`;
   }
 
   private storageKey(key: string, scope: KVScope): string {

@@ -1,14 +1,28 @@
 # KVStore HTTP contract
 
-This contract exposes the `KVStore` operations — `get` / `set` / `remove` / `keys(prefix?)` — over JSON HTTP for the **`account` scope only**. All paths below are relative to a deployment-defined base URL. Path segments and query parameter values are percent-encoded UTF-8 strings; a key used as a path segment MUST NOT be exactly `.` or `..`, because URL parsers normalize those dot segments before routing. Request and response bodies use `application/json`; successful operations with no return value respond with `204 No Content`.
+This contract exposes the `KVStore` operations — `get` / `set` / `remove` / `keys(prefix?)` — over JSON HTTP for the **`account` scope only**. All paths below are relative to a deployment-defined base URL. Path segments and query parameter values are percent-encoded UTF-8 strings. Request and response bodies use `application/json`; successful operations with no return value respond with `204 No Content`.
+
+The conformance server in this package is test-only. It implements no authentication or authorization model beyond what the contract's response codes require; deriving the principal from an authenticated session is the reference server's job.
 
 ## The scope is not on the wire
 
 `KVStore` distinguishes two scopes. `account` is user data a server-backed deployment syncs across devices (provider and model configuration, profile); `device` is machine-local state (theme, locale, layout) that must never leave the machine. That is a property of the primitive, not a deployment setting.
 
-This contract therefore has **no scope at all**: no scope path segment, no scope query parameter, no scope body field. There is nothing to set to `device`, so there is no configuration, header, or client bug that could ship a device value to a server — a request carrying a device value is not a request this contract can express. Servers MUST reject a write body that invents a scope field with `400 VALIDATION_FAILED` rather than ignoring it, so a client attempting to describe a scope fails loud instead of silently having its intent discarded.
+This contract therefore has **no scope at all**: no scope path segment, no scope query parameter, no scope header, no scope body field. There is nothing to set to `device`, so there is no configuration or client bug that could ship a device value to a server — a request carrying a device value is not a request this contract can express. Servers MUST reject a request that invents a scope in any of those channels with `400 VALIDATION_FAILED` rather than ignoring it, so a client attempting to describe a scope fails loud instead of silently having its intent discarded.
 
-The client half mirrors this. `HttpAccountKV` is the only object in `@openmaic/storage` that can reach this contract, and none of its methods takes a scope. `HttpKVStore` — the full `KVStore` — is the one place the two scopes are told apart: it routes `account` to that transport and `device` to a local backend, which it requires at construction. There is no default and no fallback, so a deployment cannot end up with device values that have nowhere local to go.
+The client half mirrors this in three layers, only the last of which actually carries the weight:
+
+1. `HttpAccountKV` is the only object in `@openmaic/storage` that can reach this contract, and none of its methods takes a scope.
+2. `HttpKVStore` — the full `KVStore` — is the one place the two scopes are told apart. An unrecognized scope is refused rather than folded into the account path: guessing would send a value the caller believed was device-local to a server.
+3. `HttpKVStore` requires a **`LocalKVStore`** for the `device` scope — a store branded as keeping its values on this machine. `KVStore` alone is not enough, because a networked store satisfies it structurally: `HttpAccountKV` *is* a `KVStore` with one optional parameter fewer, so a `KVStore`-typed parameter would accept the very transport this design exists to exclude. The brand makes that a type error, and a runtime check refuses a remote store that a cast smuggled past the types.
+
+There is no default and no fallback, so a deployment cannot end up with device values that have nowhere local to go.
+
+## A key is an identifier, never structure
+
+Keys appear as path segments and arrive at the server percent-decoded, so their shape is part of the contract. A key MUST NOT be empty, MUST NOT be exactly `.` or `..` (URL parsers normalize those before routing), MUST NOT contain `/` or `\`, MUST NOT contain U+0000 or an unpaired UTF-16 surrogate, and MUST NOT exceed 512 UTF-8 bytes — a bound in bytes rather than characters, so a multi-byte key cannot exceed it while appearing to comply. Clients reject a violating key before sending; servers MUST reject one with `400 VALIDATION_FAILED`.
+
+A server **MUST NOT use a key directly as a path component or as an unescaped fragment of a query**. `a%2F..%2F..%2Fb` is a legal request to make and decodes to something carrying separators; the key belongs in a bound parameter or a derived, constrained identifier, never in string-built structure.
 
 ## Endpoints
 
@@ -19,9 +33,11 @@ The client half mirrors this. `HttpAccountKV` is the only object in `@openmaic/s
 | `DELETE` | `/kv/entries/{key}` | Delete one value. Idempotent; deleting an absent key succeeds. | `204` |
 | `GET` | `/kv/keys` | List the principal's keys. Optional `?prefix={prefix}` returns only keys starting with it. | `200` with `string[]` |
 
-The value is wrapped in an envelope rather than being the body itself, because a stored value may legitimately be `null` and a bare `null` body could not be told apart from an absent entry. `get` maps `404 KEY_NOT_FOUND` back to `null`, matching `KVStore.get`; the client MUST use the machine-readable code, not the status alone, so a `404 ROUTE_NOT_FOUND` stays an error instead of masquerading as a missing key.
+The value travels in an envelope rather than as the body itself. `KVStore.get` cannot distinguish a stored `null` from an absent key — both are `null` to a caller — but the wire still has to be unambiguous: a bare `null` body would be indistinguishable from an empty body or a stored `null`, leaving the framing to depend on `Content-Length`. The envelope makes "there is a value, and it is `null`" a statement the response can make. `get` maps `404 KEY_NOT_FOUND` back to `null`, matching `KVStore.get`; the client MUST use the machine-readable code, not the status alone, so a `404 ROUTE_NOT_FOUND` stays an error instead of masquerading as a missing key.
 
 `GET /kv/keys` returns every matching key. The listing is not paginated, matching `GET /documents` in the [DocumentStore HTTP contract](./document-http-contract.md); the primitive is sized for small configuration values, and a deployment that outgrows an unbounded listing needs a change to `KVStore` itself, not a second listing shape here.
+
+The prefix is a **literal, byte-for-byte** comparison, not a pattern. A server MUST escape any metacharacter of its own query language before applying it — the obvious SQL translation, `key LIKE prefix || '%'`, turns a caller's `%` or `_` into a wildcard and starts returning keys the caller never asked for. The result order is unspecified, but the listing MUST NOT repeat a key.
 
 ## Value domain
 
@@ -30,6 +46,8 @@ Values travel through JSON, so this backend accepts only plain JSON values that 
 This is intentionally narrower than `BrowserKVStore`, whose `JSON.stringify` would quietly rewrite a `Date` into a string or drop a nested `undefined`. Where the browser backend is silently lossy, the HTTP backend refuses.
 
 Both backends agree on one deliberate exception: `set(key, value)` where `value` has no JSON representation at all (`undefined`, a function, a symbol) is a **removal**, not a write. Storing such a value would produce an entry that throws on read, so the key is deleted instead.
+
+That exception is decided by inspecting the value, never by trial-serializing it. A `JSON.stringify` pre-flight would run caller code — `toJSON`, getters — before the gate above had looked at anything, which both reclassifies values the gate must reject (`{ toJSON: () => undefined }` stringifies to `undefined` and would silently become a delete) and lets a stateful accessor show the probe one value and the serializer another. The gate runs first, on the value as given.
 
 ## Principal derivation
 
@@ -55,15 +73,17 @@ Every non-2xx response has this machine-readable JSON shape:
 
 | Condition | HTTP status | Error code | Client behavior |
 | --- | --- | --- | --- |
-| Malformed JSON, a missing `value` member, a scope field, or a non-JSON value | `400` | `VALIDATION_FAILED` | Throw `HttpKVStoreError` with the server message |
+| Malformed JSON, a key violating the identifier rules, a missing `value` member, a scope in any channel, or a non-JSON value | `400` | `VALIDATION_FAILED` | Throw `HttpKVStoreError` with the server message |
 | Request body exceeds the deployment's size bound | `413` | `PAYLOAD_TOO_LARGE` | Throw `HttpKVStoreError` |
 | No entry is stored under the key | `404` | `KEY_NOT_FOUND` | `get` returns `null` |
 | Route does not exist | `404` | `ROUTE_NOT_FOUND` | Throw `HttpKVStoreError` |
 | Missing or invalid credential | `401` | `UNAUTHENTICATED` | Throw `HttpKVStoreError` |
 | Principal may not perform the operation | `403` | `FORBIDDEN_KV` | Throw `HttpKVStoreError` |
-| Unexpected server failure | `500` | `INTERNAL_ERROR` | Throw `HttpKVStoreError` |
+| Unexpected server failure | `500` | `INTERNAL_ERROR` | Throw `HttpKVStoreError`; the handler does not expose internal details |
 
-A response the client cannot interpret — a `get` body without a `value` member, a `keys` body that is not an array of strings — raises `MALFORMED_RESPONSE`, a client-side code with no server counterpart.
+Only `KEY_NOT_FOUND` becomes `null`. Status alone is not sufficient — `ROUTE_NOT_FOUND` shares its status and means a broken deployment, and a `401` or `403` must never be reported as a missing key.
+
+A response the client cannot interpret — a body that is not JSON despite a 2xx status, a `get` body without a `value` member, a `keys` body that is not an array of strings — raises `MALFORMED_RESPONSE`, a client-side code with no server counterpart. It is a typed storage error like any other: the client never lets a native `SyntaxError` escape in its place.
 
 ## Retry and atomicity guarantees
 

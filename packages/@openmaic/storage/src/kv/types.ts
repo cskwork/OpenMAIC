@@ -19,5 +19,40 @@ export interface KVStore {
   keys(prefix?: string, scope?: KVScope): Promise<string[]>;
 }
 
+/**
+ * A `KVStore` that keeps every value on the machine it runs on.
+ *
+ * The brand exists because `KVStore` alone is not enough to express "somewhere
+ * local". A remote store structurally satisfies `KVStore` — that is the point
+ * of the interface — so a backend asking for a local store to hold `device`
+ * values would happily accept a networked one, and the device-never-leaves-the-
+ * device invariant would rest on the caller's good intentions. A remote store
+ * cannot acquire this brand by accident; claiming it requires writing the lie
+ * out by hand.
+ */
+export interface LocalKVStore extends KVStore {
+  readonly isLocalKVStore: true;
+}
+
 /** The default scope used when a caller omits one. */
 export const DEFAULT_KV_SCOPE: KVScope = 'account';
+
+/**
+ * Narrow an untrusted scope to the two the primitive defines, failing closed.
+ *
+ * Scopes reach backends as ordinary values (the zustand adapter passes one
+ * straight through), so a typo like `'Device'` is a runtime possibility even
+ * though the type forbids it. Backends must not guess: treating "not `device`"
+ * as `account` sends a mistyped device write to a server, and treating "not
+ * `account`" as `device` silently strands account data. Both failure modes are
+ * worse than throwing.
+ */
+export function assertKVScope(scope: KVScope): KVScope {
+  switch (scope) {
+    case 'device':
+    case 'account':
+      return scope;
+    default:
+      throw new Error(`@openmaic/storage: unknown KV scope ${JSON.stringify(scope as string)}`);
+  }
+}
