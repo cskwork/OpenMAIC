@@ -1107,6 +1107,27 @@ describe('HttpAssetProvider base url and credentials', () => {
     expect(() => new HttpAssetProvider({ baseUrl: '/' })).not.toThrow();
   });
 
+  test.each([
+    ['userinfo', 'https://user:pass@assets.invalid'],
+    ['a username alone', 'https://user@assets.invalid'],
+  ])('refuses a base url carrying %s', (_name, baseUrl) => {
+    // Fetch refuses to build a request from a URL with embedded credentials, so
+    // such a base constructs a client that throws a native TypeError on every
+    // operation. One legible error at configuration time instead.
+    expect(() => new HttpAssetProvider({ baseUrl })).toThrow(/must not carry userinfo/);
+  });
+
+  test.each([
+    ['a trailing space', 'https://assets.invalid/api '],
+    ['a leading space', ' https://assets.invalid/api'],
+    ['a trailing space on a path base', '/api/persistence '],
+  ])('refuses a base url with %s', (_name, baseUrl) => {
+    // `new URL` strips surrounding whitespace, so this validates cleanly and
+    // then breaks every request: concatenation puts the space inside the URL,
+    // where it is no longer trailing and no longer stripped.
+    expect(() => new HttpAssetProvider({ baseUrl })).toThrow(/whitespace/);
+  });
+
   test('still accepts a path-only base url for the app-mounted shape', () => {
     expect(() => new HttpAssetProvider({ baseUrl: '/api/persistence' })).not.toThrow();
   });
@@ -1252,6 +1273,34 @@ describe('HttpAssetProvider cache and not-found identity', () => {
 
     await expect(provider.resolve(`sha256-${'c'.repeat(64)}`)).resolves.toBeNull();
   });
+});
+
+describe('conformance server resolve-cache hygiene', () => {
+  test.each([['proxy'], ['signed']] as const)(
+    'the %s resolve response is served no-store',
+    async (mode) => {
+      const target = mode === 'proxy' ? proxyServer : signedServer;
+      const storageNamespace = `resolve-no-store-${namespace++}`;
+      const provider = new HttpAssetProvider({
+        baseUrl: target.baseUrl,
+        fetch: target.fetch,
+        headers: () =>
+          mode === 'proxy'
+            ? sessionCookie(storageNamespace)
+            : { 'x-storage-namespace': storageNamespace },
+      });
+      const ref = await provider.put(new Blob(['cached'], { type: 'image/png' }));
+
+      const response = await target.fetch(`${target.baseUrl}/assets/${ref}/url`, {
+        headers:
+          mode === 'proxy'
+            ? sessionCookie(storageNamespace)
+            : { 'x-storage-namespace': storageNamespace },
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+    },
+  );
 });
 
 test('real fetch reaches the listening conformance server over loopback', async ({ skip }) => {

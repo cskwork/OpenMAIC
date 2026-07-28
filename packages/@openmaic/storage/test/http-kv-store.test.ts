@@ -762,6 +762,16 @@ describe('HttpKVStore transport semantics', () => {
     expect(() => new HttpKVStore({ baseUrl, deviceStore })).toThrow(/query or fragment/);
   });
 
+  test.each([
+    ['userinfo', 'https://user:pass@kv.invalid'],
+    ['a trailing space', 'https://kv.invalid/api '],
+  ])('refuses a base url carrying %s', (_name, baseUrl) => {
+    const deviceStore = new BrowserKVStore({ storage: new MemoryStorage() });
+    expect(() => new HttpKVStore({ baseUrl, deviceStore })).toThrow(
+      /must not carry userinfo|whitespace/,
+    );
+  });
+
   test('passes credentials through to fetch for a cross-origin cookie deployment', async () => {
     let seen: RequestCredentials | undefined;
     const store = new HttpKVStore({
@@ -888,6 +898,52 @@ describe('HttpKVStore cache and not-found identity', () => {
     });
 
     await expect(store.get('k')).resolves.toBeNull();
+  });
+});
+
+describe('conformance server read-cache and delete hygiene', () => {
+  test.each([
+    ['a kv entry read', (base: string) => `${base}/kv/entries/cached`],
+    ['a kv key listing', (base: string) => `${base}/kv/keys`],
+  ])('%s is served no-store', async (_name, url) => {
+    // The contract requires it, so the harness has to send it — otherwise the
+    // suite passes against exactly the implementation the requirement exists to
+    // catch.
+    const storageNamespace = `no-store-${namespace++}`;
+    const store = makeStore(storageNamespace);
+    await store.set('cached', 'v');
+
+    const response = await server.fetch(url(server.baseUrl), {
+      headers: { 'x-storage-namespace': storageNamespace },
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+  });
+
+  test('a delete carrying a body is refused', async () => {
+    // The body was the one channel left through which a delete could still
+    // describe a scope; query and header were already covered.
+    const response = await server.fetch(`${server.baseUrl}/kv/entries/k`, {
+      method: 'DELETE',
+      headers: {
+        'content-type': 'application/json',
+        'x-storage-namespace': `delete-body-${namespace++}`,
+      },
+      body: JSON.stringify({ scope: 'device' }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'VALIDATION_FAILED', message: expect.stringContaining('body') },
+    });
+  });
+
+  test('a bodyless delete still succeeds', async () => {
+    const storageNamespace = `delete-clean-${namespace++}`;
+    const store = makeStore(storageNamespace);
+    await store.set('k', 'v');
+    await expect(store.remove('k')).resolves.toBeUndefined();
+    expect(await store.get('k')).toBeNull();
   });
 });
 

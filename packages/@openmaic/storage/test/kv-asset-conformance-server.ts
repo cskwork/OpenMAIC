@@ -82,10 +82,23 @@ class ConformanceHttpError extends Error {
   }
 }
 
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'content-type': 'application/json' });
+function sendJson(
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  extraHeaders: Record<string, string> = {},
+): void {
+  res.writeHead(status, { 'content-type': 'application/json', ...extraHeaders });
   res.end(JSON.stringify(body));
 }
+
+/**
+ * The contract requires reads to be uncacheable, so the harness has to send the
+ * header itself — otherwise the suite would pass against an implementation that
+ * omits it, which is precisely the implementation the requirement exists to
+ * catch.
+ */
+const NO_STORE = { 'cache-control': 'no-store' };
 
 function sendNoContent(res: ServerResponse): void {
   res.writeHead(204);
@@ -415,7 +428,7 @@ async function routeAssets(
     }
     const path = `/assets/${encodeURIComponent(ref)}/content`;
     if (resolveMode === 'proxy') {
-      sendJson(res, 200, { url: path });
+      sendJson(res, 200, { url: path }, NO_STORE);
       return true;
     }
     // A distinct token per call is also what makes the signed shape a real test
@@ -428,7 +441,7 @@ async function routeAssets(
       namespace: principal,
       expiresAt: Date.now() + signedTtlMs,
     });
-    sendJson(res, 200, { url: `${baseUrl}${path}?token=${encodeURIComponent(token)}` });
+    sendJson(res, 200, { url: `${baseUrl}${path}?token=${encodeURIComponent(token)}` }, NO_STORE);
     return true;
   }
 
@@ -520,6 +533,7 @@ async function routeKv(
       res,
       200,
       [...state.kv.keys()].filter((key) => key.startsWith(prefix)),
+      NO_STORE,
     );
     return true;
   }
@@ -537,7 +551,7 @@ async function routeKv(
           `@openmaic/storage: no kv entry ${JSON.stringify(key)}`,
         );
       }
-      sendJson(res, 200, { value: JSON.parse(raw) as unknown });
+      sendJson(res, 200, { value: JSON.parse(raw) as unknown }, NO_STORE);
       return true;
     }
     if (method === 'PUT') {
@@ -568,6 +582,20 @@ async function routeKv(
       return true;
     }
     if (method === 'DELETE') {
+      // A bodyless method, so a body is refused outright rather than parsed for
+      // the scope it might be smuggling. Checking only the query and the header
+      // left the body as the one channel a delete could still describe a scope
+      // through, and a server that ignores it discards the caller's intent
+      // exactly as silently as one that ignores a scope field on a write.
+      const body = await readBytes(req, maxBodyBytes);
+      if (body.length > 0) {
+        throw new ConformanceHttpError(
+          400,
+          'VALIDATION_FAILED',
+          '@openmaic/storage: DELETE must not carry a request body — this contract is ' +
+            'account-scoped and the principal is derived server-side',
+        );
+      }
       state.kv.delete(key);
       sendNoContent(res);
       return true;

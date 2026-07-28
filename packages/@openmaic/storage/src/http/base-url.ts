@@ -43,11 +43,21 @@ const URL_CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]/;
  *   all. The browser resolves it cross-origin, taking the client's requests and
  *   credentials with it.
  * - A control character anywhere, since the URL parser strips or re-encodes
- *   them and the string then stops meaning what it reads as.
+ *   them and the string then stops meaning what it reads as, and surrounding
+ *   whitespace for the same reason.
+ * - Embedded credentials, which `fetch` refuses to build a request from at all.
  */
 export function assertHttpBaseUrl(baseUrl: string, label: string): string {
   if (baseUrl === '') {
     throw new Error(`@openmaic/storage: ${label} baseUrl must be non-empty`);
+  }
+  // `new URL` strips surrounding whitespace, so a base with a trailing space
+  // validates cleanly and then breaks every request: the concatenation puts the
+  // space *inside* the URL, where it is no longer trailing and no longer
+  // stripped. Refuse rather than silently repair, so the configuration is fixed
+  // where it was written.
+  if (baseUrl !== baseUrl.trim()) {
+    throw new Error(`@openmaic/storage: ${label} baseUrl must not begin or end with whitespace`);
   }
   const trimmed = baseUrl.replace(/\/+$/, '');
   // Before any shape check, because the URL parser strips these and would then
@@ -97,14 +107,24 @@ export function assertHttpBaseUrl(baseUrl: string, label: string): string {
         `(a scheme without "//" is resolved relative to the current document)`,
     );
   }
+  let parsed: URL;
   try {
-    // Parseability only; the query and fragment were already refused on the raw
-    // string, which is the check that holds — `parsed.search` is empty for a
-    // base ending in a bare `?`, so reading it would pass exactly the case that
-    // swallows the path.
-    new URL(trimmed);
+    // The query and fragment were already refused on the raw string, which is
+    // the check that holds — `parsed.search` is empty for a base ending in a
+    // bare `?`, so reading it would pass exactly the case that swallows the path.
+    parsed = new URL(trimmed);
   } catch {
     throw new Error(`@openmaic/storage: ${label} baseUrl must be a valid URL`);
+  }
+  // Fetch forbids building a request from a URL carrying credentials, so a base
+  // like `https://user:pass@host` constructs a client that throws a native
+  // TypeError on every single operation. Refusing here turns a per-call runtime
+  // failure into one legible error where the deployment is configured.
+  if (parsed.username !== '' || parsed.password !== '') {
+    throw new Error(
+      `@openmaic/storage: ${label} baseUrl must not carry userinfo — fetch refuses to build a ` +
+        `request from a URL with embedded credentials`,
+    );
   }
   return trimmed;
 }
