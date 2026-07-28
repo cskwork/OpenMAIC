@@ -1,7 +1,34 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
-const packages = ['dsl', 'storage', 'renderer', 'importer'];
+const packageInputs = {
+  dsl: {
+    files: ['LICENSE', 'README.md', 'package.json', 'tsconfig.json'],
+    directories: ['scripts/', 'src/'],
+  },
+  storage: {
+    files: ['LICENSE', 'README.md', 'package.json', 'tsconfig.json'],
+    directories: ['src/'],
+  },
+  renderer: {
+    files: [
+      'DESIGN.md',
+      'FONTS.md',
+      'LICENSE',
+      'README.md',
+      'fonts.config.mjs',
+      'fonts.css',
+      'package.json',
+      'rollup.config.js',
+      'tsconfig.json',
+    ],
+    directories: ['font-licenses/', 'scripts/', 'src/'],
+  },
+  importer: {
+    files: ['LICENSE', 'README.md', 'package.json', 'rollup.config.js', 'tsconfig.json'],
+    directories: ['src/'],
+  },
+};
 const base = process.argv[2];
 
 if (!base) {
@@ -37,16 +64,14 @@ const changedFiles = new Set(
 
 const failures = [];
 
-for (const name of packages) {
+for (const [name, inputs] of Object.entries(packageInputs)) {
   const directory = `packages/@openmaic/${name}`;
   const packageChanged = [...changedFiles].some((file) => {
     if (!file.startsWith(`${directory}/`)) return false;
     const relative = file.slice(directory.length + 1);
     return (
-      relative !== '.gitignore' &&
-      relative !== 'vitest.config.ts' &&
-      !relative.startsWith('test/') &&
-      !relative.startsWith('docs/')
+      inputs.files.includes(relative) ||
+      inputs.directories.some((prefix) => relative.startsWith(prefix))
     );
   });
   if (!packageChanged) continue;
