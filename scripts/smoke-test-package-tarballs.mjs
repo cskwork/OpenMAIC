@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -8,7 +8,7 @@ const root = resolve(import.meta.dirname, '..');
 const temporaryDirectory = mkdtempSync(join(tmpdir(), 'openmaic-package-smoke-'));
 
 function run(command, args, options = {}) {
-  execFileSync(command, args, {
+  return execFileSync(command, args, {
     cwd: options.cwd ?? root,
     encoding: 'utf8',
     stdio: options.stdio ?? 'inherit',
@@ -17,18 +17,27 @@ function run(command, args, options = {}) {
 
 function pack(name) {
   const packageDirectory = join(root, 'packages', '@openmaic', name);
-  run('pnpm', ['pack', '--pack-destination', temporaryDirectory], { cwd: packageDirectory });
+  run('pnpm', ['pack', '--pack-destination', temporaryDirectory], {
+    cwd: packageDirectory,
+    stdio: 'pipe',
+  });
   const prefix = `openmaic-${name}-`;
   const tarball = readdirSync(temporaryDirectory).find(
     (entry) => entry.startsWith(prefix) && entry.endsWith('.tgz'),
   );
   assert(tarball, `pnpm pack did not produce a tarball for @openmaic/${name}`);
+  console.log(`Packed @openmaic/${name}.`);
   return join(temporaryDirectory, tarball);
 }
 
 try {
+  const rendererManifest = JSON.parse(
+    readFileSync(join(root, 'packages/@openmaic/renderer/package.json'), 'utf8'),
+  );
   const dslTarball = pack('dsl');
   const storageTarball = pack('storage');
+  const rendererTarball = pack('renderer');
+  const importerTarball = pack('importer');
   const consumerDirectory = join(temporaryDirectory, 'consumer');
 
   mkdirSync(consumerDirectory);
@@ -39,8 +48,11 @@ try {
         private: true,
         type: 'module',
         dependencies: {
+          ...rendererManifest.peerDependencies,
           '@openmaic/dsl': `file:${dslTarball}`,
           '@openmaic/storage': `file:${storageTarball}`,
+          '@openmaic/renderer': `file:${rendererTarball}`,
+          '@openmaic/importer': `file:${importerTarball}`,
         },
       },
       null,
@@ -55,12 +67,22 @@ try {
   writeFileSync(
     join(consumerDirectory, 'smoke.mjs'),
     `import assert from 'node:assert/strict';
+import { stat } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { RUNTIME_DSL_VERSION, validateRuntimeSession } from '@openmaic/dsl';
 import { DOCUMENT_PG_SCHEMA } from '@openmaic/storage';
+import { SlideCanvas } from '@openmaic/renderer';
 
 assert.equal(typeof RUNTIME_DSL_VERSION, 'string');
 assert.equal(typeof validateRuntimeSession, 'function');
 assert.match(DOCUMENT_PG_SCHEMA, /CREATE TABLE IF NOT EXISTS document_stages/);
+assert.equal(typeof SlideCanvas, 'function');
+
+const importerEntry = fileURLToPath(import.meta.resolve('@openmaic/importer'));
+assert((await stat(importerEntry)).isFile());
+const importerRequireEntry = createRequire(import.meta.url).resolve('@openmaic/importer');
+assert((await stat(importerRequireEntry)).isFile());
 
 for (const subpath of [
   'runtime/http',
@@ -76,7 +98,7 @@ for (const subpath of [
   );
   run('node', ['smoke.mjs'], { cwd: consumerDirectory });
 
-  console.log('Packed @openmaic/dsl and @openmaic/storage imports passed.');
+  console.log('Packed @openmaic package imports passed.');
 } finally {
   rmSync(temporaryDirectory, { recursive: true, force: true });
 }

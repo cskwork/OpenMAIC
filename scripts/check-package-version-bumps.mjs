@@ -39,9 +39,17 @@ const failures = [];
 
 for (const name of packages) {
   const directory = `packages/@openmaic/${name}`;
-  const sourcePrefix = `${directory}/src/`;
-  const sourceChanged = [...changedFiles].some((file) => file.startsWith(sourcePrefix));
-  if (!sourceChanged) continue;
+  const packageChanged = [...changedFiles].some((file) => {
+    if (!file.startsWith(`${directory}/`)) return false;
+    const relative = file.slice(directory.length + 1);
+    return (
+      relative !== '.gitignore' &&
+      relative !== 'vitest.config.ts' &&
+      !relative.startsWith('test/') &&
+      !relative.startsWith('docs/')
+    );
+  });
+  if (!packageChanged) continue;
 
   const manifest = `${directory}/package.json`;
   const before = readVersion(git(['show', `${base}:${manifest}`]), `${manifest} at ${base}`);
@@ -49,7 +57,8 @@ for (const name of packages) {
 
   if (compareVersions(after, before) <= 0) {
     failures.push(
-      `${name}: source changed but version did not increase (${before.raw} -> ${after.raw})`,
+      `${name}: publishable package inputs changed but version did not increase ` +
+        `(${before.raw} -> ${after.raw})`,
     );
   } else {
     console.log(`${name}: ${before.raw} -> ${after.raw}`);
@@ -59,7 +68,7 @@ for (const name of packages) {
 if (failures.length > 0) {
   console.error(
     [
-      'Every @openmaic package source change must ship with a new package version:',
+      'Every @openmaic publishable package change must ship with a new package version:',
       ...failures.map((failure) => `- ${failure}`),
     ].join('\n'),
   );
