@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { NextRequest } from 'next/server';
 import { POST } from '@/app/api/chat/pi/client-effects/[executionId]/ack/route';
+import type { StageStore } from '@/lib/api/stage-api';
+import { BrowserClientEffectRuntime } from '@/lib/agent/client/client-effect-runtime';
 import {
   CLIENT_EFFECT_ACK_HEADER,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
@@ -114,6 +116,22 @@ function streamedAckRequest(opts: { executionId: string; token: string; chunks: 
 
 async function post(request: NextRequest, executionId: string) {
   return POST(request, { params: Promise.resolve({ executionId }) });
+}
+
+function createStore(): StageStore {
+  let state = {
+    stage: { id: 'stage-1', name: 'Course', createdAt: 1, updatedAt: 1, whiteboard: [] },
+    scenes: [{ id: 'scene-1' }],
+    currentSceneId: 'scene-1',
+    mode: 'playback' as const,
+  };
+  return {
+    getState: () => state,
+    setState: (partial: Partial<typeof state>) => {
+      state = { ...state, ...partial };
+    },
+    subscribe: () => () => undefined,
+  } as unknown as StageStore;
 }
 
 describe('client effect ACK route', () => {
@@ -289,7 +307,7 @@ describe('client effect ACK route', () => {
     });
   });
 
-  it('distinguishes unknown and cleaned-up executions without parsing transitions', async () => {
+  it('distinguishes unknown executions and recovers authenticated terminal tombstones', async () => {
     const unknown = await post(
       ackRequest({
         executionId: 'unknown',
@@ -304,7 +322,7 @@ describe('client effect ACK route', () => {
     const registered = piClientEffectCoordinator.register(effect);
     piClientEffectCoordinator.cancel(effect.executionId, 'SESSION_ENDED', 'Session ended.');
     piClientEffectCoordinator.cleanup(effect.executionId);
-    const gone = await post(
+    const late = await post(
       ackRequest({
         executionId: effect.executionId,
         token: registered.delivery.acknowledgementToken,
@@ -312,7 +330,75 @@ describe('client effect ACK route', () => {
       }),
       effect.executionId,
     );
-    expect(gone.status).toBe(410);
+    expect(late.status).toBe(200);
+    await expect(late.json()).resolves.toMatchObject({
+      success: true,
+      disposition: 'late',
+      state: {
+        status: 'cancelled',
+        terminalResult: { status: 'cancelled', error: { code: 'SESSION_ENDED' } },
+      },
+    });
+
+    const unauthorized = await post(
+      ackRequest({
+        executionId: effect.executionId,
+        token: 'wrong-token',
+        body: accepted(effect),
+      }),
+      effect.executionId,
+    );
+    expect(unauthorized.status).toBe(401);
+  });
+
+  it('recovers an applied commit through the real route with an exact browser replay', async () => {
+    const effect = await effectRequest();
+    effect.args = { content: 'hello', x: 100, y: 120 };
+    const registered = piClientEffectCoordinator.register(effect);
+    const commitEventIds: string[] = [];
+    let loseFirstCommitResponse = true;
+    let browserNow = Date.now();
+    const fetchAck: typeof fetch = async (input, init) => {
+      const url = new URL(String(input), 'http://localhost');
+      const ack = JSON.parse(String(init?.body)) as ClientEffectAck;
+      if (ack.status === 'effect_committed') commitEventIds.push(ack.clientEventId);
+      const headers = new Headers(init?.headers);
+      headers.set('origin', url.origin);
+      const response = await post(
+        new NextRequest(url, {
+          method: init?.method,
+          headers,
+          body: init?.body,
+        }),
+        effect.executionId,
+      );
+      if (ack.status === 'effect_committed' && loseFirstCommitResponse) {
+        loseFirstCommitResponse = false;
+        piClientEffectCoordinator.cleanup(effect.executionId);
+        browserNow = effect.deadlineAt + 1;
+        throw new TypeError('simulated response loss after server commit');
+      }
+      return response;
+    };
+    const store = createStore();
+    const runtime = new BrowserClientEffectRuntime({
+      sessionId: effect.target.sessionId,
+      requestId: effect.target.requestId,
+      store,
+      fetchAck,
+      now: () => browserNow,
+      waitForPresentation: async () => {},
+      ensureWhiteboardVisible: async () => {},
+    });
+
+    await expect(runtime.execute(registered.delivery, new AbortController().signal)).resolves.toBe(
+      'effect_committed',
+    );
+    expect(commitEventIds).toHaveLength(2);
+    expect(new Set(commitEventIds).size).toBe(1);
+    expect(
+      store.getState().stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements),
+    ).toHaveLength(1);
   });
 
   it('is unreachable while the Phase 2 flag is disabled', async () => {

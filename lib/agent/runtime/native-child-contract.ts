@@ -69,6 +69,15 @@ export type ChildRunStatus = 'completed' | 'exhausted' | 'cancelled' | 'failed';
  */
 export type RuntimeAgentToolResult<TDetails = unknown> = AgentToolResult<TDetails> & {
   isError: boolean;
+  /**
+   * Runtime-authoritative settlement for a tool that returned a structured
+   * error instead of throwing. This keeps timeout/cancellation trace semantics
+   * distinct from an ordinary execution failure.
+   */
+  executionStatus?: Extract<
+    ServerToolExecutionStatus,
+    'execution_failed' | 'timeout' | 'cancelled'
+  >;
 };
 
 export interface AgentUsage {

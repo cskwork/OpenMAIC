@@ -99,6 +99,35 @@ function doneOnlyTextStream(text: string): StreamFn {
   }) as StreamFn;
 }
 
+function assistantToolCall(
+  id: string,
+  name: string,
+  args: Record<string, unknown>,
+): AssistantMessage {
+  return {
+    role: 'assistant',
+    content: [{ type: 'toolCall', id, name, arguments: args }],
+    api: 'test',
+    provider: 'test',
+    model: 'deterministic',
+    usage,
+    stopReason: 'toolUse',
+    timestamp: 1,
+  };
+}
+
+function streamMessage(message: AssistantMessage) {
+  const stream = createAssistantMessageEventStream();
+  queueMicrotask(() =>
+    stream.push({
+      type: 'done',
+      reason: message.stopReason === 'toolUse' ? 'toolUse' : 'stop',
+      message,
+    }),
+  );
+  return stream;
+}
+
 function buildDoneOnlyNativeTeacherCall(streamFn: StreamFn, events: StatelessEvent[]) {
   return buildCallAgentTool({
     body,
@@ -161,7 +190,7 @@ describe('Teacher native wb_draw_text server bridge', () => {
     expect(piClientEffectCoordinator.getSnapshot(envelope.executionId)).toBeNull();
     expect(
       piClientEffectCoordinator.authorize(envelope.executionId, delivery.acknowledgementToken),
-    ).toBe('gone');
+    ).toBe('authorized');
   });
 
   it('fails before delivery when a closed whiteboard cannot open within the remaining budget', async () => {
@@ -291,6 +320,80 @@ describe('Teacher native wb_draw_text server bridge', () => {
       data: { content: output },
     });
     expect(result.details).toMatchObject({ text: output });
+  });
+
+  it('records a coordinator active timeout as a native tool timeout', async () => {
+    const openWhiteboardBody = {
+      ...body,
+      storeState: { ...body.storeState, whiteboardOpen: true },
+    } as StatelessChatRequest;
+    const contexts: Context[] = [];
+    const streamFn = ((_model, context) => {
+      contexts.push(context);
+      const toolResult = context.messages.find(
+        (entry) => entry.role === 'toolResult' && entry.toolName === 'wb_draw_text',
+      );
+      return toolResult
+        ? streamMessage({
+            role: 'assistant',
+            content: [{ type: 'text', text: '白板超时了，我先继续口头解释。' }],
+            api: 'test',
+            provider: 'test',
+            model: 'deterministic',
+            usage,
+            stopReason: 'stop',
+            timestamp: 1,
+          })
+        : streamMessage(
+            assistantToolCall('wb-timeout-call', 'wb_draw_text', {
+              content: 'k 决定方向',
+              x: 100,
+              y: 120,
+            }),
+          );
+    }) as StreamFn;
+    const callAgent = buildCallAgentTool({
+      body: openWhiteboardBody,
+      agentConfigs: [teacher],
+      send: async () => {
+        // Intentionally do not ACK so the production coordinator owns timeout settlement.
+      },
+      languageModel: {} as LanguageModel,
+      onAgentDone: vi.fn(),
+      onTrustedChildResult: vi.fn(),
+      onActionDone: vi.fn(),
+      thinkingConfig: { mode: 'disabled', enabled: false },
+      abortSignal: new AbortController().signal,
+      maxAgentTurns: 2,
+      getAgentTurnCount: () => 0,
+      getAgentResponses: () => [],
+      getWhiteboardLedger: () => [],
+      maxActionsPerAgent: 1,
+      enableWhiteboardTools: true,
+      enableNativeChildWhiteboard: true,
+      nativeChildStreamFn: streamFn,
+      nativeChildTimeoutMs: 1_300,
+    });
+
+    const result = await callAgent.execute('director-call-timeout', {
+      agentId: teacher.id,
+      instruction: 'Use the whiteboard and explain.',
+    });
+
+    expect(contexts).toHaveLength(2);
+    expect(result.details).toMatchObject({
+      nativeChildRun: {
+        status: 'completed',
+        toolExecutions: [
+          {
+            request: { kind: 'client_effect', toolName: 'wb_draw_text' },
+            status: 'timeout',
+            isError: true,
+            details: { status: 'timed_out' },
+          },
+        ],
+      },
+    });
   });
 
   it('streams pre-tool text, waits for browser commit, then continues the same Child bubble', async () => {

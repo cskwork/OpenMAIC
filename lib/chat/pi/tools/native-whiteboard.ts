@@ -184,6 +184,12 @@ export function buildNativeWhiteboardTextTool(opts: {
           error: terminal.error,
         },
         isError: true,
+        executionStatus:
+          terminal.status === 'timed_out'
+            ? 'timeout'
+            : terminal.status === 'cancelled'
+              ? 'cancelled'
+              : 'execution_failed',
         ...(terminal.status === 'cancelled' ? { terminate: true } : {}),
       };
     } finally {

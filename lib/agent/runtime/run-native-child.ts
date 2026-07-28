@@ -330,9 +330,13 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Child
             }
             return tool.execute(toolCallId, params, signal, onUpdate);
           }, signal);
-          const reportedError = (result as RuntimeAgentToolResult).isError === true;
+          const runtimeResult = result as RuntimeAgentToolResult;
+          const reportedError = runtimeResult.isError === true;
           if (reportedError) toolReportedErrors.add(toolCallId);
-          toolSettlements.set(toolCallId, reportedError ? 'execution_failed' : 'succeeded');
+          toolSettlements.set(
+            toolCallId,
+            reportedError ? (runtimeResult.executionStatus ?? 'execution_failed') : 'succeeded',
+          );
           return result;
         } catch (error) {
           toolSettlements.set(

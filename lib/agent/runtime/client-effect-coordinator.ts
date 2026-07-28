@@ -1,4 +1,4 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
   type AcceptedTargetBinding,
   type ClientEffectAck,
@@ -28,10 +28,16 @@ interface CoordinatorEntry {
   resolveResult: (result: ClientEffectTerminalResult) => void;
 }
 
+interface CoordinatorTombstone {
+  acknowledgementTokenDigest: Buffer;
+  idempotencyKey: string;
+  snapshot: ClientEffectCoordinatorSnapshot;
+}
+
 export type ClientEffectAckOutcome =
   | { kind: 'applied' | 'duplicate' | 'late'; snapshot: ClientEffectCoordinatorSnapshot }
   | { kind: 'invalid'; reason: string; snapshot?: ClientEffectCoordinatorSnapshot }
-  | { kind: 'unauthorized' | 'unknown' | 'gone' };
+  | { kind: 'unauthorized' | 'unknown' };
 
 export interface RegisteredClientEffect {
   delivery: ClientEffectDelivery;
@@ -70,6 +76,15 @@ function tokensEqual(actual: string, expected: string): boolean {
   );
 }
 
+function tokenDigest(token: string): Buffer {
+  return createHash('sha256').update(token).digest();
+}
+
+function tokenMatchesDigest(token: string, expected: Buffer): boolean {
+  const actual = tokenDigest(token);
+  return actual.byteLength === expected.byteLength && timingSafeEqual(actual, expected);
+}
+
 function bindingsEqual(left: AcceptedTargetBinding, right: AcceptedTargetBinding): boolean {
   return (
     left.requestId === right.requestId &&
@@ -84,7 +99,7 @@ function bindingsEqual(left: AcceptedTargetBinding, right: AcceptedTargetBinding
 export class ClientEffectCoordinator {
   private readonly entries = new Map<string, CoordinatorEntry>();
   private readonly stableElementOwners = new Map<string, string>();
-  private readonly tombstones = new Map<string, ClientEffectTerminalResult>();
+  private readonly tombstones = new Map<string, CoordinatorTombstone>();
 
   constructor(
     private readonly now: () => number = Date.now,
@@ -157,21 +172,36 @@ export class ClientEffectCoordinator {
     };
   }
 
-  authorize(
-    executionId: string,
-    token: string,
-  ): 'authorized' | 'unauthorized' | 'unknown' | 'gone' {
+  authorize(executionId: string, token: string): 'authorized' | 'unauthorized' | 'unknown' {
     const entry = this.entries.get(executionId);
-    if (!entry) return this.tombstones.has(executionId) ? 'gone' : 'unknown';
-    if (tokensEqual(token, entry.acknowledgementToken)) return 'authorized';
-    this.trace(entry, { type: 'ack_rejected', code: 'UNAUTHORIZED' });
-    return 'unauthorized';
+    if (entry) {
+      if (tokensEqual(token, entry.acknowledgementToken)) return 'authorized';
+      this.trace(entry, { type: 'ack_rejected', code: 'UNAUTHORIZED' });
+      return 'unauthorized';
+    }
+    const tombstone = this.tombstones.get(executionId);
+    if (!tombstone) return 'unknown';
+    return tokenMatchesDigest(token, tombstone.acknowledgementTokenDigest)
+      ? 'authorized'
+      : 'unauthorized';
   }
 
   acknowledge(executionId: string, token: string, ack: ClientEffectAck): ClientEffectAckOutcome {
     const entry = this.entries.get(executionId);
     if (!entry) {
-      return this.tombstones.has(executionId) ? { kind: 'gone' } : { kind: 'unknown' };
+      const tombstone = this.tombstones.get(executionId);
+      if (!tombstone) return { kind: 'unknown' };
+      if (!tokenMatchesDigest(token, tombstone.acknowledgementTokenDigest)) {
+        return { kind: 'unauthorized' };
+      }
+      if (ack.executionId !== executionId || ack.idempotencyKey !== tombstone.idempotencyKey) {
+        return {
+          kind: 'invalid',
+          reason: 'ACK identity does not match the cleaned-up execution.',
+          snapshot: tombstone.snapshot,
+        };
+      }
+      return { kind: 'late', snapshot: tombstone.snapshot };
     }
     if (!tokensEqual(token, entry.acknowledgementToken)) {
       this.trace(entry, { type: 'ack_rejected', code: 'UNAUTHORIZED' });
@@ -180,6 +210,16 @@ export class ClientEffectCoordinator {
     if (ack.executionId !== executionId || ack.idempotencyKey !== entry.request.idempotencyKey) {
       this.trace(entry, { type: 'ack_rejected', ackStatus: ack.status, code: 'IDENTITY' });
       return { kind: 'invalid', reason: 'ACK identity does not match the execution.' };
+    }
+    if (!entry.terminalResult && this.now() >= entry.request.deadlineAt) {
+      this.settle(entry, 'cancelled', {
+        code: 'HARD_DEADLINE_EXCEEDED',
+        message: 'Client effect exceeded its hard wall-clock deadline.',
+        retryable: false,
+      });
+      const snapshot = this.snapshot(entry);
+      this.trace(entry, { type: 'ack_late', ackStatus: ack.status });
+      return { kind: 'late', snapshot };
     }
 
     const fingerprint = stableJson(ack);
@@ -246,9 +286,14 @@ export class ClientEffectCoordinator {
     const entry = this.entries.get(executionId);
     if (!entry?.terminalResult) return;
     this.clearTimers(entry);
+    const snapshot = this.snapshot(entry);
     this.entries.delete(executionId);
     this.stableElementOwners.delete(entry.request.postcondition.stableElementId);
-    this.tombstones.set(executionId, entry.terminalResult);
+    this.tombstones.set(executionId, {
+      acknowledgementTokenDigest: tokenDigest(entry.acknowledgementToken),
+      idempotencyKey: entry.request.idempotencyKey,
+      snapshot,
+    });
     this.trace(entry, { type: 'cleaned_up' });
     while (this.tombstones.size > this.tombstoneLimit) {
       const oldest = this.tombstones.keys().next().value;

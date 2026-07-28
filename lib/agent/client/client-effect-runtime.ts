@@ -49,6 +49,12 @@ class AuthoritativeClientEffectError extends Error {
   }
 }
 
+class ClientEffectHardDeadlineError extends Error {
+  constructor() {
+    super('Client effect exceeded its hard wall-clock deadline.');
+  }
+}
+
 function errorDetails(error: unknown): { code: string; message: string; retryable: boolean } {
   const message = error instanceof Error ? error.message : String(error);
   const targetChanged = message.includes('CLIENT_EFFECT_TARGET_CHANGED');
@@ -167,10 +173,20 @@ export class BrowserClientEffectRuntime {
     signal: AbortSignal,
   ): Promise<ClientEffectStatus> {
     const { request } = record.delivery;
+    const deadlineController = new AbortController();
+    let deadlineExpired = false;
+    const hardRemainingMs = request.deadlineAt - this.now();
+    const expireDeadline = () => {
+      deadlineExpired = true;
+      deadlineController.abort();
+    };
+    const hardTimer = hardRemainingMs > 0 ? setTimeout(expireDeadline, hardRemainingMs) : undefined;
+    if (hardRemainingMs <= 0) expireDeadline();
+    const executionSignal = AbortSignal.any([signal, deadlineController.signal]);
     try {
-      await this.opts.waitForPresentation(request.executionId, signal);
+      await this.opts.waitForPresentation(request.executionId, executionSignal);
       record.presentationReady = true;
-      await this.waitWhilePaused(record, signal);
+      await this.waitWhilePaused(record, executionSignal);
       if (record.serverPaused) {
         await this.enqueueAck(record, { status: 'presentation_resumed' });
         record.serverPaused = false;
@@ -181,9 +197,9 @@ export class BrowserClientEffectRuntime {
       record.status = 'accepted';
       this.opts.onState?.(request.executionId, 'accepted');
 
-      await this.waitWhilePaused(record, signal);
-      await this.opts.ensureWhiteboardVisible(signal);
-      await this.waitWhilePaused(record, signal);
+      await this.waitWhilePaused(record, executionSignal);
+      await this.opts.ensureWhiteboardVisible(executionSignal);
+      await this.waitWhilePaused(record, executionSignal);
       const params = request.args as Record<string, unknown>;
       const result = await executeNativeWhiteboardTextEffect({
         store: this.opts.store,
@@ -200,7 +216,7 @@ export class BrowserClientEffectRuntime {
           ...(params.color !== undefined ? { color: String(params.color) } : {}),
         },
         expectedContentDigest: request.postcondition.expectedContentDigest,
-        signal,
+        signal: executionSignal,
       });
       await this.enqueueAck(record, {
         status: 'effect_committed',
@@ -211,21 +227,32 @@ export class BrowserClientEffectRuntime {
       this.opts.onState?.(request.executionId, 'effect_committed');
       return record.status;
     } catch (error) {
+      const hardDeadlineExceeded =
+        deadlineExpired || error instanceof ClientEffectHardDeadlineError;
       const aborted =
-        signal.aborted || (error instanceof DOMException && error.name === 'AbortError');
+        executionSignal.aborted || (error instanceof DOMException && error.name === 'AbortError');
       const authoritativeStatus =
         error instanceof AuthoritativeClientEffectError && this.isTerminal(error.status)
           ? error.status
           : undefined;
-      const details = aborted
+      const details = hardDeadlineExceeded
         ? {
-            code: 'CLIENT_EFFECT_CANCELLED',
-            message: 'Client effect was cancelled.',
+            code: 'HARD_DEADLINE_EXCEEDED',
+            message: 'Client effect exceeded its hard wall-clock deadline.',
             retryable: false,
           }
-        : errorDetails(error);
+        : aborted
+          ? {
+              code: 'CLIENT_EFFECT_CANCELLED',
+              message: 'Client effect was cancelled.',
+              retryable: false,
+            }
+          : errorDetails(error);
       const localFailureStatus: 'cancelled' | 'effect_failed' =
-        aborted || details.code === 'CLIENT_EFFECT_TARGET_CHANGED' || !record.binding
+        hardDeadlineExceeded ||
+        aborted ||
+        details.code === 'CLIENT_EFFECT_TARGET_CHANGED' ||
+        !record.binding
           ? 'cancelled'
           : 'effect_failed';
       const status = authoritativeStatus ?? localFailureStatus;
@@ -240,6 +267,8 @@ export class BrowserClientEffectRuntime {
       record.status = status;
       this.opts.onState?.(request.executionId, status, details.message);
       return record.status;
+    } finally {
+      if (hardTimer) clearTimeout(hardTimer);
     }
   }
 
@@ -337,32 +366,69 @@ export class BrowserClientEffectRuntime {
       observedAt: this.now(),
       ...payload,
     } as ClientEffectAck;
-    const response = await this.fetchAck(
-      `/api/chat/pi/client-effects/${encodeURIComponent(ack.executionId)}/ack`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          [CLIENT_EFFECT_ACK_HEADER]: record.delivery.acknowledgementToken,
-        },
-        body: JSON.stringify(ack),
-        signal: AbortSignal.timeout(5_000),
-      },
-    );
-    if (!response.ok) throw new Error(`CLIENT_EFFECT_ACK_FAILED_${response.status}`);
-    const body = (await response.json()) as {
-      success?: boolean;
-      state?: { status?: ClientEffectStatus };
-    };
-    if (body.success !== true || !body.state?.status) {
-      throw new Error('CLIENT_EFFECT_ACK_REJECTED');
+    const bodyText = JSON.stringify(ack);
+    const url = `/api/chat/pi/client-effects/${encodeURIComponent(ack.executionId)}/ack`;
+    const maxAttempts = 2;
+    let lastTransportError: unknown;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const remainingMs = record.delivery.request.deadlineAt - this.now();
+      if (attempt === 1 && remainingMs <= 0) throw new ClientEffectHardDeadlineError();
+      // Once an ACK has been sent, a transport failure is ambiguous: the
+      // coordinator may already have applied it. Permit one exact replay beyond
+      // the effect deadline solely to recover the authoritative tombstone.
+      const transportTimeoutMs = attempt === 1 ? Math.max(1, Math.min(5_000, remainingMs)) : 5_000;
+
+      let response: Response;
+      try {
+        response = await this.fetchAck(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            [CLIENT_EFFECT_ACK_HEADER]: record.delivery.acknowledgementToken,
+          },
+          body: bodyText,
+          signal: AbortSignal.timeout(transportTimeoutMs),
+        });
+      } catch (error) {
+        lastTransportError = error;
+        if (attempt < maxAttempts) continue;
+        throw error;
+      }
+
+      if (!response.ok) {
+        const error = new Error(`CLIENT_EFFECT_ACK_FAILED_${response.status}`);
+        if (response.status >= 500 && attempt < maxAttempts) {
+          lastTransportError = error;
+          continue;
+        }
+        throw error;
+      }
+
+      let body: {
+        success?: boolean;
+        state?: { status?: ClientEffectStatus };
+      };
+      try {
+        body = (await response.json()) as typeof body;
+      } catch (error) {
+        lastTransportError = error;
+        if (attempt < maxAttempts) continue;
+        throw error;
+      }
+      if (body.success !== true || !body.state?.status) {
+        throw new Error('CLIENT_EFFECT_ACK_REJECTED');
+      }
+      if (
+        (payload.status === 'accepted' || this.isTerminal(payload.status)) &&
+        body.state.status !== payload.status
+      ) {
+        throw new AuthoritativeClientEffectError(body.state.status);
+      }
+      return;
     }
-    if (
-      (payload.status === 'accepted' || this.isTerminal(payload.status)) &&
-      body.state.status !== payload.status
-    ) {
-      throw new AuthoritativeClientEffectError(body.state.status);
-    }
+
+    throw lastTransportError ?? new Error('CLIENT_EFFECT_ACK_FAILED');
   }
 
   private isTerminal(status: string): status is ClientEffectTerminalStatus {

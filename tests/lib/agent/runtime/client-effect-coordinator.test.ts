@@ -340,7 +340,7 @@ describe('ClientEffectCoordinator', () => {
     ).rejects.toThrow('belongs to another execution');
   });
 
-  it('returns a gone result after terminal cleanup', async () => {
+  it('authenticates a terminal tombstone and returns its authoritative state', async () => {
     const coordinator = new ClientEffectCoordinator();
     const effect = await request();
     const registered = coordinator.register(effect);
@@ -353,8 +353,61 @@ describe('ClientEffectCoordinator', () => {
         registered.delivery.acknowledgementToken,
         accepted(effect),
       ),
-    ).toEqual({ kind: 'gone' });
+    ).toMatchObject({
+      kind: 'late',
+      snapshot: {
+        executionId: effect.executionId,
+        idempotencyKey: effect.idempotencyKey,
+        status: 'cancelled',
+        terminalResult: { status: 'cancelled', error: { code: 'SESSION_ENDED' } },
+      },
+    });
+    expect(coordinator.authorize(effect.executionId, 'wrong-token')).toBe('unauthorized');
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        accepted({ ...effect, idempotencyKey: 'conflicting-idempotency-key' }),
+      ),
+    ).toMatchObject({
+      kind: 'invalid',
+      reason: 'ACK identity does not match the cleaned-up execution.',
+      snapshot: { status: 'cancelled' },
+    });
   });
+
+  it.each(['accepted', 'effect_committed'] as const)(
+    'rejects a live %s ACK once the authoritative clock reaches the hard deadline',
+    async (status) => {
+      let clock = Date.now();
+      const coordinator = new ClientEffectCoordinator(() => clock);
+      const effect = await request({ deadlineAt: clock + 100 });
+      const registered = coordinator.register(effect);
+      clock = effect.deadlineAt;
+
+      const outcome = coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        status === 'accepted' ? accepted(effect) : committed(effect),
+      );
+
+      expect(outcome).toMatchObject({
+        kind: 'late',
+        snapshot: {
+          status: 'cancelled',
+          terminalResult: {
+            status: 'cancelled',
+            error: { code: 'HARD_DEADLINE_EXCEEDED' },
+          },
+        },
+      });
+      await expect(registered.result).resolves.toMatchObject({
+        status: 'cancelled',
+        isError: true,
+        completedAt: effect.deadlineAt,
+      });
+    },
+  );
 
   it('emits auditable trace events without the capability token', async () => {
     const trace: unknown[] = [];

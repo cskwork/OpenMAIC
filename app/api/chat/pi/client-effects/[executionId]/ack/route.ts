@@ -77,10 +77,6 @@ export async function POST(
   if (authorization === 'unknown') {
     return invalidRequest(404, 'Client effect execution was not found.');
   }
-  if (authorization === 'gone') {
-    return invalidRequest(410, 'Client effect execution has already been cleaned up.');
-  }
-
   const contentLength = Number(request.headers.get('content-length'));
   if (Number.isFinite(contentLength) && contentLength > CLIENT_EFFECT_ACK_MAX_BYTES) {
     return invalidRequest(413, 'Client effect ACK body is too large.');
@@ -118,8 +114,6 @@ export async function POST(
       return invalidRequest(401, 'Client effect capability is invalid.');
     case 'unknown':
       return invalidRequest(404, 'Client effect execution was not found.');
-    case 'gone':
-      return invalidRequest(410, 'Client effect execution has already been cleaned up.');
     case 'invalid':
       return apiError(
         'INVALID_REQUEST',

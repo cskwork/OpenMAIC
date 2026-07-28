@@ -184,6 +184,44 @@ describe('BrowserClientEffectRuntime', () => {
     expect(acknowledgements.map((ack) => ack.status)).toEqual(['presentation_paused', 'cancelled']);
   });
 
+  it('settles a paused execution at its hard deadline without waiting for resume', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-28T00:00:00.000Z'));
+    try {
+      const acknowledgements: ClientEffectAck[] = [];
+      const store = createStore();
+      const runtime = new BrowserClientEffectRuntime({
+        sessionId: 'session-1',
+        requestId: 'request-1',
+        store,
+        fetchAck: async (_url, init) => {
+          const ack = JSON.parse(String(init?.body)) as ClientEffectAck;
+          acknowledgements.push(ack);
+          return new Response(JSON.stringify({ success: true, state: { status: ack.status } }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        },
+        waitForPresentation: async () => {},
+        ensureWhiteboardVisible: async () => {},
+      });
+      runtime.pause();
+      const effect = await delivery();
+      effect.request.deadlineAt = Date.now() + 100;
+      const execution = runtime.execute(effect, new AbortController().signal);
+
+      await vi.advanceTimersByTimeAsync(101);
+
+      await expect(execution).resolves.toBe('cancelled');
+      expect(acknowledgements.map((ack) => ack.status)).toEqual(['presentation_paused']);
+      expect(
+        store.getState().stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements),
+      ).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('settles locally when the ACK channel fails instead of leaving a hanging promise', async () => {
     const runtime = new BrowserClientEffectRuntime({
       sessionId: 'session-1',
