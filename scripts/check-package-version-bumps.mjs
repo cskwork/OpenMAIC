@@ -28,12 +28,19 @@ const ignoredPackageInputs = {
   },
 };
 const base = process.argv[2];
-const repositoryRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], {
-  encoding: 'utf8',
-}).trim();
 
 if (!base) {
   console.error('Usage: pnpm check:package-versions <base-ref>');
+  process.exit(2);
+}
+
+let repositoryRoot;
+try {
+  repositoryRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+    encoding: 'utf8',
+  }).trim();
+} catch {
+  console.error('Package version checks must run inside a Git worktree.');
   process.exit(2);
 }
 
