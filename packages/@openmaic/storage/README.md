@@ -33,11 +33,20 @@ a browser.
 - **Scopes.** `account` values are user data a server-backed deployment syncs
   across devices; `device` values (theme, locale, layout) never leave the
   device — every backend honours that, so the scope is part of the primitive,
-  not the backend choice.
-- **Content-addressed assets.** `BrowserAssetProvider` refs are `sha256-<hex>`,
-  so identical bytes de-duplicate to one stored asset. A document embeds only
-  the stable ref; the provider resolves it to a URL at render time (a raw URL
-  would bake in a provider + expiry and break portability).
+  not the backend choice. The [KV HTTP contract](./docs/kv-http-contract.md) is
+  `account`-only and carries no scope on the wire at all, so `HttpKVStore`
+  routes `device` to a local backend it requires at construction: shipping a
+  device value is not a request the transport can express.
+- **Content-addressed assets.** Asset refs are `sha256-<hex>` over the bytes, so
+  identical bytes de-duplicate to one stored asset — and since every backend
+  computes the ref by the same rule, a ref minted in the browser addresses the
+  same asset on a server. The
+  [asset HTTP contract](./docs/asset-http-contract.md) makes the ref the address
+  the bytes are written to and has the server re-hash what it received, so
+  content addressing is enforced end to end rather than assumed. A document
+  embeds only the stable ref; the provider resolves it to a URL at render time
+  (a raw URL would bake in a provider + expiry and break portability), and the
+  contract accommodates both a signed URL and a proxied path.
 - **Document normalization.** The DSL `document` is a portable embedded
   aggregate; `DocumentStore` normalizes it into per-entity rows so scene-level
   writes (`putScene`) stay cheap, and reassembles it on read. Each document is
@@ -94,6 +103,9 @@ semantics.
 - [x] RuntimeStore PostgreSQL backend
 - [x] DocumentStore HTTP backend + reference-server routes + HTTP contract
 - [x] DocumentStore PostgreSQL backend
+- [x] `KVStore` (`account`) and `AssetProvider` HTTP backends + HTTP contracts
+- [ ] `KVStore` / `AssetProvider` server-side reference backends and
+      reference-server routes
 
 ## License
 

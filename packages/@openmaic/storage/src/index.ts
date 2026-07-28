@@ -7,16 +7,32 @@
  * persists — the KV / asset primitives and their swappable backends. The
  * pluggable seam is the backend, not the database driver.
  *
- * The KV / asset primitives ship with browser backends (zero server) and their
- * primitive contracts; the `DocumentStore` adds the normalized document
- * aggregate (browser backend, migrate-on-read, validation gate). The HTTP
- * backend + reference server and the `RuntimeStore` follow in later parts (see
- * the tracking issue).
+ * Every primitive ships a browser backend (zero server) and an HTTP backend
+ * that speaks a documented contract, proven equivalent by one shared contract
+ * suite per primitive. `KVStore` is the one asymmetric case: only its `account`
+ * scope has an HTTP backend, because `device` values never leave the device.
  */
 export type { KVScope, KVStore } from './kv/types.js';
 export { DEFAULT_KV_SCOPE } from './kv/types.js';
 export { BrowserKVStore, type BrowserKVStoreOptions } from './kv/browser.js';
+export {
+  HttpAccountKV,
+  HttpKVStore,
+  HttpKVStoreError,
+  type HttpAccountKVOptions,
+  type HttpKVHeadersContext,
+  type HttpKVHeadersHook,
+  type HttpKVStoreOptions,
+} from './kv/http.js';
 export { BrowserAssetProvider, type BrowserAssetProviderOptions } from './asset/browser.js';
+export { assetRefForBytes, computeAssetRef, isContentAssetRef } from './asset/content-ref.js';
+export {
+  HttpAssetProvider,
+  HttpAssetProviderError,
+  type HttpAssetHeadersContext,
+  type HttpAssetHeadersHook,
+  type HttpAssetProviderOptions,
+} from './asset/http.js';
 
 export {
   kvPersistStorage,
