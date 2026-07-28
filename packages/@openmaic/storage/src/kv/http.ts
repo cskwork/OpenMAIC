@@ -203,6 +203,11 @@ export class HttpAccountKV {
       method,
       headers,
       ...(this.credentials === undefined ? {} : { credentials: this.credentials }),
+      // Reads are never served from a cache. `account` values are exactly the
+      // ones another device may have changed a moment ago, and this client has
+      // no way to invalidate a cache entry when that happens — a cached read
+      // would quietly serve the state this scope exists to move past.
+      ...(method === 'GET' ? { cache: 'no-store' as RequestCache } : {}),
       ...(serializedBody === undefined ? {} : { body: serializedBody }),
     });
     if (!response.ok) {
@@ -241,7 +246,17 @@ export class HttpAccountKV {
     try {
       response = await this.request<unknown>('GET', `/kv/entries/${encodeURIComponent(key)}`);
     } catch (error) {
-      if (error instanceof HttpKVStoreError && error.code === 'KEY_NOT_FOUND') return null;
+      // Both conditions, deliberately. A proxy or gateway that answers 401, 403
+      // or 500 while echoing the body's error code must not have that answer
+      // read as "no such entry" — `null` is indistinguishable from a legitimate
+      // miss, so an outage would look like data loss.
+      if (
+        error instanceof HttpKVStoreError &&
+        error.status === 404 &&
+        error.code === 'KEY_NOT_FOUND'
+      ) {
+        return null;
+      }
       throw error;
     }
     const body = response.body;

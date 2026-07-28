@@ -85,6 +85,8 @@ A validated absolute URL is returned exactly as received. In particular the clie
 
 A deployment configured with a path-only base URL (an app-mounted route such as `/api/persistence`) receives root-relative paths unchanged, because the browser resolves them against the document itself. Every rule above still applies to them — that shape has no base origin to fall back on, so the parse-based check is the only thing standing between it and another origin.
 
+`GET /assets/{ref}/url` MUST be served with `Cache-Control: no-store` (and MUST NOT be cached by any intermediary). Its answer is a statement about two mutable facts — whether the calling principal holds a claim, and which URL is valid right now — so a cached one is wrong in both directions: it hands back a signed URL past its expiry, and it replays a negatively cached `404` for an asset written since. The client sends the request with `cache: 'no-store'` for the same reason, because the coalescing below lives in the client and cannot reach the HTTP cache. Asset *content* is the opposite case: bytes at a content-addressed ref never change, so `GET /assets/{ref}/content` MAY be cached aggressively.
+
 Because a resolved URL may expire, the HTTP client caches nothing across calls. It coalesces **concurrent** `resolve(ref)` calls onto one request so they share a single URL — matching `BrowserAssetProvider`, whose object URL must not be minted twice — and then forgets it. Handing back an expired signed URL later would be worse than asking again. A successful `put` or `remove` invalidates any in-flight resolution of that ref, so a caller arriving after the write never inherits an answer computed before it.
 
 ## Authentication and authorization

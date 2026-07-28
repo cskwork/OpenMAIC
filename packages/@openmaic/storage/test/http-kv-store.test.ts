@@ -814,6 +814,83 @@ describe('HttpKVStore transport semantics', () => {
   });
 });
 
+describe('HttpKVStore cache and not-found identity', () => {
+  test.each([
+    ['a read of one entry', (kv: HttpKVStore) => kv.get('k')],
+    ['a key listing', (kv: HttpKVStore) => kv.keys()],
+  ])('%s is never served from a cache', async (_name, operation) => {
+    // `account` values are precisely the ones another device may have changed a
+    // moment ago, and this client cannot invalidate a cache entry when it does.
+    let seen: RequestCache | undefined;
+    const store = new HttpKVStore({
+      baseUrl: 'https://kv.invalid',
+      fetch: async (input, init) => {
+        seen = init?.cache;
+        const body = String(input).includes('/kv/keys') ? [] : { value: 'v' };
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+      deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
+    });
+
+    await operation(store);
+    expect(seen).toBe('no-store');
+  });
+
+  test('a write is not marked no-store, having nothing to read from a cache', async () => {
+    let seen: RequestCache | undefined = 'no-store';
+    const store = new HttpKVStore({
+      baseUrl: 'https://kv.invalid',
+      fetch: async (_input, init) => {
+        seen = init?.cache;
+        return new Response(null, { status: 204 });
+      },
+      deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
+    });
+
+    await store.set('k', 'v');
+    expect(seen).toBeUndefined();
+  });
+
+  test.each([
+    [401, 'the credential expired'],
+    [403, 'a gateway denied the request'],
+    [500, 'the origin fell over'],
+  ])('throws when a %i answer carries the not-found code', async (status, why) => {
+    // `null` here is indistinguishable from a legitimate miss, so reading an
+    // outage as one would present it to the caller as data loss.
+    const store = new HttpKVStore({
+      baseUrl: 'https://kv.invalid',
+      fetch: async () =>
+        new Response(JSON.stringify({ error: { code: 'KEY_NOT_FOUND', message: why } }), {
+          status,
+          headers: { 'content-type': 'application/json' },
+        }),
+      deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
+    });
+
+    const failure = store.get('k');
+    await expect(failure).rejects.toBeInstanceOf(HttpKVStoreError);
+    await expect(failure).rejects.toMatchObject({ status, code: 'KEY_NOT_FOUND' });
+  });
+
+  test('still maps a genuine 404 KEY_NOT_FOUND to null', async () => {
+    const store = new HttpKVStore({
+      baseUrl: 'https://kv.invalid',
+      fetch: async () =>
+        new Response(JSON.stringify({ error: { code: 'KEY_NOT_FOUND', message: 'absent' } }), {
+          status: 404,
+          headers: { 'content-type': 'application/json' },
+        }),
+      deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
+    });
+
+    await expect(store.get('k')).resolves.toBeNull();
+  });
+});
+
 test('real fetch reaches the listening conformance server over loopback', async ({ skip }) => {
   let networkServer: KvAssetConformanceServer;
   try {

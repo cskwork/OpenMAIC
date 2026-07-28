@@ -1197,6 +1197,63 @@ describe('conformance server request hygiene', () => {
   });
 });
 
+describe('HttpAssetProvider cache and not-found identity', () => {
+  test('a resolve request is never served from a cache', async () => {
+    // The in-flight coalescing lives in this object; the HTTP cache does not.
+    // A cached resolve returns an expired signed URL, or replays a negatively
+    // cached 404 for an asset written since.
+    let seen: RequestCache | undefined;
+    const provider = new HttpAssetProvider({
+      baseUrl: 'https://assets.invalid',
+      fetch: async (_input, init) => {
+        seen = init?.cache;
+        return new Response(JSON.stringify({ url: 'https://cdn.invalid/o/abc' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+
+    await provider.resolve(`sha256-${'a'.repeat(64)}`);
+    expect(seen).toBe('no-store');
+  });
+
+  test.each([
+    [401, 'the credential expired'],
+    [403, 'a gateway denied the request'],
+    [500, 'the origin fell over'],
+  ])('throws when a %i answer carries the not-found code', async (status, why) => {
+    // A proxy that echoes the body's error code while answering with its own
+    // status must not be read as "the asset is gone": `null` is a statement
+    // about the asset, and this is a statement about the infrastructure.
+    const provider = new HttpAssetProvider({
+      baseUrl: 'https://assets.invalid',
+      fetch: async () =>
+        new Response(JSON.stringify({ error: { code: 'ASSET_NOT_FOUND', message: why } }), {
+          status,
+          headers: { 'content-type': 'application/json' },
+        }),
+    });
+
+    const failure = provider.resolve(`sha256-${'b'.repeat(64)}`);
+    await expect(failure).rejects.toBeInstanceOf(HttpAssetProviderError);
+    await expect(failure).rejects.toMatchObject({ status, code: 'ASSET_NOT_FOUND' });
+  });
+
+  test('still maps a genuine 404 ASSET_NOT_FOUND to null', async () => {
+    const provider = new HttpAssetProvider({
+      baseUrl: 'https://assets.invalid',
+      fetch: async () =>
+        new Response(JSON.stringify({ error: { code: 'ASSET_NOT_FOUND', message: 'absent' } }), {
+          status: 404,
+          headers: { 'content-type': 'application/json' },
+        }),
+    });
+
+    await expect(provider.resolve(`sha256-${'c'.repeat(64)}`)).resolves.toBeNull();
+  });
+});
+
 test('real fetch reaches the listening conformance server over loopback', async ({ skip }) => {
   let networkServer: KvAssetConformanceServer;
   try {

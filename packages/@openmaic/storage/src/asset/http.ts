@@ -130,7 +130,7 @@ export class HttpAssetProvider implements StorageProvider {
   private async send(
     method: string,
     path: string,
-    init: { body?: BodyInit; contentType?: string } = {},
+    init: { body?: BodyInit; contentType?: string; cache?: RequestCache } = {},
   ): Promise<Response> {
     const headers = normalizeHeaders(await this.headersHook?.({ method, path }));
     if (init.contentType !== undefined) {
@@ -155,6 +155,7 @@ export class HttpAssetProvider implements StorageProvider {
       method,
       headers,
       ...(this.credentials === undefined ? {} : { credentials: this.credentials }),
+      ...(init.cache === undefined ? {} : { cache: init.cache }),
       ...(init.body === undefined ? {} : { body: init.body }),
     });
     if (!response.ok) throw await this.toError(response);
@@ -333,9 +334,24 @@ export class HttpAssetProvider implements StorageProvider {
   private async requestUrl(ref: AssetRef): Promise<string | null> {
     let response: Response;
     try {
-      response = await this.send('GET', `/assets/${segment(ref)}/url`);
+      // Never served from a cache. A resolution is a fresh statement about a
+      // mutable fact — whether this principal holds a claim, and what URL is
+      // valid right now — and the in-flight coalescing above cannot reach the
+      // HTTP cache layer. A cached hit would hand back an expired signed URL, or
+      // replay a negatively-cached 404 for an asset that has since been written.
+      response = await this.send('GET', `/assets/${segment(ref)}/url`, { cache: 'no-store' });
     } catch (error) {
-      if (error instanceof HttpAssetProviderError && error.code === 'ASSET_NOT_FOUND') return null;
+      // Both conditions, deliberately. A proxy or gateway that answers 401, 403
+      // or 500 while echoing the body's error code must not have that answer
+      // read as "no such asset" — `null` tells the caller the asset is gone,
+      // which would make an outage look like a deletion.
+      if (
+        error instanceof HttpAssetProviderError &&
+        error.status === 404 &&
+        error.code === 'ASSET_NOT_FOUND'
+      ) {
+        return null;
+      }
       throw error;
     }
     let body: unknown;
