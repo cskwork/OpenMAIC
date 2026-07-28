@@ -46,6 +46,15 @@ export function isPiWebSearchEnabled(): boolean {
 }
 
 /**
+ * Phase 1 mode selector for running classroom Children through Pi native tool
+ * calling with server-side web_search. The OPENMAIC_ENABLE_PI_WEB_SEARCH master
+ * capability flag must also be enabled. Default OFF.
+ */
+export function isPiNativeChildWebSearchEnabled(): boolean {
+  return readBoolean(process.env.OPENMAIC_ENABLE_PI_NATIVE_CHILD_WEB_SEARCH);
+}
+
+/**
  * Server-authoritative gate for the vocational task-engine generation path.
  * Default OFF. When disabled, requests that include taskEngineMode must
  * silently fall back to the ordinary standard / interactive generation paths.

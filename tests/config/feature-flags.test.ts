@@ -4,6 +4,7 @@ import {
   isPlaybackRendererEnabled,
   isPiChatEnabled,
   isPptxImportEnabled,
+  isPiNativeChildWebSearchEnabled,
   isPiWebSearchEnabled,
   isVideoExportEnabled,
   isVocationalTaskEngineEnabled,
@@ -155,6 +156,34 @@ describe('isPiWebSearchEnabled', () => {
 
     process.env[flag] = 'yes';
     expect(isPiWebSearchEnabled()).toBe(false);
+  });
+});
+
+describe('isPiNativeChildWebSearchEnabled', () => {
+  const flag = 'OPENMAIC_ENABLE_PI_NATIVE_CHILD_WEB_SEARCH';
+  let original: string | undefined;
+
+  beforeEach(() => {
+    original = process.env[flag];
+  });
+
+  afterEach(() => {
+    if (original === undefined) delete process.env[flag];
+    else process.env[flag] = original;
+  });
+
+  it('is disabled by default and accepts only the standard truthy values', () => {
+    delete process.env[flag];
+    expect(isPiNativeChildWebSearchEnabled()).toBe(false);
+
+    process.env[flag] = 'true';
+    expect(isPiNativeChildWebSearchEnabled()).toBe(true);
+
+    process.env[flag] = '1';
+    expect(isPiNativeChildWebSearchEnabled()).toBe(true);
+
+    process.env[flag] = 'yes';
+    expect(isPiNativeChildWebSearchEnabled()).toBe(false);
   });
 });
 

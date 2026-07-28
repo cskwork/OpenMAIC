@@ -1,8 +1,10 @@
-import type { AgentTool } from '@earendil-works/pi-agent-core';
+import type { AgentTool, StreamFn } from '@earendil-works/pi-agent-core';
 import { Type, type Static } from 'typebox';
 import type { LanguageModel } from 'ai';
 import { nanoid } from 'nanoid';
 import { buildAgent } from '@/lib/agent/runtime/build-agent';
+import { runNativeChild } from '@/lib/agent/runtime/run-native-child';
+import type { ChildRunResult } from '@/lib/agent/runtime/native-child-contract';
 import { createCallLlmStreamFn } from '@/lib/agent/runtime/stream-fn';
 import {
   createParserState,
@@ -20,6 +22,8 @@ import type { ParsedAction, StatelessChatRequest } from '@/lib/types/chat';
 import {
   buildChildPrompt,
   buildChildTurnPrompt,
+  buildNativeWebChildPrompt,
+  buildNativeWebChildTurnPrompt,
   extractLastAssistantText,
   sanitizeVisibleSpeech,
   toHistoryMessages,
@@ -528,6 +532,10 @@ export function buildCallAgentTool(opts: {
   isSessionClosed?: () => boolean;
   takeSceneEvidence?: () => RuntimeEvidenceAttachment<DirectorSceneEvidenceMetadata[]> | undefined;
   takeWebEvidence?: () => RuntimeEvidenceAttachment<DirectorWebEvidenceMetadata> | undefined;
+  enableNativeChildWebSearch?: boolean;
+  createNativeChildWebSearchTool?: () => AgentTool;
+  nativeChildStreamFn?: StreamFn;
+  nativeChildTimeoutMs?: number;
 }): AgentTool<typeof CallAgentParams> {
   // Loop-guard (model-agnostic): an empty/errored child turn used to bypass onAgentDone,
   // so the completed-turn count never advanced and the maxAgentTurns guard was defeated — a model
@@ -537,6 +545,7 @@ export function buildCallAgentTool(opts: {
   const maxAgentAttempts = Math.max(opts.maxAgentTurns * 3, opts.maxAgentTurns + 3);
   let consecutiveEmptyTurns = 0;
   let totalAgentAttempts = 0;
+  const requestTraceId = nanoid();
   const whiteboardState = createPiWhiteboardRuntimeState(opts.body);
   return {
     name: 'call_agent',
@@ -633,7 +642,7 @@ export function buildCallAgentTool(opts: {
       // Take it before starting/building the child so any downstream failure cannot
       // leak the packet to a later agent.
       const sceneEvidence = opts.takeSceneEvidence?.();
-      const webEvidence = opts.takeWebEvidence?.();
+      const webEvidence = opts.enableNativeChildWebSearch ? undefined : opts.takeWebEvidence?.();
 
       const childAbort = new AbortController();
       const abortChild = () => childAbort.abort();
@@ -670,6 +679,95 @@ export function buildCallAgentTool(opts: {
           agentColor: agent.color,
         },
       });
+
+      if (opts.enableNativeChildWebSearch) {
+        const nativeWebSearchTool = opts.createNativeChildWebSearchTool?.();
+        if (!nativeWebSearchTool) {
+          opts.abortSignal.removeEventListener('abort', abortChild);
+          signal?.removeEventListener('abort', abortChild);
+          await opts.send({ type: 'agent_end', data: { messageId, agentId: agent.id } });
+          throw new Error('Native Child web_search is enabled without a tool factory');
+        }
+
+        const nativeStreamFn =
+          opts.nativeChildStreamFn ??
+          createCallLlmStreamFn({
+            languageModel: opts.languageModel,
+            source: 'pi-chat-native-child',
+            thinkingConfig: opts.thinkingConfig,
+            maxOutputTokens: opts.maxOutputTokens,
+            abortSignal: childAbort.signal,
+          });
+        let nativeResult: ChildRunResult;
+        try {
+          nativeResult = await runNativeChild({
+            traceId: requestTraceId,
+            runId: nanoid(),
+            agentInvocationId: messageId,
+            agentId: agent.id,
+            depth: 1,
+            streamFn: nativeStreamFn,
+            systemPrompt: buildNativeWebChildPrompt(opts.body, agent, opts.getAgentResponses()),
+            prompt: buildNativeWebChildTurnPrompt(params.instruction, agent.role, {
+              scene: sceneEvidence?.content,
+            }),
+            tools: [nativeWebSearchTool],
+            allowedToolNames: new Set([nativeWebSearchTool.name]),
+            history: toHistoryMessages(opts.body.messages),
+            timeoutMs: opts.nativeChildTimeoutMs ?? 60_000,
+            maxToolExecutions: 2,
+            maxToolCallAttempts: 4,
+            abortSignal: childAbort.signal,
+          });
+        } finally {
+          opts.abortSignal.removeEventListener('abort', abortChild);
+          signal?.removeEventListener('abort', abortChild);
+        }
+
+        const finalText = nativeResult.finalOutput?.trim() ?? '';
+        if (finalText) {
+          await opts.send({ type: 'text_delta', data: { content: finalText, messageId } });
+        }
+        const isEmptyTurn = nativeResult.status !== 'completed' || finalText.length === 0;
+        consecutiveEmptyTurns = isEmptyTurn ? consecutiveEmptyTurns + 1 : 0;
+        await opts.send({ type: 'agent_end', data: { messageId, agentId: agent.id } });
+        opts.onAgentDone({
+          agentId: agent.id,
+          agentName: agent.name,
+          contentPreview: finalText.slice(0, 300),
+          actionCount: 0,
+          whiteboardActions: [],
+          actionWarnings: [],
+        });
+        opts.onTrustedChildResult?.({
+          source: 'runtime_child_result',
+          agentInvocationId: messageId,
+          agentId: agent.id,
+          outcomeId: params.outcomeId,
+          status:
+            nativeResult.status === 'completed' ? (isEmptyTurn ? 'empty' : 'completed') : 'failed',
+          substantive: !isEmptyTurn,
+        });
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `${agent.name}: ${finalText || '(no visible response)'}`,
+            },
+          ],
+          details: {
+            agentInvocationId: messageId,
+            agentId: agent.id,
+            agentName: agent.name,
+            ...(params.outcomeId ? { outcomeId: params.outcomeId } : {}),
+            text: finalText,
+            nativeChildRun: nativeResult,
+            ...(sceneEvidence ? { sceneEvidence: sceneEvidence.metadata } : {}),
+          },
+          ...(nativeResult.status !== 'completed' ? { isError: true } : {}),
+        };
+      }
 
       const childTools = buildChildActionTools({
         body: opts.body,

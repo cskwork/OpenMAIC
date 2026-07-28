@@ -1,4 +1,9 @@
-import type { AgentMessage, AgentTool, StreamFn } from '@earendil-works/pi-agent-core';
+import type {
+  AgentMessage,
+  AgentTool,
+  AgentToolResult,
+  StreamFn,
+} from '@earendil-works/pi-agent-core';
 
 export const TOOL_EXECUTION_PROTOCOL_VERSION = 'maic.tool-execution.v1';
 
@@ -45,6 +50,16 @@ export interface ToolExecutionSummary {
 }
 
 export type ChildRunStatus = 'completed' | 'exhausted' | 'cancelled' | 'failed';
+
+/**
+ * OpenMAIC server tools may return structured failure details without throwing
+ * so the same Agent can inspect the limitation and continue. Pi's upstream
+ * AgentToolResult does not currently model that marker, so producer and Runtime
+ * share this explicit extension instead of relying on unrelated duck typing.
+ */
+export type RuntimeAgentToolResult<TDetails = unknown> = AgentToolResult<TDetails> & {
+  isError: boolean;
+};
 
 export interface AgentUsage {
   inputTokens: number;

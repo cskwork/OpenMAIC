@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import type { StatelessChatRequest } from '@/lib/types/chat';
-import { buildChildPrompt, buildChildTurnPrompt, buildDirectorPrompt } from '@/lib/chat/pi/prompts';
+import {
+  buildChildPrompt,
+  buildChildTurnPrompt,
+  buildDirectorPrompt,
+  buildNativeWebChildPrompt,
+} from '@/lib/chat/pi/prompts';
 
 const agents: AgentConfig[] = [
   {
@@ -209,6 +214,22 @@ describe('Pi director prompt closure routing', () => {
     expect(prompt).toContain('sceneId=scene-2');
     expect(prompt).toContain('reflective roofs reduce absorbed heat');
     expect(prompt).toContain('preserve its sceneId, revision, and source provenance');
+  });
+
+  it('routes external evidence work to the native Child without asking the Director to search', () => {
+    const directorPrompt = buildDirectorPrompt(makeBody(), agents, 4, {
+      enableWebSearch: false,
+      enableChildWebSearch: true,
+    });
+    const childPrompt = buildNativeWebChildPrompt(makeBody(), agents[0], []);
+
+    expect(directorPrompt).toContain('# Child Native Web Search');
+    expect(directorPrompt).toContain('The Child must perform the search in its own run');
+    expect(directorPrompt).not.toContain('Call `web_search` before `call_agent`');
+    expect(childPrompt).toContain('After a successful search, continue in this same turn');
+    expect(childPrompt).toContain('If search fails, times out, or has no legal source URL');
+    expect(childPrompt).toContain('Return plain visible speech only');
+    expect(childPrompt).not.toContain('Return ONLY a valid JSON array');
   });
 
   it('teaches close_session as the terminal alternative to cue_user', () => {

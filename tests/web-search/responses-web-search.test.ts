@@ -150,6 +150,35 @@ describe('Responses API web search', () => {
     ).rejects.toThrow('timed out');
   });
 
+  it('keeps response body parsing inside the same timeout lifecycle', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+        Promise.resolve({
+          ok: true,
+          json: () =>
+            new Promise<never>((_resolve, reject) => {
+              init?.signal?.addEventListener(
+                'abort',
+                () => reject(init.signal?.reason ?? new DOMException('Aborted', 'AbortError')),
+                { once: true },
+              );
+            }),
+        } as unknown as Response),
+      ),
+    );
+
+    await expect(
+      searchWithResponsesWebSearch({
+        query: 'latest result',
+        apiKey: 'test-key',
+        baseUrl: 'https://responses-proxy.test/v1',
+        model: 'search-model',
+        timeoutMs: 5,
+      }),
+    ).rejects.toThrow('timed out');
+  });
+
   it('fails when the Responses endpoint returns no answer text', async () => {
     vi.stubGlobal(
       'fetch',

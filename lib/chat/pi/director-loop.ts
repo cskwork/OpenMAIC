@@ -24,6 +24,7 @@ import {
   type DirectorSceneEvidencePacket,
 } from './tools/read-scene';
 import {
+  buildChildWebSearchTool,
   buildDirectorWebSearchTool,
   type DirectorWebEvidencePacket,
   type DirectorWebEvidenceMetadata,
@@ -48,6 +49,18 @@ function formatSceneEvidenceForDelegation(evidence: DirectorSceneEvidencePacket[
   return evidence.map((packet) => packet.content).join('\n\n');
 }
 
+export type PiWebSearchMode = 'disabled' | 'director' | 'child';
+
+export function resolvePiWebSearchMode(opts: {
+  enableWebSearch?: boolean;
+  enableNativeChildWebSearch?: boolean;
+  enableWhiteboardTools: boolean;
+}): PiWebSearchMode {
+  if (opts.enableWebSearch !== true) return 'disabled';
+  if (opts.enableNativeChildWebSearch === true && !opts.enableWhiteboardTools) return 'child';
+  return 'director';
+}
+
 export async function runPiDirectorLoop(opts: {
   body: StatelessChatRequest;
   agentConfigs: AgentConfig[];
@@ -62,7 +75,18 @@ export async function runPiDirectorLoop(opts: {
   maxActionsPerAgent: number;
   enableWhiteboardTools: boolean;
   enableWebSearch?: boolean;
+  enableNativeChildWebSearch?: boolean;
 }): Promise<void> {
+  // OPENMAIC_ENABLE_PI_WEB_SEARCH remains the capability master switch. Phase 1
+  // only changes its execution mode. Until Phase 2 introduces native
+  // client-effect ACKs, whiteboard-enabled turns stay on the existing JSON Child
+  // path and retain the Director search tool.
+  const webSearchMode = resolvePiWebSearchMode({
+    enableWebSearch: opts.enableWebSearch,
+    enableNativeChildWebSearch: opts.enableNativeChildWebSearch,
+    enableWhiteboardTools: opts.enableWhiteboardTools,
+  });
+  const nativeChildWebSearchEnabled = webSearchMode === 'child';
   let totalAgents = 0;
   let totalActions = 0;
   let agentHadContent = false;
@@ -138,7 +162,7 @@ export async function runPiDirectorLoop(opts: {
         pendingSceneEvidence.set(evidence.details.sceneId, evidence);
       },
     }),
-    ...(opts.enableWebSearch
+    ...(webSearchMode === 'director'
       ? [
           buildDirectorWebSearchTool({
             stageId: opts.body.storeState.stage?.id,
@@ -182,6 +206,13 @@ export async function runPiDirectorLoop(opts: {
       getWhiteboardLedger: () => piWhiteboardLedger,
       maxActionsPerAgent: opts.maxActionsPerAgent,
       enableWhiteboardTools: opts.enableWhiteboardTools,
+      enableNativeChildWebSearch: nativeChildWebSearchEnabled,
+      createNativeChildWebSearchTool: nativeChildWebSearchEnabled
+        ? () =>
+            buildChildWebSearchTool({
+              stageId: opts.body.storeState.stage?.id,
+            })
+        : undefined,
       isUserCued: () => userCued,
       isSessionClosed: () => sessionClosed,
       takeSceneEvidence: () => {
@@ -246,7 +277,8 @@ export async function runPiDirectorLoop(opts: {
   const director = buildAgent({
     streamFn,
     systemPrompt: buildDirectorPrompt(opts.body, opts.agentConfigs, opts.maxAgentTurns, {
-      enableWebSearch: opts.enableWebSearch,
+      enableWebSearch: webSearchMode === 'director',
+      enableChildWebSearch: nativeChildWebSearchEnabled,
       taskState: terminalController.getPromptState(),
     }),
     tools,
@@ -261,6 +293,12 @@ export async function runPiDirectorLoop(opts: {
           ? (context.result.details as { status?: string } | undefined)?.status
           : undefined;
       const evidenceError = evidenceStatus !== undefined && evidenceStatus !== 'ok';
+      const nativeChildStatus =
+        context.toolCall.name === 'call_agent'
+          ? (context.result.details as { nativeChildRun?: { status?: string } } | undefined)
+              ?.nativeChildRun?.status
+          : undefined;
+      const nativeChildError = nativeChildStatus !== undefined && nativeChildStatus !== 'completed';
       const terminalDecision = (
         context.result.details as
           | {
@@ -272,7 +310,12 @@ export async function runPiDirectorLoop(opts: {
       )?.terminalControl;
       const terminalRejected = terminalDecision?.status === 'rejected';
       const terminalExhausted = terminalDecision?.status === 'exhausted';
-      const isError = context.isError || evidenceError || terminalRejected || terminalExhausted;
+      const isError =
+        context.isError ||
+        evidenceError ||
+        nativeChildError ||
+        terminalRejected ||
+        terminalExhausted;
       const resultPreview = context.result.content
         .map((content) => (content.type === 'text' ? content.text : '[image]'))
         .join('\n')
@@ -290,10 +333,12 @@ export async function runPiDirectorLoop(opts: {
         terminalController.recordRuntimeExhaustion('director_tool_call_budget');
       }
       const terminate = sessionClosed || userCued || terminalExhausted || directorBudgetExhausted;
-      if (!terminate && !evidenceError && !terminalRejected) return undefined;
+      if (!terminate && !evidenceError && !nativeChildError && !terminalRejected) return undefined;
       return {
         ...(terminate ? { terminate: true } : {}),
-        ...(evidenceError || terminalRejected || terminalExhausted ? { isError: true } : {}),
+        ...(evidenceError || nativeChildError || terminalRejected || terminalExhausted
+          ? { isError: true }
+          : {}),
       };
     },
   });

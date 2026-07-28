@@ -17,6 +17,7 @@ import {
   TOOL_EXECUTION_PROTOCOL_VERSION,
   type AgentUsage,
   type ChildRunResult,
+  type RuntimeAgentToolResult,
   type RunNativeChildOptions,
   type ServerExecutionRequest,
   type ServerToolExecutionStatus,
@@ -271,6 +272,7 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Child
   let toolCallAttemptBudgetExhausted = false;
   const budgetRejectedToolCalls = new Set<string>();
   const attemptRejectedToolCalls = new Set<string>();
+  const toolReportedErrors = new Set<string>();
 
   const boundedTools = opts.tools.map(
     (tool): AgentTool => ({
@@ -311,7 +313,9 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Child
             () => tool.execute(toolCallId, params, signal, onUpdate),
             signal,
           );
-          toolSettlements.set(toolCallId, 'succeeded');
+          const reportedError = (result as RuntimeAgentToolResult).isError === true;
+          if (reportedError) toolReportedErrors.add(toolCallId);
+          toolSettlements.set(toolCallId, reportedError ? 'execution_failed' : 'succeeded');
           return result;
         } catch (error) {
           toolSettlements.set(
@@ -347,11 +351,15 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Child
     afterToolCall: (context) => {
       if (
         !budgetRejectedToolCalls.has(context.toolCall.id) &&
-        !attemptRejectedToolCalls.has(context.toolCall.id)
+        !attemptRejectedToolCalls.has(context.toolCall.id) &&
+        !toolReportedErrors.has(context.toolCall.id)
       ) {
         return undefined;
       }
-      return { isError: true, terminate: true };
+      return {
+        isError: true,
+        ...(!toolReportedErrors.has(context.toolCall.id) ? { terminate: true } : {}),
+      };
     },
   });
 
