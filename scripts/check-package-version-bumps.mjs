@@ -1,5 +1,4 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
 
 const commonIgnoredInputs = {
   files: ['.gitignore', 'vitest.config.ts'],
@@ -47,6 +46,13 @@ function gitFileAt(ref, file) {
   }
 }
 
+try {
+  git(['rev-parse', '--verify', `${base}^{commit}`]);
+} catch {
+  console.error(`Base ref ${JSON.stringify(base)} is not an available commit.`);
+  process.exit(2);
+}
+
 function readVersion(contents, source) {
   const version = JSON.parse(contents).version;
   const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
@@ -89,7 +95,8 @@ for (const [name, ignored] of Object.entries(ignoredPackageInputs)) {
     failures.push(`${name}: ${manifest} does not exist at ${base}`);
     continue;
   }
-  if (!existsSync(manifest)) {
+  const afterContents = gitFileAt('HEAD', manifest);
+  if (afterContents === undefined) {
     failures.push(`${name}: ${manifest} was removed`);
     continue;
   }
@@ -98,7 +105,7 @@ for (const [name, ignored] of Object.entries(ignoredPackageInputs)) {
   let after;
   try {
     before = readVersion(beforeContents, `${manifest} at ${base}`);
-    after = readVersion(readFileSync(manifest, 'utf8'), manifest);
+    after = readVersion(afterContents, `${manifest} at HEAD`);
   } catch (error) {
     failures.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
     continue;

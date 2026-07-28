@@ -38,14 +38,17 @@ try {
       readFileSync(join(root, 'packages/@openmaic', name, 'package.json'), 'utf8'),
     );
     for (const [peer, range] of Object.entries(manifest.peerDependencies ?? {})) {
+      const isOptional = manifest.peerDependenciesMeta?.[peer]?.optional === true;
+      if (isOptional && name !== 'renderer') continue;
       const existing = peerDependencies[peer];
-      peerDependencies[peer] = existing === undefined ? range : `${existing} ${range}`;
+      assert(
+        existing === undefined || existing === range,
+        `@openmaic packages declare different ${peer} peer ranges: ${existing} and ${range}`,
+      );
+      peerDependencies[peer] = range;
     }
   }
-  const dslTarball = pack('dsl');
-  const storageTarball = pack('storage');
-  const rendererTarball = pack('renderer');
-  const importerTarball = pack('importer');
+  const tarballs = Object.fromEntries(packageNames.map((name) => [name, pack(name)]));
   const consumerDirectory = join(temporaryDirectory, 'consumer');
 
   mkdirSync(consumerDirectory);
@@ -57,10 +60,9 @@ try {
         type: 'module',
         dependencies: {
           ...peerDependencies,
-          '@openmaic/dsl': `file:${dslTarball}`,
-          '@openmaic/storage': `file:${storageTarball}`,
-          '@openmaic/renderer': `file:${rendererTarball}`,
-          '@openmaic/importer': `file:${importerTarball}`,
+          ...Object.fromEntries(
+            packageNames.map((name) => [`@openmaic/${name}`, `file:${tarballs[name]}`]),
+          ),
         },
       },
       null,
