@@ -22,11 +22,27 @@ export function isMaicEditorEnabled(): boolean {
 }
 
 /**
+ * Experimental playback canvas renderer. Default OFF so classroom playback uses
+ * the legacy in-app renderer unless explicitly enabled in `.env.local`.
+ */
+export function isPlaybackRendererEnabled(): boolean {
+  return readBoolean(process.env.NEXT_PUBLIC_MAIC_PLAYBACK_RENDERER_ENABLED);
+}
+
+/**
  * Experimental Pi-based classroom chat runtime. Default OFF. The same public
  * flag selects the client runtime and gates the corresponding server route.
  */
 export function isPiChatEnabled(): boolean {
   return readBoolean(process.env.NEXT_PUBLIC_PI_CHAT_ENABLED);
+}
+
+/**
+ * Server-only gate for the Pi Director web-search tool. Default OFF. Enabling
+ * Pi chat alone must not implicitly grant the Director external network access.
+ */
+export function isPiWebSearchEnabled(): boolean {
+  return readBoolean(process.env.OPENMAIC_ENABLE_PI_WEB_SEARCH);
 }
 
 /**
