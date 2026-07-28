@@ -1,3 +1,4 @@
+import { assertHttpBaseUrl } from '../http/base-url.js';
 import { assertJsonValue } from '../runtime/json-value.js';
 import {
   assertKVKey,
@@ -50,9 +51,6 @@ export interface HttpKVStoreOptions extends HttpAccountKVOptions {
    */
   deviceStore: LocalKVStore;
 }
-
-/** Schemes a base URL may use, so no request can be built onto `file:` or `ftp:`. */
-const RESOLVABLE_SCHEMES = new Set(['http:', 'https:']);
 
 interface ErrorResponseBody {
   error?: {
@@ -160,9 +158,6 @@ export class HttpAccountKV {
   private readonly credentials: RequestCredentials | undefined;
 
   constructor(options: HttpAccountKVOptions) {
-    if (options.baseUrl === '') {
-      throw new Error('@openmaic/storage: HttpKVStore baseUrl must be non-empty');
-    }
     // Bind explicitly: browsers require fetch to be invoked with
     // `this === globalThis` (calling a stored reference as `this.fetchImpl(...)`
     // throws "Illegal invocation"), while node's undici does not care — which is
@@ -173,25 +168,7 @@ export class HttpAccountKV {
     if (typeof selectedFetch !== 'function') {
       throw new Error('@openmaic/storage: HttpKVStore requires a fetch implementation');
     }
-    // A base URL that is neither http(s) nor a path would put `file:` or `ftp:`
-    // one string-join away from every request this client makes, and a
-    // non-parsing one turns the first join into a bare TypeError.
-    const trimmedBase = options.baseUrl.replace(/\/+$/, '');
-    if (/^[a-z][a-z0-9+.-]*:/i.test(trimmedBase)) {
-      let parsedBase: URL;
-      try {
-        parsedBase = new URL(trimmedBase);
-      } catch {
-        throw new Error(`@openmaic/storage: HttpKVStore baseUrl must be a valid URL`);
-      }
-      if (!RESOLVABLE_SCHEMES.has(parsedBase.protocol)) {
-        throw new Error(
-          `@openmaic/storage: HttpKVStore baseUrl scheme ` +
-            `${JSON.stringify(parsedBase.protocol)} is not http(s)`,
-        );
-      }
-    }
-    this.baseUrl = trimmedBase;
+    this.baseUrl = assertHttpBaseUrl(options.baseUrl, 'HttpKVStore');
     this.fetchImpl = selectedFetch.bind(globalThis);
     this.headersHook = options.headers;
     this.credentials = options.credentials;

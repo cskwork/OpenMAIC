@@ -180,6 +180,20 @@ export function runKVStoreContract(name: string, makeStore: () => KVStore): void
       await expect(kv.keys('')).resolves.toEqual([]);
     });
 
+    // A prefix is not a path segment, so the dot-segment rule that governs keys
+    // does not reach it: `.` is the legitimate prefix of a `.hidden`-style key.
+    // Backends must agree, or a listing that works in the browser returns 400
+    // against a server.
+    test('keys() accepts a dot prefix, which is not a dot segment', async () => {
+      const kv = makeStore();
+      await kv.set('.hidden', 1);
+      await kv.set('..parent', 2);
+      await kv.set('visible', 3);
+
+      expect([...(await kv.keys('.'))].sort()).toEqual(['..parent', '.hidden']);
+      expect(await kv.keys('..')).toEqual(['..parent']);
+    });
+
     test('keys() does not repeat a key', async () => {
       const kv = makeStore();
       await kv.set('one', 1);

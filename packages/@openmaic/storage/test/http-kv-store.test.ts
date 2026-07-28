@@ -706,6 +706,36 @@ describe('HttpKVStore transport semantics', () => {
     expect(() => new HttpKVStore({ baseUrl, deviceStore })).toThrow(/is not http\(s\)/);
   });
 
+  test('refuses a scheme-without-authority base url', () => {
+    const deviceStore = new BrowserKVStore({ storage: new MemoryStorage() });
+    expect(
+      () => new HttpKVStore({ baseUrl: 'https:api.example/persistence', deviceStore }),
+    ).toThrow(/scheme:\/\/host/);
+  });
+
+  test.each([
+    ['a query', 'https://kv.invalid/api?v=1'],
+    ['a fragment', 'https://kv.invalid/api#frag'],
+  ])('refuses a base url carrying %s', (_name, baseUrl) => {
+    const deviceStore = new BrowserKVStore({ storage: new MemoryStorage() });
+    expect(() => new HttpKVStore({ baseUrl, deviceStore })).toThrow(/query or fragment/);
+  });
+
+  test('omits credentials entirely when the deployment does not ask for them', async () => {
+    let hadKey = true;
+    const store = new HttpKVStore({
+      baseUrl: 'https://kv.invalid',
+      fetch: async (_input, init) => {
+        hadKey = init !== undefined && 'credentials' in init;
+        return new Response(null, { status: 204 });
+      },
+      deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
+    });
+
+    await store.remove('k');
+    expect(hadKey).toBe(false);
+  });
+
   test('passes credentials through to fetch for a cross-origin cookie deployment', async () => {
     let seen: RequestCredentials | undefined;
     const store = new HttpKVStore({

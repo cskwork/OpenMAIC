@@ -374,14 +374,23 @@ describe('HttpAssetProvider resolved-url safety', () => {
     await expect(failure).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' });
   });
 
-  test('refuses a url naming the probe host the check itself resolves against', async () => {
-    // The origin comparison asks "did this stay where I put it", which a URL
-    // naming the probe host passes by coincidence — and it is protocol-relative,
-    // so against the real base it goes somewhere else entirely. The guard must
-    // not depend on the probe host being unguessable; it is in the source.
+  test.each([
+    ['protocol-relative', '//asset-url-probe.invalid/x'],
+    // The parser normalizes these into the form above, so a `startsWith('//')`
+    // spelling of the guard let them through and only the probe host failing to
+    // resolve was standing in the way.
+    ['backslash', '/\\asset-url-probe.invalid/x'],
+    ['mixed backslash and slash', '/\\/asset-url-probe.invalid/x'],
+  ])('refuses a %s url naming the probe host the check resolves against', async (_name, url) => {
+    // The origin comparison asks "did this stay where I put it", and a URL
+    // naming the probe host passes it by coincidence — against the real base it
+    // goes somewhere else entirely. Refusing any authority-opening second
+    // character is what makes the guard independent of the probe host.
     for (const base of ['https://assets.invalid', '/api/persistence']) {
-      const failure = providerReturning('//asset-url-probe.invalid/x', base).resolve('ref');
-      await expect(failure, base).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' });
+      const failure = providerReturning(url, base).resolve('ref');
+      await expect(failure, `${url} @ ${base}`).rejects.toMatchObject({
+        code: 'MALFORMED_RESPONSE',
+      });
     }
   });
 
@@ -1035,6 +1044,24 @@ describe('HttpAssetProvider base url and credentials', () => {
     // Otherwise every request this client builds is one string-join away from a
     // scheme it should never speak.
     expect(() => new HttpAssetProvider({ baseUrl })).toThrow(/is not http\(s\)/);
+  });
+
+  test('refuses a scheme-without-authority base url', () => {
+    // Parses standalone to the host `api.example`, but `fetch` on a same-scheme
+    // page resolves it against the current document — so requests, and the
+    // credentials on them, would go somewhere the operator never wrote.
+    expect(() => new HttpAssetProvider({ baseUrl: 'https:api.example/persistence' })).toThrow(
+      /scheme:\/\/host/,
+    );
+  });
+
+  test.each([
+    ['a query', 'https://assets.invalid/api?v=1'],
+    ['a fragment', 'https://assets.invalid/api#frag'],
+    ['a query on a path-only base', '/api/persistence?v=1'],
+  ])('refuses a base url carrying %s', (_name, baseUrl) => {
+    // Concatenating a path onto these silently swallows it.
+    expect(() => new HttpAssetProvider({ baseUrl })).toThrow(/query or fragment/);
   });
 
   test('refuses a base url that carries a scheme but does not parse', () => {

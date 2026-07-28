@@ -227,6 +227,46 @@ function assertAddressableIdentifier(value: string, label: string): void {
   }
 }
 
+/**
+ * A `keys()` prefix is not a path segment — it arrives in the query string — so
+ * it is held to the key rules minus the two that only make sense for a segment:
+ * it may be empty (that is what "list everything" means) and it may be `.` or
+ * `..`, which are legal prefixes of legal keys such as `.hidden`. Reusing the
+ * path-segment validator here rejected prefixes the client rightly allows.
+ */
+function assertAddressablePrefix(prefix: string): void {
+  if (prefix === '') return;
+  if (prefix.includes('/') || prefix.includes('\\')) {
+    throw new ConformanceHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `@openmaic/storage: kv key prefix ${JSON.stringify(prefix)} must not contain '/' or '\\'`,
+    );
+  }
+  if (prefix.includes('\u0000')) {
+    throw new ConformanceHttpError(
+      400,
+      'VALIDATION_FAILED',
+      '@openmaic/storage: kv key prefix must not contain the NUL code point',
+    );
+  }
+  if (/[\uD800-\uDFFF]/u.test(prefix)) {
+    throw new ConformanceHttpError(
+      400,
+      'VALIDATION_FAILED',
+      '@openmaic/storage: kv key prefix must not contain an unpaired UTF-16 surrogate',
+    );
+  }
+  const bytes = Buffer.byteLength(prefix, 'utf8');
+  if (bytes > MAX_IDENTIFIER_BYTES) {
+    throw new ConformanceHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `@openmaic/storage: kv key prefix exceeds ${MAX_IDENTIFIER_BYTES} UTF-8 bytes (got ${bytes})`,
+    );
+  }
+}
+
 function routeNotFound(res: ServerResponse): void {
   sendJson(res, 404, { error: { code: 'ROUTE_NOT_FOUND', message: 'route not found' } });
 }
@@ -472,7 +512,7 @@ async function routeKv(
     // The prefix is caller-controlled and reaches the same place a key does, so
     // it is held to the same rules. A server trusting the client to have checked
     // is trusting a client it does not control.
-    if (prefix !== '') assertAddressableIdentifier(prefix, 'kv key prefix');
+    assertAddressablePrefix(prefix);
     // A literal, byte-for-byte prefix comparison. Spelled out because the
     // obvious SQL translation is `LIKE prefix || '%'`, where an unescaped `%`
     // or `_` in a caller-supplied prefix silently becomes a wildcard.

@@ -1,4 +1,5 @@
 import type { AssetMeta, AssetRef, BinaryBlob, StorageProvider } from '@openmaic/dsl';
+import { ABSOLUTE_URL, assertHttpBaseUrl, RESOLVABLE_SCHEMES } from '../http/base-url.js';
 import { assertAssetRef, computeAssetRef } from './content-ref.js';
 
 export interface HttpAssetHeadersContext {
@@ -54,22 +55,11 @@ export class HttpAssetProviderError extends Error {
 /** The media type sent when the caller has no content type for the bytes. */
 const UNKNOWN_CONTENT_TYPE = 'application/octet-stream';
 
-/** A URL carrying an explicit scheme, i.e. one this client must not rewrite. */
-const ABSOLUTE_URL = /^[a-z][a-z0-9+.-]*:/i;
-
 /**
  * Origin used only to ask the URL parser whether a relative reference stays on
  * the origin it was resolved against. Never fetched, and never returned.
  */
 const PROBE_ORIGIN = 'https://asset-url-probe.invalid';
-
-/**
- * Schemes a resolved asset URL may use. A ref resolves into something the
- * application hands to an `<img>` / `<audio>` / `<video>` `src`, so a server
- * (or anything that can answer for one) returning `javascript:` or `data:`
- * turns asset resolution into script execution in the app's own origin.
- */
-const RESOLVABLE_SCHEMES = new Set(['http:', 'https:']);
 
 function segment(value: string): string {
   assertAssetRef(value);
@@ -121,9 +111,6 @@ export class HttpAssetProvider implements StorageProvider {
   private readonly inFlight = new Map<AssetRef, Promise<string | null>>();
 
   constructor(options: HttpAssetProviderOptions) {
-    if (options.baseUrl === '') {
-      throw new Error('@openmaic/storage: HttpAssetProvider baseUrl must be non-empty');
-    }
     // Bind explicitly: browsers require fetch to be invoked with
     // `this === globalThis` (calling a stored reference as `this.fetchImpl(...)`
     // throws "Illegal invocation"), while node's undici does not care — which is
@@ -134,25 +121,7 @@ export class HttpAssetProvider implements StorageProvider {
     if (typeof selectedFetch !== 'function') {
       throw new Error('@openmaic/storage: HttpAssetProvider requires a fetch implementation');
     }
-    // A base URL that is neither http(s) nor a path would put `file:` or `ftp:`
-    // one string-join away from every request this client makes, and a
-    // non-parsing one turns the first join into a bare TypeError.
-    const trimmedBase = options.baseUrl.replace(/\/+$/, '');
-    if (/^[a-z][a-z0-9+.-]*:/i.test(trimmedBase)) {
-      let parsedBase: URL;
-      try {
-        parsedBase = new URL(trimmedBase);
-      } catch {
-        throw new Error('@openmaic/storage: HttpAssetProvider baseUrl must be a valid URL');
-      }
-      if (!RESOLVABLE_SCHEMES.has(parsedBase.protocol)) {
-        throw new Error(
-          `@openmaic/storage: HttpAssetProvider baseUrl scheme ` +
-            `${JSON.stringify(parsedBase.protocol)} is not http(s)`,
-        );
-      }
-    }
-    this.baseUrl = trimmedBase;
+    this.baseUrl = assertHttpBaseUrl(options.baseUrl, 'HttpAssetProvider');
     this.fetchImpl = selectedFetch.bind(globalThis);
     this.headersHook = options.headers;
     this.credentials = options.credentials;
@@ -284,12 +253,16 @@ export class HttpAssetProvider implements StorageProvider {
     } catch {
       throw this.malformed('asset resolve url is not a parseable path', status);
     }
-    if (probed.origin !== PROBE_ORIGIN || url.startsWith('//')) {
-      // The origin comparison answers "did this stay where I put it", which a URL
-      // naming the probe host itself passes by coincidence — `//<probe host>/x`
-      // is protocol-relative and would resolve against the *real* base to a
-      // different origin. Any authority-bearing form is refused outright, so the
-      // check does not depend on the probe host being unguessable.
+    if (probed.origin !== PROBE_ORIGIN || url[1] === '/' || url[1] === '\\') {
+      // Two checks, because neither is sufficient alone. The origin comparison
+      // asks "did this stay where I put it", and a URL naming the probe host
+      // passes it by coincidence — `//<probe host>/x` and its backslash
+      // spellings are protocol-relative, so against the *real* base they land
+      // somewhere else entirely. Refusing any second character that can open an
+      // authority closes that off without the probe host having to be
+      // unguessable: a path-absolute reference always inherits the base's
+      // origin, so once no authority can be introduced, the comparison cannot
+      // be satisfied by a cross-origin reference.
       throw this.malformed(
         'asset resolve url must be a path, not a reference to another origin',
         status,
