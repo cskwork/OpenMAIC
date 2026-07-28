@@ -1,32 +1,27 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
-const packageInputs = {
-  dsl: {
-    files: ['LICENSE', 'README.md', 'package.json', 'tsconfig.json'],
-    directories: ['scripts/', 'src/'],
-  },
-  storage: {
-    files: ['LICENSE', 'README.md', 'package.json', 'tsconfig.json'],
-    directories: ['src/'],
-  },
-  renderer: {
-    files: [
-      'DESIGN.md',
-      'FONTS.md',
-      'LICENSE',
-      'README.md',
-      'fonts.config.mjs',
-      'fonts.css',
-      'package.json',
-      'rollup.config.js',
-      'tsconfig.json',
-    ],
-    directories: ['font-licenses/', 'scripts/', 'src/'],
-  },
+const commonIgnoredInputs = {
+  files: ['.gitignore', 'vitest.config.ts'],
+  directories: ['docs/', 'test/'],
+};
+
+const ignoredPackageInputs = {
+  dsl: commonIgnoredInputs,
+  storage: commonIgnoredInputs,
+  renderer: commonIgnoredInputs,
   importer: {
-    files: ['LICENSE', 'README.md', 'package.json', 'rollup.config.js', 'tsconfig.json'],
-    directories: ['src/'],
+    files: [
+      ...commonIgnoredInputs.files,
+      '.babelrc.cjs',
+      '.eslintignore',
+      '.eslintrc.cjs',
+      'DESIGN.md',
+      'SKILL.md',
+      'favicon.ico',
+      'index.html',
+    ],
+    directories: [...commonIgnoredInputs.directories, 'scripts/', 'src1/'],
   },
 };
 const base = process.argv[2];
@@ -64,15 +59,15 @@ const changedFiles = new Set(
 
 const failures = [];
 
-for (const [name, inputs] of Object.entries(packageInputs)) {
+for (const [name, ignored] of Object.entries(ignoredPackageInputs)) {
   const directory = `packages/@openmaic/${name}`;
   const packageChanged = [...changedFiles].some((file) => {
     if (!file.startsWith(`${directory}/`)) return false;
     const relative = file.slice(directory.length + 1);
-    return (
-      inputs.files.includes(relative) ||
-      inputs.directories.some((prefix) => relative.startsWith(prefix))
-    );
+    const isIgnored =
+      ignored.files.includes(relative) ||
+      ignored.directories.some((prefix) => relative.startsWith(prefix));
+    return !isIgnored;
   });
   if (!packageChanged) continue;
 
