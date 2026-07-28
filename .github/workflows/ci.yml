@@ -19,6 +19,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
       - name: Package version bumps
         if: github.event_name == 'pull_request'
         run: node scripts/check-package-version-bumps.mjs "$BASE_SHA"
@@ -26,15 +33,10 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
 
       - name: Package version bumps (main push)
-        if: github.event_name == 'push'
-        run: node scripts/check-package-version-bumps.mjs HEAD^1
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
+        if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        run: node scripts/check-package-version-bumps.mjs "$BEFORE_SHA"
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
 
       - run: pnpm install --frozen-lockfile
 

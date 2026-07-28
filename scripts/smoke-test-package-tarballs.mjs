@@ -37,7 +37,7 @@ try {
   // The smoke program executes the renderer root, whose optional chart and
   // highlighting peers are imported by that entry. Other optional peers remain
   // optional unless the smoke program starts executing their owning entry.
-  const installOptionalPeersFor = new Set(['renderer', 'storage']);
+  const installOptionalPeersFor = new Set(['renderer']);
   const peerDependencies = {};
   for (const name of packageNames) {
     const manifest = JSON.parse(
