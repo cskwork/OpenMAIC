@@ -736,6 +736,32 @@ describe('HttpKVStore transport semantics', () => {
     expect(hadKey).toBe(false);
   });
 
+  test.each([
+    ['protocol-relative', '//evil.example'],
+    ['backslash authority', '/\\evil.example'],
+  ])('refuses a %s base url posing as a path', (_name, baseUrl) => {
+    const deviceStore = new BrowserKVStore({ storage: new MemoryStorage() });
+    expect(() => new HttpKVStore({ baseUrl, deviceStore })).toThrow(
+      /not a reference to another origin/,
+    );
+  });
+
+  test.each([
+    ['a tab', '/api\u0009/persistence'],
+    ['a NUL', '/api\u0000/persistence'],
+  ])('refuses a base url containing %s', (_name, baseUrl) => {
+    const deviceStore = new BrowserKVStore({ storage: new MemoryStorage() });
+    expect(() => new HttpKVStore({ baseUrl, deviceStore })).toThrow(/control characters/);
+  });
+
+  test.each([
+    ['a bare query separator', 'https://kv.invalid/api?'],
+    ['a bare fragment separator', '/api/persistence#'],
+  ])('refuses a base url ending in %s', (_name, baseUrl) => {
+    const deviceStore = new BrowserKVStore({ storage: new MemoryStorage() });
+    expect(() => new HttpKVStore({ baseUrl, deviceStore })).toThrow(/query or fragment/);
+  });
+
   test('passes credentials through to fetch for a cross-origin cookie deployment', async () => {
     let seen: RequestCredentials | undefined;
     const store = new HttpKVStore({

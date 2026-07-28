@@ -1068,6 +1068,45 @@ describe('HttpAssetProvider base url and credentials', () => {
     expect(() => new HttpAssetProvider({ baseUrl: 'https://%%' })).toThrow(/must be a valid URL/);
   });
 
+  test.each([
+    ['protocol-relative', '//evil.example'],
+    ['protocol-relative with a path', '//evil.example/api'],
+    ['backslash authority', '/\\evil.example'],
+    ['mixed backslash and slash', '/\\/evil.example/api'],
+  ])('refuses a %s base url posing as a path', (_name, baseUrl) => {
+    // A browser reads these as an authority, so every request built on such a
+    // base — and every credential the hook attaches to it — leaves the origin.
+    expect(() => new HttpAssetProvider({ baseUrl })).toThrow(/not a reference to another origin/);
+  });
+
+  test.each([
+    ['a tab', '/api\u0009/persistence'],
+    ['a newline', '/api\u000A/persistence'],
+    ['a carriage return', '/api\u000D/persistence'],
+    ['a NUL', '/api\u0000/persistence'],
+    ['a control character in an absolute base', 'https://assets.invalid/api\u0009/x'],
+  ])('refuses a base url containing %s', (_name, baseUrl) => {
+    // The parser strips or re-encodes these, after which the string no longer
+    // means what it reads as — `/\u0009/evil.example` becomes `//evil.example`.
+    expect(() => new HttpAssetProvider({ baseUrl })).toThrow(/control characters/);
+  });
+
+  test.each([
+    ['a bare query separator', 'https://assets.invalid/api?'],
+    ['a bare fragment separator', 'https://assets.invalid/api#'],
+    ['a bare query separator on a path base', '/api/persistence?'],
+    ['a bare fragment separator on a path base', '/api/persistence#'],
+  ])('refuses a base url ending in %s', (_name, baseUrl) => {
+    // These parse to an *empty* search and hash, so a check reading the parsed
+    // URL waves them through — and the concatenated path is then swallowed into
+    // the query or fragment.
+    expect(() => new HttpAssetProvider({ baseUrl })).toThrow(/query or fragment/);
+  });
+
+  test('accepts a root-mounted path base', () => {
+    expect(() => new HttpAssetProvider({ baseUrl: '/' })).not.toThrow();
+  });
+
   test('still accepts a path-only base url for the app-mounted shape', () => {
     expect(() => new HttpAssetProvider({ baseUrl: '/api/persistence' })).not.toThrow();
   });

@@ -17,6 +17,13 @@ export const RESOLVABLE_SCHEMES = new Set(['http:', 'https:']);
 const SCHEME_AUTHORITY_FORM = /^https?:\/\//i;
 
 /**
+ * C0 controls and DEL. The URL parser strips tab, LF and CR outright and
+ * percent-encodes the rest, so a base URL containing one never means what it
+ * looks like it means.
+ */
+const URL_CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]/;
+
+/**
  * Validate a base URL and return it without its trailing slashes.
  *
  * A base URL is either a full `http(s)://host[/path]` or a bare path (the
@@ -32,15 +39,47 @@ const SCHEME_AUTHORITY_FORM = /^https?:\/\//i;
  *   and its credentials, somewhere other than where the operator wrote.
  * - A base carrying a query or fragment silently swallows the path appended to
  *   it: `https://host/api?v=1` + `/kv/keys` is not a route anyone intended.
+ * - A "path" that opens an authority — `//host`, `/\host` — is not a path at
+ *   all. The browser resolves it cross-origin, taking the client's requests and
+ *   credentials with it.
+ * - A control character anywhere, since the URL parser strips or re-encodes
+ *   them and the string then stops meaning what it reads as.
  */
 export function assertHttpBaseUrl(baseUrl: string, label: string): string {
   if (baseUrl === '') {
     throw new Error(`@openmaic/storage: ${label} baseUrl must be non-empty`);
   }
   const trimmed = baseUrl.replace(/\/+$/, '');
+  // Before any shape check, because the URL parser strips these and would then
+  // disagree with everything below about what it is looking at. Same reasoning
+  // as the guard on resolved asset URLs, widened to every C0 control and DEL:
+  // none of them belongs in a base URL under any encoding.
+  if (URL_CONTROL_CHARACTERS.test(trimmed)) {
+    throw new Error(`@openmaic/storage: ${label} baseUrl must not contain control characters`);
+  }
+  // On the raw string, not on a parsed `search`/`hash`: a base ending in a bare
+  // `?` or `#` parses to empty ones and would slip through, then swallow the
+  // path concatenated onto it into a query or fragment.
+  if (trimmed.includes('?') || trimmed.includes('#')) {
+    throw new Error(`@openmaic/storage: ${label} baseUrl must not carry a query or fragment`);
+  }
   if (!ABSOLUTE_URL.test(trimmed)) {
-    if (trimmed.includes('?') || trimmed.includes('#')) {
-      throw new Error(`@openmaic/storage: ${label} baseUrl must not carry a query or fragment`);
+    // Trimming leaves `''` for a root mount (`/`), which concatenates correctly.
+    if (trimmed === '') return trimmed;
+    if (!trimmed.startsWith('/')) {
+      throw new Error(
+        `@openmaic/storage: ${label} baseUrl must be an absolute http(s) URL or a path ` +
+          `beginning with "/"`,
+      );
+    }
+    // `//host` and `/\host` are not paths. A browser reads them as an authority,
+    // so every request built on such a base — and every credential on it — goes
+    // to another origin. Structurally the same refusal the resolved-URL check
+    // makes, for the same reason.
+    if (trimmed[1] === '/' || trimmed[1] === '\\') {
+      throw new Error(
+        `@openmaic/storage: ${label} baseUrl must be a path, not a reference to another origin`,
+      );
     }
     return trimmed;
   }
@@ -58,14 +97,14 @@ export function assertHttpBaseUrl(baseUrl: string, label: string): string {
         `(a scheme without "//" is resolved relative to the current document)`,
     );
   }
-  let parsed: URL;
   try {
-    parsed = new URL(trimmed);
+    // Parseability only; the query and fragment were already refused on the raw
+    // string, which is the check that holds — `parsed.search` is empty for a
+    // base ending in a bare `?`, so reading it would pass exactly the case that
+    // swallows the path.
+    new URL(trimmed);
   } catch {
     throw new Error(`@openmaic/storage: ${label} baseUrl must be a valid URL`);
-  }
-  if (parsed.search !== '' || parsed.hash !== '') {
-    throw new Error(`@openmaic/storage: ${label} baseUrl must not carry a query or fragment`);
   }
   return trimmed;
 }
