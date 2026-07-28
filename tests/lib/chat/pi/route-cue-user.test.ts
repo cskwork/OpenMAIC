@@ -162,7 +162,10 @@ function mockDirectorWithAgentTurn(opts: { explicitlyCueUser: boolean; closeAfte
             instruction: 'Give one concise answer.',
           });
           if (opts.explicitlyCueUser) {
-            await cueUser?.execute('cue-1', { prompt: 'Any follow-up?' });
+            await cueUser?.execute('cue-1', {
+              reason: 'task_complete_followup',
+              prompt: 'Any follow-up?',
+            });
           }
           if (opts.closeAfterCue) {
             await closeSession?.execute('close-1', { endReason: 'user_done' });
@@ -222,7 +225,10 @@ function mockDirectorWebEvidenceLifecycle(captured: {
               instruction: 'State that the second fact lacks evidence.',
             })) as Record<string, unknown>,
           );
-          await cueUser?.execute('cue-1', { prompt: 'Any follow-up?' });
+          await cueUser?.execute('cue-1', {
+            reason: 'task_complete_followup',
+            prompt: 'Any follow-up?',
+          });
         },
         waitForIdle: async () => {},
         subscribe: () => () => {},
@@ -274,7 +280,10 @@ function mockDirectorWebEvidenceChildFailure(captured: {
               instruction: 'Recover without reusing evidence from the failed child.',
             })) as Record<string, unknown>,
           );
-          await cueUser?.execute('cue-1', { prompt: 'Any follow-up?' });
+          await cueUser?.execute('cue-1', {
+            reason: 'task_complete_followup',
+            prompt: 'Any follow-up?',
+          });
         },
         waitForIdle: async () => {},
         subscribe: () => () => {},
@@ -333,7 +342,10 @@ function mockDirectorReadSceneDelegation(captured: {
               instruction: 'Add a clarification without reusing prior scene evidence.',
             })) as Record<string, unknown>,
           );
-          await cueUser?.execute('cue-1', { prompt: 'Any follow-up?' });
+          await cueUser?.execute('cue-1', {
+            reason: 'task_complete_followup',
+            prompt: 'Any follow-up?',
+          });
         },
         waitForIdle: async () => {},
         subscribe: () => () => {},
@@ -372,7 +384,10 @@ function mockDirectorWithWhiteboardTeacherTurn(actionJson: string) {
             agentId: 'default-1',
             instruction: 'Draw the key point on the whiteboard.',
           });
-          await cueUser?.execute('cue-1', { prompt: 'Any follow-up?' });
+          await cueUser?.execute('cue-1', {
+            reason: 'task_complete_followup',
+            prompt: 'Any follow-up?',
+          });
         },
         waitForIdle: async () => {},
         subscribe: () => () => {},
@@ -415,7 +430,10 @@ function mockDirectorWithTwoTeacherTurns() {
             agentId: 'default-1',
             instruction: 'This second normal turn should be skipped locally.',
           });
-          await cueUser?.execute('cue-1', { prompt: 'Any follow-up?' });
+          await cueUser?.execute('cue-1', {
+            reason: 'task_complete_followup',
+            prompt: 'Any follow-up?',
+          });
         },
         waitForIdle: async () => {},
         subscribe: () => () => {},
@@ -456,7 +474,10 @@ function mockDirectorWithAgentThenCue(opts: {
             agentId: opts.agentId,
             instruction: 'Give one concise answer.',
           });
-          await cueUser?.execute('cue-1', { prompt: opts.cuePrompt ?? 'Any follow-up?' });
+          await cueUser?.execute('cue-1', {
+            reason: 'task_complete_followup',
+            prompt: opts.cuePrompt ?? 'Any follow-up?',
+          });
         },
         waitForIdle: async () => {},
         subscribe: () => () => {},
@@ -473,6 +494,83 @@ function mockDirectorWithAgentThenCue(opts: {
           {
             role: 'assistant',
             content: [{ type: 'text', text: opts.childText }],
+          },
+        ],
+      },
+    };
+  });
+}
+
+function mockDirectorTaskIncompleteThenContinue(captured: {
+  firstCueResult?: Record<string, unknown>;
+  secondCueResult?: Record<string, unknown>;
+  firstCueGuard?: { terminate?: boolean; isError?: boolean };
+  secondCueGuard?: { terminate?: boolean; isError?: boolean };
+}) {
+  let childIndex = 0;
+  mocks.buildAgent.mockImplementation((agentOpts: MockAgentOptions) => {
+    const isDirector = agentOpts.tools.some((tool) => tool.name === 'cue_user');
+
+    if (isDirector) {
+      return {
+        prompt: async () => {
+          const callAgent = agentOpts.tools.find((tool) => tool.name === 'call_agent');
+          const cueUser = agentOpts.tools.find((tool) => tool.name === 'cue_user');
+          await callAgent?.execute('teacher-call', {
+            agentId: 'default-1',
+            instruction: 'Give the core explanation.',
+          });
+          captured.firstCueResult = (await cueUser?.execute('cue-too-early', {
+            reason: 'task_complete_followup',
+            prompt: 'Any follow-up?',
+          })) as Record<string, unknown>;
+          captured.firstCueGuard = await agentOpts.afterToolCall?.({
+            toolCall: { name: 'cue_user' },
+            args: { reason: 'task_complete_followup' },
+            result: captured.firstCueResult,
+            isError: false,
+          });
+          await callAgent?.execute('student-call', {
+            agentId: 'student-1',
+            outcomeId: 'student_analysis',
+            instruction: 'Give the requested student analysis.',
+          });
+          captured.secondCueResult = (await cueUser?.execute('cue-after-completion', {
+            reason: 'task_complete_followup',
+            prompt: 'Any follow-up?',
+          })) as Record<string, unknown>;
+          captured.secondCueGuard = await agentOpts.afterToolCall?.({
+            toolCall: { name: 'cue_user' },
+            args: { reason: 'task_complete_followup' },
+            result: captured.secondCueResult,
+            isError: false,
+          });
+        },
+        waitForIdle: async () => {},
+        subscribe: () => () => {},
+        state: { messages: [] },
+      };
+    }
+
+    const index = childIndex;
+    childIndex += 1;
+    return {
+      subscribe: () => () => {},
+      prompt: async () => {},
+      waitForIdle: async () => {},
+      state: {
+        messages: [
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'text',
+                text:
+                  index === 0
+                    ? 'Teacher gives the core explanation.'
+                    : 'Student contributes the requested analysis.',
+              },
+            ],
           },
         ],
       },
@@ -500,6 +598,41 @@ function mockDirectorCloseSessionWithoutTeacherTurn() {
       subscribe: () => () => {},
       prompt: async () => {},
       waitForIdle: async () => {},
+      state: { messages: [] },
+    };
+  });
+}
+
+function mockDirectorWithoutTerminalOrAgentCall() {
+  mocks.buildAgent.mockReturnValue({
+    prompt: async () => {},
+    waitForIdle: async () => {},
+    subscribe: () => () => {},
+    state: { messages: [] },
+  });
+}
+
+function mockDirectorWithEmptyChildThenStop() {
+  mocks.buildAgent.mockImplementation((agentOpts: MockAgentOptions) => {
+    const isDirector = agentOpts.tools.some((tool) => tool.name === 'cue_user');
+    if (isDirector) {
+      return {
+        prompt: async () => {
+          const callAgent = agentOpts.tools.find((tool) => tool.name === 'call_agent');
+          await callAgent?.execute('empty-child', {
+            agentId: 'default-1',
+            instruction: 'Give a concise answer.',
+          });
+        },
+        waitForIdle: async () => {},
+        subscribe: () => () => {},
+        state: { messages: [] },
+      };
+    }
+    return {
+      prompt: async () => {},
+      waitForIdle: async () => {},
+      subscribe: () => () => {},
       state: { messages: [] },
     };
   });
@@ -630,6 +763,33 @@ describe('POST /api/chat/pi cue_user', () => {
       if (originalWebSearchFlag === undefined) delete process.env.OPENMAIC_ENABLE_PI_WEB_SEARCH;
       else process.env.OPENMAIC_ENABLE_PI_WEB_SEARCH = originalWebSearchFlag;
     }
+  });
+
+  it('rejects a task contract that references an unavailable classroom agent', async () => {
+    const body = makeBody();
+    const { POST } = await import('@/app/api/chat/pi/route');
+    const response = await POST(
+      makeRequest({
+        ...body,
+        config: {
+          ...body.config,
+          piTaskContract: {
+            requestedOutcomes: [
+              {
+                id: 'missing_analysis',
+                agentId: 'missing-agent',
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringContaining('unavailable agent'),
+    });
+    expect(mocks.buildAgent).not.toHaveBeenCalled();
   });
 
   it('hands successful web evidence to one child and clears it before later delegations', async () => {
@@ -883,7 +1043,7 @@ describe('POST /api/chat/pi cue_user', () => {
     expect(doneEvent?.data.cueUserReceived).toBe(true);
   });
 
-  it('falls back to cue_user after a student-only turn', async () => {
+  it('preserves observe-only fallback after a visible student turn', async () => {
     mockDirectorWithAgentThenCue({
       agentId: 'student-1',
       childText: 'I wonder if window placement changes airflow.',
@@ -922,6 +1082,112 @@ describe('POST /api/chat/pi cue_user', () => {
       }),
     ]);
     expect(doneEvent?.data.cueUserReceived).toBe(true);
+    expect(doneEvent?.data.terminalControl).toMatchObject({
+      terminal: {
+        kind: 'cue_user',
+        reason: 'task_complete_followup',
+      },
+    });
+  });
+
+  it('returns TASK_INCOMPLETE to the same Director, then continues after a trusted child result', async () => {
+    const captured: {
+      firstCueResult?: Record<string, unknown>;
+      secondCueResult?: Record<string, unknown>;
+      firstCueGuard?: { terminate?: boolean; isError?: boolean };
+      secondCueGuard?: { terminate?: boolean; isError?: boolean };
+    } = {};
+    mockDirectorTaskIncompleteThenContinue(captured);
+
+    const body = makeBody();
+    const responseBody = {
+      ...body,
+      config: {
+        ...body.config,
+        piMaxAgentTurns: 2,
+        agentIds: ['default-1', 'student-1'],
+        agentConfigs: [
+          body.config.agentConfigs[0],
+          makeAgentConfig({ id: 'student-1', name: 'Student', role: 'student' }),
+        ],
+        piTaskContract: {
+          requestedOutcomes: [
+            {
+              id: 'student_analysis',
+              agentId: 'student-1',
+              description: 'Student contributes a distinct analysis.',
+            },
+          ],
+        },
+      },
+    };
+
+    const { POST } = await import('@/app/api/chat/pi/route');
+    const response = await POST(makeRequest(responseBody));
+    const events = await readSseEvents(response);
+    const cueUserEvents = events.filter((event) => event.type === 'cue_user');
+    const doneEvent = events.find((event) => event.type === 'done');
+
+    expect(response.status).toBe(200);
+    expect(captured.firstCueResult).toMatchObject({
+      content: [
+        {
+          type: 'text',
+          text: expect.stringContaining('TASK_INCOMPLETE'),
+        },
+      ],
+      details: {
+        emitted: false,
+        skipped: true,
+        reason: 'TASK_INCOMPLETE',
+        terminalControl: {
+          status: 'rejected',
+          pendingOutcomes: [{ id: 'student_analysis', agentId: 'student-1' }],
+        },
+      },
+    });
+    expect(captured.firstCueGuard).toEqual({ isError: true });
+    expect(captured.secondCueResult).toMatchObject({
+      details: {
+        emitted: true,
+        cueReason: 'task_complete_followup',
+        terminalControl: {
+          status: 'allowed',
+          pendingOutcomes: [],
+        },
+      },
+    });
+    expect(captured.secondCueGuard).toEqual({ terminate: true });
+    expect(cueUserEvents).toEqual([
+      {
+        type: 'cue_user',
+        data: { fromAgentId: 'student-1', prompt: 'Any follow-up?' },
+      },
+    ]);
+    expect(doneEvent?.data.totalAgents).toBe(2);
+    expect(doneEvent?.data.terminalControl).toMatchObject({
+      revision: 2,
+      outcomes: [
+        {
+          id: 'student_analysis',
+          status: 'completed',
+          completedBy: {
+            agentInvocationId: expect.any(String),
+            source: 'runtime_child_result',
+            revision: 1,
+          },
+        },
+      ],
+      decisions: [
+        { code: 'TASK_INCOMPLETE', status: 'rejected' },
+        { code: 'ALLOWED', status: 'allowed' },
+      ],
+      terminal: {
+        kind: 'cue_user',
+        reason: 'task_complete_followup',
+        revision: 2,
+      },
+    });
   });
 
   it('allows explicit cue_user after a teacher substantive turn', async () => {
@@ -1008,6 +1274,52 @@ describe('POST /api/chat/pi cue_user', () => {
     expect(doneEvent?.data.sessionClosed).toBe(false);
     expect(doneEvent?.data.endReason).toBeUndefined();
     expect(doneEvent?.data.cueUserReceived).toBe(false);
+    expect(doneEvent?.data.terminalControl).toMatchObject({
+      terminal: {
+        kind: 'runtime_exhausted',
+        reason: 'RUNTIME_FALLBACK_POLICY_REJECTED',
+      },
+      exhaustedReason: 'RUNTIME_FALLBACK_POLICY_REJECTED',
+    });
+  });
+
+  it('records Runtime exhaustion when the Director stops without tools or content', async () => {
+    mockDirectorWithoutTerminalOrAgentCall();
+
+    const { POST } = await import('@/app/api/chat/pi/route');
+    const response = await POST(makeRequest(makeBody()));
+    const events = await readSseEvents(response);
+    const doneEvent = events.find((event) => event.type === 'done');
+
+    expect(response.status).toBe(200);
+    expect(doneEvent?.data.totalAgents).toBe(0);
+    expect(doneEvent?.data.terminalControl).toMatchObject({
+      terminal: {
+        kind: 'runtime_exhausted',
+        reason: 'RUNTIME_FALLBACK_POLICY_REJECTED',
+      },
+      exhaustedReason: 'RUNTIME_FALLBACK_POLICY_REJECTED',
+    });
+  });
+
+  it('records Runtime exhaustion after an empty Child instead of ordinary completion', async () => {
+    mockDirectorWithEmptyChildThenStop();
+
+    const { POST } = await import('@/app/api/chat/pi/route');
+    const response = await POST(makeRequest(makeBody()));
+    const events = await readSseEvents(response);
+    const doneEvent = events.find((event) => event.type === 'done');
+
+    expect(response.status).toBe(200);
+    expect(doneEvent?.data.totalAgents).toBe(1);
+    expect(doneEvent?.data.agentHadContent).toBe(false);
+    expect(doneEvent?.data.terminalControl).toMatchObject({
+      terminal: {
+        kind: 'runtime_exhausted',
+        reason: 'RUNTIME_FALLBACK_POLICY_REJECTED',
+      },
+      exhaustedReason: 'RUNTIME_FALLBACK_POLICY_REJECTED',
+    });
   });
 
   it('terminates the director after the hard tool-call budget', async () => {
@@ -1029,6 +1341,14 @@ describe('POST /api/chat/pi cue_user', () => {
     expect(counter.value).toBe(4);
     expect(doneEvent?.data.totalAgents).toBe(0);
     expect(doneEvent?.data.agentHadContent).toBe(false);
+    expect(doneEvent?.data.directorToolAttemptCount).toBe(4);
+    expect(doneEvent?.data.terminalControl).toMatchObject({
+      terminal: {
+        kind: 'runtime_exhausted',
+        reason: 'DIRECTOR_TOOL_CALL_BUDGET_EXHAUSTED',
+      },
+      exhaustedReason: 'DIRECTOR_TOOL_CALL_BUDGET_EXHAUSTED',
+    });
   });
 
   it('marks failed evidence tools as native tool errors and exposes an audit trace', async () => {

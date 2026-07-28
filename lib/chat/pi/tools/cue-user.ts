@@ -1,11 +1,29 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type, type Static } from 'typebox';
 import type { StatelessEvent } from '@/lib/types/chat';
+import type { CueUserReason, TerminalDecision, TerminalRequest } from '../terminal-control';
 
 const CueUserParams = Type.Object({
+  reason: Type.Union(
+    [
+      Type.Literal('explicit_user_turn'),
+      Type.Literal('clarification_required'),
+      Type.Literal('task_complete_followup'),
+    ],
+    {
+      description:
+        'Why the real user is needed: an explicit user turn, focused clarification, or follow-up after requested outcomes are complete.',
+    },
+  ),
   prompt: Type.Optional(
     Type.String({
       description: 'Optional short prompt for handing the turn back to the user.',
+    }),
+  ),
+  missingFields: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        'For clarification_required only: trusted missing-information fields this prompt asks the user to supply.',
     }),
   ),
 });
@@ -23,6 +41,7 @@ export function buildCueUserTool(opts: {
   canCueUser?: () => boolean;
   cueUserSkipReason?: CueUserSkipReason;
   isSessionClosed?: () => boolean;
+  terminalPreflight?: (request: Extract<TerminalRequest, { kind: 'cue_user' }>) => TerminalDecision;
 }): AgentTool<typeof CueUserParams> {
   return {
     name: 'cue_user',
@@ -32,6 +51,33 @@ export function buildCueUserTool(opts: {
     parameters: CueUserParams,
     executionMode: 'sequential',
     execute: async (_toolCallId: string, params: CueUserParams) => {
+      const terminalDecision = opts.terminalPreflight?.({
+        kind: 'cue_user',
+        source: 'director_tool',
+        reason: params.reason as CueUserReason,
+        prompt: params.prompt,
+        missingFields: params.missingFields,
+      });
+      if (terminalDecision && terminalDecision.status !== 'allowed') {
+        return {
+          content: [
+            {
+              type: 'text',
+              text:
+                terminalDecision.code === 'TASK_INCOMPLETE'
+                  ? `TASK_INCOMPLETE: complete these requested outcomes before cueing the user: ${terminalDecision.pendingOutcomes.map((outcome) => outcome.id).join(', ')}.`
+                  : `${terminalDecision.code}: ${terminalDecision.reason}`,
+            },
+          ],
+          details: {
+            emitted: false,
+            skipped: true,
+            reason: terminalDecision.code,
+            terminalControl: terminalDecision,
+          },
+        };
+      }
+
       if (opts.isSessionClosed?.()) {
         return {
           content: [
@@ -75,7 +121,15 @@ export function buildCueUserTool(opts: {
               : 'The user was already cued for this classroom turn.',
           },
         ],
-        details: { emitted },
+        details: {
+          emitted,
+          ...(terminalDecision
+            ? {
+                cueReason: params.reason,
+                terminalControl: terminalDecision,
+              }
+            : {}),
+        },
       };
     },
   };

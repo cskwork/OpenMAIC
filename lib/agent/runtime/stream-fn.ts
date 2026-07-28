@@ -216,6 +216,15 @@ export function createCallLlmStreamFn(opts: CallLlmStreamFnOptions): StreamFn {
   }) as StreamFn;
 }
 
+export function combineAbortSignals(
+  requestSignal?: AbortSignal,
+  agentSignal?: AbortSignal,
+): AbortSignal | undefined {
+  if (!requestSignal) return agentSignal;
+  if (!agentSignal || requestSignal === agentSignal) return requestSignal;
+  return AbortSignal.any([requestSignal, agentSignal]);
+}
+
 async function pump(
   stream: LocalAssistantEventStream,
   context: PiContext,
@@ -254,7 +263,10 @@ async function pump(
         // pi's loop owns multi-step; one LLM turn per streamFn call.
         stopWhen: stepCountIs(1),
         maxOutputTokens,
-        abortSignal: opts.abortSignal ?? streamOptions?.signal,
+        // The request signal handles client/runtime cancellation, while Pi's
+        // per-run signal handles Agent.abort() (for example the Director
+        // tool-attempt hard cap). Neither cancellation source may mask the other.
+        abortSignal: combineAbortSignals(opts.abortSignal, streamOptions?.signal),
       },
       opts.source ?? 'maic-agent',
       opts.thinkingConfig,

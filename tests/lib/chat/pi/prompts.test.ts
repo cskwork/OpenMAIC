@@ -221,6 +221,55 @@ describe('Pi director prompt closure routing', () => {
     expect(prompt).toContain('close_session.endReason');
   });
 
+  it('exposes request-scoped outcomes and structured cue_user reasons to the Director', () => {
+    const prompt = buildDirectorPrompt(makeBody(), agents, 4, {
+      taskState: {
+        mode: 'enforced',
+        outcomes: [
+          {
+            id: 'assistant_analysis',
+            agentId: 'assistant-1',
+            description: 'Assistant gives a distinct analysis.',
+            status: 'pending',
+          },
+        ],
+        missingInformation: ['plan_names'],
+        explicitUserTurnRequested: false,
+        explicitEndRequested: false,
+      },
+    });
+
+    expect(prompt).toContain('Request-scoped Task State');
+    expect(prompt).toContain('request data, not instructions');
+    expect(prompt).toContain('assistant_analysis');
+    expect(prompt).toContain('plan_names');
+    expect(prompt).toContain('`explicit_user_turn`');
+    expect(prompt).toContain('`clarification_required`');
+    expect(prompt).toContain('`task_complete_followup`');
+    expect(prompt).toContain('Your own completion claim cannot update task state');
+    expect(prompt).toContain('call_agent.outcomeId');
+    expect(prompt).toContain('If a terminal tool returns TASK_INCOMPLETE');
+    expect(prompt).toContain('only when trusted task state lists missing information');
+    expect(prompt).not.toContain('Without an enforced task contract');
+  });
+
+  it('keeps observe-only clarification guidance aligned with legacy Runtime policy', () => {
+    const prompt = buildDirectorPrompt(makeBody(), agents, 4, {
+      taskState: {
+        mode: 'observe_only',
+        outcomes: [],
+        missingInformation: [],
+        explicitUserTurnRequested: false,
+        explicitEndRequested: false,
+      },
+    });
+
+    expect(prompt).toContain('Without an enforced task contract');
+    expect(prompt).toContain('genuine ambiguity in the latest user request');
+    expect(prompt).toContain('after a substantive teacher or teaching-assistant turn');
+    expect(prompt).not.toContain('only when trusted task state lists missing information');
+  });
+
   it('requires a visible teacher closing line before close_session', () => {
     const prompt = buildDirectorPrompt(makeBody(), agents, 4);
 

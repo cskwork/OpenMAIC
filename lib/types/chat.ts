@@ -294,6 +294,7 @@ import type { SceneOutline } from '@/lib/types/generation';
 import type { AgentTurnSummary, WhiteboardActionRecord } from '@/lib/orchestration/types';
 import type { DirectorCompactionTrace } from '@/lib/chat/pi/director-compaction';
 import type { DirectorToolTraceEntry } from '@/lib/chat/pi/types';
+import type { InclassTaskContractSeed, TerminalControlTrace } from '@/lib/chat/pi/terminal-control';
 
 /**
  * Accumulated director state passed between per-agent requests.
@@ -370,6 +371,8 @@ export interface StatelessChatRequest {
     piMaxActionsPerAgent?: number;
     /** Pi PoC: opt in to whiteboard tools; defaults off to keep the first A/B pass comparable. */
     piEnableWhiteboardTools?: boolean;
+    /** Phase 0T: request-scoped desired outcomes and trusted user-intent facts. */
+    piTaskContract?: InclassTaskContractSeed;
   };
   /** Accumulated director state from previous per-agent requests */
   directorState?: DirectorState;
@@ -448,7 +451,9 @@ export type StatelessEvent =
         sessionClosed?: boolean;
         endReason?: string;
         directorCompaction?: DirectorCompactionTrace;
+        directorToolAttemptCount?: number;
         directorToolTrace?: DirectorToolTraceEntry[];
+        terminalControl?: TerminalControlTrace;
         directorState?: DirectorState;
       };
     }

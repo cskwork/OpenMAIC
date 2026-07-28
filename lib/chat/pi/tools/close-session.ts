@@ -1,5 +1,6 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type, type Static } from 'typebox';
+import type { TerminalDecision, TerminalRequest } from '../terminal-control';
 
 const CloseSessionParams = Type.Object({
   endReason: Type.Optional(
@@ -24,6 +25,9 @@ export function buildCloseSessionTool(opts: {
   closeSession: (data: { endReason?: string }) => Promise<boolean>;
   canCloseSession?: () => boolean;
   isUserCued?: () => boolean;
+  terminalPreflight?: (
+    request: Extract<TerminalRequest, { kind: 'close_session' }>,
+  ) => TerminalDecision;
 }): AgentTool<typeof CloseSessionParams> {
   return {
     name: 'close_session',
@@ -33,6 +37,31 @@ export function buildCloseSessionTool(opts: {
     parameters: CloseSessionParams,
     executionMode: 'sequential',
     execute: async (_toolCallId: string, params: CloseSessionParams) => {
+      const terminalDecision = opts.terminalPreflight?.({
+        kind: 'close_session',
+        source: 'director_tool',
+        endReason: params.endReason,
+      });
+      if (terminalDecision && terminalDecision.status !== 'allowed') {
+        return {
+          content: [
+            {
+              type: 'text',
+              text:
+                terminalDecision.code === 'TASK_INCOMPLETE'
+                  ? `TASK_INCOMPLETE: complete these requested outcomes before closing: ${terminalDecision.pendingOutcomes.map((outcome) => outcome.id).join(', ')}.`
+                  : `${terminalDecision.code}: ${terminalDecision.reason}`,
+            },
+          ],
+          details: {
+            emitted: false,
+            skipped: true,
+            reason: terminalDecision.code,
+            terminalControl: terminalDecision,
+          },
+        };
+      }
+
       if (opts.isUserCued?.()) {
         return {
           content: [
@@ -67,7 +96,10 @@ export function buildCloseSessionTool(opts: {
               : 'The classroom session was already marked for closure.',
           },
         ],
-        details: { emitted },
+        details: {
+          emitted,
+          ...(terminalDecision ? { terminalControl: terminalDecision } : {}),
+        },
       };
     },
   };

@@ -9,6 +9,12 @@ import type { ThinkingConfig } from '@/lib/types/provider';
 import { buildDirectorPrompt, buildUserPrompt, toHistoryMessages } from './prompts';
 import { createDirectorCompactionRuntime } from './director-compaction';
 import type { DirectorToolTraceEntry, SendEvent } from './types';
+import {
+  attachDirectorToolExecutionGate,
+  createDirectorToolExecutionGate,
+  createInclassTerminalController,
+  guardDirectorToolsWithExecutionGate,
+} from './terminal-control';
 import { buildCallAgentTool } from './tools/call-agent';
 import { buildCloseSessionTool } from './tools/close-session';
 import { buildCueUserTool } from './tools/cue-user';
@@ -63,13 +69,24 @@ export async function runPiDirectorLoop(opts: {
   let userCued = false;
   let sessionClosed = false;
   let endReason: string | undefined;
-  let directorToolCalls = 0;
   const pendingSceneEvidence = new Map<string, DirectorSceneEvidencePacket>();
   let latestWebEvidence: DirectorWebEvidencePacket | undefined;
   const directorToolTrace: DirectorToolTraceEntry[] = [];
   const maxDirectorToolCalls = Math.max(opts.maxAgentTurns * 3, opts.maxAgentTurns + 3);
   const piAgentResponses: AgentTurnSummary[] = [];
   const piWhiteboardLedger: WhiteboardActionRecord[] = [];
+  const terminalController = createInclassTerminalController({
+    seed: opts.body.config.piTaskContract,
+    maxDecisions: Math.max(opts.maxAgentTurns + 2, 4),
+    maxRejections: 2,
+    // Stay below the route's 300s ceiling without treating a slow-but-valid
+    // self-hosted model response as terminal-control exhaustion.
+    wallClockBudgetMs: 240_000,
+  });
+  const directorToolExecutionGate = createDirectorToolExecutionGate({
+    controller: terminalController,
+    maxToolCalls: maxDirectorToolCalls,
+  });
   const getAgentTurnCount = (): number => piAgentResponses.length;
   const isTeachingSubstantiveTurn = (summary: AgentTurnSummary): boolean => {
     const agent = opts.agentConfigs.find((candidate) => candidate.id === summary.agentId);
@@ -114,7 +131,7 @@ export async function runPiDirectorLoop(opts: {
     maxOutputTokens: opts.maxOutputTokens,
   });
 
-  const tools: AgentTool[] = [
+  const unguardedTools: AgentTool[] = [
     buildReadSceneTool({
       body: opts.body,
       onEvidence: (evidence) => {
@@ -143,6 +160,9 @@ export async function runPiDirectorLoop(opts: {
         totalAgents += 1;
         if (summary.contentPreview || summary.actionCount > 0) agentHadContent = true;
         piAgentResponses.push(summary);
+      },
+      onTrustedChildResult: (event) => {
+        terminalController.recordChildResult(event);
       },
       onActionDone: (record) => {
         totalActions += 1;
@@ -199,22 +219,35 @@ export async function runPiDirectorLoop(opts: {
     }),
     buildCloseSessionTool({
       closeSession,
-      canCloseSession: hasVisibleAgentTurn,
-      isUserCued: () => userCued,
+      terminalPreflight: (request) =>
+        terminalController.preflight(request, {
+          hasTeachingSubstantiveTurn: hasTeachingSubstantiveTurn(),
+          hasVisibleAgentTurn: hasVisibleAgentTurn(),
+          hasAgentContent: hasAgentContent(),
+          userCued,
+          sessionClosed,
+        }),
     }),
     buildCueUserTool({
       cueUser,
       getLastAgentId: () => piAgentResponses.at(-1)?.agentId,
-      canCueUser: hasTeachingSubstantiveTurn,
-      cueUserSkipReason: 'no_substantive_teaching_turn',
-      isSessionClosed: () => sessionClosed,
+      terminalPreflight: (request) =>
+        terminalController.preflight(request, {
+          hasTeachingSubstantiveTurn: hasTeachingSubstantiveTurn(),
+          hasVisibleAgentTurn: hasVisibleAgentTurn(),
+          hasAgentContent: hasAgentContent(),
+          userCued,
+          sessionClosed,
+        }),
     }),
   ];
+  const tools = guardDirectorToolsWithExecutionGate(unguardedTools, directorToolExecutionGate);
 
   const director = buildAgent({
     streamFn,
     systemPrompt: buildDirectorPrompt(opts.body, opts.agentConfigs, opts.maxAgentTurns, {
       enableWebSearch: opts.enableWebSearch,
+      taskState: terminalController.getPromptState(),
     }),
     tools,
     allowedToolNames: new Set(tools.map((tool) => tool.name)),
@@ -222,13 +255,24 @@ export async function runPiDirectorLoop(opts: {
     transformContext: compactionRuntime.transformContext,
     convertToLlm,
     afterToolCall: (context) => {
-      directorToolCalls += 1;
+      const directorToolCalls = directorToolExecutionGate.getAttemptCount();
       const evidenceStatus =
         context.toolCall.name === 'read_scene' || context.toolCall.name === 'web_search'
           ? (context.result.details as { status?: string } | undefined)?.status
           : undefined;
       const evidenceError = evidenceStatus !== undefined && evidenceStatus !== 'ok';
-      const isError = context.isError || evidenceError;
+      const terminalDecision = (
+        context.result.details as
+          | {
+              terminalControl?: {
+                status?: 'allowed' | 'rejected' | 'exhausted';
+              };
+            }
+          | undefined
+      )?.terminalControl;
+      const terminalRejected = terminalDecision?.status === 'rejected';
+      const terminalExhausted = terminalDecision?.status === 'exhausted';
+      const isError = context.isError || evidenceError || terminalRejected || terminalExhausted;
       const resultPreview = context.result.content
         .map((content) => (content.type === 'text' ? content.text : '[image]'))
         .join('\n')
@@ -241,26 +285,51 @@ export async function runPiDirectorLoop(opts: {
         resultPreview,
         details: context.result.details,
       });
-      const terminate = sessionClosed || userCued || directorToolCalls >= maxDirectorToolCalls;
-      if (!terminate && !evidenceError) return undefined;
+      const directorBudgetExhausted = directorToolCalls >= maxDirectorToolCalls;
+      if (directorBudgetExhausted && !sessionClosed && !userCued && !terminalExhausted) {
+        terminalController.recordRuntimeExhaustion('director_tool_call_budget');
+      }
+      const terminate = sessionClosed || userCued || terminalExhausted || directorBudgetExhausted;
+      if (!terminate && !evidenceError && !terminalRejected) return undefined;
       return {
         ...(terminate ? { terminate: true } : {}),
-        ...(evidenceError ? { isError: true } : {}),
+        ...(evidenceError || terminalRejected || terminalExhausted ? { isError: true } : {}),
       };
     },
   });
+  const unsubscribeDirectorToolExecutionGate = attachDirectorToolExecutionGate(
+    director,
+    directorToolExecutionGate,
+  );
 
   try {
     await director.prompt(buildUserPrompt(opts.body));
     await director.waitForIdle();
   } finally {
+    unsubscribeDirectorToolExecutionGate();
     compactionRuntime.dispose();
   }
 
   if (opts.signal.aborted) return;
 
-  if (!sessionClosed && !userCued && hasAgentContent()) {
-    await cueUser({ fromAgentId: piAgentResponses.at(-1)?.agentId });
+  if (!sessionClosed && !userCued && !terminalController.getTrace().terminal) {
+    const fallbackDecision = terminalController.preflight(
+      {
+        kind: 'cue_user',
+        source: 'runtime_fallback',
+        reason: 'task_complete_followup',
+      },
+      {
+        hasTeachingSubstantiveTurn: hasTeachingSubstantiveTurn(),
+        hasVisibleAgentTurn: hasVisibleAgentTurn(),
+        hasAgentContent: hasAgentContent(),
+        userCued,
+        sessionClosed,
+      },
+    );
+    if (fallbackDecision.status === 'allowed') {
+      await cueUser({ fromAgentId: piAgentResponses.at(-1)?.agentId });
+    }
   }
 
   await opts.send({
@@ -273,7 +342,9 @@ export async function runPiDirectorLoop(opts: {
       sessionClosed,
       endReason,
       directorCompaction: compactionRuntime.getTrace(),
+      directorToolAttemptCount: directorToolExecutionGate.getAttemptCount(),
       directorToolTrace,
+      terminalControl: terminalController.getTrace(),
       directorState: {
         turnCount: getAgentTurnCount(),
         agentResponses: [...(opts.body.directorState?.agentResponses ?? []), ...piAgentResponses],

@@ -2,7 +2,11 @@
  * Tests for the promoted stream-fn adapter — `toModelMessages` conversion.
  */
 import { describe, it, expect } from 'vitest';
-import { toModelMessages, createPartMapper } from '@/lib/agent/runtime/stream-fn';
+import {
+  combineAbortSignals,
+  createPartMapper,
+  toModelMessages,
+} from '@/lib/agent/runtime/stream-fn';
 import type { ToolCallProviderMetadata } from '@/lib/agent/runtime/provider-metadata';
 import type {
   AssistantMessage,
@@ -30,6 +34,24 @@ function emptyPartial(): AssistantMessage {
     timestamp: 0,
   };
 }
+
+describe('combineAbortSignals', () => {
+  it('preserves both request cancellation and Pi Agent.abort()', () => {
+    const requestAbort = new AbortController();
+    const agentAbort = new AbortController();
+    const combined = combineAbortSignals(requestAbort.signal, agentAbort.signal);
+
+    expect(combined?.aborted).toBe(false);
+    agentAbort.abort();
+    expect(combined?.aborted).toBe(true);
+
+    const secondRequestAbort = new AbortController();
+    const secondAgentAbort = new AbortController();
+    const secondCombined = combineAbortSignals(secondRequestAbort.signal, secondAgentAbort.signal);
+    secondRequestAbort.abort();
+    expect(secondCombined?.aborted).toBe(true);
+  });
+});
 
 describe('createPartMapper — reasoning/thinking channel', () => {
   it('maps reasoning-delta parts to thinking_start + thinking_delta and accumulates a thinking content block', () => {

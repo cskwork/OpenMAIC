@@ -2046,4 +2046,66 @@ describe('Pi call_agent JSON action output', () => {
     expect(onAgentDone).toHaveBeenCalledTimes(1);
     expect(r1.details.skipped).toBeFalsy();
   });
+
+  it('does not trust partial child output when Pi finishes with an error stop reason', async () => {
+    const partialSpeech = JSON.stringify([
+      { type: 'text', content: '这是一段失败前已经流出的部分回答。' },
+    ]);
+    let handler: ((event: unknown) => unknown) | null = null;
+    mocks.buildAgent.mockReturnValue({
+      subscribe: (nextHandler: (event: unknown) => unknown) => {
+        handler = nextHandler;
+        return () => {};
+      },
+      prompt: async () => {},
+      waitForIdle: async () => {
+        await handler?.({
+          type: 'message_update',
+          assistantMessageEvent: { type: 'text_delta', delta: partialSpeech },
+        });
+      },
+      state: {
+        messages: [
+          {
+            role: 'assistant',
+            content: [{ type: 'text', text: partialSpeech }],
+            stopReason: 'error',
+            errorMessage: 'provider stream failed after partial output',
+          },
+        ],
+      },
+    });
+    const { createInclassTerminalController } = await import('@/lib/chat/pi/terminal-control');
+    const controller = createInclassTerminalController({
+      seed: {
+        requestedOutcomes: [{ id: 'teacher_explanation', agentId: teacher.id }],
+      },
+    });
+    const onTrustedChildResult = vi.fn((event) => controller.recordChildResult(event));
+    const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
+    const events: StatelessEvent[] = [];
+    const tool = buildCallAgentTool({
+      ...baseToolOpts(events),
+      onTrustedChildResult,
+    });
+
+    await tool.execute('partial-then-error', {
+      agentId: teacher.id,
+      outcomeId: 'teacher_explanation',
+      instruction: 'Explain the concept.',
+    });
+
+    expect(onTrustedChildResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcomeId: 'teacher_explanation',
+        status: 'failed',
+        substantive: false,
+      }),
+    );
+    expect(controller.getTrace()).toMatchObject({
+      revision: 0,
+      outcomes: [{ id: 'teacher_explanation', status: 'pending' }],
+      updates: [],
+    });
+  });
 });

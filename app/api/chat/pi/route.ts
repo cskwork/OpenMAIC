@@ -15,6 +15,7 @@ import {
   resolveAgentConfigs,
 } from '@/lib/chat/pi/config';
 import { runPiDirectorLoop } from '@/lib/chat/pi/director-loop';
+import { validateInclassTaskContract } from '@/lib/chat/pi/terminal-control';
 import type { SendEvent } from '@/lib/chat/pi/types';
 import { resolveModel } from '@/lib/server/resolve-model';
 import { apiError } from '@/lib/server/api-response';
@@ -102,6 +103,13 @@ export async function POST(req: NextRequest) {
         400,
         `No valid classroom agents found for config.agentIds: ${body.config.agentIds.join(', ')}`,
       );
+    }
+    const taskContractError = validateInclassTaskContract(
+      body.config.piTaskContract,
+      resolvedAgentIds,
+    );
+    if (taskContractError) {
+      return apiError('INVALID_REQUEST', 400, taskContractError);
     }
 
     const signal = req.signal;

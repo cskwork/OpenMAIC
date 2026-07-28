@@ -25,6 +25,7 @@ import {
   toHistoryMessages,
 } from '../prompts';
 import type { SendEvent } from '../types';
+import type { TrustedChildResultEvent } from '../terminal-control';
 import { buildChildActionTools, createPiWhiteboardRuntimeState } from './classroom-actions';
 
 const CallAgentParams = Type.Object({
@@ -34,6 +35,12 @@ const CallAgentParams = Type.Object({
   instruction: Type.String({
     description: 'Specific instruction and context for the selected agent response.',
   }),
+  outcomeId: Type.Optional(
+    Type.String({
+      description:
+        'Exact pending request-scoped outcome ID this delegation is intended to complete. Omit when no explicit outcome applies.',
+    }),
+  ),
 });
 
 type CallAgentParams = Static<typeof CallAgentParams>;
@@ -506,6 +513,7 @@ export function buildCallAgentTool(opts: {
   send: SendEvent;
   languageModel: LanguageModel;
   onAgentDone: (summary: AgentTurnSummary) => void;
+  onTrustedChildResult?: (event: TrustedChildResultEvent) => void;
   onActionDone: (record?: WhiteboardActionRecord) => void;
   thinkingConfig: ThinkingConfig;
   maxOutputTokens?: number;
@@ -752,6 +760,13 @@ export function buildCallAgentTool(opts: {
       });
 
       const emittedText = text.trim();
+      const finalAssistantMessage = child.state.messages.findLast(
+        (message) => message.role === 'assistant',
+      );
+      const childTerminalFailed =
+        finalAssistantMessage?.stopReason === 'error' ||
+        finalAssistantMessage?.stopReason === 'aborted';
+      const childRunFailed = childErrored || childTerminalFailed;
       const fallbackText = sawStructuredOutput
         ? ''
         : sanitizeVisibleSpeech(extractLastAssistantText(child.state.messages)).trim();
@@ -775,7 +790,7 @@ export function buildCallAgentTool(opts: {
       if (finalText && !emittedText) {
         await opts.send({ type: 'text_delta', data: { content: finalText, messageId } });
       }
-      const isEmptyTurn = childErrored || (!hasVisibleText && actionCount === 0);
+      const isEmptyTurn = childRunFailed || (!hasVisibleText && actionCount === 0);
       consecutiveEmptyTurns = isEmptyTurn ? consecutiveEmptyTurns + 1 : 0;
       await opts.send({ type: 'agent_end', data: { messageId, agentId: agent.id } });
       opts.onAgentDone({
@@ -786,6 +801,14 @@ export function buildCallAgentTool(opts: {
         whiteboardActions,
         actionWarnings,
       });
+      opts.onTrustedChildResult?.({
+        source: 'runtime_child_result',
+        agentInvocationId: messageId,
+        agentId: agent.id,
+        outcomeId: params.outcomeId,
+        status: childRunFailed ? 'failed' : isEmptyTurn ? 'empty' : 'completed',
+        substantive: !isEmptyTurn,
+      });
 
       return {
         content: [
@@ -795,8 +818,10 @@ export function buildCallAgentTool(opts: {
           },
         ],
         details: {
+          agentInvocationId: messageId,
           agentId: agent.id,
           agentName: agent.name,
+          ...(params.outcomeId ? { outcomeId: params.outcomeId } : {}),
           text: finalText,
           actionWarnings,
           ...(sceneEvidence ? { sceneEvidence: sceneEvidence.metadata } : {}),
