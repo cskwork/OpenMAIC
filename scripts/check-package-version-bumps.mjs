@@ -78,7 +78,7 @@ function compareVersions(left, right) {
 }
 
 const changedFiles = new Set(
-  git(['diff', '--name-only', '--no-renames', '--diff-filter=ACDMRT', base, 'HEAD'])
+  git(['diff', '--name-only', '--no-renames', '--diff-filter=ACDMRT', `${base}...HEAD`])
     .split('\n')
     .filter(Boolean),
 );

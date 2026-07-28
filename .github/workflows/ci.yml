@@ -16,18 +16,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Fetch pull request base
-        if: github.event_name == 'pull_request'
-        run: git fetch --no-tags --depth=1 origin "$BASE_SHA"
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        with:
+          fetch-depth: 0
 
       - name: Package version bumps
         if: github.event_name == 'pull_request'
         run: node scripts/check-package-version-bumps.mjs "$BASE_SHA"
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+
+      - name: Package version bumps (main push)
+        if: github.event_name == 'push'
+        run: node scripts/check-package-version-bumps.mjs HEAD^1
 
       - uses: pnpm/action-setup@v4
 

@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = resolve(import.meta.dirname, '..');
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const temporaryDirectory = mkdtempSync(join(tmpdir(), 'openmaic-package-smoke-'));
 
 function run(command, args, options = {}) {
@@ -32,16 +33,18 @@ function pack(name) {
 
 try {
   const packageNames = ['dsl', 'storage', 'renderer', 'importer'];
+  const localPackages = new Set(packageNames.map((name) => `@openmaic/${name}`));
   // The smoke program executes the renderer root, whose optional chart and
   // highlighting peers are imported by that entry. Other optional peers remain
   // optional unless the smoke program starts executing their owning entry.
-  const installOptionalPeersFor = new Set(['renderer']);
+  const installOptionalPeersFor = new Set(['renderer', 'storage']);
   const peerDependencies = {};
   for (const name of packageNames) {
     const manifest = JSON.parse(
       readFileSync(join(root, 'packages/@openmaic', name, 'package.json'), 'utf8'),
     );
     for (const [peer, range] of Object.entries(manifest.peerDependencies ?? {})) {
+      if (localPackages.has(peer)) continue;
       const isOptional = manifest.peerDependenciesMeta?.[peer]?.optional === true;
       if (isOptional && !installOptionalPeersFor.has(name)) continue;
       const existing = peerDependencies[peer];
