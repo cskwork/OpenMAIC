@@ -28,6 +28,9 @@ const ignoredPackageInputs = {
   },
 };
 const base = process.argv[2];
+const repositoryRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+  encoding: 'utf8',
+}).trim();
 
 if (!base) {
   console.error('Usage: pnpm check:package-versions <base-ref>');
@@ -35,11 +38,11 @@ if (!base) {
 }
 
 function git(args) {
-  return execFileSync('git', args, { encoding: 'utf8' }).trim();
+  return execFileSync('git', args, { cwd: repositoryRoot, encoding: 'utf8' }).trim();
 }
 
 function gitFileAt(ref, file) {
-  const path = git(['ls-tree', '--name-only', ref, '--', file]);
+  const path = git(['ls-tree', '--full-tree', '--name-only', ref, '--', file]);
   if (path === '') return undefined;
   return git(['show', `${ref}:${file}`]);
 }
