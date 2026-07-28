@@ -232,20 +232,34 @@ function routeNotFound(res: ServerResponse): void {
 }
 
 function pathParts(req: IncomingMessage): { parts: string[]; url: URL } {
-  const url = new URL(req.url ?? '/', 'http://conformance.invalid');
-  const parts = url.pathname.split('/');
-  if (parts[0] === '') parts.shift();
-  try {
-    return { parts: parts.map((part) => decodeURIComponent(part)), url };
-  } catch {
-    // A malformed escape (`%`, `%zz`) is a bad request, not a server fault; the
-    // native URIError would otherwise surface as the contract's 500 row.
-    throw new ConformanceHttpError(
-      400,
-      'VALIDATION_FAILED',
-      '@openmaic/storage: request path is not valid percent-encoded UTF-8',
-    );
+  const target = req.url ?? '/';
+  const url = new URL(target, 'http://conformance.invalid');
+  // Split the RAW request target, not `url.pathname`. The WHATWG parser resolves
+  // dot segments before anything here can look, and it treats `%2e` as one — so
+  // `/assets/%2e%2e/x` arrives already collapsed to `/x`, and a validator reading
+  // the parsed path would be inspecting a request nobody sent. The rules exist to
+  // reject what was *received*, so the segments come from the wire.
+  const rawPath = target.split(/[?#]/, 1)[0] ?? '/';
+  const rawParts = rawPath.split('/');
+  if (rawParts[0] === '') rawParts.shift();
+  const parts: string[] = [];
+  for (const part of rawParts) {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(part);
+    } catch {
+      // A malformed escape (`%`, `%zz`, a surrogate encoding) is a bad request,
+      // not a server fault; the native URIError would otherwise surface as the
+      // contract's INTERNAL_ERROR row.
+      throw new ConformanceHttpError(
+        400,
+        'VALIDATION_FAILED',
+        '@openmaic/storage: request path is not valid percent-encoded UTF-8',
+      );
+    }
+    parts.push(decoded);
   }
+  return { parts, url };
 }
 
 function cookieValue(req: IncomingMessage, name: string): string | undefined {
@@ -455,6 +469,10 @@ async function routeKv(
 
   if (method === 'GET' && parts.length === 2 && parts[1] === 'keys') {
     const prefix = url.searchParams.get('prefix') ?? '';
+    // The prefix is caller-controlled and reaches the same place a key does, so
+    // it is held to the same rules. A server trusting the client to have checked
+    // is trusting a client it does not control.
+    if (prefix !== '') assertAddressableIdentifier(prefix, 'kv key prefix');
     // A literal, byte-for-byte prefix comparison. Spelled out because the
     // obvious SQL translation is `LIKE prefix || '%'`, where an unescaped `%`
     // or `_` in a caller-supplied prefix silently becomes a wildcard.
@@ -618,9 +636,17 @@ export async function startKvAssetConformanceServer(
     const request = new Request(input, init);
     const url = new URL(request.url);
     const requestBody = Buffer.from(await request.arrayBuffer());
+    // Recover the raw request target when the caller passed a string. `Request`
+    // normalizes dot segments — including `%2e` — exactly as `URL` does, so
+    // building the target from the parsed URL would hide from this server the
+    // very inputs a real client can put on the wire.
+    const rawTarget =
+      typeof input === 'string'
+        ? input.slice(url.origin.length) || '/'
+        : `${url.pathname}${url.search}`;
     const fakeRequest = {
       method: request.method,
-      url: `${url.pathname}${url.search}`,
+      url: rawTarget,
       headers: Object.fromEntries(request.headers.entries()),
       async *[Symbol.asyncIterator]() {
         if (requestBody.length > 0) yield requestBody;

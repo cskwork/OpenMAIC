@@ -377,6 +377,36 @@ describe('HttpKVStore key constraints', () => {
     await expect(store().set('\u20AC'.repeat(256), 'v')).rejects.toThrow(/exceeds 512 UTF-8 bytes/);
   });
 
+  test.each([
+    ['%2e', '/kv/entries/%2e'],
+    ['%2e%2e', '/kv/entries/%2e%2e'],
+  ])('the server refuses the encoded dot segment %s', async (_name, path) => {
+    const response = await server.fetch(`${server.baseUrl}${path}`, {
+      method: 'DELETE',
+      headers: { 'x-storage-namespace': `kv-dot-${namespace++}` },
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'VALIDATION_FAILED' },
+    });
+  });
+
+  test('the server validates the keys() prefix, not just the key', async () => {
+    // The prefix is a separate caller-controlled input that reaches the same
+    // query a key does; a server trusting the client to have checked it is
+    // trusting a client it does not control.
+    const response = await server.fetch(
+      `${server.baseUrl}/kv/keys?prefix=${encodeURIComponent('a/b')}`,
+      { headers: { 'x-storage-namespace': `kv-prefix-${namespace++}` } },
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'VALIDATION_FAILED', message: expect.stringContaining('must not contain') },
+    });
+  });
+
   test('the server refuses a percent-encoded traversal in a key', async () => {
     const response = await server.fetch(
       `${server.baseUrl}/kv/entries/${encodeURIComponent('../../etc/passwd')}`,
@@ -666,6 +696,50 @@ describe('HttpKVStore transport semantics', () => {
     await account.keys();
     await account.keys('ui:');
     expect(paths).toEqual(['/kv/keys', '/kv/keys?prefix=ui%3A']);
+  });
+
+  test.each([
+    ['file:', 'file:///etc'],
+    ['ftp:', 'ftp://host/x'],
+  ])('refuses a %s base url at construction', (_name, baseUrl) => {
+    const deviceStore = new BrowserKVStore({ storage: new MemoryStorage() });
+    expect(() => new HttpKVStore({ baseUrl, deviceStore })).toThrow(/is not http\(s\)/);
+  });
+
+  test('passes credentials through to fetch for a cross-origin cookie deployment', async () => {
+    let seen: RequestCredentials | undefined;
+    const store = new HttpKVStore({
+      baseUrl: 'https://kv.invalid',
+      credentials: 'include',
+      fetch: async (_input, init) => {
+        seen = init?.credentials;
+        return new Response(null, { status: 204 });
+      },
+      deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
+    });
+
+    await store.remove('k');
+    expect(seen).toBe('include');
+  });
+
+  test('a headers hook cannot describe the request body', async () => {
+    // Same rule as HttpAssetProvider, so the two clients do not disagree about
+    // whether a hook may set Content-Type.
+    let called = false;
+    const store = new HttpKVStore({
+      baseUrl: 'https://kv.invalid',
+      fetch: async () => {
+        called = true;
+        return new Response(null, { status: 204 });
+      },
+      headers: () => ({ 'Content-Type': 'text/plain' }),
+      deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
+    });
+
+    await expect(store.set('k', 'v')).rejects.toThrow(/must not set Content-Type/);
+    expect(called).toBe(false);
+    // Reads carry no body, so there is nothing for a hook to misdescribe.
+    await expect(store.remove('k')).resolves.toBeUndefined();
   });
 
   test('requires a non-empty base url and a usable fetch implementation', () => {

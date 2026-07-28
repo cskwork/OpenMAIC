@@ -1,5 +1,5 @@
 import type { AssetMeta, AssetRef, BinaryBlob, StorageProvider } from '@openmaic/dsl';
-import { computeAssetRef } from './content-ref.js';
+import { assertAssetRef, computeAssetRef } from './content-ref.js';
 
 export interface BrowserAssetProviderOptions {
   /** IndexedDB factory. Defaults to the ambient `indexedDB`. Injectable for tests. */
@@ -101,6 +101,10 @@ export class BrowserAssetProvider implements StorageProvider {
   }
 
   async resolve(ref: AssetRef): Promise<string | null> {
+    // The same ref domain the HTTP backend enforces. A ref this backend stored
+    // but a server could not address would silently stop resolving the moment a
+    // deployment moved — the portability the shared contract suite claims.
+    assertAssetRef(ref);
     const cached = this.urls.get(ref);
     if (cached) return cached;
     const pending = this.readAsUrl(ref);
@@ -126,6 +130,7 @@ export class BrowserAssetProvider implements StorageProvider {
   }
 
   async remove(ref: AssetRef): Promise<void> {
+    assertAssetRef(ref);
     await this.tx('readwrite', (store) => store.delete(ref));
     await this.invalidateUrl(ref);
   }

@@ -26,6 +26,15 @@ export interface HttpAccountKVOptions {
   fetch?: typeof globalThis.fetch;
   /** Called for every request so deployments can attach authentication headers. */
   headers?: HttpKVHeadersHook;
+  /**
+   * Passed straight to `fetch`. A cookie-authenticated deployment whose base URL
+   * is on another origin needs `'include'`: `fetch` sends no cookies
+   * cross-origin by default, and the headers hook cannot compensate because
+   * `Cookie` is a forbidden header name the browser refuses to let scripts set.
+   * Such a deployment also owns the CORS side — the server must answer with
+   * `Access-Control-Allow-Credentials` and a concrete origin.
+   */
+  credentials?: RequestCredentials;
 }
 
 export interface HttpKVStoreOptions extends HttpAccountKVOptions {
@@ -41,6 +50,9 @@ export interface HttpKVStoreOptions extends HttpAccountKVOptions {
    */
   deviceStore: LocalKVStore;
 }
+
+/** Schemes a base URL may use, so no request can be built onto `file:` or `ftp:`. */
+const RESOLVABLE_SCHEMES = new Set(['http:', 'https:']);
 
 interface ErrorResponseBody {
   error?: {
@@ -110,16 +122,23 @@ function normalizeHeaders(init: HeadersInit | undefined): Record<string, string>
  * Wire client for the account-scoped KV HTTP contract.
  *
  * `device` values never leave the device — that is part of the KV primitive,
- * not a deployment setting — so this type makes shipping one *inexpressible*
- * rather than merely refusing it at runtime. No method here takes a scope, the
- * contract it speaks has no scope path segment, query parameter or body field,
- * and every request it can construct is an account request. A caller holding
- * this object has no vocabulary for `device`, so there is no call to audit, no
- * flag to misconfigure, and no branch that could regress into sending one.
+ * not a deployment setting — and this type is the seam where that could be
+ * broken, because it is the only object in the package that can reach the
+ * network. It refuses a device value **twice**, once in the type and once at
+ * run time, and the second one is doing the real work:
  *
- * The scope decision lives one level up, in {@link HttpKVStore}, which routes
- * `device` to a local backend and only ever reaches this transport for
- * `account`.
+ * - The `scope` parameter admits `'account'` alone, so writing `'device'` at a
+ *   call site here is a type error.
+ * - That is not enough on its own. TypeScript compares method parameters
+ *   bivariantly, so this class satisfies the wider `KVStore` and any caller
+ *   holding it that way passes a full `KVScope`. Before the parameter existed
+ *   the extra argument was simply dropped, and the device value went out. So
+ *   the scope is checked at run time and anything but `account` throws.
+ *
+ * The contract underneath has no scope in any channel, which is what makes the
+ * two checks sufficient rather than merely diligent: there is no field for a
+ * device value to occupy even if one got this far. The routing decision lives
+ * one level up, in {@link HttpKVStore}.
  */
 export class HttpAccountKV {
   /**
@@ -138,6 +157,7 @@ export class HttpAccountKV {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly headersHook: HttpKVHeadersHook | undefined;
+  private readonly credentials: RequestCredentials | undefined;
 
   constructor(options: HttpAccountKVOptions) {
     if (options.baseUrl === '') {
@@ -153,9 +173,28 @@ export class HttpAccountKV {
     if (typeof selectedFetch !== 'function') {
       throw new Error('@openmaic/storage: HttpKVStore requires a fetch implementation');
     }
-    this.baseUrl = options.baseUrl.replace(/\/+$/, '');
+    // A base URL that is neither http(s) nor a path would put `file:` or `ftp:`
+    // one string-join away from every request this client makes, and a
+    // non-parsing one turns the first join into a bare TypeError.
+    const trimmedBase = options.baseUrl.replace(/\/+$/, '');
+    if (/^[a-z][a-z0-9+.-]*:/i.test(trimmedBase)) {
+      let parsedBase: URL;
+      try {
+        parsedBase = new URL(trimmedBase);
+      } catch {
+        throw new Error(`@openmaic/storage: HttpKVStore baseUrl must be a valid URL`);
+      }
+      if (!RESOLVABLE_SCHEMES.has(parsedBase.protocol)) {
+        throw new Error(
+          `@openmaic/storage: HttpKVStore baseUrl scheme ` +
+            `${JSON.stringify(parsedBase.protocol)} is not http(s)`,
+        );
+      }
+    }
+    this.baseUrl = trimmedBase;
     this.fetchImpl = selectedFetch.bind(globalThis);
     this.headersHook = options.headers;
+    this.credentials = options.credentials;
   }
 
   private async request<T>(
@@ -166,13 +205,27 @@ export class HttpAccountKV {
     const headers = normalizeHeaders(await this.headersHook?.({ method, path }));
     let serializedBody: string | undefined;
     if (body !== undefined) {
-      headers['content-type'] ??= 'application/json';
+      // The body is JSON and nothing else, so a hook-supplied Content-Type is a
+      // misconfiguration rather than a preference. Fail loud, matching
+      // HttpAssetProvider — the two clients must not disagree about whether a
+      // hook may describe the body.
+      if (headers['content-type'] !== undefined) {
+        throw new HttpKVStoreError(
+          // No exchange happened, so there is no status to report.
+          0,
+          'CONTENT_TYPE_CONFLICT',
+          '@openmaic/storage: the headers hook must not set Content-Type — KV request bodies ' +
+            'are always application/json',
+        );
+      }
+      headers['content-type'] = 'application/json';
       serializedBody = JSON.stringify(body);
     }
 
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
       headers,
+      ...(this.credentials === undefined ? {} : { credentials: this.credentials }),
       ...(serializedBody === undefined ? {} : { body: serializedBody }),
     });
     if (!response.ok) {

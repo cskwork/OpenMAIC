@@ -1,6 +1,5 @@
 import type { AssetMeta, AssetRef, BinaryBlob, StorageProvider } from '@openmaic/dsl';
-import { assertJsonValue } from '../runtime/json-value.js';
-import { computeAssetRef } from './content-ref.js';
+import { assertAssetRef, computeAssetRef } from './content-ref.js';
 
 export interface HttpAssetHeadersContext {
   method: string;
@@ -18,6 +17,15 @@ export interface HttpAssetProviderOptions {
   fetch?: typeof globalThis.fetch;
   /** Called for every request so deployments can attach authentication headers. */
   headers?: HttpAssetHeadersHook;
+  /**
+   * Passed straight to `fetch`. A cookie-authenticated deployment whose base URL
+   * is on another origin needs `'include'`: `fetch` sends no cookies
+   * cross-origin by default, and the headers hook cannot compensate because
+   * `Cookie` is a forbidden header name the browser refuses to let scripts set.
+   * Such a deployment also owns the CORS side — the server must answer with
+   * `Access-Control-Allow-Credentials` and a concrete origin.
+   */
+  credentials?: RequestCredentials;
 }
 
 interface ErrorResponseBody {
@@ -63,49 +71,8 @@ const PROBE_ORIGIN = 'https://asset-url-probe.invalid';
  */
 const RESOLVABLE_SCHEMES = new Set(['http:', 'https:']);
 
-/**
- * Upper bound on a ref, in UTF-8 bytes. Long past any digest, and the same
- * reasoning as the KV key bound: refs become URL segments and server-side keys.
- */
-const MAX_ASSET_REF_BYTES = 512;
-
-const UTF8 = new TextEncoder();
-
-/**
- * Constrain a ref to something that survives a URL round trip and can never be
- * mistaken for structure by a server.
- *
- * The read path accepts refs this package did not issue (a document may carry a
- * ref from a future scheme), so shape is not enforced here — but safety is. `/`
- * and `\` are refused because a decoded ref must not be able to introduce a
- * path segment: `..%2F..%2Fetc%2Fpasswd` decodes to a traversal, and a server
- * that used the ref as a filename would inherit it.
- */
-function assertAddressableRef(ref: string): void {
-  // Rejects NUL and lone surrogates, the latter of which would otherwise make
-  // encodeURIComponent throw a bare URIError instead of a storage error.
-  assertJsonValue(ref, `asset ref ${JSON.stringify(ref)}`);
-  if (ref === '') {
-    throw new Error('@openmaic/storage: asset ref must not be empty');
-  }
-  if (ref === '.' || ref === '..') {
-    throw new Error(`@openmaic/storage: URL path segment must not be ${JSON.stringify(ref)}`);
-  }
-  if (ref.includes('/') || ref.includes('\\')) {
-    throw new Error(
-      `@openmaic/storage: asset ref ${JSON.stringify(ref)} must not contain '/' or '\\'`,
-    );
-  }
-  const bytes = UTF8.encode(ref).length;
-  if (bytes > MAX_ASSET_REF_BYTES) {
-    throw new Error(
-      `@openmaic/storage: asset ref exceeds ${MAX_ASSET_REF_BYTES} UTF-8 bytes (got ${bytes})`,
-    );
-  }
-}
-
 function segment(value: string): string {
-  assertAddressableRef(value);
+  assertAssetRef(value);
   return encodeURIComponent(value);
 }
 
@@ -142,12 +109,14 @@ export class HttpAssetProvider implements StorageProvider {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly headersHook: HttpAssetHeadersHook | undefined;
+  private readonly credentials: RequestCredentials | undefined;
   /**
    * ref → the in-flight resolution. Concurrent `resolve(ref)` calls share one
    * request and therefore one URL, matching `BrowserAssetProvider`. The entry is
-   * dropped once it settles: unlike an object URL, a resolved HTTP URL may be a
-   * short-lived signed URL, and handing back an expired one later would be
-   * worse than asking the server again.
+   * dropped once it settles, and again whenever the ref is mutated — so this is
+   * a request-coalescing window, not a cache. Unlike an object URL, a resolved
+   * HTTP URL may be a short-lived signed URL; keeping one to hand out later
+   * would trade a second request for an expired URL.
    */
   private readonly inFlight = new Map<AssetRef, Promise<string | null>>();
 
@@ -165,9 +134,28 @@ export class HttpAssetProvider implements StorageProvider {
     if (typeof selectedFetch !== 'function') {
       throw new Error('@openmaic/storage: HttpAssetProvider requires a fetch implementation');
     }
-    this.baseUrl = options.baseUrl.replace(/\/+$/, '');
+    // A base URL that is neither http(s) nor a path would put `file:` or `ftp:`
+    // one string-join away from every request this client makes, and a
+    // non-parsing one turns the first join into a bare TypeError.
+    const trimmedBase = options.baseUrl.replace(/\/+$/, '');
+    if (/^[a-z][a-z0-9+.-]*:/i.test(trimmedBase)) {
+      let parsedBase: URL;
+      try {
+        parsedBase = new URL(trimmedBase);
+      } catch {
+        throw new Error('@openmaic/storage: HttpAssetProvider baseUrl must be a valid URL');
+      }
+      if (!RESOLVABLE_SCHEMES.has(parsedBase.protocol)) {
+        throw new Error(
+          `@openmaic/storage: HttpAssetProvider baseUrl scheme ` +
+            `${JSON.stringify(parsedBase.protocol)} is not http(s)`,
+        );
+      }
+    }
+    this.baseUrl = trimmedBase;
     this.fetchImpl = selectedFetch.bind(globalThis);
     this.headersHook = options.headers;
+    this.credentials = options.credentials;
   }
 
   private async send(
@@ -197,6 +185,7 @@ export class HttpAssetProvider implements StorageProvider {
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
       headers,
+      ...(this.credentials === undefined ? {} : { credentials: this.credentials }),
       ...(init.body === undefined ? {} : { body: init.body }),
     });
     if (!response.ok) throw await this.toError(response);
@@ -295,7 +284,12 @@ export class HttpAssetProvider implements StorageProvider {
     } catch {
       throw this.malformed('asset resolve url is not a parseable path', status);
     }
-    if (probed.origin !== PROBE_ORIGIN) {
+    if (probed.origin !== PROBE_ORIGIN || url.startsWith('//')) {
+      // The origin comparison answers "did this stay where I put it", which a URL
+      // naming the probe host itself passes by coincidence — `//<probe host>/x`
+      // is protocol-relative and would resolve against the *real* base to a
+      // different origin. Any authority-bearing form is refused outright, so the
+      // check does not depend on the probe host being unguessable.
       throw this.malformed(
         'asset resolve url must be a path, not a reference to another origin',
         status,
@@ -312,6 +306,15 @@ export class HttpAssetProvider implements StorageProvider {
     if (resolved.origin !== new URL(this.baseUrl).origin) {
       throw this.malformed(
         `asset resolve url resolved to ${JSON.stringify(resolved.origin)}, not the base origin`,
+        status,
+      );
+    }
+    // Same allowlist as the absolute branch: a join can only ever produce the
+    // base URL's scheme, and the constructor already refused a base that is not
+    // http(s), but the media element does not care which code path built the URL.
+    if (!RESOLVABLE_SCHEMES.has(resolved.protocol)) {
+      throw this.malformed(
+        `asset resolve url resolved to scheme ${JSON.stringify(resolved.protocol)}, not http(s)`,
         status,
       );
     }

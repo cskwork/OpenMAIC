@@ -374,6 +374,17 @@ describe('HttpAssetProvider resolved-url safety', () => {
     await expect(failure).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' });
   });
 
+  test('refuses a url naming the probe host the check itself resolves against', async () => {
+    // The origin comparison asks "did this stay where I put it", which a URL
+    // naming the probe host passes by coincidence — and it is protocol-relative,
+    // so against the real base it goes somewhere else entirely. The guard must
+    // not depend on the probe host being unguessable; it is in the source.
+    for (const base of ['https://assets.invalid', '/api/persistence']) {
+      const failure = providerReturning('//asset-url-probe.invalid/x', base).resolve('ref');
+      await expect(failure, base).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' });
+    }
+  });
+
   test('a signed url with userinfo or a lookalike host is still returned verbatim', async () => {
     // Documented as in-scope behaviour, not an oversight: the client validates
     // that a URL is a fetchable http(s) URL, and cannot adjudicate which hosts a
@@ -419,7 +430,7 @@ describe('HttpAssetProvider identifier safety', () => {
   test('reports a lone surrogate as a storage error, not a bare URIError', async () => {
     const failure = provider().resolve('\uD800');
     await expect(failure).rejects.not.toBeInstanceOf(URIError);
-    await expect(failure).rejects.toThrow(/not a plain JSON value/);
+    await expect(failure).rejects.toThrow(/unpaired UTF-16 surrogate/);
   });
 
   test('the server refuses a percent-encoded traversal on every asset route', async () => {
@@ -866,6 +877,57 @@ describe('asset media types are constrained on the way out', () => {
   });
 });
 
+describe('signed urls are reusable and principal-scoped', () => {
+  test('a signed url may be fetched more than once', async () => {
+    // The contract says short-lived, deliberately not single-use: `resolve`
+    // makes no promise about how many times its result is loaded, and a browser
+    // may well re-request it (a range request, a reload, a second element).
+    const storageNamespace = `signed-reuse-${namespace++}`;
+    const provider = new HttpAssetProvider({
+      baseUrl: signedServer.baseUrl,
+      fetch: signedServer.fetch,
+      headers: () => ({ 'x-storage-namespace': storageNamespace }),
+    });
+    const ref = await provider.put(new Blob(['reusable'], { type: 'image/png' }));
+    const url = await provider.resolve(ref);
+
+    for (const attempt of [1, 2, 3]) {
+      const response = await signedServer.fetch(url!);
+      expect(response.status, `attempt ${attempt}`).toBe(200);
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytesOf('reusable'));
+    }
+  });
+
+  test('a signed url serves the media type its own principal filed', async () => {
+    const owner = `signed-media-owner-${namespace++}`;
+    const other = `signed-media-other-${namespace++}`;
+    const payload = 'bytes with two filings';
+    const ownerProvider = new HttpAssetProvider({
+      baseUrl: signedServer.baseUrl,
+      fetch: signedServer.fetch,
+      headers: () => ({ 'x-storage-namespace': owner }),
+    });
+    const otherProvider = new HttpAssetProvider({
+      baseUrl: signedServer.baseUrl,
+      fetch: signedServer.fetch,
+      headers: () => ({ 'x-storage-namespace': other }),
+    });
+
+    const ref = await ownerProvider.put(new Blob([payload], { type: 'image/png' }));
+    await otherProvider.put(new Blob([payload], { type: 'text/html' }));
+
+    const ownerUrl = await ownerProvider.resolve(ref);
+    const otherUrl = await otherProvider.resolve(ref);
+
+    // Same bytes, same ref, two filings — and the signed URL carries which one.
+    const served = await signedServer.fetch(ownerUrl!);
+    expect(served.headers.get('content-type')).toBe('image/png');
+    const otherServed = await signedServer.fetch(otherUrl!);
+    expect(otherServed.headers.get('content-type')).toBe('application/octet-stream');
+    expect(otherServed.headers.get('content-disposition')).toBe('attachment');
+  });
+});
+
 describe('the per-principal claim model', () => {
   function providerFor(principal: string): HttpAssetProvider {
     return new HttpAssetProvider({
@@ -964,7 +1026,80 @@ describe('the per-principal claim model', () => {
   });
 });
 
+describe('HttpAssetProvider base url and credentials', () => {
+  test.each([
+    ['file:', 'file:///etc'],
+    ['ftp:', 'ftp://host/x'],
+    ['javascript:', 'javascript:alert(1)'],
+  ])('refuses a %s base url at construction', (_name, baseUrl) => {
+    // Otherwise every request this client builds is one string-join away from a
+    // scheme it should never speak.
+    expect(() => new HttpAssetProvider({ baseUrl })).toThrow(/is not http\(s\)/);
+  });
+
+  test('refuses a base url that carries a scheme but does not parse', () => {
+    expect(() => new HttpAssetProvider({ baseUrl: 'https://%%' })).toThrow(/must be a valid URL/);
+  });
+
+  test('still accepts a path-only base url for the app-mounted shape', () => {
+    expect(() => new HttpAssetProvider({ baseUrl: '/api/persistence' })).not.toThrow();
+  });
+
+  test('passes credentials through to fetch for a cross-origin cookie deployment', async () => {
+    // A cookie-authenticated deployment on another origin has no other way in:
+    // fetch sends no cookies cross-origin by default, and the headers hook
+    // cannot set Cookie because the browser forbids it.
+    let seen: RequestCredentials | undefined;
+    const provider = new HttpAssetProvider({
+      baseUrl: 'https://assets.invalid',
+      credentials: 'include',
+      fetch: async (_input, init) => {
+        seen = init?.credentials;
+        return new Response(null, { status: 204 });
+      },
+    });
+
+    await provider.remove(`sha256-${'c'.repeat(64)}`);
+    expect(seen).toBe('include');
+  });
+
+  test('omits credentials entirely when the deployment does not ask for them', async () => {
+    let hadKey = true;
+    const provider = new HttpAssetProvider({
+      baseUrl: 'https://assets.invalid',
+      fetch: async (_input, init) => {
+        hadKey = init !== undefined && 'credentials' in init;
+        return new Response(null, { status: 204 });
+      },
+    });
+
+    await provider.remove(`sha256-${'d'.repeat(64)}`);
+    expect(hadKey).toBe(false);
+  });
+});
+
 describe('conformance server request hygiene', () => {
+  test.each([
+    ['%2e', `/assets/%2e`],
+    ['%2E', `/assets/%2E`],
+    ['%2e%2e', `/assets/%2e%2e`],
+    ['an encoded traversal', `/assets/%2e%2e%2f%2e%2e%2fetc%2fpasswd`],
+  ])('refuses the encoded dot segment %s on the raw request target', async (_name, path) => {
+    // The WHATWG parser resolves dot segments — including their percent-encoded
+    // spellings — before any validator can look, so a server reading the parsed
+    // path would be inspecting a request nobody sent. These must be judged as
+    // received.
+    const response = await proxyServer.fetch(`${proxyServer.baseUrl}${path}`, {
+      method: 'DELETE',
+      headers: sessionCookie(`dot-segment-${namespace++}`),
+    });
+
+    expect(response.status, path).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'VALIDATION_FAILED' },
+    });
+  });
+
   test('a malformed percent-escape is a 400, not a 500', async () => {
     // decodeURIComponent throws a native URIError on `%`; unmapped it would
     // surface as the contract's INTERNAL_ERROR row for an ordinary bad request.

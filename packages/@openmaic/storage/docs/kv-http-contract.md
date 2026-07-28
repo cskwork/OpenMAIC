@@ -41,7 +41,7 @@ The value travels in an envelope rather than as the body itself. `KVStore.get` c
 
 `GET /kv/keys` returns every matching key. The listing is not paginated, matching `GET /documents` in the [DocumentStore HTTP contract](./document-http-contract.md); the primitive is sized for small configuration values, and a deployment that outgrows an unbounded listing needs a change to `KVStore` itself, not a second listing shape here.
 
-The prefix is a **literal, byte-for-byte** comparison, not a pattern. A server MUST escape any metacharacter of its own query language before applying it — the obvious SQL translation, `key LIKE prefix || '%'`, turns a caller's `%` or `_` into a wildcard and starts returning keys the caller never asked for. The result order is unspecified, but the listing MUST NOT repeat a key.
+The prefix is a **literal, byte-for-byte** comparison, not a pattern. A server MUST validate it against the key rules below (minus the non-empty requirement) and MUST escape every metacharacter of its own query language before applying it. In the obvious SQL translation, `key LIKE prefix || '%'`, that means `%`, `_` **and the backslash** — PostgreSQL's default `LIKE` escape character. Backslash is worth naming because it is the one an implementer is most likely to skip: a legal *key* can never contain one, so it is easy to conclude the client has already excluded it. The client has not; the prefix is a separate input, and it reaches the query. The result order is unspecified, but the listing MUST NOT repeat a key.
 
 ## Value domain
 
@@ -51,7 +51,7 @@ This is intentionally narrower than `BrowserKVStore`, whose `JSON.stringify` wou
 
 Both backends agree on one deliberate exception: `set(key, value)` where `value` has no JSON representation at all (`undefined`, a function, a symbol) is a **removal**, not a write. Storing such a value would produce an entry that throws on read, so the key is deleted instead.
 
-That exception is decided by inspecting the value, never by trial-serializing it. A `JSON.stringify` pre-flight would run caller code — `toJSON`, getters — before the gate above had looked at anything, which both reclassifies values the gate must reject (`{ toJSON: () => undefined }` stringifies to `undefined` and would silently become a delete) and lets a stateful accessor show the probe one value and the serializer another. The gate runs first, on the value as given.
+Every backend decides that by inspecting the value, never by trial-serializing it, and this is a rule about *all* of them rather than an HTTP detail. A `JSON.stringify` pre-flight runs caller code — `toJSON`, getters — before any validation has looked at anything, which reclassifies values as deletes (`{ toJSON: () => undefined }` stringifies to `undefined`) and lets a stateful accessor show the probe one value and the serializer another. Two backends probing and validating in different orders would disagree about whether a write was a delete, which is precisely the divergence the shared suite exists to prevent. Scope and key are validated first, then the delete case is recognized by type, and only then is anything serialized. A value that still fails to serialize is refused rather than quietly deleted.
 
 ## Principal derivation
 

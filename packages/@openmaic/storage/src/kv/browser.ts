@@ -61,15 +61,30 @@ export class BrowserKVStore implements LocalKVStore {
   }
 
   async set<T>(key: string, value: T, scope: KVScope = DEFAULT_KV_SCOPE): Promise<void> {
-    const json = JSON.stringify(value);
-    // `JSON.stringify` yields `undefined` for values JSON can't represent
-    // (`undefined`, a function, a symbol). Storing that coerces to the literal
-    // string "undefined", which then throws on read — so treat it as a removal
-    // rather than writing an unreadable entry.
-    if (json === undefined) {
+    // Scope and key first, before anything can run caller code. `JSON.stringify`
+    // invokes `toJSON` and getters, so validating after it would let a value
+    // observe (and react to) a write that is about to be rejected anyway.
+    const storageKey = this.storageKey(key, scope);
+    // A value with no JSON representation at all is a removal — storing it would
+    // coerce to the literal string "undefined" and throw on the next read. Decided
+    // by inspecting the value, exactly as the HTTP backend decides it: a
+    // `JSON.stringify` probe would also catch `{ toJSON: () => undefined }`, which
+    // the HTTP backend rejects, and the two backends must not disagree about
+    // whether a write was a delete.
+    if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
       return this.remove(key, scope);
     }
-    this.storage.setItem(this.storageKey(key, scope), json);
+    const json = JSON.stringify(value);
+    if (json === undefined) {
+      // Reachable only via a `toJSON` that returns undefined. Refusing keeps this
+      // backend's answer the same as the HTTP one, where the JSON gate rejects
+      // any value defining `toJSON`.
+      throw new Error(
+        `@openmaic/storage: kv value for key ${JSON.stringify(key)} serialized to undefined ` +
+          `(a toJSON returning undefined cannot be stored)`,
+      );
+    }
+    this.storage.setItem(storageKey, json);
   }
 
   async remove(key: string, scope: KVScope = DEFAULT_KV_SCOPE): Promise<void> {

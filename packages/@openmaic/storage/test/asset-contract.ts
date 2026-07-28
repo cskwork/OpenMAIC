@@ -64,6 +64,38 @@ export function runStorageProviderContract(
       expect(await p.resolve('sha256-deadbeef')).toBeNull();
     });
 
+    // The ref domain belongs to the primitive, not to one backend: a ref that
+    // one backend addresses and another cannot is not a portable handle, and a
+    // decoded ref must never be able to introduce a path segment for whatever
+    // storage sits underneath.
+    test.each([
+      ['an empty ref', '', /must not be empty/],
+      ['a ref containing "/"', 'a/b', /must not contain/],
+      ['a ref containing "\\"', 'a\\b', /must not contain/],
+      ['a traversal-shaped ref', '../../etc/passwd', /must not contain/],
+      ['the dot segment "."', '.', /URL path segment/],
+      ['the dot segment ".."', '..', /URL path segment/],
+      ['a ref containing NUL', 'bad\u0000ref', /NUL/],
+      ['a ref containing an unpaired surrogate', '\uD800', /surrogate/],
+      ['an over-long ref', 'r'.repeat(513), /exceeds 512 UTF-8 bytes/],
+    ])('refuses %s', async (_name, ref, message) => {
+      const p = makeProvider();
+      await expect(p.resolve(ref)).rejects.toThrow(message);
+      await expect(p.remove(ref)).rejects.toThrow(message);
+    });
+
+    // Zero bytes is a legal asset. It hashes like anything else, so every empty
+    // asset in a deployment collapses to one well-known ref by design.
+    test('stores and resolves a zero-byte asset', async () => {
+      const p = makeProvider();
+      const ref = await p.put(new Blob([], { type: 'text/plain' }));
+      expect(ref).toBe('sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
+
+      const url = await p.resolve(ref);
+      expect(url).not.toBeNull();
+      expect(await readUrl(url!)).toEqual(new Uint8Array());
+    });
+
     test('resolve returns null after remove', async () => {
       const p = makeProvider();
       const ref = await p.put(blob('temporary'));

@@ -89,6 +89,33 @@ export function runKVStoreContract(name: string, makeStore: () => KVStore): void
       expect(await kv.get('k', 'account')).toBe('account-val');
     });
 
+    // Both backends decide "this write is a delete" by inspecting the value, not
+    // by trial-serializing it: `JSON.stringify` runs caller code, so a probe
+    // would reclassify `{ toJSON: () => undefined }` as a delete on one backend
+    // while the other rejects it. A value that cannot be stored is refused, and
+    // a refused write leaves the previous value alone.
+    test('a toJSON returning undefined is refused, not silently treated as a delete', async () => {
+      const kv = makeStore();
+      await kv.set('k', 'present');
+
+      await expect(kv.set('k', { toJSON: () => undefined })).rejects.toThrow();
+      expect(await kv.get('k')).toBe('present');
+    });
+
+    test('the key is validated before anything reads the value', async () => {
+      const kv = makeStore();
+      let reads = 0;
+      const spy = {
+        get value() {
+          reads += 1;
+          return reads;
+        },
+      };
+
+      await expect(kv.set('a/b', spy)).rejects.toThrow(/must not contain/);
+      expect(reads).toBe(0);
+    });
+
     // Scopes arrive as ordinary values (the zustand adapter passes one through
     // verbatim), so a typo is a runtime possibility the type cannot prevent.
     // Every backend must fail closed on one, and identically: a backend that

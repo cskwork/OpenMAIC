@@ -67,6 +67,8 @@ So the proxied shape is only sound where the deployment authenticates with a **c
 
 A deployment authenticating with a bearer token or any other header MUST use the signed-URL shape, or serve `GET /assets/{ref}/content` behind its own short-lived URL token. Pointing `resolve` at a header-authenticated path is not a configuration to be tuned: the resulting URL fails to load for every browser, in every deployment.
 
+A cookie deployment whose base URL is on **another origin** needs one more thing. `fetch` sends no cookies cross-origin unless the request asks for them, and the headers hook cannot compensate — `Cookie` is a forbidden header name, so a script cannot set it. Such a deployment passes `credentials: 'include'` to the client (both `HttpAssetProvider` and `HttpAccountKV` accept it and hand it to `fetch` untouched) and takes on the CORS obligations that follow: the server must answer with `Access-Control-Allow-Credentials: true` and a concrete origin, never `*`. Same-origin cookie deployments need none of this, which is why the option is opt-in rather than a default.
+
 ### Client-side validation
 
 A resolved URL ends up in a media `src`, so the client validates before returning it, and every failure below is a `MALFORMED_RESPONSE`.
@@ -96,6 +98,7 @@ Deployments MUST bound upload size, rejecting a body past the bound with `413 PA
 Refs are content-addressed, so identical bytes uploaded by two principals produce one ref. A deployment MAY still store those bytes once. What it MUST NOT do is let the shared bytes make the two principals share a fate. The contract settles that with a claim model, so `remove`, `resolve`, and reclamation are defined rather than left to the backend:
 
 - A principal acquires a **claim** on a ref by `PUT`, and only by `PUT`. Nothing else creates one.
+- **Acquiring a claim MUST leave the bytes present.** A server that de-duplicates will find the bytes already stored and be tempted to insert the claim alone — but a concurrent reclamation of the last previous claim can remove those bytes immediately afterwards, leaving a claim pointing at nothing and a document that resolves to a URL serving `404`. Either write the bytes unconditionally, or hold the lock reclamation takes for the duration of the claim insert. This is the one ordering hazard the model introduces, and it is invisible until a deployment runs long enough to garbage-collect.
 - `resolve(ref)` for a principal holding no claim returns `null` — the same answer as an asset that does not exist. Knowing a ref is not authorization, so a principal cannot read another's asset by guessing or by copying a ref out of a shared document.
 - `remove(ref)` releases the caller's claim. Afterwards that caller's `resolve(ref)` returns `null`, while every other claimholder is unaffected: one principal's delete MUST NOT break another principal's document.
 - Re-uploading the same bytes after a `remove` restores the claim, at the same ref.
