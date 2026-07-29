@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { DOCUMENT_PG_SCHEMA } from '../src/document/pg.js';
-import { RUNTIME_PG_SCHEMA } from '../src/runtime/pg.js';
+import { DOCUMENT_PG_SCHEMA, ensureDocumentSchema } from '../src/document/pg.js';
+import { RUNTIME_PG_SCHEMA, ensureSchema } from '../src/runtime/pg.js';
+import type { Queryable } from '../src/runtime/pg.js';
 
 /**
  * Golden pins for the two PostgreSQL schemas this package exports.
@@ -21,6 +22,12 @@ import { RUNTIME_PG_SCHEMA } from '../src/runtime/pg.js';
  * These tests do not judge whether the DDL is correct. They make changing it
  * impossible to do by accident: any edit fails here and has to be made
  * deliberately, in the same change that tells consumers to migrate.
+ *
+ * Pinning the constants alone would leave a gap, because what a consumer has to
+ * reproduce is not the constant but the statements the ensure functions run. So
+ * each ensure function is also executed against a recording queryable and its
+ * exact statement sequence is asserted, which keeps the two from drifting apart
+ * through a change that touches only the function.
  */
 
 const EXPECTED_DOCUMENT_PG_SCHEMA = `
@@ -83,12 +90,62 @@ CREATE INDEX IF NOT EXISTS runtime_records_session_scene_idx
   ON runtime_records (session_id, scene_id);
 `;
 
+/** Records the statements an ensure function actually issues. */
+function recordingQueryable(): { statements: string[]; queryable: Queryable } {
+  const statements: string[] = [];
+  return {
+    statements,
+    queryable: {
+      async query<TRow extends Record<string, unknown>>(text: string) {
+        statements.push(text);
+        return { rows: [] as TRow[] };
+      },
+    },
+  };
+}
+
+function statementsOf(schema: string): string[] {
+  return schema
+    .split(';')
+    .map((statement) => statement.trim())
+    .filter((statement) => statement !== '');
+}
+
 const schemas = [
-  { name: 'DOCUMENT_PG_SCHEMA', actual: DOCUMENT_PG_SCHEMA, expected: EXPECTED_DOCUMENT_PG_SCHEMA },
-  { name: 'RUNTIME_PG_SCHEMA', actual: RUNTIME_PG_SCHEMA, expected: EXPECTED_RUNTIME_PG_SCHEMA },
+  {
+    name: 'DOCUMENT_PG_SCHEMA',
+    actual: DOCUMENT_PG_SCHEMA,
+    expected: EXPECTED_DOCUMENT_PG_SCHEMA,
+    ensure: ensureDocumentSchema,
+  },
+  {
+    name: 'RUNTIME_PG_SCHEMA',
+    actual: RUNTIME_PG_SCHEMA,
+    expected: EXPECTED_RUNTIME_PG_SCHEMA,
+    ensure: ensureSchema,
+  },
 ];
 
-describe.each(schemas)('$name is a pinned contract', ({ name, actual, expected }) => {
+describe.each(schemas)('$name is a pinned contract', ({ name, actual, expected, ensure }) => {
+  it('is exactly what the ensure function provisions', async () => {
+    // Pinning the constant alone would not notice the ensure function growing
+    // extra DDL, dropping the index statements, or reordering them. What a
+    // consumer has to reproduce is what actually runs, so assert that.
+    const { statements, queryable } = recordingQueryable();
+    await ensure(queryable);
+
+    expect(statements).toEqual(statementsOf(expected));
+  });
+
+  it('provisions idempotently on a second call', async () => {
+    const { statements, queryable } = recordingQueryable();
+    await ensure(queryable);
+    await ensure(queryable);
+
+    const once = statementsOf(expected);
+    expect(statements).toEqual([...once, ...once]);
+  });
+
   it('matches the published DDL verbatim', () => {
     // A failure here is not a broken test: it means the schema changed. Update
     // this pin in the same change, and treat it as a breaking change for any

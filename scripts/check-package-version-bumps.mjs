@@ -2,6 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+const REGISTRY = 'https://registry.npmjs.org';
+
 const commonIgnoredInputs = {
   files: ['.gitignore', 'vitest.config.ts'],
   directories: ['docs/', 'test/'],
@@ -9,6 +11,17 @@ const commonIgnoredInputs = {
 
 // Keep this package set in lockstep with publish-packages.yml. The release
 // workflow intentionally publishes only these four owned packages.
+//
+// KNOWN LIMITATION: this treats "publishable input" as "file under the package
+// directory". That is exact for dsl and storage, which build with tsc and
+// declare every runtime dependency. It is an under-approximation for renderer
+// and importer, whose Rollup configs inline their dependency graph, so a
+// lockfile-only resolution change can alter their published bytes with no diff
+// under the package directory. Closing that would mean either marking those
+// dependencies external or treating the lockfile as an input of every bundling
+// package, both of which are changes to how the packages are built rather than
+// to this check. Diff mode is therefore a merge-time guard against the common
+// case, not a proof of byte equality.
 const ignoredPackageInputs = {
   dsl: commonIgnoredInputs,
   storage: commonIgnoredInputs,
@@ -32,8 +45,8 @@ const ignoredPackageInputs = {
 
 const usage = [
   'Usage:',
-  '  check-package-version-bumps.mjs <base-ref>                   (diff mode)',
-  '  check-package-version-bumps.mjs --release [<fallback-base>]  (release mode)',
+  '  check-package-version-bumps.mjs <base-ref>   (diff mode, merge-time gate)',
+  '  check-package-version-bumps.mjs --release    (release mode, pre-publish gate)',
 ].join('\n');
 
 let repositoryRoot;
@@ -71,13 +84,19 @@ function resolveCommit(ref) {
   }
 }
 
+function parseVersion(raw) {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(raw);
+  if (!match) return undefined;
+  return { raw, parts: match.slice(1).map(Number) };
+}
+
 function readVersion(contents, source) {
-  const version = JSON.parse(contents).version;
-  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
-  if (!match) {
-    throw new Error(`${source} must use a stable x.y.z version, got ${JSON.stringify(version)}`);
+  const raw = JSON.parse(contents).version;
+  const version = parseVersion(raw);
+  if (!version) {
+    throw new Error(`${source} must use a stable x.y.z version, got ${JSON.stringify(raw)}`);
   }
-  return { raw: version, parts: match.slice(1).map(Number) };
+  return version;
 }
 
 function compareVersions(left, right) {
@@ -124,7 +143,12 @@ function failIfAny(failures, headline) {
 
 /**
  * Diff mode: every publishable change between `base` and HEAD must carry a
- * version increase. This is the pull-request / branch-push gate.
+ * version increase.
+ *
+ * This is where drift is actually prevented. It runs on pull requests and on
+ * pushes to main, where a real push range always exists, so it sees every
+ * commit that can change a package before that change is reachable by a
+ * release.
  */
 function runDiffMode(base) {
   if (!resolveCommit(base)) {
@@ -138,13 +162,13 @@ function runDiffMode(base) {
 
     const manifest = `${packageDirectory(name)}/package.json`;
     const beforeContents = gitFileAt(base, manifest);
-    if (beforeContents === undefined) {
-      failures.push(`${name}: ${manifest} does not exist at ${base}`);
-      continue;
-    }
     const afterContents = gitFileAt('HEAD', manifest);
     if (afterContents === undefined) {
       failures.push(`${name}: ${manifest} was removed`);
+      continue;
+    }
+    if (beforeContents === undefined) {
+      console.log(`${name}: new package at ${base}, nothing to compare.`);
       continue;
     }
 
@@ -175,65 +199,88 @@ function runDiffMode(base) {
   console.log('Package version check passed.');
 }
 
-/** Versions of `name` already on the registry, or undefined if never published. */
+/**
+ * Versions of `name` already on the registry.
+ *
+ * Returns `undefined` only for a definitive "this package does not exist"
+ * answer. Every other outcome — a transient error, an auth or proxy failure, an
+ * unparseable body, a registry that is not the one we publish to — exits
+ * non-zero, because reading "unknown" as "never published" would skip the
+ * checks below entirely.
+ */
 function registryVersions(name) {
+  let stdout = '';
+  let stderr = '';
+  let failed = false;
   try {
-    const output = execFileSync('npm', ['view', name, 'versions', '--json'], {
+    stdout = execFileSync('npm', ['view', name, 'versions', '--json', '--registry', REGISTRY], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim();
-    if (output === '') return undefined;
-    const parsed = JSON.parse(output);
-    return Array.isArray(parsed) ? parsed : [parsed];
+    });
   } catch (error) {
-    const stderr = String(error.stderr ?? '');
-    if (stderr.includes('E404') || stderr.includes('404 Not Found')) return undefined;
-    // Any other failure (network, auth, rate limit) must not be read as "never
-    // published" — that would let an unvalidated release through.
-    console.error(`Unable to query the registry for ${name}: ${stderr.trim() || error.message}`);
+    failed = true;
+    stdout = String(error.stdout ?? '');
+    stderr = String(error.stderr ?? '');
+  }
+
+  const body = stdout.trim();
+  if (body !== '') {
+    let parsed;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      console.error(`Registry response for ${name} was not JSON: ${body.slice(0, 200)}`);
+      process.exit(2);
+    }
+    // npm --json reports errors as an object with an `error` member.
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.error) {
+      if (parsed.error.code === 'E404') return undefined;
+      console.error(`Registry error for ${name}: ${parsed.error.code} ${parsed.error.summary ?? ''}`);
+      process.exit(2);
+    }
+    if (Array.isArray(parsed) && parsed.every((entry) => typeof entry === 'string')) return parsed;
+    if (typeof parsed === 'string') return [parsed];
+    console.error(`Unexpected registry payload for ${name}: ${body.slice(0, 200)}`);
     process.exit(2);
   }
-}
 
-function highestVersion(versions) {
-  return versions
-    .map((version) => {
-      const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
-      return match ? { raw: version, parts: match.slice(1).map(Number) } : undefined;
-    })
-    .filter((version) => version !== undefined)
-    .sort(compareVersions)
-    .pop();
+  if (failed && /E404|404 Not Found/.test(stderr)) return undefined;
+  console.error(
+    `Unable to determine the published versions of ${name}: ${stderr.trim() || 'empty response'}`,
+  );
+  process.exit(2);
 }
 
 /**
  * Release mode: runs inside the publish job, before publishing, for every
  * trigger.
  *
- * `pnpm publish` silently skips a package whose version is already on the
- * registry. That skip is what lets the registry drift away from the source
- * tree: change a package, leave its version alone, and the release is a no-op
- * that reports success. Diff mode cannot cover this on its own — it sees a
- * single push range, and tag / manual runs have no push range at all.
+ * Scope note. An earlier revision of this gate also tried to prove, at publish
+ * time, that a package whose version is already on the registry still matches
+ * the source that produced it. There is no trustworthy record to prove that
+ * against: git tags are mutable and can be created or moved by hand, pnpm does
+ * not record `gitHead`, and a push range describes one push rather than the
+ * origin of a release. Every anchor available here is either forgeable or
+ * missing for packages released before the scheme existed, and treating a
+ * forgeable anchor as authoritative is worse than not checking, because it
+ * turns "unproven" into "proven".
  *
- * So every package is judged against the registry instead, and a version that
- * is already published is accepted only when the source has not moved since
- * that release. The anchor for "since that release" is, in order:
+ * So drift is prevented where it is provable — diff mode, at merge time, on
+ * every push to main — and this gate is limited to the claims a release can
+ * actually establish:
  *
- *   1. the `@openmaic/<name>@<version>` tag the publish job writes after every
- *      successful publish (exact, and independent of the trigger), or
- *   2. `fallbackBase` — the push range of a branch push, which covers packages
- *      released before those tags existed.
+ *   1. every version about to be published is new and moves forward, so a
+ *      release can never quietly reuse or downgrade a published version;
+ *   2. a package whose version is already published is reported and left
+ *      alone, so `pnpm publish` skipping it is a stated outcome rather than a
+ *      silent one;
+ *   3. anything the registry cannot answer definitively stops the release.
  *
- * With neither anchor there is nothing to compare against, so the release stops
- * rather than guessing.
+ * The workflow adds the two guarantees that do not belong in a script: real
+ * publishes only happen from a commit contained in `main`, and each package is
+ * published and tagged individually so a partial failure stays retryable.
  */
-function runReleaseMode(fallbackBase) {
-  const resolvedFallback = resolveCommit(fallbackBase);
-  if (fallbackBase && !resolvedFallback) {
-    console.log(`Fallback base ${JSON.stringify(fallbackBase)} is not available; ignoring it.`);
-  }
-
+function runReleaseMode() {
   const failures = [];
   const releases = [];
 
@@ -256,64 +303,60 @@ function runReleaseMode(fallbackBase) {
       continue;
     }
 
-    if (!published.includes(local.raw)) {
-      const highest = highestVersion(published);
-      if (highest && compareVersions(local, highest) <= 0) {
-        failures.push(
-          `${packageName}: ${local.raw} is not greater than the published ${highest.raw}; ` +
-            'refusing to release from a stale tree',
-        );
-        continue;
-      }
-      console.log(`${packageName}: releasing ${local.raw} (published: ${highest?.raw ?? 'none'}).`);
-      releases.push({ package: packageName, version: local.raw });
-      continue;
-    }
-
-    // Already on the registry: this run cannot change it, so the source has to
-    // still be the source that produced it.
-    const releaseTag = `${packageName}@${local.raw}`;
-    const taggedRelease = resolveCommit(releaseTag);
-    const anchor = taggedRelease ?? resolvedFallback;
-    if (!anchor) {
-      failures.push(
-        `${packageName}: ${local.raw} is already on the registry and there is no release ` +
-          `anchor to verify it against (no ${releaseTag} tag, and this trigger has no push ` +
-          'range). Bump the version to publish the current source, or tag the commit that ' +
-          `released ${local.raw} as ${releaseTag}.`,
+    if (published.includes(local.raw)) {
+      console.log(
+        `${packageName}: ${local.raw} is already published; this run will not republish it.`,
       );
       continue;
     }
 
-    if (publishableInputsChanged(name, anchor)) {
+    // Compare against every published version, not only the stable ones: a
+    // prerelease or a version this repository cannot express still occupies its
+    // number on the registry, and releasing "past" it would be a downgrade.
+    const unparsable = published.filter((version) => parseVersion(version) === undefined);
+    const stable = published.map(parseVersion).filter((version) => version !== undefined);
+    if (unparsable.length > 0) {
       failures.push(
-        `${packageName}: publishable inputs changed since ` +
-          `${taggedRelease ? releaseTag : anchor.slice(0, 12)} but the version is still ` +
-          `${local.raw}, which is already on the registry. \`pnpm publish\` would skip it and ` +
-          'leave the registry behind the source. Bump the version.',
+        `${packageName}: the registry holds versions this check cannot order ` +
+          `(${unparsable.slice(0, 5).join(', ')}). Releasing ${local.raw} past them cannot be ` +
+          'verified here; publish manually or extend this check with full semver ordering.',
+      );
+      continue;
+    }
+    if (stable.length === 0) {
+      failures.push(`${packageName}: the registry reports no usable versions; refusing to guess.`);
+      continue;
+    }
+    const highest = stable.sort(compareVersions).pop();
+    if (compareVersions(local, highest) <= 0) {
+      failures.push(
+        `${packageName}: ${local.raw} is not greater than the published ${highest.raw}; ` +
+          'refusing to release from a stale tree',
       );
       continue;
     }
 
-    console.log(`${packageName}: ${local.raw} already published and unchanged, will be skipped.`);
+    console.log(`${packageName}: releasing ${local.raw} (published: ${highest.raw}).`);
+    releases.push({ package: packageName, version: local.raw });
   }
 
   failIfAny(failures, 'Refusing to publish @openmaic packages:');
 
-  // The release tags the next run will use as its anchor. Written only once the
-  // checks pass, and consumed only after the publish itself has succeeded.
   const planPath = process.env.RELEASE_PLAN_PATH;
   if (planPath) {
     writeFileSync(planPath, `${JSON.stringify(releases, null, 2)}\n`);
     console.log(`Wrote the release plan for ${releases.length} package(s) to ${planPath}.`);
   }
 
+  if (releases.length === 0) {
+    console.log('Nothing to release: every package version is already on the registry.');
+  }
   console.log('Release version check passed.');
 }
 
 const args = process.argv.slice(2);
 if (args[0] === '--release') {
-  runReleaseMode(args[1]);
+  runReleaseMode();
 } else if (args.length > 0 && !args[0].startsWith('--')) {
   runDiffMode(args[0]);
 } else {
