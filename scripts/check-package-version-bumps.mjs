@@ -235,7 +235,9 @@ function registryVersions(name) {
     // npm --json reports errors as an object with an `error` member.
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.error) {
       if (parsed.error.code === 'E404') return undefined;
-      console.error(`Registry error for ${name}: ${parsed.error.code} ${parsed.error.summary ?? ''}`);
+      console.error(
+        `Registry error for ${name}: ${parsed.error.code} ${parsed.error.summary ?? ''}`,
+      );
       process.exit(2);
     }
     if (Array.isArray(parsed) && parsed.every((entry) => typeof entry === 'string')) return parsed;
@@ -303,18 +305,10 @@ function runReleaseMode() {
       continue;
     }
 
-    if (published.includes(local.raw)) {
-      console.log(
-        `${packageName}: ${local.raw} is already published; this run will not republish it.`,
-      );
-      continue;
-    }
-
-    // Compare against every published version, not only the stable ones: a
-    // prerelease or a version this repository cannot express still occupies its
-    // number on the registry, and releasing "past" it would be a downgrade.
+    // Order against every published version, not only the ones this check can
+    // parse: a prerelease still occupies its number on the registry, so
+    // silently discarding it could let a release move backwards.
     const unparsable = published.filter((version) => parseVersion(version) === undefined);
-    const stable = published.map(parseVersion).filter((version) => version !== undefined);
     if (unparsable.length > 0) {
       failures.push(
         `${packageName}: the registry holds versions this check cannot order ` +
@@ -323,11 +317,32 @@ function runReleaseMode() {
       );
       continue;
     }
+    const stable = published.map(parseVersion).filter((version) => version !== undefined);
     if (stable.length === 0) {
       failures.push(`${packageName}: the registry reports no usable versions; refusing to guess.`);
       continue;
     }
-    const highest = stable.sort(compareVersions).pop();
+    const highest = [...stable].sort(compareVersions).pop();
+
+    if (published.includes(local.raw)) {
+      // Being behind the registry is not a harmless no-op. `pnpm publish`
+      // rewrites each `workspace:*` dependency to the version in this tree, so
+      // a sibling released alongside a rolled-back package would be published
+      // declaring a dependency on the older one.
+      if (compareVersions(local, highest) < 0) {
+        failures.push(
+          `${packageName}: the tree is at ${local.raw} while ${highest.raw} is published. ` +
+            'Refusing to release from a tree that is behind the registry: any sibling ' +
+            `published from it would declare a dependency on ${local.raw}.`,
+        );
+        continue;
+      }
+      console.log(
+        `${packageName}: ${local.raw} is already published; this run will not republish it.`,
+      );
+      continue;
+    }
+
     if (compareVersions(local, highest) <= 0) {
       failures.push(
         `${packageName}: ${local.raw} is not greater than the published ${highest.raw}; ` +
