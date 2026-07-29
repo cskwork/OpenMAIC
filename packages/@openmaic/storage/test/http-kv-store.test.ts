@@ -6,12 +6,9 @@ import { kvPersistStorage } from '../src/zustand/persist.js';
 import { HttpAccountKV, HttpKVStore, HttpKVStoreError } from '../src/kv/http.js';
 import { runKVStoreContract } from './kv-contract.js';
 import { MemoryStorage } from './setup.js';
-import {
-  startKvAssetConformanceServer,
-  type KvAssetConformanceServer,
-} from './kv-asset-conformance-server.js';
+import { startKvConformanceServer, type KvConformanceServer } from './kv-conformance-server.js';
 
-let server: KvAssetConformanceServer;
+let server: KvConformanceServer;
 let namespace = 0;
 
 function makeStore(storageNamespace = `kv-${namespace++}`): HttpKVStore {
@@ -24,7 +21,7 @@ function makeStore(storageNamespace = `kv-${namespace++}`): HttpKVStore {
 }
 
 beforeAll(async () => {
-  server = await startKvAssetConformanceServer({ listen: false });
+  server = await startKvConformanceServer({ listen: false });
 });
 
 afterAll(async () => {
@@ -487,7 +484,7 @@ describe('HttpKVStore error-table coverage', () => {
   });
 
   test('an unauthenticated deployment answers 401 on the contract routes', async () => {
-    const guarded = await startKvAssetConformanceServer({
+    const guarded = await startKvConformanceServer({
       listen: false,
       authenticate: (req) => req.headers.authorization !== undefined,
     });
@@ -508,7 +505,7 @@ describe('HttpKVStore error-table coverage', () => {
   });
 
   test('a denied principal receives 403 rather than a missing key', async () => {
-    const guarded = await startKvAssetConformanceServer({
+    const guarded = await startKvConformanceServer({
       listen: false,
       authorize: (_req, area) => area !== 'kv',
     });
@@ -525,7 +522,7 @@ describe('HttpKVStore error-table coverage', () => {
   });
 
   test('a write past the body ceiling is rejected with 413', async () => {
-    const bounded = await startKvAssetConformanceServer({ listen: false, maxBodyBytes: 8 });
+    const bounded = await startKvConformanceServer({ listen: false, maxBodyBytes: 8 });
     try {
       const store = new HttpKVStore({
         baseUrl: bounded.baseUrl,
@@ -825,8 +822,8 @@ describe('HttpKVStore transport semantics', () => {
   });
 
   test('a headers hook cannot describe the request body', async () => {
-    // Same rule as HttpAssetProvider, so the two clients do not disagree about
-    // whether a hook may set Content-Type.
+    // The hook attaches authentication headers; the body is always JSON, so a
+    // hook that sets Content-Type is misconfigured and fails loud.
     let called = false;
     const store = new HttpKVStore({
       baseUrl: 'https://kv.invalid',
@@ -984,9 +981,9 @@ describe('conformance server read-cache and delete hygiene', () => {
 });
 
 test('real fetch reaches the listening conformance server over loopback', async ({ skip }) => {
-  let networkServer: KvAssetConformanceServer;
+  let networkServer: KvConformanceServer;
   try {
-    networkServer = await startKvAssetConformanceServer();
+    networkServer = await startKvConformanceServer();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EPERM') {
       skip('sandbox does not permit binding a 127.0.0.1 listener');

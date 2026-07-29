@@ -1,5 +1,4 @@
 import type { AssetMeta, AssetRef, BinaryBlob, StorageProvider } from '@openmaic/dsl';
-import { assertAssetRef, computeAssetRef } from './content-ref.js';
 
 export interface BrowserAssetProviderOptions {
   /** IndexedDB factory. Defaults to the ambient `indexedDB`. Injectable for tests. */
@@ -13,6 +12,13 @@ const STORE = 'assets';
 interface StoredAsset {
   bytes: ArrayBuffer;
   contentType: string;
+}
+
+function toHex(buffer: ArrayBuffer): string {
+  const view = new Uint8Array(buffer);
+  let hex = '';
+  for (let i = 0; i < view.length; i++) hex += view[i].toString(16).padStart(2, '0');
+  return hex;
 }
 
 /**
@@ -76,10 +82,14 @@ export class BrowserAssetProvider implements StorageProvider {
     });
   }
 
+  private async computeRef(data: BinaryBlob): Promise<{ ref: AssetRef; bytes: ArrayBuffer }> {
+    const bytes = await data.arrayBuffer();
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return { ref: `sha256-${toHex(digest)}`, bytes };
+  }
+
   async put(data: BinaryBlob, meta?: AssetMeta): Promise<AssetRef> {
-    // Shared with every other backend, so identical bytes keep resolving to one
-    // ref no matter which backend a deployment writes them through.
-    const { ref, bytes } = await computeAssetRef(data);
+    const { ref, bytes } = await this.computeRef(data);
     const asset: StoredAsset = { bytes, contentType: meta?.contentType ?? data.type ?? '' };
     await this.tx('readwrite', (store) => store.put(asset, ref));
     // A re-put with the same bytes but different metadata (e.g. a corrected
@@ -101,10 +111,6 @@ export class BrowserAssetProvider implements StorageProvider {
   }
 
   async resolve(ref: AssetRef): Promise<string | null> {
-    // The same ref domain the HTTP backend enforces. A ref this backend stored
-    // but a server could not address would silently stop resolving the moment a
-    // deployment moved — the portability the shared contract suite claims.
-    assertAssetRef(ref);
     const cached = this.urls.get(ref);
     if (cached) return cached;
     const pending = this.readAsUrl(ref);
@@ -130,7 +136,6 @@ export class BrowserAssetProvider implements StorageProvider {
   }
 
   async remove(ref: AssetRef): Promise<void> {
-    assertAssetRef(ref);
     await this.tx('readwrite', (store) => store.delete(ref));
     await this.invalidateUrl(ref);
   }

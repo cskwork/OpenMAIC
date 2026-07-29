@@ -191,9 +191,9 @@ export class HttpAccountKV {
     let serializedBody: string | undefined;
     if (body !== undefined) {
       // The body is JSON and nothing else, so a hook-supplied Content-Type is a
-      // misconfiguration rather than a preference. Fail loud, matching
-      // HttpAssetProvider — the two clients must not disagree about whether a
-      // hook may describe the body.
+      // misconfiguration rather than a preference: the hook exists to attach
+      // authentication headers, not to describe the body. Fail loud rather than
+      // pick a winner.
       if (headers['content-type'] !== undefined) {
         throw new HttpKVStoreError(
           // No exchange happened, so there is no status to report.

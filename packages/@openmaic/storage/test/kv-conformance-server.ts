@@ -1,75 +1,35 @@
-// Test-only HTTP adapter implementing the KV and asset HTTP contracts, so the
-// shared contract suites can run against the real clients over a real request /
-// response boundary. It keeps its state in memory: the server-side Postgres and
-// filesystem/object-storage backends are a separate part, and this file must
-// not quietly become one.
+// Test-only HTTP adapter implementing the KV HTTP contract, so the shared
+// contract suite can run against the real client over a real request / response
+// boundary. It keeps its state in memory: the server-side Postgres backend is a
+// separate part, and this file must not quietly become one.
 //
 // It is a conformance harness, not a reference server. Its credential handling
-// exists to exercise the contract's authentication and authorization responses
-// (and, for the proxied asset shape, to prove the resolved URL is loadable with
-// nothing but ambient browser credentials); it is not an authentication model.
-// Deriving a principal from an authenticated session belongs to the reference
-// server.
+// exists to exercise the contract's authentication and authorization responses;
+// it is not an authentication model. Deriving a principal from an authenticated
+// session belongs to the reference server.
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { assertJsonValue } from '../src/runtime/json-value.js';
-import { assetRefForBytes, isContentAssetRef } from '../src/asset/content-ref.js';
 
-/** How the server chooses to hand back a loadable URL from `resolve`. */
-export type AssetResolveMode = 'proxy' | 'signed';
-
-export interface KvAssetConformanceServer {
+export interface KvConformanceServer {
   baseUrl: string;
   fetch: typeof globalThis.fetch;
   close(): Promise<void>;
 }
 
-export interface KvAssetConformanceServerOptions {
+export interface KvConformanceServerOptions {
   /** Bind a loopback TCP port. Tests can disable this in network-restricted sandboxes. */
   listen?: boolean;
-  /**
-   * `proxy` returns a root-relative path this server also serves, authorized by
-   * the session cookie a browser sends on its own; `signed` returns an absolute
-   * URL bearing a short-lived token. Both deployment shapes have to satisfy the
-   * same contract.
-   */
-  resolveMode?: AssetResolveMode;
-  /** Lifetime of a minted signed-URL token. `0` produces already-expired tokens. */
-  signedTtlMs?: number;
   /** Request body ceiling; a larger body is rejected with `413`. */
   maxBodyBytes?: number;
   /** Return false to answer `401 UNAUTHENTICATED`. Defaults to allowing everything. */
   authenticate?: (req: IncomingMessage) => boolean;
   /** Return false to answer `403`. Defaults to allowing everything. */
-  authorize?: (req: IncomingMessage, area: 'assets' | 'kv') => boolean;
+  authorize?: (req: IncomingMessage, area: 'kv') => boolean;
 }
 
-/**
- * Bytes are stored once per ref and shared, which is the whole point of content
- * addressing — and exactly the arrangement the claim model exists to make safe.
- */
-interface SharedAsset {
-  bytes: Buffer;
-  /** Principals holding a claim, each with the media type it uploaded under. */
-  claims: Map<string, string>;
-}
-
-/** One principal's view. The namespace header/cookie stands in for a principal. */
+/** One principal's view. The namespace header stands in for a principal. */
 interface Namespace {
   kv: Map<string, string>;
-}
-
-interface SignedToken {
-  ref: string;
-  /** The principal the URL was minted for; a signed URL carries its own claim. */
-  principal: string;
-  /**
-   * A signed URL identifies the object completely — that is what makes it
-   * loadable by a browser carrying no credentials at all — so the namespace
-   * travels in the minted token rather than in a header the media load could
-   * never send.
-   */
-  namespace: string;
-  expiresAt: number;
 }
 
 class ConformanceHttpError extends Error {
@@ -155,46 +115,16 @@ async function readJson<T>(req: IncomingMessage, maxBodyBytes: number): Promise<
   return body as T;
 }
 
-/**
- * Media types served back as themselves. Deliberately narrow: these are the
- * types a browser renders in an <img>/<audio>/<video> without being able to
- * execute anything. `image/svg+xml` is absent on purpose — it is a document
- * format, and serving one from the application's origin is a scripting
- * surface, not an image.
- */
-const RENDERABLE_MEDIA_TYPES = new Set([
-  'image/png',
-  'image/jpeg',
-  'image/gif',
-  'image/webp',
-  'image/avif',
-  'audio/mpeg',
-  'audio/ogg',
-  'audio/wav',
-  'audio/webm',
-  'video/mp4',
-  'video/webm',
-  'video/ogg',
-]);
-
-const OPAQUE_MEDIA_TYPE = 'application/octet-stream';
-
-/** Strip any parameters (`; charset=…`) and normalize for the allowlist check. */
-function mediaTypeOf(header: string | undefined): string {
-  if (typeof header !== 'string') return OPAQUE_MEDIA_TYPE;
-  return header.split(';')[0]!.trim().toLowerCase();
-}
-
 const MAX_IDENTIFIER_BYTES = 512;
 
 /**
- * The server-side half of the contract's "an identifier is never structure"
- * rule. Refs and keys arrive percent-decoded, so `..%2F..%2Fetc%2Fpasswd`
- * becomes a traversal here; a backend that joined it to a filesystem path or
- * interpolated it into a query would inherit that. Reject the shape at the
- * boundary so no later storage layer can be the first to look.
+ * The server-side half of the contract's "a key is never structure" rule. Keys
+ * arrive percent-decoded, so `a%2F..%2F..%2Fb` becomes something with separators
+ * here; a backend that joined it to a path or interpolated it into a query would
+ * inherit that. Reject the shape at the boundary so no later storage layer can be
+ * the first to look.
  */
-function assertAddressableIdentifier(value: string, label: string): void {
+function assertAddressableKey(value: string, label: string): void {
   if (value === '') {
     throw new ConformanceHttpError(
       400,
@@ -245,7 +175,7 @@ function assertAddressableIdentifier(value: string, label: string): void {
  * it is held to the key rules minus the two that only make sense for a segment:
  * it may be empty (that is what "list everything" means) and it may be `.` or
  * `..`, which are legal prefixes of legal keys such as `.hidden`. Reusing the
- * path-segment validator here rejected prefixes the client rightly allows.
+ * key validator here would reject prefixes the client rightly allows.
  */
 function assertAddressablePrefix(prefix: string): void {
   if (prefix === '') return;
@@ -289,8 +219,8 @@ function pathParts(req: IncomingMessage): { parts: string[]; url: URL } {
   const url = new URL(target, 'http://conformance.invalid');
   // Split the RAW request target, not `url.pathname`. The WHATWG parser resolves
   // dot segments before anything here can look, and it treats `%2e` as one — so
-  // `/assets/%2e%2e/x` arrives already collapsed to `/x`, and a validator reading
-  // the parsed path would be inspecting a request nobody sent. The rules exist to
+  // `/kv/entries/%2e%2e` arrives already collapsed, and a validator reading the
+  // parsed path would be inspecting a request nobody sent. The rules exist to
   // reject what was *received*, so the segments come from the wire.
   const rawPath = target.split(/[?#]/, 1)[0] ?? '/';
   const rawParts = rawPath.split('/');
@@ -313,17 +243,6 @@ function pathParts(req: IncomingMessage): { parts: string[]; url: URL } {
     parts.push(decoded);
   }
   return { parts, url };
-}
-
-function cookieValue(req: IncomingMessage, name: string): string | undefined {
-  const header = req.headers.cookie;
-  if (typeof header !== 'string') return undefined;
-  for (const pair of header.split(';')) {
-    const separator = pair.indexOf('=');
-    if (separator === -1) continue;
-    if (pair.slice(0, separator).trim() === name) return pair.slice(separator + 1).trim();
-  }
-  return undefined;
 }
 
 /**
@@ -351,164 +270,9 @@ function assertNoScopeChannel(req: IncomingMessage, url: URL): void {
 
 interface RouteContext {
   state: Namespace;
-  /** The principal, for the claim model. The namespace header/cookie stands in. */
-  namespaceName: string;
-  namespaceFor: (name: string) => Namespace;
-  assets: Map<string, SharedAsset>;
   parts: string[];
   url: URL;
-  baseUrl: string;
-  resolveMode: AssetResolveMode;
-  signedTtlMs: number;
   maxBodyBytes: number;
-  tokens: Map<string, SignedToken>;
-}
-
-async function routeAssets(
-  req: IncomingMessage,
-  res: ServerResponse,
-  context: RouteContext,
-): Promise<boolean> {
-  const { parts, url, baseUrl, resolveMode, signedTtlMs, maxBodyBytes, tokens, assets } = context;
-  const principal = context.namespaceName;
-  const method = req.method ?? 'GET';
-  if (parts.length < 2) return false;
-  const ref = parts[1]!;
-  assertAddressableIdentifier(ref, 'asset ref');
-
-  if (method === 'PUT' && parts.length === 2) {
-    // Content addressing is enforced here, not merely assumed: the ref in the
-    // path must be the hash of the bytes that arrived, so no client (or proxy,
-    // or retry) can bind arbitrary bytes to someone else's ref.
-    if (!isContentAssetRef(ref)) {
-      throw new ConformanceHttpError(
-        400,
-        'VALIDATION_FAILED',
-        `@openmaic/storage: asset ref ${JSON.stringify(ref)} must be sha256-<64 lowercase hex>`,
-      );
-    }
-    const bytes = await readBytes(req, maxBodyBytes);
-    const view = new Uint8Array(bytes);
-    const computed = await assetRefForBytes(
-      view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength),
-    );
-    if (computed !== ref) {
-      throw new ConformanceHttpError(
-        400,
-        'ASSET_REF_MISMATCH',
-        `@openmaic/storage: asset bytes hash to ${JSON.stringify(computed)}, not to the ` +
-          `requested ref ${JSON.stringify(ref)}`,
-      );
-    }
-    const mediaType = mediaTypeOf(req.headers['content-type']);
-    const existing = assets.get(ref);
-    if (existing) {
-      // Bytes are already here (content addressing guarantees they are the same
-      // bytes). What the PUT establishes is this principal's claim, and the
-      // media type it filed them under — per principal, so re-uploading cannot
-      // rewrite what anyone else's document resolves to.
-      existing.claims.set(principal, mediaType);
-    } else {
-      assets.set(ref, { bytes, claims: new Map([[principal, mediaType]]) });
-    }
-    sendNoContent(res);
-    return true;
-  }
-
-  if (method === 'GET' && parts.length === 3 && parts[2] === 'url') {
-    // Holding no claim is indistinguishable from the asset not existing:
-    // knowing a ref is not authorization, so a ref copied out of a shared
-    // document does not read back someone else's asset.
-    if (!assets.get(ref)?.claims.has(principal)) {
-      throw new ConformanceHttpError(
-        404,
-        'ASSET_NOT_FOUND',
-        `@openmaic/storage: no asset ${JSON.stringify(ref)}`,
-      );
-    }
-    const path = `/assets/${encodeURIComponent(ref)}/content`;
-    if (resolveMode === 'proxy') {
-      sendJson(res, 200, { url: path }, NO_STORE);
-      return true;
-    }
-    // A distinct token per call is also what makes the signed shape a real test
-    // of resolve()'s in-flight coalescing: two uncoalesced calls would visibly
-    // return different URLs.
-    const token = `tok-${tokens.size}-${Math.random().toString(36).slice(2)}`;
-    tokens.set(token, {
-      ref,
-      principal,
-      namespace: principal,
-      expiresAt: Date.now() + signedTtlMs,
-    });
-    sendJson(res, 200, { url: `${baseUrl}${path}?token=${encodeURIComponent(token)}` }, NO_STORE);
-    return true;
-  }
-
-  if (method === 'GET' && parts.length === 3 && parts[2] === 'content') {
-    let claimant = principal;
-    if (resolveMode === 'signed') {
-      // Validate the token for real. A server that only checked for presence
-      // would let any string through, and the contract's "short-lived" promise
-      // would be untested decoration.
-      const token = url.searchParams.get('token');
-      const minted = token === null ? undefined : tokens.get(token);
-      if (minted === undefined || minted.ref !== ref || minted.expiresAt <= Date.now()) {
-        throw new ConformanceHttpError(
-          403,
-          'FORBIDDEN_ASSETS',
-          '@openmaic/storage: asset content requires a valid, unexpired signed url',
-        );
-      }
-      claimant = minted.principal;
-    } else if (cookieValue(req, 'session') === undefined) {
-      // The proxied shape is only sound where the browser can authenticate the
-      // media load by itself. A media element sends cookies, never the client's
-      // headers hook, so this route accepts exactly what a browser would send.
-      throw new ConformanceHttpError(
-        401,
-        'UNAUTHENTICATED',
-        '@openmaic/storage: proxied asset content requires a session cookie',
-      );
-    }
-    const asset = assets.get(ref);
-    const mediaType = asset?.claims.get(claimant);
-    if (!asset || mediaType === undefined) {
-      throw new ConformanceHttpError(
-        404,
-        'ASSET_NOT_FOUND',
-        `@openmaic/storage: no asset ${JSON.stringify(ref)}`,
-      );
-    }
-    // Only an allowlisted type is served as itself. Anything else — including
-    // the octet-stream a metadata-less upload lands on — is served opaquely and
-    // marked as a download, so a `text/html` upload cannot come back as a
-    // document in the application's own origin.
-    const renderable = RENDERABLE_MEDIA_TYPES.has(mediaType);
-    res.writeHead(200, {
-      'content-type': renderable ? mediaType : OPAQUE_MEDIA_TYPE,
-      // The stored type is caller-influenced, so the browser must not be able to
-      // sniff its way to a different one.
-      'x-content-type-options': 'nosniff',
-      ...(renderable ? {} : { 'content-disposition': 'attachment' }),
-    });
-    res.end(asset.bytes);
-    return true;
-  }
-
-  if (method === 'DELETE' && parts.length === 2) {
-    const asset = assets.get(ref);
-    if (asset) {
-      asset.claims.delete(principal);
-      // Reclaim the bytes once nobody holds a claim. Until then one principal's
-      // delete must not break another principal's document.
-      if (asset.claims.size === 0) assets.delete(ref);
-    }
-    sendNoContent(res);
-    return true;
-  }
-
-  return false;
 }
 
 async function routeKv(
@@ -540,7 +304,7 @@ async function routeKv(
 
   if (parts.length === 3 && parts[1] === 'entries') {
     const key = parts[2]!;
-    assertAddressableIdentifier(key, 'kv key');
+    assertAddressableKey(key, 'kv key');
 
     if (method === 'GET') {
       const raw = state.kv.get(key);
@@ -606,20 +370,14 @@ async function routeKv(
 }
 
 /**
- * Start a test-only HTTP adapter. Each `x-storage-namespace` header (or
- * `session` cookie, which is all a browser media load can send) selects a fresh
- * in-memory namespace, so factories used by the shared contract suites stay
+ * Start a test-only HTTP adapter. Each `x-storage-namespace` header selects a
+ * fresh in-memory namespace, so factories used by the shared contract suite stay
  * isolated.
  */
-export async function startKvAssetConformanceServer(
-  options: KvAssetConformanceServerOptions = {},
-): Promise<KvAssetConformanceServer> {
+export async function startKvConformanceServer(
+  options: KvConformanceServerOptions = {},
+): Promise<KvConformanceServer> {
   const namespaces = new Map<string, Namespace>();
-  // Bytes are shared across principals by ref; claims live inside each entry.
-  const assets = new Map<string, SharedAsset>();
-  const tokens = new Map<string, SignedToken>();
-  const resolveMode = options.resolveMode ?? 'proxy';
-  const signedTtlMs = options.signedTtlMs ?? 60_000;
   const maxBodyBytes = options.maxBodyBytes ?? 32 * 1024 * 1024;
   const authenticate = options.authenticate ?? (() => true);
   const authorize = options.authorize ?? (() => true);
@@ -635,16 +393,14 @@ export async function startKvAssetConformanceServer(
 
   const namespaceNameFor = (req: IncomingMessage): string => {
     const header = req.headers['x-storage-namespace'];
-    const id = typeof header === 'string' && header !== '' ? header : cookieValue(req, 'session');
-    return id === undefined || id === '' ? 'default' : id;
+    return typeof header === 'string' && header !== '' ? header : 'default';
   };
 
-  let baseUrl = 'http://kv-asset-conformance.invalid';
+  let baseUrl = 'http://kv-conformance.invalid';
 
   const route = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const { parts, url } = pathParts(req);
-    const area = parts[0] === 'assets' ? 'assets' : parts[0] === 'kv' ? 'kv' : undefined;
-    if (area === undefined) {
+    if (parts[0] !== 'kv') {
       routeNotFound(res);
       return;
     }
@@ -655,30 +411,20 @@ export async function startKvAssetConformanceServer(
         '@openmaic/storage: missing or invalid credential',
       );
     }
-    if (!authorize(req, area)) {
+    if (!authorize(req, 'kv')) {
       throw new ConformanceHttpError(
         403,
-        area === 'assets' ? 'FORBIDDEN_ASSETS' : 'FORBIDDEN_KV',
+        'FORBIDDEN_KV',
         '@openmaic/storage: principal may not perform this operation',
       );
     }
-    const namespaceName = namespaceNameFor(req);
     const context: RouteContext = {
-      state: namespaceFor(namespaceName),
-      namespaceName,
-      namespaceFor,
-      assets,
+      state: namespaceFor(namespaceNameFor(req)),
       parts,
       url,
-      baseUrl,
-      resolveMode,
-      signedTtlMs,
       maxBodyBytes,
-      tokens,
     };
-    const handled =
-      area === 'assets' ? await routeAssets(req, res, context) : await routeKv(req, res, context);
-    if (!handled) routeNotFound(res);
+    if (!(await routeKv(req, res, context))) routeNotFound(res);
   };
 
   const server = createServer((req, res) => {
@@ -695,7 +441,7 @@ export async function startKvAssetConformanceServer(
     });
     const address = server.address();
     if (address === null || typeof address === 'string') {
-      throw new Error('KV/asset conformance server did not bind a TCP port');
+      throw new Error('KV conformance server did not bind a TCP port');
     }
     baseUrl = `http://127.0.0.1:${address.port}`;
   }
