@@ -129,7 +129,8 @@ jobs:
           PG_CONTRACT_URL: postgresql://postgres:postgres@localhost:5432/openmaic
           STORAGE_PG_CONTRACT_REQUIRED: "1"
         run: |
-          pnpm --filter "@openmaic/dsl" --filter "@openmaic/storage" --filter "@openmaic/importer" run test
+          pnpm --filter "@openmaic/dsl" --filter "@openmaic/storage" \
+            --filter "@openmaic/renderer" --filter "@openmaic/importer" run test
           pnpm --filter "@openmaic/dsl" --filter "@openmaic/storage" --filter "@openmaic/renderer" run typecheck
 
       - name: Inspect tarball contents (dry-run pack)
