@@ -48,10 +48,14 @@ jobs:
     name: Build, validate & publish
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write # required to write the release tags below
       id-token: write # required for npm provenance
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The version gate compares the tree against release tags and push
+          # ranges, so the full history and tags have to be present.
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
 
@@ -60,6 +64,19 @@ jobs:
           node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org
+
+      # Gate BEFORE anything else: ci.yml is a separate workflow, so its copy of
+      # this check cannot stop a publish that reaches here with CI red, skipped,
+      # or never run at all. This one judges the tree against the registry, so it
+      # holds for every trigger — branch push, release tag, and manual run alike.
+      # `github.event.before` is absent (or all zeroes) for tag and manual runs;
+      # the script treats it as an optional fallback and uses the release tags
+      # otherwise.
+      - name: Validate package versions (pre-publish gate)
+        run: node scripts/check-package-version-bumps.mjs --release "$FALLBACK_BASE"
+        env:
+          FALLBACK_BASE: ${{ github.event_name == 'push' && github.event.before || '' }}
+          RELEASE_PLAN_PATH: ${{ runner.temp }}/release-plan.json
 
       - run: pnpm install --frozen-lockfile
 
@@ -108,3 +125,34 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
+
+      # Anchor every version this run put on the registry to the commit that
+      # produced it. Without these tags the gate above has nothing to compare an
+      # already-published version against on a tag or manual run, and a package
+      # whose source drifted from its release would publish as a silent no-op.
+      #
+      # These pushes use the checkout's default GITHUB_TOKEN credentials, and
+      # GitHub does not start new workflow runs from GITHUB_TOKEN pushes, so
+      # writing an `@openmaic/*@*` tag here does not re-trigger this workflow.
+      - name: Tag published versions
+        if: github.event_name == 'push' || inputs.dry_run == false
+        env:
+          RELEASE_PLAN_PATH: ${{ runner.temp }}/release-plan.json
+          GIT_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          tags="$(node -p 'JSON.parse(require("fs").readFileSync(process.env.RELEASE_PLAN_PATH, "utf8")).map((entry) => `${entry.package}@${entry.version}`).join("\n")')"
+          if [ -z "$tags" ]; then
+            echo "No newly published versions to tag."
+            exit 0
+          fi
+          echo "$tags" | while read -r tag; do
+            [ -n "$tag" ] || continue
+            if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              echo "Tag $tag already exists, leaving it alone."
+              continue
+            fi
+            git tag "$tag" "$GIT_COMMIT"
+            git push origin "refs/tags/$tag"
+            echo "Tagged $tag at $GIT_COMMIT."
+          done
