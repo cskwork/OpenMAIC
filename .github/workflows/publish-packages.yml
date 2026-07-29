@@ -109,7 +109,10 @@ jobs:
           # including states no reviewer ever saw: a pull request that adds a
           # bad commit and reverts it in the next one leaves the bad tree an
           # ancestor of main forever.
-          if ! git rev-list --first-parent origin/main | grep -qx "$GITHUB_SHA"; then
+          # Not `| grep -qx`: grep exits at the first match, git rev-list then
+          # dies of SIGPIPE, and pipefail turns a found commit into a failure
+          # as soon as main's history outgrows the pipe buffer.
+          if [ "$(git rev-list --first-parent origin/main | grep -cx "$GITHUB_SHA" || true)" -eq 0 ]; then
             echo "::error::Refusing to publish $GITHUB_SHA: it is not on main's first-parent history."
             echo "Release a commit that landed on main, not one merged underneath it."
             exit 1
@@ -125,35 +128,33 @@ jobs:
         if: github.event_name == 'push' || inputs.dry_run == false
         env:
           GH_TOKEN: ${{ github.token }}
-          REQUIRED_CHECK: Lint, Typecheck & Unit Tests
         run: |
           set -euo pipefail
+          # Identify the run by workflow file and triggering event, not by a
+          # check-run display name: names are not unique, and any other workflow
+          # or app publishing a check with the same name could otherwise stand
+          # in for a red version gate.
+          query="repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&per_page=100"
           deadline=$((SECONDS + 1800))
           while :; do
-            gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
-              > "$RUNNER_TEMP/check-runs.json"
-            conclusion="$(jq -r --arg name "$REQUIRED_CHECK" \
-              '([.check_runs[] | select(.name == $name)] | last // {}) | .conclusion // "pending"' \
-              "$RUNNER_TEMP/check-runs.json")"
-            case "$conclusion" in
-              success)
-                echo "CI check \"$REQUIRED_CHECK\" succeeded for $GITHUB_SHA."
+            gh api "$query" > "$RUNNER_TEMP/ci-runs.json"
+            status="$(jq -r '([.workflow_runs[]] | sort_by(.run_started_at) | last // {}) | .status // "absent"' "$RUNNER_TEMP/ci-runs.json")"
+            conclusion="$(jq -r '([.workflow_runs[]] | sort_by(.run_started_at) | last // {}) | .conclusion // "none"' "$RUNNER_TEMP/ci-runs.json")"
+            if [ "$status" = "completed" ]; then
+              if [ "$conclusion" = "success" ]; then
+                echo "CI succeeded for $GITHUB_SHA."
                 break
-                ;;
-              pending)
-                if [ "$SECONDS" -ge "$deadline" ]; then
-                  echo "::error::No completed \"$REQUIRED_CHECK\" run for $GITHUB_SHA within the wait window."
-                  echo "Release from a commit that CI has actually validated."
-                  exit 1
-                fi
-                echo "Waiting for \"$REQUIRED_CHECK\" on $GITHUB_SHA..."
-                sleep 30
-                ;;
-              *)
-                echo "::error::Refusing to publish $GITHUB_SHA: \"$REQUIRED_CHECK\" concluded \"$conclusion\"."
-                exit 1
-                ;;
-            esac
+              fi
+              echo "::error::Refusing to publish $GITHUB_SHA: CI concluded \"$conclusion\"."
+              exit 1
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::No completed CI run for $GITHUB_SHA within the wait window (status: $status)."
+              echo "Release from a commit that CI has actually validated on a push to main."
+              exit 1
+            fi
+            echo "Waiting for CI on $GITHUB_SHA (status: $status)..."
+            sleep 30
           done
 
       # Gate BEFORE anything else: ci.yml is a separate workflow, so its copy of

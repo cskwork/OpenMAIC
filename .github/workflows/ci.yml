@@ -35,17 +35,19 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
 
-      # A branch creation or a force push reports an unusable `before`. Falling
-      # back to the first parent still checks the commit that just landed, which
-      # is strictly better than skipping the gate entirely.
+      # A branch creation or a force push reports an unusable `before`. Fail
+      # rather than substituting HEAD^: a force push can replace many commits at
+      # once, so the previous commit is not the range that needs checking, and
+      # publishing requires this run to be green.
       - name: Package version bumps (main push)
         if: github.event_name == 'push'
         run: |
           set -euo pipefail
           base="$BEFORE_SHA"
           if [ -z "$base" ] || ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
-            echo "Push range base $base is unavailable; comparing against HEAD^ instead."
-            base="$(git rev-parse HEAD^)"
+            echo "::error::Push range base ${base:-<empty>} is unavailable, so this push cannot be checked."
+            echo "Re-run after the branch has an ordinary push range, or verify the versions by hand."
+            exit 1
           fi
           node scripts/check-package-version-bumps.mjs "$base"
         env:
