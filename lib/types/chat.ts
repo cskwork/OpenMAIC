@@ -7,6 +7,7 @@
 
 import type { UIMessage } from 'ai';
 import type { CleanupSource } from '@/lib/playback/auto-resume';
+import type { ClientEffectDelivery } from '@/lib/agent/runtime/client-effect-contract';
 import type { ThinkingConfig } from './provider';
 
 // Session Types
@@ -436,6 +437,7 @@ export type StatelessEvent =
         messageId?: string;
       };
     }
+  | { type: 'client_effect'; data: ClientEffectDelivery }
   | {
       type: 'thinking';
       data: { stage: 'director' | 'agent_loading'; agentId?: string };

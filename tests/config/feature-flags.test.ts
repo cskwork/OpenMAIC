@@ -4,6 +4,7 @@ import {
   isPlaybackRendererEnabled,
   isPiChatEnabled,
   isPptxImportEnabled,
+  isPiNativeChildWhiteboardEnabled,
   isPiNativeChildWebSearchEnabled,
   isPiWebSearchEnabled,
   isVideoExportEnabled,
@@ -184,6 +185,34 @@ describe('isPiNativeChildWebSearchEnabled', () => {
 
     process.env[flag] = 'yes';
     expect(isPiNativeChildWebSearchEnabled()).toBe(false);
+  });
+});
+
+describe('isPiNativeChildWhiteboardEnabled', () => {
+  const flag = 'OPENMAIC_ENABLE_PI_NATIVE_CHILD_WHITEBOARD';
+  let original: string | undefined;
+
+  beforeEach(() => {
+    original = process.env[flag];
+  });
+
+  afterEach(() => {
+    if (original === undefined) delete process.env[flag];
+    else process.env[flag] = original;
+  });
+
+  it('is disabled by default and accepts only the standard truthy values', () => {
+    delete process.env[flag];
+    expect(isPiNativeChildWhiteboardEnabled()).toBe(false);
+
+    process.env[flag] = 'true';
+    expect(isPiNativeChildWhiteboardEnabled()).toBe(true);
+
+    process.env[flag] = '1';
+    expect(isPiNativeChildWhiteboardEnabled()).toBe(true);
+
+    process.env[flag] = 'yes';
+    expect(isPiNativeChildWhiteboardEnabled()).toBe(false);
   });
 });
 

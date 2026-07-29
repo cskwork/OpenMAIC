@@ -55,6 +55,14 @@ export function isPiNativeChildWebSearchEnabled(): boolean {
 }
 
 /**
+ * Phase 2 mode selector for the Teacher native wb_draw_text client-effect
+ * closure. Default OFF so the legacy JSON action path is unchanged.
+ */
+export function isPiNativeChildWhiteboardEnabled(): boolean {
+  return readBoolean(process.env.OPENMAIC_ENABLE_PI_NATIVE_CHILD_WHITEBOARD);
+}
+
+/**
  * Server-authoritative gate for the vocational task-engine generation path.
  * Default OFF. When disabled, requests that include taskEngineMode must
  * silently fall back to the ordinary standard / interactive generation paths.
