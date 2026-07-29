@@ -84,16 +84,54 @@ function resolveCommit(ref) {
   }
 }
 
+/**
+ * Parse a semver version. Prerelease identifiers are kept because the registry
+ * holds whatever was ever published: refusing to order them would let one
+ * historical `x.y.z-beta.1` block every future release of every package.
+ */
 function parseVersion(raw) {
-  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(raw);
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(raw);
   if (!match) return undefined;
-  return { raw, parts: match.slice(1).map(Number) };
+  return {
+    raw,
+    parts: match.slice(1, 4).map(Number),
+    prerelease: match[4] === undefined ? undefined : match[4].split('.'),
+  };
+}
+
+function isStable(version) {
+  return version.prerelease === undefined;
+}
+
+/** Semver precedence for prerelease identifiers. */
+function comparePrerelease(left, right) {
+  if (left === undefined && right === undefined) return 0;
+  // A version without a prerelease outranks one with it.
+  if (left === undefined) return 1;
+  if (right === undefined) return -1;
+  for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
+    const a = left[i];
+    const b = right[i];
+    if (a === undefined) return -1;
+    if (b === undefined) return 1;
+    const aNumeric = /^\d+$/.test(a);
+    const bNumeric = /^\d+$/.test(b);
+    if (aNumeric && bNumeric) {
+      if (Number(a) !== Number(b)) return Number(a) - Number(b);
+    } else if (aNumeric !== bNumeric) {
+      // Numeric identifiers always have lower precedence than alphanumeric.
+      return aNumeric ? -1 : 1;
+    } else if (a !== b) {
+      return a < b ? -1 : 1;
+    }
+  }
+  return 0;
 }
 
 function readVersion(contents, source) {
   const raw = JSON.parse(contents).version;
   const version = parseVersion(raw);
-  if (!version) {
+  if (!version || !isStable(version)) {
     throw new Error(`${source} must use a stable x.y.z version, got ${JSON.stringify(raw)}`);
   }
   return version;
@@ -103,7 +141,7 @@ function compareVersions(left, right) {
   for (let i = 0; i < left.parts.length; i += 1) {
     if (left.parts[i] !== right.parts[i]) return left.parts[i] - right.parts[i];
   }
-  return 0;
+  return comparePrerelease(left.prerelease, right.prerelease);
 }
 
 function packageDirectory(name) {
@@ -305,24 +343,23 @@ function runReleaseMode() {
       continue;
     }
 
-    // Order against every published version, not only the ones this check can
-    // parse: a prerelease still occupies its number on the registry, so
-    // silently discarding it could let a release move backwards.
+    // Order against every published version, prereleases included: each one
+    // occupies its number on the registry, so discarding them could let a
+    // release move backwards.
     const unparsable = published.filter((version) => parseVersion(version) === undefined);
     if (unparsable.length > 0) {
       failures.push(
-        `${packageName}: the registry holds versions this check cannot order ` +
-          `(${unparsable.slice(0, 5).join(', ')}). Releasing ${local.raw} past them cannot be ` +
-          'verified here; publish manually or extend this check with full semver ordering.',
+        `${packageName}: the registry holds versions that are not semver ` +
+          `(${unparsable.slice(0, 5).join(', ')}); refusing to order ${local.raw} against them.`,
       );
       continue;
     }
-    const stable = published.map(parseVersion).filter((version) => version !== undefined);
-    if (stable.length === 0) {
+    const parsed = published.map(parseVersion).filter((version) => version !== undefined);
+    if (parsed.length === 0) {
       failures.push(`${packageName}: the registry reports no usable versions; refusing to guess.`);
       continue;
     }
-    const highest = [...stable].sort(compareVersions).pop();
+    const highest = [...parsed].sort(compareVersions).pop();
 
     if (published.includes(local.raw)) {
       // Being behind the registry is not a harmless no-op. `pnpm publish`

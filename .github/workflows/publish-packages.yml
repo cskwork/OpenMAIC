@@ -15,9 +15,16 @@ name: Publish @openmaic packages
 #     intend to release in the same change.
 #   - manual run via the Actions tab (dry-run by default; uncheck to publish)
 #
-# Whatever the trigger, a real publish only happens from a commit contained in
-# `main`, so everything that reaches the registry has been through the pull
-# request gate. Dry runs are allowed from any ref.
+# Real publishes are restricted to commits on main's first-parent history that
+# have a green CI run. Those checks live in this file, and a `workflow_dispatch`
+# or tag run executes the workflow definition FROM THE SELECTED REF, so a branch
+# that edits this file could remove them. They are defence in depth, not the
+# boundary.
+#
+# REQUIRED REPOSITORY SETUP: NPM_TOKEN must live in a GitHub Environment named
+# `release` whose deployment branch rule allows only `main`, not in a plain
+# repository secret. That rule is enforced by GitHub outside this file, so a
+# branch-local edit cannot reach the token. Dry runs are allowed from any ref.
 #
 # Prerequisites (one-time, see issue #778):
 #   - npm org `openmaic` created and owning the `@openmaic` scope
@@ -52,9 +59,28 @@ jobs:
   publish:
     name: Build, validate & publish
     runs-on: ubuntu-latest
+    # Holds NPM_TOKEN behind a main-only deployment branch rule; see the header.
+    environment: release
     permissions:
       contents: write # required to write the release marker tags below
+      checks: read # required to read this commit's CI conclusion
       id-token: write # required for npm provenance
+    # storage's PostgreSQL contract suites skip themselves without a database.
+    # Publishing storage without ever running them would ship the one backend
+    # whose behaviour only a real PostgreSQL can confirm.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: openmaic
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d openmaic"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
         with:
@@ -77,13 +103,58 @@ jobs:
         if: github.event_name == 'push' || inputs.dry_run == false
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=0 origin main
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "::error::Refusing to publish $GITHUB_SHA: it is not contained in origin/main."
-            echo "Real publishes must come from a commit that went through the gate on main."
+          git fetch --no-tags origin main
+          # First-parent only. Plain reachability would also accept every
+          # intermediate commit of every branch merged with a merge commit,
+          # including states no reviewer ever saw: a pull request that adds a
+          # bad commit and reverts it in the next one leaves the bad tree an
+          # ancestor of main forever.
+          if ! git rev-list --first-parent origin/main | grep -qx "$GITHUB_SHA"; then
+            echo "::error::Refusing to publish $GITHUB_SHA: it is not on main's first-parent history."
+            echo "Release a commit that landed on main, not one merged underneath it."
             exit 1
           fi
-          echo "$GITHUB_SHA is contained in origin/main."
+          echo "$GITHUB_SHA is on main's first-parent history."
+
+      # Being on main is not the same as having passed the gate. ci.yml is a
+      # separate workflow that this one can outrun (both start on the same push)
+      # or that may have failed outright, and it is the run that proves a
+      # package change carried a version bump. So wait for CI on this exact
+      # commit and require it to be green before anything is published.
+      - name: Require a green CI run for this commit
+        if: github.event_name == 'push' || inputs.dry_run == false
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUIRED_CHECK: Lint, Typecheck & Unit Tests
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 1800))
+          while :; do
+            gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
+              > "$RUNNER_TEMP/check-runs.json"
+            conclusion="$(jq -r --arg name "$REQUIRED_CHECK" \
+              '([.check_runs[] | select(.name == $name)] | last // {}) | .conclusion // "pending"' \
+              "$RUNNER_TEMP/check-runs.json")"
+            case "$conclusion" in
+              success)
+                echo "CI check \"$REQUIRED_CHECK\" succeeded for $GITHUB_SHA."
+                break
+                ;;
+              pending)
+                if [ "$SECONDS" -ge "$deadline" ]; then
+                  echo "::error::No completed \"$REQUIRED_CHECK\" run for $GITHUB_SHA within the wait window."
+                  echo "Release from a commit that CI has actually validated."
+                  exit 1
+                fi
+                echo "Waiting for \"$REQUIRED_CHECK\" on $GITHUB_SHA..."
+                sleep 30
+                ;;
+              *)
+                echo "::error::Refusing to publish $GITHUB_SHA: \"$REQUIRED_CHECK\" concluded \"$conclusion\"."
+                exit 1
+                ;;
+            esac
+          done
 
       # Gate BEFORE anything else: ci.yml is a separate workflow, so its copy of
       # the version check cannot stop a publish that reaches here with CI red,
@@ -127,6 +198,9 @@ jobs:
       # reaches the registry. npm versions are immutable, so this prevents a
       # partial release (e.g. dsl published, then a sibling's test fails).
       - name: Test & typecheck (pre-publish gate)
+        env:
+          PG_CONTRACT_URL: postgresql://postgres:postgres@localhost:5432/openmaic
+          STORAGE_PG_CONTRACT_REQUIRED: "1"
         run: |
           pnpm --filter "@openmaic/dsl" --filter "@openmaic/storage" --filter "@openmaic/importer" run test
           pnpm --filter "@openmaic/dsl" --filter "@openmaic/storage" --filter "@openmaic/renderer" run typecheck
@@ -174,11 +248,20 @@ jobs:
               echo "Skipping $name@$version: already on the registry."
               continue
             fi
-            ( cd "packages/@openmaic/$pkg" && pnpm publish --access public --provenance --no-git-checks )
+            # --ignore-scripts: every package's prepublishOnly reruns the build,
+            # which would delete and regenerate the dist that was just verified
+            # and smoke-tested, so npm could receive bytes nothing checked.
+            ( cd "packages/@openmaic/$pkg" \
+              && pnpm publish --access public --provenance --no-git-checks --ignore-scripts )
             echo "Published $name@$version."
             tag="$name@$version"
             if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-              echo "Release marker $tag already exists."
+              existing="$(git rev-parse "refs/tags/$tag^{commit}")"
+              if [ "$existing" = "$GIT_COMMIT" ]; then
+                echo "Release marker $tag already points at $GIT_COMMIT."
+              else
+                echo "::warning::Release marker $tag points at $existing, not the released commit $GIT_COMMIT."
+              fi
             elif git tag "$tag" "$GIT_COMMIT" && git push origin "refs/tags/$tag"; then
               echo "Marked $tag at $GIT_COMMIT."
             else

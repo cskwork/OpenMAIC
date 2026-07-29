@@ -8,7 +8,10 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel a main run. Each main run validates only its own push range, so
+  # a superseded run takes the range that contained a package change with it and
+  # the replacement, comparing against the cancelled tip, sees nothing.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
@@ -32,9 +35,19 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
 
+      # A branch creation or a force push reports an unusable `before`. Falling
+      # back to the first parent still checks the commit that just landed, which
+      # is strictly better than skipping the gate entirely.
       - name: Package version bumps (main push)
-        if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
-        run: node scripts/check-package-version-bumps.mjs "$BEFORE_SHA"
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          base="$BEFORE_SHA"
+          if [ -z "$base" ] || ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
+            echo "Push range base $base is unavailable; comparing against HEAD^ instead."
+            base="$(git rev-parse HEAD^)"
+          fi
+          node scripts/check-package-version-bumps.mjs "$base"
         env:
           BEFORE_SHA: ${{ github.event.before }}
 
