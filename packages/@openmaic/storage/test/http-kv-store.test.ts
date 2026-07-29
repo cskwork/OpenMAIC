@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { BrowserKVStore } from '../src/kv/browser.js';
-import type { KVStore, LocalKVStore } from '../src/kv/types.js';
+import type { DeviceSafeKVStore, KVStore, LocalKVStore } from '../src/kv/types.js';
 import { KVScopeViolationError } from '../src/kv/types.js';
 import { kvPersistStorage } from '../src/zustand/persist.js';
 import { HttpAccountKV, HttpKVStore, HttpKVStoreError } from '../src/kv/http.js';
@@ -168,7 +168,7 @@ describe('HttpKVStore device-scope invariant', () => {
     expect(paths).toEqual(['/kv/entries/k', '/kv/entries/k']);
   });
 
-  test('the persist adapter refuses to pair a device scope with a remote store', () => {
+  test('the persist adapter refuses to pair a device scope with a pure account transport', () => {
     const sent: string[] = [];
     const account = new HttpAccountKV({
       baseUrl: 'https://kv.invalid',
@@ -180,17 +180,52 @@ describe('HttpKVStore device-scope invariant', () => {
 
     // The documented persist wiring, and the shortest path to a device value on
     // the wire: the adapter takes the store and the scope as separate arguments,
-    // so nothing else was checking that they belong together.
+    // so nothing else was checking that they belong together. HttpAccountKV has
+    // no local device backend, so a device value handed to it goes to the server
+    // — it must stay rejected even though the device-safe composite is now allowed.
     const pairing = (): unknown =>
-      // @ts-expect-error the `device` overload requires a LocalKVStore.
+      // @ts-expect-error the `device` overload requires a DeviceSafeKVStore.
       kvPersistStorage(account, 'device');
-    expect(pairing).toThrow(/requires a LocalKVStore/);
+    expect(pairing).toThrow(/servesDeviceScopeLocally/);
 
     // And the cast that erases the type error is refused at runtime.
-    expect(() => kvPersistStorage(account as unknown as LocalKVStore, 'device')).toThrow(
+    expect(() => kvPersistStorage(account as unknown as DeviceSafeKVStore, 'device')).toThrow(
       KVScopeViolationError,
     );
     expect(sent).toEqual([]);
+  });
+
+  // cosarah's finding: a full HttpKVStore routes `device` to its required local
+  // backend and never puts it on the wire, so it is safe to persist device-scoped
+  // state through — the earlier guard wrongly conflated "fully local" with "safe
+  // for device" and rejected this legitimate composite case.
+  test('the persist adapter accepts a device-routing composite for the device scope', async () => {
+    const deviceBacking = new BrowserKVStore({ storage: new MemoryStorage() });
+    let fetchCalls = 0;
+    const composite = new HttpKVStore({
+      baseUrl: 'https://kv.invalid',
+      fetch: async () => {
+        fetchCalls += 1;
+        return new Response(null, { status: 204 });
+      },
+      deviceStore: deviceBacking,
+    });
+
+    const deviceStorage = kvPersistStorage<{ theme: string }>(composite, 'device');
+    await deviceStorage.setItem('settings-storage', { state: { theme: 'dark' } });
+    expect(await deviceStorage.getItem('settings-storage')).toEqual({ state: { theme: 'dark' } });
+    await deviceStorage.removeItem('settings-storage');
+    expect(await deviceStorage.getItem('settings-storage')).toBeNull();
+
+    // The value reached the injected device backend directly...
+    await deviceStorage.setItem('settings-storage', { state: { theme: 'light' } });
+    expect(await deviceBacking.get('settings-storage', 'device')).toEqual({
+      state: { theme: 'light' },
+    });
+    // ...and it is device-scoped there, not account-scoped.
+    expect(await deviceBacking.get('settings-storage', 'account')).toBeNull();
+    // ...and no HTTP request was ever made.
+    expect(fetchCalls).toBe(0);
   });
 
   test('the persist adapter still accepts the legitimate pairings', async () => {
@@ -211,6 +246,7 @@ describe('HttpKVStore device-scope invariant', () => {
     const sent: string[] = [];
     const liar = {
       isLocalKVStore: true as const,
+      servesDeviceScopeLocally: true as const,
       get: async () => null,
       set: async (key: string, value: unknown) => {
         sent.push(`${key}=${JSON.stringify(value)}`);

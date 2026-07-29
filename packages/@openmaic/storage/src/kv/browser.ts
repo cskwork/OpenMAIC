@@ -29,8 +29,10 @@ export interface BrowserKVStoreOptions {
  * backend choice.
  */
 export class BrowserKVStore implements LocalKVStore {
-  /** Brand: this backend never leaves the machine, so it may hold `device` values. */
+  /** Brand: every value stays on the machine, so this may back another store's `device` scope. */
   readonly isLocalKVStore = true as const;
+  /** And therefore its own `device` scope never leaves the device. */
+  readonly servesDeviceScopeLocally = true as const;
   private readonly storage: Storage;
   private readonly namespace: string;
 

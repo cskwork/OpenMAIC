@@ -6,8 +6,8 @@ import {
   assertKVScope,
   DEFAULT_KV_SCOPE,
   KVScopeViolationError,
+  type DeviceSafeKVStore,
   type KVScope,
-  type KVStore,
   type LocalKVStore,
 } from './types.js';
 
@@ -140,18 +140,26 @@ function normalizeHeaders(init: HeadersInit | undefined): Record<string, string>
  */
 export class HttpAccountKV {
   /**
-   * Anti-brand, and the reason `HttpKVStore` asks for a `LocalKVStore` rather
-   * than a `KVStore`. This class satisfies `KVStore` structurally — every method
-   * is the same method minus an optional parameter, and TypeScript accepts a
-   * shorter signature where a longer one is expected — and no member added here
-   * can change that, since extra members never block assignment to a narrower
-   * interface. So the barrier is placed on the other side: the branded
-   * `LocalKVStore` this class declares itself *not* to be, backed by a runtime
-   * check for the `as` that would erase the difference. Without it, injecting
-   * this transport as a `deviceStore` type-checks and puts device values on the
-   * wire through the one seam the types were meant to close.
+   * Anti-brands, and the reason a device-safe store cannot be one of these. This
+   * class satisfies `KVStore` structurally — every method is the same method
+   * minus an optional parameter, and TypeScript accepts a shorter signature
+   * where a longer one is expected — and no member added here can change that,
+   * since extra members never block assignment to a narrower interface. So the
+   * barrier is placed on the other side: the branded interfaces this class
+   * declares itself *not* to satisfy, backed by runtime checks for the `as` that
+   * would erase the difference.
+   *
+   * `servesDeviceScopeLocally` is the load-bearing one. This transport has no
+   * local device backend at all — a `device` value handed to it would go on the
+   * wire — so it is the exact store that must never be accepted where a
+   * device-safe one is asked for. It declares the capability `false`, which is
+   * not assignable to the `true` {@link DeviceSafeKVStore} requires, so no cast
+   * short of a hand-written lie can pass it there. `isLocalKVStore` stays for
+   * the stronger "fully local" barrier a composite's injected device backend
+   * demands.
    */
   readonly isLocalKVStore = false as const;
+  readonly servesDeviceScopeLocally = false as const;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly headersHook: HttpKVHeadersHook | undefined;
@@ -327,9 +335,23 @@ export class HttpAccountKV {
  * the only object it can reach the network through — {@link HttpAccountKV} —
  * cannot express a device request at all.
  */
-export class HttpKVStore implements KVStore {
-  /** Anti-brand: a client of a remote store is not somewhere local. */
+export class HttpKVStore implements DeviceSafeKVStore {
+  /**
+   * Not fully local — its `account` scope goes to the network — so it still may
+   * not be another composite's injected device backend, which demands a store
+   * with no networked scope to route.
+   */
   readonly isLocalKVStore = false as const;
+  /**
+   * But its `device` scope *does* stay local: it routes `device` to the
+   * {@link LocalKVStore} required at construction and only ever reaches the
+   * network for `account`. That is exactly the capability a caller needs to
+   * persist `device`-scoped state, so this composite is safe to hand a `device`
+   * scope even though it is not itself local. This is the distinction the guard
+   * on {@link kvPersistStorage} turns on — and the one `HttpAccountKV`, which has
+   * no local device backend, declares `false`.
+   */
+  readonly servesDeviceScopeLocally = true as const;
   private readonly account: HttpAccountKV;
   private readonly device: LocalKVStore;
 

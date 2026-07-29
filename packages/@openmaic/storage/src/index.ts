@@ -12,7 +12,7 @@
  * suite per primitive. `KVStore` is the one asymmetric case: only its `account`
  * scope has an HTTP backend, because `device` values never leave the device.
  */
-export type { KVScope, KVStore, LocalKVStore } from './kv/types.js';
+export type { DeviceSafeKVStore, KVScope, KVStore, LocalKVStore } from './kv/types.js';
 export {
   assertKVKey,
   assertKVKeyPrefix,

@@ -20,17 +20,37 @@ export interface KVStore {
 }
 
 /**
- * A `KVStore` that keeps every value on the machine it runs on.
+ * A `KVStore` whose `device` scope never leaves the device.
  *
- * The brand exists because `KVStore` alone is not enough to express "somewhere
- * local". A remote store structurally satisfies `KVStore` — that is the point
- * of the interface — so a backend asking for a local store to hold `device`
- * values would happily accept a networked one, and the device-never-leaves-the-
- * device invariant would rest on the caller's good intentions. A remote store
- * cannot acquire this brand by accident; claiming it requires writing the lie
- * out by hand.
+ * This is the capability that actually matters when a caller wants to persist
+ * `device`-scoped state: not "is the whole store local", but "does a `device`
+ * write stay on this machine". Two kinds of store honour it — one that is
+ * entirely local, and a composite that routes `device` to a local backend while
+ * sending `account` to a server — and both are safe to hand a `device` scope.
+ *
+ * The brand exists because `KVStore` alone cannot express it. A remote store
+ * structurally satisfies `KVStore` — that is the point of the interface — so a
+ * `KVStore`-typed parameter asking for a device-safe store would happily accept
+ * a pure network transport, and the device-never-leaves-the-device invariant
+ * would rest on the caller's good intentions. A store that does *not* keep
+ * `device` local cannot acquire this brand by accident: the account-only
+ * transport declares itself `false`, which is not assignable to the `true` this
+ * requires, so claiming the capability would mean writing the lie out by hand.
  */
-export interface LocalKVStore extends KVStore {
+export interface DeviceSafeKVStore extends KVStore {
+  readonly servesDeviceScopeLocally: true;
+}
+
+/**
+ * A `KVStore` that keeps *every* value on the machine it runs on — strictly
+ * stronger than {@link DeviceSafeKVStore}, which only promises it for `device`.
+ *
+ * This is what a composite store demands of the backend it injects for the
+ * `device` scope: that backend has no second, networked scope to route
+ * elsewhere, so nothing it holds can leave. A device-safe composite would not
+ * do — nesting one inside another is a loop of routers with no local floor.
+ */
+export interface LocalKVStore extends DeviceSafeKVStore {
   readonly isLocalKVStore: true;
 }
 
