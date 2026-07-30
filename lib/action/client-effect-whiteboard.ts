@@ -1,17 +1,27 @@
 import { createStageAPI, type StageStore } from '@/lib/api/stage-api';
 import {
+  CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  digestWhiteboardLineV1,
   digestWhiteboardShapeV1,
   digestVisibleTextV1,
+  normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
   normalizeVisibleTextV1,
   type AcceptedTargetBinding,
   type ClientEffectTarget,
+  type WhiteboardLineMarker,
+  type WhiteboardLineSpec,
+  type WhiteboardLineStyle,
   type WhiteboardShapeKind,
   type WhiteboardShapeSpec,
 } from '@/lib/agent/runtime/client-effect-contract';
-import type { PPTElement } from '@openmaic/dsl';
+import type { PPTElement, PPTLineElement } from '@openmaic/dsl';
+import {
+  createWhiteboardLineElement,
+  readAbsoluteWhiteboardLineEndpoints,
+} from './whiteboard-lines';
 import { WHITEBOARD_SHAPE_PATHS } from './whiteboard-shapes';
 
 export interface NativeWbDrawTextInput {
@@ -42,6 +52,14 @@ export interface NativeWhiteboardShapePostconditionResult extends WhiteboardShap
   matchingElementCount: 1;
 }
 
+export interface NativeWhiteboardLinePostconditionResult extends WhiteboardLineSpec {
+  stableElementId: string;
+  elementType: 'line';
+  normalizationVersion: typeof CLIENT_EFFECT_LINE_NORMALIZATION_VERSION;
+  observedLineDigest: string;
+  matchingElementCount: 1;
+}
+
 export interface NativeWhiteboardExecutionResult<
   TPostcondition = NativeWhiteboardTextPostconditionResult,
 > {
@@ -59,6 +77,12 @@ type NativeShapeElement = PPTElement & {
   clientEffectExecutionId?: string;
   clientEffectShapeDigest?: string;
   clientEffectShapeKind?: WhiteboardShapeKind;
+  clientEffectNormalizationVersion?: string;
+};
+
+type NativeLineElement = PPTLineElement & {
+  clientEffectExecutionId?: string;
+  clientEffectLineDigest?: string;
   clientEffectNormalizationVersion?: string;
 };
 
@@ -490,6 +514,220 @@ export async function executeNativeWhiteboardShapeEffect(opts: {
     stableElementId: opts.input.stableElementId,
     expectedShape: requestShape,
     expectedShapeDigest: opts.expectedShapeDigest,
+    signal: opts.signal,
+  });
+  throwIfAborted(opts.signal);
+  return { replayed: false, postcondition };
+}
+
+export interface NativeWbDrawLineInput {
+  executionId: string;
+  stableElementId: string;
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+  color?: string;
+  width?: number;
+  style?: WhiteboardLineStyle;
+  points?: [WhiteboardLineMarker, WhiteboardLineMarker];
+}
+
+function lineSpecFromElement(element: NativeLineElement): WhiteboardLineSpec {
+  if (
+    element.type !== 'line' ||
+    typeof element.left !== 'number' ||
+    typeof element.top !== 'number' ||
+    typeof element.width !== 'number' ||
+    !Array.isArray(element.start) ||
+    element.start.length !== 2 ||
+    !Array.isArray(element.end) ||
+    element.end.length !== 2 ||
+    typeof element.color !== 'string' ||
+    (element.style !== 'solid' && element.style !== 'dashed') ||
+    !Array.isArray(element.points) ||
+    element.points.length !== 2
+  ) {
+    throw new Error('CLIENT_EFFECT_LINE_ELEMENT_MISMATCH');
+  }
+  const endpoints = readAbsoluteWhiteboardLineEndpoints(element);
+  return normalizeWhiteboardLineV1({
+    ...endpoints,
+    color: element.color,
+    width: element.width,
+    style: element.style,
+    points: element.points,
+  });
+}
+
+function lineSpecsEqual(left: WhiteboardLineSpec, right: WhiteboardLineSpec): boolean {
+  return (
+    left.start.x === right.start.x &&
+    left.start.y === right.start.y &&
+    left.end.x === right.end.x &&
+    left.end.y === right.end.y &&
+    left.strokeColor === right.strokeColor &&
+    left.strokeWidth === right.strokeWidth &&
+    left.strokeStyle === right.strokeStyle &&
+    left.markers[0] === right.markers[0] &&
+    left.markers[1] === right.markers[1]
+  );
+}
+
+export async function verifyNativeWhiteboardLineEffect(opts: {
+  store: StageStore;
+  targetBinding: AcceptedTargetBinding;
+  executionId: string;
+  stableElementId: string;
+  expectedLine: WhiteboardLineSpec;
+  expectedLineDigest: string;
+  signal?: AbortSignal;
+}): Promise<NativeWhiteboardLinePostconditionResult> {
+  const readVerifiedElement = (): { element: NativeLineElement; spec: WhiteboardLineSpec } => {
+    throwIfAborted(opts.signal);
+    assertStageAndScene(opts.store, opts.targetBinding);
+    const elementsResult = createStageAPI(opts.store).whiteboard.listElements(
+      opts.targetBinding.whiteboardId,
+    );
+    if (!elementsResult.success || !elementsResult.data) {
+      throw new Error(elementsResult.error || 'CLIENT_EFFECT_WHITEBOARD_NOT_FOUND');
+    }
+    const matches = elementsResult.data.filter((element) => element.id === opts.stableElementId);
+    if (matches.length !== 1) {
+      throw new Error(
+        matches.length === 0
+          ? 'CLIENT_EFFECT_ELEMENT_NOT_FOUND'
+          : 'CLIENT_EFFECT_DUPLICATE_ELEMENT_ID',
+      );
+    }
+    const element = matches[0] as NativeLineElement;
+    if (
+      element.clientEffectExecutionId !== opts.executionId ||
+      element.clientEffectNormalizationVersion !== CLIENT_EFFECT_LINE_NORMALIZATION_VERSION
+    ) {
+      throw new Error('CLIENT_EFFECT_ELEMENT_OWNERSHIP_MISMATCH');
+    }
+    return { element, spec: lineSpecFromElement(element) };
+  };
+
+  const beforeDigest = readVerifiedElement();
+  const observedLineDigest = await digestWhiteboardLineV1(beforeDigest.spec);
+  throwIfAborted(opts.signal);
+  const afterDigest = readVerifiedElement();
+  if (
+    !lineSpecsEqual(beforeDigest.spec, afterDigest.spec) ||
+    !lineSpecsEqual(beforeDigest.spec, opts.expectedLine) ||
+    observedLineDigest !== opts.expectedLineDigest ||
+    afterDigest.element.clientEffectLineDigest !== opts.expectedLineDigest
+  ) {
+    throw new Error('CLIENT_EFFECT_LINE_MISMATCH');
+  }
+
+  return {
+    stableElementId: opts.stableElementId,
+    elementType: 'line',
+    normalizationVersion: CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
+    observedLineDigest,
+    matchingElementCount: 1,
+    ...beforeDigest.spec,
+  };
+}
+
+export async function executeNativeWhiteboardLineEffect(opts: {
+  store: StageStore;
+  targetBinding: AcceptedTargetBinding;
+  input: NativeWbDrawLineInput;
+  expectedLine: WhiteboardLineSpec;
+  expectedLineDigest: string;
+  signal?: AbortSignal;
+}): Promise<NativeWhiteboardExecutionResult<NativeWhiteboardLinePostconditionResult>> {
+  throwIfAborted(opts.signal);
+  if (
+    typeof opts.input.executionId !== 'string' ||
+    !opts.input.executionId.trim() ||
+    typeof opts.input.stableElementId !== 'string' ||
+    !opts.input.stableElementId.trim()
+  ) {
+    throw new Error('CLIENT_EFFECT_INPUT_INVALID');
+  }
+  const inputLine = normalizeWhiteboardLineV1(opts.input);
+  const requestLine = normalizeWhiteboardLineV1({
+    startX: opts.expectedLine.start.x,
+    startY: opts.expectedLine.start.y,
+    endX: opts.expectedLine.end.x,
+    endY: opts.expectedLine.end.y,
+    color: opts.expectedLine.strokeColor,
+    width: opts.expectedLine.strokeWidth,
+    style: opts.expectedLine.strokeStyle,
+    points: opts.expectedLine.markers,
+  });
+  const inputDigest = await digestWhiteboardLineV1(inputLine);
+  throwIfAborted(opts.signal);
+  if (
+    !lineSpecsEqual(inputLine, requestLine) ||
+    inputDigest !== opts.expectedLineDigest ||
+    (await digestWhiteboardLineV1(requestLine)) !== opts.expectedLineDigest
+  ) {
+    throw new Error('CLIENT_EFFECT_REQUEST_LINE_MISMATCH');
+  }
+
+  assertStageAndScene(opts.store, opts.targetBinding);
+  const whiteboardApi = createStageAPI(opts.store).whiteboard;
+  const elementsResult = whiteboardApi.listElements(opts.targetBinding.whiteboardId);
+  if (!elementsResult.success || !elementsResult.data) {
+    throw new Error(elementsResult.error || 'CLIENT_EFFECT_WHITEBOARD_NOT_FOUND');
+  }
+  const existing = elementsResult.data.filter(
+    (element) => element.id === opts.input.stableElementId,
+  );
+  if (existing.length > 1) throw new Error('CLIENT_EFFECT_DUPLICATE_ELEMENT_ID');
+  if (existing.length === 1) {
+    const postcondition = await verifyNativeWhiteboardLineEffect({
+      store: opts.store,
+      targetBinding: opts.targetBinding,
+      executionId: opts.input.executionId,
+      stableElementId: opts.input.stableElementId,
+      expectedLine: requestLine,
+      expectedLineDigest: opts.expectedLineDigest,
+      signal: opts.signal,
+    });
+    throwIfAborted(opts.signal);
+    return { replayed: true, postcondition };
+  }
+
+  throwIfAborted(opts.signal);
+  assertStageAndScene(opts.store, opts.targetBinding);
+  const addResult = whiteboardApi.addElement(
+    {
+      ...createWhiteboardLineElement({
+        id: opts.input.stableElementId,
+        startX: inputLine.start.x,
+        startY: inputLine.start.y,
+        endX: inputLine.end.x,
+        endY: inputLine.end.y,
+        color: inputLine.strokeColor,
+        width: inputLine.strokeWidth,
+        style: inputLine.strokeStyle,
+        points: inputLine.markers,
+      }),
+      clientEffectExecutionId: opts.input.executionId,
+      clientEffectLineDigest: opts.expectedLineDigest,
+      clientEffectNormalizationVersion: CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
+    } as NativeLineElement,
+    opts.targetBinding.whiteboardId,
+  );
+  if (!addResult.success) {
+    throw new Error(addResult.error || 'CLIENT_EFFECT_WHITEBOARD_MUTATION_FAILED');
+  }
+  throwIfAborted(opts.signal);
+
+  const postcondition = await verifyNativeWhiteboardLineEffect({
+    store: opts.store,
+    targetBinding: opts.targetBinding,
+    executionId: opts.input.executionId,
+    stableElementId: opts.input.stableElementId,
+    expectedLine: requestLine,
+    expectedLineDigest: opts.expectedLineDigest,
     signal: opts.signal,
   });
   throwIfAborted(opts.signal);

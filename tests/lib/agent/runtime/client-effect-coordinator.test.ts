@@ -1,15 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  digestWhiteboardLineV1,
   digestWhiteboardShapeV1,
   digestVisibleTextV1,
   isClientEffectAck,
+  normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
   resolveActiveEffectBudget,
   type AcceptedTargetBinding,
   type ClientEffectAck,
   type ClientEffectRequest,
+  type WhiteboardLineClientEffectRequest,
+  type WhiteboardLinePostcondition,
   type WhiteboardShapeClientEffectRequest,
   type WhiteboardShapePostcondition,
   type WhiteboardTextClientEffectRequest,
@@ -154,6 +159,70 @@ function shapeCommitted(
   };
 }
 
+async function lineRequest(): Promise<WhiteboardLineClientEffectRequest> {
+  const line = normalizeWhiteboardLineV1({
+    startX: 360,
+    startY: 280,
+    endX: 120,
+    endY: 80,
+    color: '#2255aa',
+    width: 3,
+    style: 'dashed',
+    points: ['', 'arrow'],
+  });
+  return {
+    ...(await request()),
+    toolName: 'wb_draw_line',
+    args: {
+      startX: 360,
+      startY: 280,
+      endX: 120,
+      endY: 80,
+      color: '#2255aa',
+      width: 3,
+      style: 'dashed',
+      points: ['', 'arrow'],
+    },
+    postcondition: {
+      kind: 'whiteboard_line_exists',
+      stableElementId: 'line-1',
+      elementType: 'line',
+      normalizationVersion: CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
+      expectedLineDigest: await digestWhiteboardLineV1(line),
+      ...line,
+    },
+  };
+}
+
+function lineCommitted(
+  effect: WhiteboardLineClientEffectRequest,
+  overrides: Partial<Omit<WhiteboardLinePostcondition, 'kind' | 'expectedLineDigest'>> = {},
+): Extract<ClientEffectAck, { status: 'effect_committed' }> {
+  return {
+    protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
+    executionId: effect.executionId,
+    idempotencyKey: effect.idempotencyKey,
+    clientEventId: 'event-line-committed',
+    status: 'effect_committed',
+    observedAt: Date.now(),
+    targetBinding,
+    postcondition: {
+      stableElementId: effect.postcondition.stableElementId,
+      elementType: 'line',
+      normalizationVersion: CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
+      observedLineDigest: effect.postcondition.expectedLineDigest,
+      matchingElementCount: 1,
+      start: effect.postcondition.start,
+      end: effect.postcondition.end,
+      strokeColor: effect.postcondition.strokeColor,
+      strokeWidth: effect.postcondition.strokeWidth,
+      strokeStyle: effect.postcondition.strokeStyle,
+      markers: effect.postcondition.markers,
+      ...overrides,
+    },
+  };
+}
+
 describe('ClientEffectCoordinator', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -235,6 +304,56 @@ describe('ClientEffectCoordinator', () => {
         registered.delivery.acknowledgementToken,
         shapeCommitted(effect, {
           bounds: { ...effect.postcondition.bounds, width: 241 },
+        }),
+      ),
+    ).toMatchObject({
+      kind: 'invalid',
+      reason: 'Committed postcondition does not match the requested effect.',
+      snapshot: { status: 'accepted' },
+    });
+  });
+
+  it('settles a line only after its exact ordered endpoints, stroke, and markers are verified', async () => {
+    const coordinator = new ClientEffectCoordinator();
+    const effect = await lineRequest();
+    const registered = coordinator.register(effect);
+    coordinator.acknowledge(
+      effect.executionId,
+      registered.delivery.acknowledgementToken,
+      accepted(effect),
+    );
+
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        lineCommitted(effect),
+      ),
+    ).toMatchObject({ kind: 'applied', snapshot: { status: 'effect_committed' } });
+    await expect(registered.result).resolves.toMatchObject({
+      status: 'effect_committed',
+      isError: false,
+    });
+  });
+
+  it('rejects a committed line with reversed endpoint semantics or different markers', async () => {
+    const coordinator = new ClientEffectCoordinator();
+    const effect = await lineRequest();
+    const registered = coordinator.register(effect);
+    coordinator.acknowledge(
+      effect.executionId,
+      registered.delivery.acknowledgementToken,
+      accepted(effect),
+    );
+
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        lineCommitted(effect, {
+          start: effect.postcondition.end,
+          end: effect.postcondition.start,
+          markers: ['arrow', ''],
         }),
       ),
     ).toMatchObject({
@@ -642,6 +761,40 @@ describe('isClientEffectAck', () => {
         postcondition: {
           ...valid.postcondition,
           bounds: { ...effect.postcondition.bounds, width: Number.NaN },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isClientEffectAck({
+        ...valid,
+        postcondition: {
+          ...valid.postcondition,
+          unexpected: true,
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it('accepts the exact line commit variant and rejects malformed line state', async () => {
+    const effect = await lineRequest();
+    const valid = lineCommitted(effect);
+    expect(isClientEffectAck(valid)).toBe(true);
+
+    expect(
+      isClientEffectAck({
+        ...valid,
+        postcondition: {
+          ...valid.postcondition,
+          start: { x: Number.NaN, y: effect.postcondition.start.y },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isClientEffectAck({
+        ...valid,
+        postcondition: {
+          ...valid.postcondition,
+          markers: ['', 'dot'],
         },
       }),
     ).toBe(false);

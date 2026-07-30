@@ -251,17 +251,30 @@ describe('Phase 1 Child native web_search', () => {
     expect(
       resolveNativeChildCapabilities({
         ...base,
-        agent: { role: base.role, allowedActions: ['wb_draw_text', 'wb_draw_shape'] },
+        agent: {
+          role: base.role,
+          allowedActions: ['wb_draw_text', 'wb_draw_shape', 'wb_draw_line'],
+        },
       }),
     ).toMatchObject({
       nativeWhiteboardEnabled: true,
-      nativeWhiteboardToolNames: ['wb_draw_text', 'wb_draw_shape'],
+      nativeWhiteboardToolNames: ['wb_draw_text', 'wb_draw_shape', 'wb_draw_line'],
       nativeChildEnabled: true,
     });
     expect(
       resolveNativeChildCapabilities({
         ...base,
         agent: { role: base.role, allowedActions: ['wb_draw_line'] },
+      }),
+    ).toMatchObject({
+      nativeWhiteboardEnabled: true,
+      nativeWhiteboardToolNames: ['wb_draw_line'],
+      nativeChildEnabled: true,
+    });
+    expect(
+      resolveNativeChildCapabilities({
+        ...base,
+        agent: { role: base.role, allowedActions: ['wb_draw_chart'] },
       }),
     ).toMatchObject({
       nativeWhiteboardEnabled: false,

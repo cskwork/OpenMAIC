@@ -264,6 +264,10 @@ describe('Pi director prompt closure routing', () => {
       enableWebSearch: false,
       enableWhiteboardText: true,
     });
+    const lineOnly = buildNativeWebChildPrompt(makeBody(), agents[0], [], {
+      enableWebSearch: false,
+      enableWhiteboardLine: true,
+    });
     const shapeTurn = buildNativeWebChildTurnPrompt(
       'Draw one simple shape.',
       'teacher',
@@ -273,14 +277,34 @@ describe('Pi director prompt closure routing', () => {
         enableWhiteboardShape: true,
       },
     );
+    const lineTurn = buildNativeWebChildTurnPrompt(
+      'Draw one directed relationship.',
+      'teacher',
+      {},
+      {
+        enableWebSearch: false,
+        enableWhiteboardLine: true,
+      },
+    );
 
     expect(shapeOnly).toContain('call `wb_draw_shape`');
     expect(shapeOnly).not.toContain('call `wb_draw_text`');
+    expect(shapeOnly).not.toContain('call `wb_draw_line`');
     expect(shapeOnly).toContain('Only the Native whiteboard tools listed above are available');
     expect(textOnly).toContain('call `wb_draw_text`');
     expect(textOnly).not.toContain('call `wb_draw_shape`');
+    expect(textOnly).not.toContain('call `wb_draw_line`');
+    expect(lineOnly).toContain('call `wb_draw_line`');
+    expect(lineOnly).toContain('connection, relationship, flow, or annotation');
+    expect(lineOnly).not.toContain('call `wb_draw_text`');
+    expect(lineOnly).not.toContain('call `wb_draw_shape`');
     expect(shapeTurn).toContain('Use `wb_draw_shape` only when one simple shape genuinely helps');
     expect(shapeTurn).not.toContain('Use `wb_draw_text`');
+    expect(lineTurn).toContain(
+      'Use `wb_draw_line` only when one straight connection, relationship, flow, or annotation genuinely helps',
+    );
+    expect(lineTurn).not.toContain('Use `wb_draw_text`');
+    expect(lineTurn).not.toContain('Use `wb_draw_shape`');
   });
 
   it('describes hybrid Web Search without giving legacy agents a native tool', () => {

@@ -5,6 +5,7 @@ import {
 
 export const CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION = 'maic.visible-text.v1' as const;
 export const CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION = 'maic.whiteboard-shape.v1' as const;
+export const CLIENT_EFFECT_LINE_NORMALIZATION_VERSION = 'maic.whiteboard-line.v1' as const;
 export const CLIENT_EFFECT_ACK_HEADER = 'x-maic-effect-token';
 export const CLIENT_EFFECT_ACK_MAX_BYTES = 8 * 1024;
 
@@ -60,6 +61,31 @@ export interface WhiteboardShapePostcondition extends WhiteboardShapeSpec {
   expectedShapeDigest: string;
 }
 
+export type WhiteboardLineStyle = 'solid' | 'dashed';
+export type WhiteboardLineMarker = '' | 'arrow';
+
+export interface WhiteboardLineCoordinate {
+  x: number;
+  y: number;
+}
+
+export interface WhiteboardLineSpec {
+  start: WhiteboardLineCoordinate;
+  end: WhiteboardLineCoordinate;
+  strokeColor: string;
+  strokeWidth: number;
+  strokeStyle: WhiteboardLineStyle;
+  markers: [WhiteboardLineMarker, WhiteboardLineMarker];
+}
+
+export interface WhiteboardLinePostcondition extends WhiteboardLineSpec {
+  kind: 'whiteboard_line_exists';
+  stableElementId: string;
+  elementType: 'line';
+  normalizationVersion: typeof CLIENT_EFFECT_LINE_NORMALIZATION_VERSION;
+  expectedLineDigest: string;
+}
+
 interface ClientEffectRequestBase extends ToolExecutionEnvelope {
   kind: 'client_effect';
   target: ClientEffectTarget;
@@ -76,9 +102,15 @@ export type WhiteboardShapeClientEffectRequest = ClientEffectRequestBase & {
   postcondition: WhiteboardShapePostcondition;
 };
 
+export type WhiteboardLineClientEffectRequest = ClientEffectRequestBase & {
+  toolName: 'wb_draw_line';
+  postcondition: WhiteboardLinePostcondition;
+};
+
 export type ClientEffectRequest =
   | WhiteboardTextClientEffectRequest
-  | WhiteboardShapeClientEffectRequest;
+  | WhiteboardShapeClientEffectRequest
+  | WhiteboardLineClientEffectRequest;
 
 export interface ClientEffectDelivery {
   request: ClientEffectRequest;
@@ -127,7 +159,14 @@ export type ClientEffectAck =
             normalizationVersion: typeof CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION;
             observedShapeDigest: string;
             matchingElementCount: 1;
-          } & WhiteboardShapeSpec);
+          } & WhiteboardShapeSpec)
+        | ({
+            stableElementId: string;
+            elementType: 'line';
+            normalizationVersion: typeof CLIENT_EFFECT_LINE_NORMALIZATION_VERSION;
+            observedLineDigest: string;
+            matchingElementCount: 1;
+          } & WhiteboardLineSpec);
     })
   | (ClientEffectAckBase & {
       status: 'effect_failed' | 'cancelled';
@@ -270,6 +309,92 @@ export async function digestWhiteboardShapeV1(input: WhiteboardShapeSpec): Promi
   ).join('')}`;
 }
 
+export function normalizeWhiteboardLineV1(input: {
+  startX: unknown;
+  startY: unknown;
+  endX: unknown;
+  endY: unknown;
+  color?: unknown;
+  width?: unknown;
+  style?: unknown;
+  points?: unknown;
+}): WhiteboardLineSpec {
+  const { startX, startY, endX, endY } = input;
+  const color = input.color ?? '#333333';
+  const width = input.width ?? 2;
+  const style = input.style ?? 'solid';
+  const points = input.points ?? ['', ''];
+  if (
+    typeof startX !== 'number' ||
+    !Number.isFinite(startX) ||
+    typeof startY !== 'number' ||
+    !Number.isFinite(startY) ||
+    typeof endX !== 'number' ||
+    !Number.isFinite(endX) ||
+    typeof endY !== 'number' ||
+    !Number.isFinite(endY) ||
+    typeof color !== 'string' ||
+    !color.trim() ||
+    color.length > 64 ||
+    typeof width !== 'number' ||
+    !Number.isFinite(width) ||
+    (style !== 'solid' && style !== 'dashed') ||
+    !Array.isArray(points) ||
+    points.length !== 2 ||
+    !points.every((marker) => marker === '' || marker === 'arrow')
+  ) {
+    throw new Error('CLIENT_EFFECT_LINE_INPUT_INVALID');
+  }
+  const start = { x: canonicalNumber(startX), y: canonicalNumber(startY) };
+  const end = { x: canonicalNumber(endX), y: canonicalNumber(endY) };
+  if (
+    start.x < 0 ||
+    start.x > 1000 ||
+    end.x < 0 ||
+    end.x > 1000 ||
+    start.y < 0 ||
+    start.y > 562 ||
+    end.y < 0 ||
+    end.y > 562
+  ) {
+    throw new Error('CLIENT_EFFECT_LINE_BOUNDS_INVALID');
+  }
+  if (start.x === end.x && start.y === end.y) {
+    throw new Error('CLIENT_EFFECT_LINE_ZERO_LENGTH');
+  }
+  if (width < 1 || width > 100) {
+    throw new Error('CLIENT_EFFECT_LINE_STROKE_INVALID');
+  }
+  return {
+    start,
+    end,
+    strokeColor: color.trim(),
+    strokeWidth: canonicalNumber(width),
+    strokeStyle: style,
+    markers: [points[0] as WhiteboardLineMarker, points[1] as WhiteboardLineMarker],
+  };
+}
+
+export async function digestWhiteboardLineV1(input: WhiteboardLineSpec): Promise<string> {
+  const normalized = normalizeWhiteboardLineV1({
+    startX: input.start.x,
+    startY: input.start.y,
+    endX: input.end.x,
+    endY: input.end.y,
+    color: input.strokeColor,
+    width: input.strokeWidth,
+    style: input.strokeStyle,
+    points: input.markers,
+  });
+  const bytes = new TextEncoder().encode(
+    `${CLIENT_EFFECT_LINE_NORMALIZATION_VERSION}\n${JSON.stringify(normalized)}`,
+  );
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  return `sha256:${Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('')}`;
+}
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
@@ -384,8 +509,8 @@ export function isClientEffectAck(value: unknown): value is ClientEffectAck {
         );
       }
       if (
-        postcondition.elementType !== 'shape' ||
-        !hasExactKeys(postcondition, [
+        postcondition.elementType === 'shape' &&
+        hasExactKeys(postcondition, [
           'stableElementId',
           'elementType',
           'normalizationVersion',
@@ -394,27 +519,76 @@ export function isClientEffectAck(value: unknown): value is ClientEffectAck {
           'shape',
           'bounds',
           'fillColor',
+        ])
+      ) {
+        if (
+          !isNonEmptyString(postcondition.stableElementId) ||
+          postcondition.normalizationVersion !== CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION ||
+          !isNonEmptyString(postcondition.observedShapeDigest) ||
+          postcondition.matchingElementCount !== 1 ||
+          !postcondition.bounds ||
+          typeof postcondition.bounds !== 'object' ||
+          Array.isArray(postcondition.bounds)
+        ) {
+          return false;
+        }
+        const bounds = postcondition.bounds as Record<string, unknown>;
+        if (!hasExactKeys(bounds, ['x', 'y', 'width', 'height'])) return false;
+        try {
+          normalizeWhiteboardShapeV1({
+            shape: postcondition.shape,
+            x: bounds.x,
+            y: bounds.y,
+            width: bounds.width,
+            height: bounds.height,
+            fillColor: postcondition.fillColor,
+          });
+          return true;
+        } catch {
+          return false;
+        }
+      }
+      if (
+        postcondition.elementType !== 'line' ||
+        !hasExactKeys(postcondition, [
+          'stableElementId',
+          'elementType',
+          'normalizationVersion',
+          'observedLineDigest',
+          'matchingElementCount',
+          'start',
+          'end',
+          'strokeColor',
+          'strokeWidth',
+          'strokeStyle',
+          'markers',
         ]) ||
         !isNonEmptyString(postcondition.stableElementId) ||
-        postcondition.normalizationVersion !== CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION ||
-        !isNonEmptyString(postcondition.observedShapeDigest) ||
+        postcondition.normalizationVersion !== CLIENT_EFFECT_LINE_NORMALIZATION_VERSION ||
+        !isNonEmptyString(postcondition.observedLineDigest) ||
         postcondition.matchingElementCount !== 1 ||
-        !postcondition.bounds ||
-        typeof postcondition.bounds !== 'object' ||
-        Array.isArray(postcondition.bounds)
+        !postcondition.start ||
+        typeof postcondition.start !== 'object' ||
+        Array.isArray(postcondition.start) ||
+        !postcondition.end ||
+        typeof postcondition.end !== 'object' ||
+        Array.isArray(postcondition.end)
       ) {
         return false;
       }
-      const bounds = postcondition.bounds as Record<string, unknown>;
-      if (!hasExactKeys(bounds, ['x', 'y', 'width', 'height'])) return false;
+      const start = postcondition.start as Record<string, unknown>;
+      const end = postcondition.end as Record<string, unknown>;
+      if (!hasExactKeys(start, ['x', 'y']) || !hasExactKeys(end, ['x', 'y'])) return false;
       try {
-        normalizeWhiteboardShapeV1({
-          shape: postcondition.shape,
-          x: bounds.x,
-          y: bounds.y,
-          width: bounds.width,
-          height: bounds.height,
-          fillColor: postcondition.fillColor,
+        normalizeWhiteboardLineV1({
+          startX: start.x,
+          startY: start.y,
+          endX: end.x,
+          endY: end.y,
+          color: postcondition.strokeColor,
+          width: postcondition.strokeWidth,
+          style: postcondition.strokeStyle,
+          points: postcondition.markers,
         });
         return true;
       } catch {

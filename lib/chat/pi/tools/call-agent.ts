@@ -34,7 +34,11 @@ import {
 } from '../prompts';
 import type { SendEvent } from '../types';
 import { buildChildActionTools, createPiWhiteboardRuntimeState } from './classroom-actions';
-import { buildNativeWhiteboardShapeTool, buildNativeWhiteboardTextTool } from './native-whiteboard';
+import {
+  buildNativeWhiteboardLineTool,
+  buildNativeWhiteboardShapeTool,
+  buildNativeWhiteboardTextTool,
+} from './native-whiteboard';
 
 const CallAgentParams = Type.Object({
   agentId: Type.String({
@@ -60,7 +64,7 @@ export function resolveNativeChildCapabilities(opts: {
   maxActionsPerAgent: number;
 }): {
   nativeWhiteboardEnabled: boolean;
-  nativeWhiteboardToolNames: Array<'wb_draw_text' | 'wb_draw_shape'>;
+  nativeWhiteboardToolNames: Array<'wb_draw_text' | 'wb_draw_shape' | 'wb_draw_line'>;
   childWebSearchEnabled: boolean;
   nativeChildEnabled: boolean;
 } {
@@ -70,7 +74,7 @@ export function resolveNativeChildCapabilities(opts: {
     opts.maxActionsPerAgent > 0 &&
     opts.agent.role === 'teacher';
   const nativeWhiteboardToolNames = nativeWhiteboardEligible
-    ? (['wb_draw_text', 'wb_draw_shape'] as const).filter((toolName) =>
+    ? (['wb_draw_text', 'wb_draw_shape', 'wb_draw_line'] as const).filter((toolName) =>
         opts.agent.allowedActions.includes(toolName),
       )
     : [];
@@ -789,6 +793,28 @@ export function buildCallAgentTool(opts: {
           nativeTools.push(nativeWhiteboard.tool);
           clientEffectHandlers.set(nativeWhiteboard.tool.name, nativeWhiteboard.handler);
         }
+        if (nativeWhiteboardToolNames.includes('wb_draw_line')) {
+          const nativeWhiteboard = buildNativeWhiteboardLineTool({
+            body: opts.body,
+            messageId,
+            send: opts.send,
+            canExecute: () => actionCount < opts.maxActionsPerAgent,
+            onCommitted: (params) => {
+              actionCount += 1;
+              const record: WhiteboardActionRecord = {
+                actionName: 'wb_draw_line',
+                agentId: agent.id,
+                agentName: agent.name,
+                params,
+              };
+              whiteboardActions.push(record);
+              opts.onActionDone(record);
+            },
+            onCancelled: abortChild,
+          });
+          nativeTools.push(nativeWhiteboard.tool);
+          clientEffectHandlers.set(nativeWhiteboard.tool.name, nativeWhiteboard.handler);
+        }
 
         const nativeStreamFn =
           opts.nativeChildStreamFn ??
@@ -813,6 +839,7 @@ export function buildCallAgentTool(opts: {
               enableWebSearch: childWebSearchEnabled,
               enableWhiteboardText: nativeWhiteboardToolNames.includes('wb_draw_text'),
               enableWhiteboardShape: nativeWhiteboardToolNames.includes('wb_draw_shape'),
+              enableWhiteboardLine: nativeWhiteboardToolNames.includes('wb_draw_line'),
             }),
             prompt: buildNativeWebChildTurnPrompt(
               params.instruction,
@@ -825,6 +852,7 @@ export function buildCallAgentTool(opts: {
                 enableWebSearch: childWebSearchEnabled,
                 enableWhiteboardText: nativeWhiteboardToolNames.includes('wb_draw_text'),
                 enableWhiteboardShape: nativeWhiteboardToolNames.includes('wb_draw_shape'),
+                enableWhiteboardLine: nativeWhiteboardToolNames.includes('wb_draw_line'),
               },
             ),
             tools: nativeTools,

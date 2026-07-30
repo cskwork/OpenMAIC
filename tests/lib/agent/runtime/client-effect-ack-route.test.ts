@@ -5,10 +5,13 @@ import type { StageStore } from '@/lib/api/stage-api';
 import { BrowserClientEffectRuntime } from '@/lib/agent/client/client-effect-runtime';
 import {
   CLIENT_EFFECT_ACK_HEADER,
+  CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  digestWhiteboardLineV1,
   digestWhiteboardShapeV1,
   digestVisibleTextV1,
+  normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
   type ClientEffectAck,
   type ClientEffectRequest,
@@ -90,6 +93,48 @@ async function shapeEffectRequest(): Promise<ClientEffectRequest> {
       normalizationVersion: CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
       expectedShapeDigest: await digestWhiteboardShapeV1(shape),
       ...shape,
+    },
+  };
+}
+
+async function lineEffectRequest(): Promise<ClientEffectRequest> {
+  const line = normalizeWhiteboardLineV1({
+    startX: 400,
+    startY: 300,
+    endX: 100,
+    endY: 90,
+    color: '#3366cc',
+    width: 4,
+    style: 'dashed',
+    points: ['', 'arrow'],
+  });
+  return {
+    ...(await effectRequest()),
+    traceId: 'trace-line-1',
+    runId: 'run-line-1',
+    agentInvocationId: 'message-line-1',
+    toolCallId: 'tool-call-line-1',
+    executionId: 'execution-line-1',
+    idempotencyKey: 'run-line-1:message-line-1:tool-call-line-1',
+    toolName: 'wb_draw_line',
+    args: {
+      startX: 400,
+      startY: 300,
+      endX: 100,
+      endY: 90,
+      color: '#3366cc',
+      width: 4,
+      style: 'dashed',
+      points: ['', 'arrow'],
+    },
+    argsDigest: 'sha256:line-args',
+    postcondition: {
+      kind: 'whiteboard_line_exists',
+      stableElementId: 'line-element-1',
+      elementType: 'line',
+      normalizationVersion: CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
+      expectedLineDigest: await digestWhiteboardLineV1(line),
+      ...line,
     },
   };
 }
@@ -486,6 +531,57 @@ describe('client effect ACK route', () => {
         width: 220,
         height: 220,
         fill: '#3366cc',
+      }),
+    ]);
+  });
+
+  it('commits an exact line postcondition through the real browser ACK route', async () => {
+    const effect = await lineEffectRequest();
+    const registered = piClientEffectCoordinator.register(effect);
+    const fetchAck: typeof fetch = async (input, init) => {
+      const url = new URL(String(input), 'http://localhost');
+      const headers = new Headers(init?.headers);
+      headers.set('origin', url.origin);
+      return post(
+        new NextRequest(url, {
+          method: init?.method,
+          headers,
+          body: init?.body,
+        }),
+        effect.executionId,
+      );
+    };
+    const store = createStore();
+    const runtime = new BrowserClientEffectRuntime({
+      sessionId: effect.target.sessionId,
+      requestId: effect.target.requestId,
+      store,
+      fetchAck,
+      waitForPresentation: async () => {},
+      ensureWhiteboardVisible: async () => {},
+    });
+
+    await expect(runtime.execute(registered.delivery, new AbortController().signal)).resolves.toBe(
+      'effect_committed',
+    );
+    expect(piClientEffectCoordinator.getSnapshot(effect.executionId)).toMatchObject({
+      status: 'effect_committed',
+      terminalResult: { status: 'effect_committed', isError: false },
+    });
+    expect(
+      store.getState().stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements),
+    ).toEqual([
+      expect.objectContaining({
+        id: effect.postcondition.stableElementId,
+        type: 'line',
+        left: 100,
+        top: 90,
+        width: 4,
+        start: [300, 210],
+        end: [0, 0],
+        style: 'dashed',
+        color: '#3366cc',
+        points: ['', 'arrow'],
       }),
     ]);
   });

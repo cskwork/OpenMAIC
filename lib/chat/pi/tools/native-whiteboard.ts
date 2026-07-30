@@ -1,9 +1,12 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type, type Static } from 'typebox';
 import {
+  CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
+  digestWhiteboardLineV1,
   digestWhiteboardShapeV1,
   digestVisibleTextV1,
+  normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
   resolveActiveEffectBudget,
   type ClientEffectRequest,
@@ -78,6 +81,46 @@ const NativeWhiteboardShapeParams = Type.Object({
 });
 
 type NativeWhiteboardShapeParams = Static<typeof NativeWhiteboardShapeParams>;
+
+const NativeWhiteboardLineMarker = Type.Union([Type.Literal(''), Type.Literal('arrow')]);
+const NativeWhiteboardLineParams = Type.Object({
+  startX: Type.Number({
+    minimum: 0,
+    maximum: 1000,
+    description: 'Ordered start x coordinate on a 1000×563 board.',
+  }),
+  startY: Type.Number({
+    minimum: 0,
+    maximum: 562,
+    description: 'Ordered start y coordinate on a 1000×563 board.',
+  }),
+  endX: Type.Number({
+    minimum: 0,
+    maximum: 1000,
+    description: 'Ordered end x coordinate on a 1000×563 board.',
+  }),
+  endY: Type.Number({
+    minimum: 0,
+    maximum: 562,
+    description: 'Ordered end y coordinate on a 1000×563 board.',
+  }),
+  color: Type.Optional(
+    Type.String({ minLength: 1, maxLength: 64, description: 'CSS stroke color.' }),
+  ),
+  width: Type.Optional(
+    Type.Number({ minimum: 1, maximum: 100, description: 'Stroke width in pixels.' }),
+  ),
+  style: Type.Optional(Type.Union([Type.Literal('solid'), Type.Literal('dashed')])),
+  points: Type.Optional(
+    Type.Array(NativeWhiteboardLineMarker, {
+      minItems: 2,
+      maxItems: 2,
+      description: 'Start and end markers; use "arrow" for a directed endpoint.',
+    }),
+  ),
+});
+
+type NativeWhiteboardLineParams = Static<typeof NativeWhiteboardLineParams>;
 const WHITEBOARD_OPEN_SETTLEMENT_MARGIN_MS = 500;
 
 interface NativeWhiteboardBaseOptions {
@@ -324,6 +367,73 @@ export function buildNativeWhiteboardShapeTool(
       toolOptions: opts,
       successMessage: 'Whiteboard shape was rendered and its postcondition was verified.',
       failureLabel: 'Whiteboard shape',
+    });
+  };
+
+  return { tool, handler };
+}
+
+export function buildNativeWhiteboardLineTool(
+  opts: NativeWhiteboardToolOptions<NativeWhiteboardLineParams>,
+): { tool: AgentTool<typeof NativeWhiteboardLineParams>; handler: NativeClientEffectHandler } {
+  const tool: AgentTool<typeof NativeWhiteboardLineParams> = {
+    name: 'wb_draw_line',
+    label: 'Draw whiteboard line',
+    description:
+      'Draw one straight line or directed arrow to connect concepts, show a relationship or flow, or annotate the classroom whiteboard. Explain the connection before calling this tool, then continue teaching after the committed result.',
+    parameters: NativeWhiteboardLineParams,
+    executionMode: 'sequential',
+    execute: async (): Promise<RuntimeAgentToolResult> => {
+      throw new Error('wb_draw_line requires the browser client-effect executor.');
+    },
+  };
+
+  const handler: NativeClientEffectHandler = async ({ request, params, signal }) => {
+    if (opts.canExecute?.() === false) return actionBudgetFailure();
+    const input = params as NativeWhiteboardLineParams;
+    let lineSpec;
+    try {
+      lineSpec = normalizeWhiteboardLineV1(input);
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Whiteboard line input was rejected: ${
+              error instanceof Error ? error.message : 'invalid input'
+            }.`,
+          },
+        ],
+        details: {
+          code: error instanceof Error ? error.message : 'CLIENT_EFFECT_LINE_INPUT_INVALID',
+        },
+        isError: true,
+      };
+    }
+    const prepared = prepareClientEffect(opts, request);
+    if ('isError' in prepared) return prepared;
+    const stableElementId = `client-effect-${request.executionId}`;
+    const effectRequest: ClientEffectRequest = {
+      ...request,
+      toolName: 'wb_draw_line',
+      target: prepared.target,
+      activeEffectBudgetMs: prepared.activeEffectBudgetMs,
+      postcondition: {
+        kind: 'whiteboard_line_exists',
+        stableElementId,
+        elementType: 'line',
+        normalizationVersion: CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
+        expectedLineDigest: await digestWhiteboardLineV1(lineSpec),
+        ...lineSpec,
+      },
+    };
+    return deliverClientEffect({
+      request: effectRequest,
+      params: input,
+      signal,
+      toolOptions: opts,
+      successMessage: 'Whiteboard line was rendered and its postcondition was verified.',
+      failureLabel: 'Whiteboard line',
     });
   };
 

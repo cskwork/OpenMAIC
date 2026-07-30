@@ -2,10 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 import type { StageStore } from '@/lib/api/stage-api';
 import { BrowserClientEffectRuntime } from '@/lib/agent/client/client-effect-runtime';
 import {
+  CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  digestWhiteboardLineV1,
   digestWhiteboardShapeV1,
   digestVisibleTextV1,
+  normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
   type ClientEffectAck,
   type ClientEffectDelivery,
@@ -119,6 +122,66 @@ async function shapeDelivery(): Promise<ClientEffectDelivery> {
         normalizationVersion: CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
         expectedShapeDigest: await digestWhiteboardShapeV1(shape),
         ...shape,
+      },
+    },
+  };
+}
+
+async function lineDelivery(): Promise<ClientEffectDelivery> {
+  const line = normalizeWhiteboardLineV1({
+    startX: 420,
+    startY: 300,
+    endX: 120,
+    endY: 80,
+    color: '#2266aa',
+    width: 4,
+    style: 'dashed',
+    points: ['', 'arrow'],
+  });
+  return {
+    acknowledgementToken: 'line-capability',
+    request: {
+      protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
+      kind: 'client_effect',
+      traceId: 'trace-line-1',
+      runId: 'run-line-1',
+      agentInvocationId: 'message-line-1',
+      agentId: 'teacher-1',
+      depth: 1,
+      sequence: 1,
+      toolCallId: 'tool-call-line-1',
+      executionId: 'execution-line-1',
+      idempotencyKey: 'run-line-1:message-line-1:tool-call-line-1',
+      toolName: 'wb_draw_line',
+      args: {
+        startX: 420,
+        startY: 300,
+        endX: 120,
+        endY: 80,
+        color: '#2266aa',
+        width: 4,
+        style: 'dashed',
+        points: ['', 'arrow'],
+      },
+      argsDigest: 'sha256:line-args',
+      issuedAt: 1,
+      deadlineAt: Date.now() + 10_000,
+      attempt: 1,
+      target: {
+        requestId: 'request-1',
+        sessionId: 'session-1',
+        stageId: 'stage-1',
+        sceneId: 'scene-1',
+        messageId: 'message-line-1',
+      },
+      activeEffectBudgetMs: 2_000,
+      postcondition: {
+        kind: 'whiteboard_line_exists',
+        stableElementId: 'line-element-1',
+        elementType: 'line',
+        normalizationVersion: CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
+        expectedLineDigest: await digestWhiteboardLineV1(line),
+        ...line,
       },
     },
   };
@@ -264,6 +327,94 @@ describe('BrowserClientEffectRuntime', () => {
     expect(
       store.getState().stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements),
     ).toHaveLength(1);
+  });
+
+  it('executes a directed line once and ACKs its verified ordered state', async () => {
+    const store = createStore();
+    const acknowledgements: ClientEffectAck[] = [];
+    const runtime = new BrowserClientEffectRuntime({
+      sessionId: 'session-1',
+      requestId: 'request-1',
+      store,
+      fetchAck: async (_url, init) => {
+        const ack = JSON.parse(String(init?.body)) as ClientEffectAck;
+        acknowledgements.push(ack);
+        return new Response(JSON.stringify({ success: true, state: { status: ack.status } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+      waitForPresentation: async () => {},
+      ensureWhiteboardVisible: async () => {},
+    });
+    const effect = await lineDelivery();
+
+    const first = runtime.execute(effect, new AbortController().signal);
+    const duplicate = runtime.execute(effect, new AbortController().signal);
+
+    await expect(first).resolves.toBe('effect_committed');
+    await expect(duplicate).resolves.toBe('effect_committed');
+    if (effect.request.toolName !== 'wb_draw_line') {
+      throw new Error('Expected a line delivery.');
+    }
+    expect(acknowledgements.map((ack) => ack.status)).toEqual([
+      'presentation_paused',
+      'presentation_resumed',
+      'accepted',
+      'effect_committed',
+    ]);
+    expect(acknowledgements.at(-1)).toMatchObject({
+      executionId: effect.request.executionId,
+      idempotencyKey: effect.request.idempotencyKey,
+      status: 'effect_committed',
+      postcondition: {
+        stableElementId: effect.request.postcondition.stableElementId,
+        elementType: 'line',
+        observedLineDigest: effect.request.postcondition.expectedLineDigest,
+        start: { x: 420, y: 300 },
+        end: { x: 120, y: 80 },
+        strokeColor: '#2266aa',
+        strokeWidth: 4,
+        strokeStyle: 'dashed',
+        markers: ['', 'arrow'],
+        matchingElementCount: 1,
+      },
+    });
+    expect(
+      store.getState().stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements),
+    ).toHaveLength(1);
+  });
+
+  it('rejects a duplicate line reservation whose direction or markers changed', async () => {
+    const runtime = new BrowserClientEffectRuntime({
+      sessionId: 'session-1',
+      requestId: 'request-1',
+      store: createStore(),
+      fetchAck: vi.fn(),
+      waitForPresentation: async () => {},
+      ensureWhiteboardVisible: async () => {},
+    });
+    const effect = await lineDelivery();
+    if (effect.request.toolName !== 'wb_draw_line') {
+      throw new Error('Expected a line delivery.');
+    }
+    const lineRequest = effect.request;
+    runtime.reserve(effect);
+
+    expect(() =>
+      runtime.reserve({
+        ...effect,
+        request: {
+          ...lineRequest,
+          postcondition: {
+            ...lineRequest.postcondition,
+            start: lineRequest.postcondition.end,
+            end: lineRequest.postcondition.start,
+            markers: ['arrow', ''],
+          },
+        },
+      }),
+    ).toThrow('CLIENT_EFFECT_DUPLICATE_CONFLICT');
   });
 
   it('cancels a presentation wait on request abort without leaving a pending execution', async () => {

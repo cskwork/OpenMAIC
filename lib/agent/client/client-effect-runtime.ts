@@ -12,6 +12,7 @@ import {
 } from '@/lib/agent/runtime/client-effect-contract';
 import { TOOL_EXECUTION_PROTOCOL_VERSION } from '@/lib/agent/runtime/native-child-contract';
 import {
+  executeNativeWhiteboardLineEffect,
   executeNativeWhiteboardShapeEffect,
   executeNativeWhiteboardTextEffect,
   prepareNativeWhiteboardTarget,
@@ -90,6 +91,20 @@ function postconditionsEqual(
       left.bounds.width === right.bounds.width &&
       left.bounds.height === right.bounds.height &&
       left.fillColor === right.fillColor
+    );
+  }
+  if (left.kind === 'whiteboard_line_exists' && right.kind === 'whiteboard_line_exists') {
+    return (
+      left.expectedLineDigest === right.expectedLineDigest &&
+      left.start.x === right.start.x &&
+      left.start.y === right.start.y &&
+      left.end.x === right.end.x &&
+      left.end.y === right.end.y &&
+      left.strokeColor === right.strokeColor &&
+      left.strokeWidth === right.strokeWidth &&
+      left.strokeStyle === right.strokeStyle &&
+      left.markers[0] === right.markers[0] &&
+      left.markers[1] === right.markers[1]
     );
   }
   return false;
@@ -226,46 +241,85 @@ export class BrowserClientEffectRuntime {
       await this.opts.ensureWhiteboardVisible(executionSignal);
       await this.waitWhilePaused(record, executionSignal);
       const params = request.args as Record<string, unknown>;
-      const result =
-        request.toolName === 'wb_draw_text'
-          ? await executeNativeWhiteboardTextEffect({
-              store: this.opts.store,
-              targetBinding: binding,
-              input: {
-                executionId: request.executionId,
-                stableElementId: request.postcondition.stableElementId,
-                content: String(params.content ?? ''),
-                x: Number(params.x),
-                y: Number(params.y),
-                ...(params.width !== undefined ? { width: Number(params.width) } : {}),
-                ...(params.height !== undefined ? { height: Number(params.height) } : {}),
-                ...(params.fontSize !== undefined ? { fontSize: Number(params.fontSize) } : {}),
-                ...(params.color !== undefined ? { color: String(params.color) } : {}),
-              },
-              expectedContentDigest: request.postcondition.expectedContentDigest,
-              signal: executionSignal,
-            })
-          : await executeNativeWhiteboardShapeEffect({
-              store: this.opts.store,
-              targetBinding: binding,
-              input: {
-                executionId: request.executionId,
-                stableElementId: request.postcondition.stableElementId,
-                shape: String(params.shape) as typeof request.postcondition.shape,
-                x: Number(params.x),
-                y: Number(params.y),
-                width: Number(params.width),
-                height: Number(params.height),
-                ...(params.fillColor !== undefined ? { fillColor: String(params.fillColor) } : {}),
-              },
-              expectedShape: {
-                shape: request.postcondition.shape,
-                bounds: request.postcondition.bounds,
-                fillColor: request.postcondition.fillColor,
-              },
-              expectedShapeDigest: request.postcondition.expectedShapeDigest,
-              signal: executionSignal,
-            });
+      let result;
+      switch (request.toolName) {
+        case 'wb_draw_text':
+          result = await executeNativeWhiteboardTextEffect({
+            store: this.opts.store,
+            targetBinding: binding,
+            input: {
+              executionId: request.executionId,
+              stableElementId: request.postcondition.stableElementId,
+              content: String(params.content ?? ''),
+              x: Number(params.x),
+              y: Number(params.y),
+              ...(params.width !== undefined ? { width: Number(params.width) } : {}),
+              ...(params.height !== undefined ? { height: Number(params.height) } : {}),
+              ...(params.fontSize !== undefined ? { fontSize: Number(params.fontSize) } : {}),
+              ...(params.color !== undefined ? { color: String(params.color) } : {}),
+            },
+            expectedContentDigest: request.postcondition.expectedContentDigest,
+            signal: executionSignal,
+          });
+          break;
+        case 'wb_draw_shape':
+          result = await executeNativeWhiteboardShapeEffect({
+            store: this.opts.store,
+            targetBinding: binding,
+            input: {
+              executionId: request.executionId,
+              stableElementId: request.postcondition.stableElementId,
+              shape: String(params.shape) as typeof request.postcondition.shape,
+              x: Number(params.x),
+              y: Number(params.y),
+              width: Number(params.width),
+              height: Number(params.height),
+              ...(params.fillColor !== undefined ? { fillColor: String(params.fillColor) } : {}),
+            },
+            expectedShape: {
+              shape: request.postcondition.shape,
+              bounds: request.postcondition.bounds,
+              fillColor: request.postcondition.fillColor,
+            },
+            expectedShapeDigest: request.postcondition.expectedShapeDigest,
+            signal: executionSignal,
+          });
+          break;
+        case 'wb_draw_line':
+          result = await executeNativeWhiteboardLineEffect({
+            store: this.opts.store,
+            targetBinding: binding,
+            input: {
+              executionId: request.executionId,
+              stableElementId: request.postcondition.stableElementId,
+              startX: Number(params.startX),
+              startY: Number(params.startY),
+              endX: Number(params.endX),
+              endY: Number(params.endY),
+              ...(params.color !== undefined ? { color: String(params.color) } : {}),
+              ...(params.width !== undefined ? { width: Number(params.width) } : {}),
+              ...(params.style !== undefined
+                ? { style: String(params.style) as typeof request.postcondition.strokeStyle }
+                : {}),
+              ...(params.points !== undefined
+                ? {
+                    points: params.points as typeof request.postcondition.markers,
+                  }
+                : {}),
+            },
+            expectedLine: {
+              start: request.postcondition.start,
+              end: request.postcondition.end,
+              strokeColor: request.postcondition.strokeColor,
+              strokeWidth: request.postcondition.strokeWidth,
+              strokeStyle: request.postcondition.strokeStyle,
+              markers: request.postcondition.markers,
+            },
+            expectedLineDigest: request.postcondition.expectedLineDigest,
+            signal: executionSignal,
+          });
+          break;
+      }
       await this.enqueueAck(record, {
         status: 'effect_committed',
         targetBinding: binding,

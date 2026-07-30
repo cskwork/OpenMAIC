@@ -50,6 +50,7 @@ import {
 } from '@/lib/choreography';
 import katex from 'katex';
 import { createLogger } from '@/lib/logger';
+import { createWhiteboardLineElement } from './whiteboard-lines';
 import { WHITEBOARD_SHAPE_PATHS } from './whiteboard-shapes';
 
 const log = createLogger('ActionEngine');
@@ -594,28 +595,18 @@ export class ActionEngine {
     const wb = this.stageAPI.whiteboard.get();
     if (!wb.success || !wb.data) return;
 
-    // Calculate bounding box — left/top is the minimum of start/end coordinates
-    const left = Math.min(action.startX, action.endX);
-    const top = Math.min(action.startY, action.endY);
-
-    // Convert absolute coordinates to relative coordinates (relative to left/top)
-    const start: [number, number] = [action.startX - left, action.startY - top];
-    const end: [number, number] = [action.endX - left, action.endY - top];
-
     this.stageAPI.whiteboard.addElement(
-      {
+      createWhiteboardLineElement({
         id: action.elementId || '',
-        type: 'line',
-        left,
-        top,
-        width: action.width ?? 2,
-        start,
-        end,
-        style: action.style ?? 'solid',
-        color: action.color ?? '#333333',
-        points: action.points ?? ['', ''],
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
+        startX: action.startX,
+        startY: action.startY,
+        endX: action.endX,
+        endY: action.endY,
+        color: action.color,
+        width: action.width,
+        style: action.style,
+        points: action.points,
+      }),
       wb.data.id,
     );
 
