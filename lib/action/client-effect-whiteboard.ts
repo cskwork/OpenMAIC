@@ -4,16 +4,21 @@ import {
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_RENDER_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  assertWhiteboardTableSpecV1,
   digestWhiteboardLatexHtmlV1,
   digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
   digestWhiteboardShapeV1,
+  digestWhiteboardTableV1,
   digestVisibleTextV1,
   normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
+  normalizeWhiteboardTableV1,
   normalizeVisibleTextV1,
+  whiteboardTableSpecsEqual,
   type AcceptedTargetBinding,
   type ClientEffectTarget,
   type WhiteboardLatexSpec,
@@ -22,8 +27,10 @@ import {
   type WhiteboardLineStyle,
   type WhiteboardShapeKind,
   type WhiteboardShapeSpec,
+  type WhiteboardTableOutline,
+  type WhiteboardTableSpec,
 } from '@/lib/agent/runtime/client-effect-contract';
-import type { PPTElement, PPTLatexElement, PPTLineElement } from '@openmaic/dsl';
+import type { PPTElement, PPTLatexElement, PPTLineElement, PPTTableElement } from '@openmaic/dsl';
 import {
   createWhiteboardLineElement,
   readAbsoluteWhiteboardLineEndpoints,
@@ -33,6 +40,7 @@ import {
   renderNativeWhiteboardLatexHtmlV1,
 } from './whiteboard-latex';
 import { WHITEBOARD_SHAPE_PATHS } from './whiteboard-shapes';
+import { createWhiteboardTableElement } from './whiteboard-tables';
 
 export interface NativeWbDrawTextInput {
   executionId: string;
@@ -111,6 +119,12 @@ type NativeLatexElement = PPTLatexElement & {
   clientEffectHtmlDigest?: string;
   clientEffectNormalizationVersion?: string;
   clientEffectRenderVersion?: string;
+};
+
+type NativeTableElement = PPTTableElement & {
+  clientEffectExecutionId?: string;
+  clientEffectTableDigest?: string;
+  clientEffectNormalizationVersion?: string;
 };
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -986,6 +1000,246 @@ export async function executeNativeWhiteboardLatexEffect(opts: {
     expectedLatex: requestLatex,
     expectedFormulaDigest: opts.expectedFormulaDigest,
     expectedHtmlDigest: opts.expectedHtmlDigest,
+    signal: opts.signal,
+  });
+  throwIfAborted(opts.signal);
+  return { replayed: false, postcondition };
+}
+
+export interface NativeWbDrawTableInput {
+  executionId: string;
+  stableElementId: string;
+  data: string[][];
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  outline?: WhiteboardTableOutline;
+  theme?: { color: string };
+}
+
+export interface NativeWhiteboardTablePostconditionResult {
+  stableElementId: string;
+  elementType: 'table';
+  normalizationVersion: typeof CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION;
+  observedTableDigest: string;
+  matchingElementCount: 1;
+}
+
+function tableSpecFromElement(element: NativeTableElement): WhiteboardTableSpec {
+  if (
+    element.type !== 'table' ||
+    typeof element.left !== 'number' ||
+    typeof element.top !== 'number' ||
+    typeof element.width !== 'number' ||
+    typeof element.height !== 'number' ||
+    element.rotate !== 0 ||
+    element.rowHeights !== undefined ||
+    !Array.isArray(element.data) ||
+    element.data.length === 0 ||
+    !Array.isArray(element.data[0]) ||
+    element.data[0].length === 0 ||
+    !Array.isArray(element.colWidths) ||
+    element.cellMinHeight !== 36 ||
+    !element.outline ||
+    typeof element.outline.width !== 'number' ||
+    (element.outline.style !== 'solid' && element.outline.style !== 'dashed') ||
+    typeof element.outline.color !== 'string'
+  ) {
+    throw new Error('CLIENT_EFFECT_TABLE_ELEMENT_MISMATCH');
+  }
+  let cellId = 0;
+  const data = element.data.map((row) =>
+    row.map((cell) => {
+      if (
+        cell.id !== `cell_${cellId++}` ||
+        cell.colspan !== 1 ||
+        cell.rowspan !== 1 ||
+        typeof cell.text !== 'string' ||
+        cell.style !== undefined ||
+        cell.padding !== undefined ||
+        cell.vAlign !== undefined ||
+        cell.borders !== undefined
+      ) {
+        throw new Error('CLIENT_EFFECT_TABLE_ELEMENT_MISMATCH');
+      }
+      return cell.text;
+    }),
+  );
+  return assertWhiteboardTableSpecV1({
+    data,
+    bounds: {
+      x: element.left,
+      y: element.top,
+      width: element.width,
+      height: element.height,
+    },
+    outline: {
+      width: element.outline.width,
+      style: element.outline.style,
+      color: element.outline.color,
+    },
+    ...(element.theme
+      ? {
+          theme: {
+            color: element.theme.color,
+            rowHeader: element.theme.rowHeader as true,
+            rowFooter: element.theme.rowFooter as false,
+            colHeader: element.theme.colHeader as false,
+            colFooter: element.theme.colFooter as false,
+          },
+        }
+      : {}),
+    colWidths: [...element.colWidths],
+    cellMinHeight: 36,
+  });
+}
+
+export async function verifyNativeWhiteboardTableEffect(opts: {
+  store: StageStore;
+  targetBinding: AcceptedTargetBinding;
+  executionId: string;
+  stableElementId: string;
+  expectedTable: WhiteboardTableSpec;
+  expectedTableDigest: string;
+  signal?: AbortSignal;
+}): Promise<NativeWhiteboardTablePostconditionResult> {
+  const readVerifiedElement = (): { element: NativeTableElement; spec: WhiteboardTableSpec } => {
+    throwIfAborted(opts.signal);
+    assertStageAndScene(opts.store, opts.targetBinding);
+    const elementsResult = createStageAPI(opts.store).whiteboard.listElements(
+      opts.targetBinding.whiteboardId,
+    );
+    if (!elementsResult.success || !elementsResult.data) {
+      throw new Error(elementsResult.error || 'CLIENT_EFFECT_WHITEBOARD_NOT_FOUND');
+    }
+    const matches = elementsResult.data.filter((element) => element.id === opts.stableElementId);
+    if (matches.length !== 1) {
+      throw new Error(
+        matches.length === 0
+          ? 'CLIENT_EFFECT_ELEMENT_NOT_FOUND'
+          : 'CLIENT_EFFECT_DUPLICATE_ELEMENT_ID',
+      );
+    }
+    const element = matches[0] as NativeTableElement;
+    if (
+      element.clientEffectExecutionId !== opts.executionId ||
+      element.clientEffectNormalizationVersion !== CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION
+    ) {
+      throw new Error('CLIENT_EFFECT_ELEMENT_OWNERSHIP_MISMATCH');
+    }
+    return { element, spec: tableSpecFromElement(element) };
+  };
+
+  const beforeDigest = readVerifiedElement();
+  const observedTableDigest = await digestWhiteboardTableV1(beforeDigest.spec);
+  throwIfAborted(opts.signal);
+  const afterDigest = readVerifiedElement();
+  if (
+    !whiteboardTableSpecsEqual(beforeDigest.spec, afterDigest.spec) ||
+    !whiteboardTableSpecsEqual(beforeDigest.spec, opts.expectedTable) ||
+    observedTableDigest !== opts.expectedTableDigest ||
+    afterDigest.element.clientEffectTableDigest !== opts.expectedTableDigest
+  ) {
+    throw new Error('CLIENT_EFFECT_TABLE_MISMATCH');
+  }
+
+  return {
+    stableElementId: opts.stableElementId,
+    elementType: 'table',
+    normalizationVersion: CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
+    observedTableDigest,
+    matchingElementCount: 1,
+  };
+}
+
+export async function executeNativeWhiteboardTableEffect(opts: {
+  store: StageStore;
+  targetBinding: AcceptedTargetBinding;
+  input: NativeWbDrawTableInput;
+  expectedTable: WhiteboardTableSpec;
+  expectedTableDigest: string;
+  signal?: AbortSignal;
+}): Promise<NativeWhiteboardExecutionResult<NativeWhiteboardTablePostconditionResult>> {
+  throwIfAborted(opts.signal);
+  if (
+    typeof opts.input.executionId !== 'string' ||
+    !opts.input.executionId.trim() ||
+    typeof opts.input.stableElementId !== 'string' ||
+    !opts.input.stableElementId.trim()
+  ) {
+    throw new Error('CLIENT_EFFECT_INPUT_INVALID');
+  }
+  const inputTable = normalizeWhiteboardTableV1(opts.input);
+  const requestTable = assertWhiteboardTableSpecV1(opts.expectedTable);
+  const inputDigest = await digestWhiteboardTableV1(inputTable);
+  throwIfAborted(opts.signal);
+  if (
+    !whiteboardTableSpecsEqual(inputTable, requestTable) ||
+    inputDigest !== opts.expectedTableDigest ||
+    (await digestWhiteboardTableV1(requestTable)) !== opts.expectedTableDigest
+  ) {
+    throw new Error('CLIENT_EFFECT_REQUEST_TABLE_MISMATCH');
+  }
+
+  assertStageAndScene(opts.store, opts.targetBinding);
+  const whiteboardApi = createStageAPI(opts.store).whiteboard;
+  const elementsResult = whiteboardApi.listElements(opts.targetBinding.whiteboardId);
+  if (!elementsResult.success || !elementsResult.data) {
+    throw new Error(elementsResult.error || 'CLIENT_EFFECT_WHITEBOARD_NOT_FOUND');
+  }
+  const existing = elementsResult.data.filter(
+    (element) => element.id === opts.input.stableElementId,
+  );
+  if (existing.length > 1) throw new Error('CLIENT_EFFECT_DUPLICATE_ELEMENT_ID');
+  if (existing.length === 1) {
+    const postcondition = await verifyNativeWhiteboardTableEffect({
+      store: opts.store,
+      targetBinding: opts.targetBinding,
+      executionId: opts.input.executionId,
+      stableElementId: opts.input.stableElementId,
+      expectedTable: requestTable,
+      expectedTableDigest: opts.expectedTableDigest,
+      signal: opts.signal,
+    });
+    throwIfAborted(opts.signal);
+    return { replayed: true, postcondition };
+  }
+
+  throwIfAborted(opts.signal);
+  assertStageAndScene(opts.store, opts.targetBinding);
+  const element = createWhiteboardTableElement({
+    id: opts.input.stableElementId,
+    x: inputTable.bounds.x,
+    y: inputTable.bounds.y,
+    width: inputTable.bounds.width,
+    height: inputTable.bounds.height,
+    data: inputTable.data,
+    outline: inputTable.outline,
+    theme: inputTable.theme ? { color: inputTable.theme.color } : undefined,
+  });
+  if (!element) throw new Error('CLIENT_EFFECT_TABLE_INPUT_INVALID');
+  const addResult = whiteboardApi.addElement(
+    {
+      ...element,
+      clientEffectExecutionId: opts.input.executionId,
+      clientEffectTableDigest: opts.expectedTableDigest,
+      clientEffectNormalizationVersion: CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
+    } as NativeTableElement,
+    opts.targetBinding.whiteboardId,
+  );
+  if (!addResult.success) {
+    throw new Error(addResult.error || 'CLIENT_EFFECT_WHITEBOARD_MUTATION_FAILED');
+  }
+  throwIfAborted(opts.signal);
+
+  const postcondition = await verifyNativeWhiteboardTableEffect({
+    store: opts.store,
+    targetBinding: opts.targetBinding,
+    executionId: opts.input.executionId,
+    stableElementId: opts.input.stableElementId,
+    expectedTable: requestTable,
+    expectedTableDigest: opts.expectedTableDigest,
     signal: opts.signal,
   });
   throwIfAborted(opts.signal);

@@ -4,14 +4,17 @@ import {
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   digestWhiteboardLatexHtmlV1,
   digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
   digestWhiteboardShapeV1,
+  digestWhiteboardTableV1,
   digestVisibleTextV1,
   normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
+  normalizeWhiteboardTableV1,
   resolveActiveEffectBudget,
   type ClientEffectRequest,
   type ClientEffectTarget,
@@ -164,6 +167,55 @@ const NativeWhiteboardLatexParams = Type.Object({
 });
 
 type NativeWhiteboardLatexParams = Static<typeof NativeWhiteboardLatexParams>;
+
+const NativeWhiteboardTableParams = Type.Object({
+  data: Type.Array(
+    Type.Array(Type.String({ maxLength: 256 }), {
+      minItems: 1,
+      maxItems: 8,
+      description: 'One table row. Every row must have the same number of cells.',
+    }),
+    {
+      minItems: 1,
+      maxItems: 12,
+      description: 'Rectangular table data with at most 96 cells.',
+    },
+  ),
+  x: Type.Number({
+    minimum: 0,
+    maximum: 999,
+    description: 'Left coordinate on a 1000×563 board.',
+  }),
+  y: Type.Number({
+    minimum: 0,
+    maximum: 562,
+    description: 'Top coordinate on a 1000×563 board.',
+  }),
+  width: Type.Number({
+    exclusiveMinimum: 0,
+    maximum: 1000,
+    description: 'Table width; x + width must stay within 1000.',
+  }),
+  height: Type.Number({
+    exclusiveMinimum: 0,
+    maximum: 563,
+    description: 'Table height; y + height must stay within 563.',
+  }),
+  outline: Type.Optional(
+    Type.Object({
+      width: Type.Number({ minimum: 0, maximum: 20 }),
+      style: Type.Union([Type.Literal('solid'), Type.Literal('dashed')]),
+      color: Type.String({ minLength: 1, maxLength: 64 }),
+    }),
+  ),
+  theme: Type.Optional(
+    Type.Object({
+      color: Type.String({ minLength: 1, maxLength: 64 }),
+    }),
+  ),
+});
+
+type NativeWhiteboardTableParams = Static<typeof NativeWhiteboardTableParams>;
 const WHITEBOARD_OPEN_SETTLEMENT_MARGIN_MS = 500;
 
 interface NativeWhiteboardBaseOptions {
@@ -547,6 +599,73 @@ export function buildNativeWhiteboardLatexTool(
       toolOptions: opts,
       successMessage: 'Whiteboard formula was rendered and its postcondition was verified.',
       failureLabel: 'Whiteboard formula',
+    });
+  };
+
+  return { tool, handler };
+}
+
+export function buildNativeWhiteboardTableTool(
+  opts: NativeWhiteboardToolOptions<NativeWhiteboardTableParams>,
+): { tool: AgentTool<typeof NativeWhiteboardTableParams>; handler: NativeClientEffectHandler } {
+  const tool: AgentTool<typeof NativeWhiteboardTableParams> = {
+    name: 'wb_draw_table',
+    label: 'Draw whiteboard table',
+    description:
+      'Draw one concise rectangular comparison table on the classroom whiteboard. Explain what is being compared before calling this tool, then continue teaching after the committed result.',
+    parameters: NativeWhiteboardTableParams,
+    executionMode: 'sequential',
+    execute: async (): Promise<RuntimeAgentToolResult> => {
+      throw new Error('wb_draw_table requires the browser client-effect executor.');
+    },
+  };
+
+  const handler: NativeClientEffectHandler = async ({ request, params, signal }) => {
+    if (opts.canExecute?.() === false) return actionBudgetFailure();
+    const input = params as NativeWhiteboardTableParams;
+    let tableSpec;
+    try {
+      tableSpec = normalizeWhiteboardTableV1(input);
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Whiteboard table input was rejected: ${
+              error instanceof Error ? error.message : 'invalid input'
+            }.`,
+          },
+        ],
+        details: {
+          code: error instanceof Error ? error.message : 'CLIENT_EFFECT_TABLE_INPUT_INVALID',
+        },
+        isError: true,
+      };
+    }
+    const prepared = prepareClientEffect(opts, request);
+    if ('isError' in prepared) return prepared;
+    const stableElementId = `client-effect-${request.executionId}`;
+    const effectRequest: ClientEffectRequest = {
+      ...request,
+      toolName: 'wb_draw_table',
+      target: prepared.target,
+      activeEffectBudgetMs: prepared.activeEffectBudgetMs,
+      postcondition: {
+        kind: 'whiteboard_table_exists',
+        stableElementId,
+        elementType: 'table',
+        normalizationVersion: CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
+        expectedTableDigest: await digestWhiteboardTableV1(tableSpec),
+        ...tableSpec,
+      },
+    };
+    return deliverClientEffect({
+      request: effectRequest,
+      params: input,
+      signal,
+      toolOptions: opts,
+      successMessage: 'Whiteboard table was rendered and its postcondition was verified.',
+      failureLabel: 'Whiteboard table',
     });
   };
 

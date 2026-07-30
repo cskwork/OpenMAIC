@@ -52,6 +52,7 @@ import {
 import { createLogger } from '@/lib/logger';
 import { createWhiteboardLineElement } from './whiteboard-lines';
 import { resolveLegacyWhiteboardShapePath } from './whiteboard-shapes';
+import { createWhiteboardTableElement } from './whiteboard-tables';
 
 const log = createLogger('ActionEngine');
 
@@ -528,54 +529,18 @@ export class ActionEngine {
     const wb = this.stageAPI.whiteboard.get();
     if (!wb.success || !wb.data) return;
 
-    const rows = action.data.length;
-    const cols = rows > 0 ? action.data[0].length : 0;
-    if (rows === 0 || cols === 0) return;
-
-    // Build colWidths: equal distribution
-    const colWidths = Array(cols).fill(1 / cols);
-
-    // Build TableCell[][] from string[][]
-    let cellId = 0;
-    const tableData = action.data.map((row) =>
-      row.map((text) => ({
-        id: `cell_${cellId++}`,
-        colspan: 1,
-        rowspan: 1,
-        text,
-      })),
-    );
-
-    this.stageAPI.whiteboard.addElement(
-      {
-        id: action.elementId || '',
-        type: 'table',
-        left: action.x,
-        top: action.y,
-        width: action.width,
-        height: action.height,
-        rotate: 0,
-        colWidths,
-        cellMinHeight: 36,
-        data: tableData,
-        outline: action.outline ?? {
-          width: 2,
-          style: 'solid',
-          color: '#eeece1',
-        },
-        theme: action.theme
-          ? {
-              color: action.theme.color,
-              rowHeader: true,
-              rowFooter: false,
-              colHeader: false,
-              colFooter: false,
-            }
-          : undefined,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
-      wb.data.id,
-    );
+    const element = createWhiteboardTableElement({
+      id: action.elementId || '',
+      x: action.x,
+      y: action.y,
+      width: action.width,
+      height: action.height,
+      data: action.data,
+      outline: action.outline,
+      theme: action.theme,
+    });
+    if (!element) return;
+    this.stageAPI.whiteboard.addElement(element, wb.data.id);
 
     if (!options.silent) await delay(WB_DRAW_MS);
   }

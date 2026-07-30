@@ -256,6 +256,7 @@ export function buildNativeWebChildPrompt(
     enableWhiteboardShape?: boolean;
     enableWhiteboardLine?: boolean;
     enableWhiteboardLatex?: boolean;
+    enableWhiteboardTable?: boolean;
   } = {
     enableWebSearch: true,
   },
@@ -283,7 +284,8 @@ export function buildNativeWebChildPrompt(
     options.enableWhiteboardText ||
     options.enableWhiteboardShape ||
     options.enableWhiteboardLine ||
-    options.enableWhiteboardLatex
+    options.enableWhiteboardLatex ||
+    options.enableWhiteboardTable
       ? [
           '# Native Whiteboard',
           options.enableWhiteboardText
@@ -297,6 +299,9 @@ export function buildNativeWebChildPrompt(
             : '',
           options.enableWhiteboardLatex
             ? 'You may call `wb_draw_latex` to place one valid display-mode formula on the whiteboard.'
+            : '',
+          options.enableWhiteboardTable
+            ? 'You may call `wb_draw_table` to place one concise rectangular comparison table on the whiteboard.'
             : '',
           'The board uses a 1000 × 563 coordinate system. Keep every complete element within the visible board.',
           'Before calling it, say briefly what you are about to show. Wait for the tool result, then continue explaining in this same turn.',
@@ -331,6 +336,7 @@ export function buildNativeWebChildTurnPrompt(
     enableWhiteboardShape?: boolean;
     enableWhiteboardLine?: boolean;
     enableWhiteboardLatex?: boolean;
+    enableWhiteboardTable?: boolean;
   } = {
     enableWebSearch: true,
   },
@@ -366,6 +372,9 @@ export function buildNativeWebChildTurnPrompt(
       : '',
     options.enableWhiteboardLatex
       ? 'Use `wb_draw_latex` only when one display formula genuinely helps a derivation or explanation. Speak before the tool call and continue after its tool result. If the formula is rejected, correct the LaTeX or explain without claiming it was drawn.'
+      : '',
+    options.enableWhiteboardTable
+      ? 'Use `wb_draw_table` only when a compact comparison genuinely helps. Keep the table rectangular and concise, speak before the tool call, and continue after its tool result.'
       : '',
     'After the tool result, provide the final classroom response in this same Child run.',
   ].join('\n');

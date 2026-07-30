@@ -5,15 +5,18 @@ import {
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
   digestWhiteboardLatexHtmlV1,
   digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
   digestWhiteboardShapeV1,
+  digestWhiteboardTableV1,
   digestVisibleTextV1,
   normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
+  normalizeWhiteboardTableV1,
   type ClientEffectAck,
   type ClientEffectDelivery,
 } from '@/lib/agent/runtime/client-effect-contract';
@@ -245,6 +248,60 @@ async function latexDelivery(): Promise<ClientEffectDelivery> {
         expectedFormulaDigest: await digestWhiteboardLatexV1(latex),
         expectedHtmlDigest: await digestWhiteboardLatexHtmlV1(html),
         ...latex,
+      },
+    },
+  };
+}
+
+async function tableDelivery(): Promise<ClientEffectDelivery> {
+  const args = {
+    data: [
+      ['参数', '作用'],
+      ['k', '决定方向'],
+      ['b', '决定高低'],
+    ],
+    x: 80,
+    y: 60,
+    width: 600,
+    height: 240,
+    theme: { color: '#4472c4' },
+  };
+  const table = normalizeWhiteboardTableV1(args);
+  return {
+    acknowledgementToken: 'table-capability',
+    request: {
+      protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
+      kind: 'client_effect',
+      traceId: 'trace-table-1',
+      runId: 'run-table-1',
+      agentInvocationId: 'message-table-1',
+      agentId: 'teacher-1',
+      depth: 1,
+      sequence: 1,
+      toolCallId: 'tool-call-table-1',
+      executionId: 'execution-table-1',
+      idempotencyKey: 'run-table-1:message-table-1:tool-call-table-1',
+      toolName: 'wb_draw_table',
+      args,
+      argsDigest: 'sha256:table-args',
+      issuedAt: 1,
+      deadlineAt: Date.now() + 10_000,
+      attempt: 1,
+      target: {
+        requestId: 'request-1',
+        sessionId: 'session-1',
+        stageId: 'stage-1',
+        sceneId: 'scene-1',
+        messageId: 'message-table-1',
+      },
+      activeEffectBudgetMs: 2_000,
+      postcondition: {
+        kind: 'whiteboard_table_exists',
+        stableElementId: 'table-element-1',
+        elementType: 'table',
+        normalizationVersion: CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
+        expectedTableDigest: await digestWhiteboardTableV1(table),
+        ...table,
       },
     },
   };
@@ -494,6 +551,56 @@ describe('BrowserClientEffectRuntime', () => {
         matchingElementCount: 1,
       },
     });
+    expect(
+      store.getState().stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements),
+    ).toHaveLength(1);
+  });
+
+  it('executes one table and ACKs only its verified bounded digest result', async () => {
+    const store = createStore();
+    const acknowledgements: ClientEffectAck[] = [];
+    const runtime = new BrowserClientEffectRuntime({
+      sessionId: 'session-1',
+      requestId: 'request-1',
+      store,
+      fetchAck: async (_url, init) => {
+        const ack = JSON.parse(String(init?.body)) as ClientEffectAck;
+        acknowledgements.push(ack);
+        return new Response(JSON.stringify({ success: true, state: { status: ack.status } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+      waitForPresentation: async () => {},
+      ensureWhiteboardVisible: async () => {},
+    });
+    const effect = await tableDelivery();
+
+    const first = runtime.execute(effect, new AbortController().signal);
+    const duplicate = runtime.execute(effect, new AbortController().signal);
+    await expect(first).resolves.toBe('effect_committed');
+    await expect(duplicate).resolves.toBe('effect_committed');
+    if (effect.request.postcondition.kind !== 'whiteboard_table_exists') {
+      throw new Error('Expected a table delivery.');
+    }
+    expect(acknowledgements.map((ack) => ack.status)).toEqual([
+      'presentation_paused',
+      'presentation_resumed',
+      'accepted',
+      'effect_committed',
+    ]);
+    const committed = acknowledgements.at(-1);
+    expect(committed).toMatchObject({
+      status: 'effect_committed',
+      postcondition: {
+        stableElementId: effect.request.postcondition.stableElementId,
+        elementType: 'table',
+        observedTableDigest: effect.request.postcondition.expectedTableDigest,
+        matchingElementCount: 1,
+      },
+    });
+    expect(JSON.stringify(committed)).not.toContain('决定方向');
+    expect(new TextEncoder().encode(JSON.stringify(committed)).byteLength).toBeLessThan(8 * 1024);
     expect(
       store.getState().stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements),
     ).toHaveLength(1);

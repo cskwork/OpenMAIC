@@ -3,16 +3,19 @@ import {
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
   digestWhiteboardLatexHtmlV1,
   digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
   digestWhiteboardShapeV1,
+  digestWhiteboardTableV1,
   digestVisibleTextV1,
   isClientEffectAck,
   normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
+  normalizeWhiteboardTableV1,
   resolveActiveEffectBudget,
   type AcceptedTargetBinding,
   type ClientEffectAck,
@@ -24,6 +27,7 @@ import {
   type WhiteboardShapeClientEffectRequest,
   type WhiteboardShapePostcondition,
   type WhiteboardTextClientEffectRequest,
+  type WhiteboardTableClientEffectRequest,
 } from '@/lib/agent/runtime/client-effect-contract';
 import { renderNativeWhiteboardLatexHtmlV1 } from '@/lib/action/whiteboard-latex';
 import { ClientEffectCoordinator } from '@/lib/agent/runtime/client-effect-coordinator';
@@ -289,6 +293,55 @@ function latexCommitted(
       color: effect.postcondition.color,
       renderVersion: effect.postcondition.renderVersion,
       ...overrides,
+    },
+  };
+}
+
+async function tableRequest(): Promise<WhiteboardTableClientEffectRequest> {
+  const args = {
+    data: [
+      ['参数', '作用'],
+      ['k', '决定方向'],
+    ],
+    x: 80,
+    y: 60,
+    width: 500,
+    height: 180,
+  };
+  const table = normalizeWhiteboardTableV1(args);
+  return {
+    ...(await request()),
+    toolName: 'wb_draw_table',
+    args,
+    postcondition: {
+      kind: 'whiteboard_table_exists',
+      stableElementId: 'table-1',
+      elementType: 'table',
+      normalizationVersion: CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
+      expectedTableDigest: await digestWhiteboardTableV1(table),
+      ...table,
+    },
+  };
+}
+
+function tableCommitted(
+  effect: WhiteboardTableClientEffectRequest,
+  observedTableDigest = effect.postcondition.expectedTableDigest,
+): Extract<ClientEffectAck, { status: 'effect_committed' }> {
+  return {
+    protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
+    executionId: effect.executionId,
+    idempotencyKey: effect.idempotencyKey,
+    clientEventId: 'event-table-committed',
+    status: 'effect_committed',
+    observedAt: Date.now(),
+    targetBinding,
+    postcondition: {
+      stableElementId: effect.postcondition.stableElementId,
+      elementType: 'table',
+      normalizationVersion: CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
+      observedTableDigest,
+      matchingElementCount: 1,
     },
   };
 }
@@ -936,6 +989,58 @@ describe('isClientEffectAck', () => {
       isClientEffectAck({
         ...valid,
         postcondition: { ...valid.postcondition, unexpected: true },
+      }),
+    ).toBe(false);
+  });
+
+  it('settles a table only for the exact bounded digest ACK', async () => {
+    const effect = await tableRequest();
+    const coordinator = new ClientEffectCoordinator();
+    const registered = coordinator.register(effect);
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        accepted(effect),
+      ),
+    ).toMatchObject({ kind: 'applied', snapshot: { status: 'accepted' } });
+
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        tableCommitted(effect, 'sha256:wrong'),
+      ),
+    ).toMatchObject({ kind: 'invalid' });
+    expect(coordinator.getSnapshot(effect.executionId)).toMatchObject({ status: 'accepted' });
+
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        tableCommitted(effect),
+      ),
+    ).toMatchObject({ kind: 'applied', snapshot: { status: 'effect_committed' } });
+    await expect(registered.result).resolves.toMatchObject({
+      status: 'effect_committed',
+      isError: false,
+    });
+  });
+
+  it('accepts only the minimal exact table ACK variant', async () => {
+    const effect = await tableRequest();
+    const valid = tableCommitted(effect);
+    expect(isClientEffectAck(valid)).toBe(true);
+    expect(
+      isClientEffectAck({
+        ...valid,
+        postcondition: { ...valid.postcondition, observedTableDigest: '' },
+      }),
+    ).toBe(false);
+    expect(
+      isClientEffectAck({
+        ...valid,
+        postcondition: { ...valid.postcondition, data: effect.postcondition.data },
       }),
     ).toBe(false);
   });

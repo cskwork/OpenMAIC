@@ -9,12 +9,14 @@ import {
   type ClientEffectDelivery,
   type ClientEffectStatus,
   type ClientEffectTerminalStatus,
+  whiteboardTableSpecsEqual,
 } from '@/lib/agent/runtime/client-effect-contract';
 import { TOOL_EXECUTION_PROTOCOL_VERSION } from '@/lib/agent/runtime/native-child-contract';
 import {
   executeNativeWhiteboardLatexEffect,
   executeNativeWhiteboardLineEffect,
   executeNativeWhiteboardShapeEffect,
+  executeNativeWhiteboardTableEffect,
   executeNativeWhiteboardTextEffect,
   prepareNativeWhiteboardTarget,
 } from '@/lib/action/client-effect-whiteboard';
@@ -119,6 +121,29 @@ function postconditionsEqual(
       left.bounds.height === right.bounds.height &&
       left.color === right.color &&
       left.renderVersion === right.renderVersion
+    );
+  }
+  if (left.kind === 'whiteboard_table_exists' && right.kind === 'whiteboard_table_exists') {
+    return (
+      left.expectedTableDigest === right.expectedTableDigest &&
+      whiteboardTableSpecsEqual(
+        {
+          data: left.data,
+          bounds: left.bounds,
+          outline: left.outline,
+          ...(left.theme ? { theme: left.theme } : {}),
+          colWidths: left.colWidths,
+          cellMinHeight: left.cellMinHeight,
+        },
+        {
+          data: right.data,
+          bounds: right.bounds,
+          outline: right.outline,
+          ...(right.theme ? { theme: right.theme } : {}),
+          colWidths: right.colWidths,
+          cellMinHeight: right.cellMinHeight,
+        },
+      )
     );
   }
   return false;
@@ -355,6 +380,41 @@ export class BrowserClientEffectRuntime {
             },
             expectedFormulaDigest: request.postcondition.expectedFormulaDigest,
             expectedHtmlDigest: request.postcondition.expectedHtmlDigest,
+            signal: executionSignal,
+          });
+          break;
+        case 'wb_draw_table':
+          result = await executeNativeWhiteboardTableEffect({
+            store: this.opts.store,
+            targetBinding: binding,
+            input: {
+              executionId: request.executionId,
+              stableElementId: request.postcondition.stableElementId,
+              data: params.data as string[][],
+              x: Number(params.x),
+              y: Number(params.y),
+              width: Number(params.width),
+              height: Number(params.height),
+              ...(params.outline !== undefined
+                ? {
+                    outline: params.outline as typeof request.postcondition.outline,
+                  }
+                : {}),
+              ...(params.theme !== undefined
+                ? {
+                    theme: params.theme as { color: string },
+                  }
+                : {}),
+            },
+            expectedTable: {
+              data: request.postcondition.data,
+              bounds: request.postcondition.bounds,
+              outline: request.postcondition.outline,
+              ...(request.postcondition.theme ? { theme: request.postcondition.theme } : {}),
+              colWidths: request.postcondition.colWidths,
+              cellMinHeight: request.postcondition.cellMinHeight,
+            },
+            expectedTableDigest: request.postcondition.expectedTableDigest,
             signal: executionSignal,
           });
           break;

@@ -2,12 +2,14 @@ import {
   TOOL_EXECUTION_PROTOCOL_VERSION,
   type ToolExecutionEnvelope,
 } from './native-child-contract';
+import { escapeWhiteboardTableCellText } from '@/lib/action/whiteboard-tables';
 
 export const CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION = 'maic.visible-text.v1' as const;
 export const CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION = 'maic.whiteboard-shape.v1' as const;
 export const CLIENT_EFFECT_LINE_NORMALIZATION_VERSION = 'maic.whiteboard-line.v1' as const;
 export const CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION = 'maic.whiteboard-latex.v1' as const;
 export const CLIENT_EFFECT_LATEX_RENDER_VERSION = 'maic.katex-html.v1' as const;
+export const CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION = 'maic.whiteboard-table.v1' as const;
 export const CLIENT_EFFECT_ACK_HEADER = 'x-maic-effect-token';
 export const CLIENT_EFFECT_ACK_MAX_BYTES = 8 * 1024;
 
@@ -111,6 +113,44 @@ export interface WhiteboardLatexPostcondition extends WhiteboardLatexSpec {
   expectedHtmlDigest: string;
 }
 
+export interface WhiteboardTableBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface WhiteboardTableOutline {
+  width: number;
+  style: 'solid' | 'dashed';
+  color: string;
+}
+
+export interface WhiteboardTableTheme {
+  color: string;
+  rowHeader: true;
+  rowFooter: false;
+  colHeader: false;
+  colFooter: false;
+}
+
+export interface WhiteboardTableSpec {
+  data: string[][];
+  bounds: WhiteboardTableBounds;
+  outline: WhiteboardTableOutline;
+  theme?: WhiteboardTableTheme;
+  colWidths: number[];
+  cellMinHeight: 36;
+}
+
+export interface WhiteboardTablePostcondition extends WhiteboardTableSpec {
+  kind: 'whiteboard_table_exists';
+  stableElementId: string;
+  elementType: 'table';
+  normalizationVersion: typeof CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION;
+  expectedTableDigest: string;
+}
+
 interface ClientEffectRequestBase extends ToolExecutionEnvelope {
   kind: 'client_effect';
   target: ClientEffectTarget;
@@ -137,11 +177,17 @@ export type WhiteboardLatexClientEffectRequest = ClientEffectRequestBase & {
   postcondition: WhiteboardLatexPostcondition;
 };
 
+export type WhiteboardTableClientEffectRequest = ClientEffectRequestBase & {
+  toolName: 'wb_draw_table';
+  postcondition: WhiteboardTablePostcondition;
+};
+
 export type ClientEffectRequest =
   | WhiteboardTextClientEffectRequest
   | WhiteboardShapeClientEffectRequest
   | WhiteboardLineClientEffectRequest
-  | WhiteboardLatexClientEffectRequest;
+  | WhiteboardLatexClientEffectRequest
+  | WhiteboardTableClientEffectRequest;
 
 export interface ClientEffectDelivery {
   request: ClientEffectRequest;
@@ -205,7 +251,14 @@ export type ClientEffectAck =
             observedFormulaDigest: string;
             observedHtmlDigest: string;
             matchingElementCount: 1;
-          } & WhiteboardLatexSpec);
+          } & WhiteboardLatexSpec)
+        | {
+            stableElementId: string;
+            elementType: 'table';
+            normalizationVersion: typeof CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION;
+            observedTableDigest: string;
+            matchingElementCount: 1;
+          };
     })
   | (ClientEffectAckBase & {
       status: 'effect_failed' | 'cancelled';
@@ -516,6 +569,230 @@ export async function digestWhiteboardLatexHtmlV1(html: string): Promise<string>
   ).join('')}`;
 }
 
+const WHITEBOARD_TABLE_MAX_ROWS = 12;
+const WHITEBOARD_TABLE_MAX_COLUMNS = 8;
+const WHITEBOARD_TABLE_MAX_CELLS = 96;
+const WHITEBOARD_TABLE_MAX_CELL_CHARACTERS = 256;
+const WHITEBOARD_TABLE_MAX_RAW_BYTES = 12 * 1024;
+
+function normalizeWhiteboardTableCell(value: unknown): string {
+  if (typeof value !== 'string' || value.length > WHITEBOARD_TABLE_MAX_CELL_CHARACTERS) {
+    throw new Error('CLIENT_EFFECT_TABLE_CELL_INVALID');
+  }
+  const normalized = value
+    .replace(/\r\n?/g, '\n')
+    .replace(/\u00a0/g, ' ')
+    .normalize('NFC');
+  if (/[\u0000-\u0009\u000b-\u001f\u007f]/.test(normalized)) {
+    throw new Error('CLIENT_EFFECT_TABLE_CELL_INVALID');
+  }
+  return escapeWhiteboardTableCellText(normalized);
+}
+
+export function normalizeWhiteboardTableV1(input: {
+  data: unknown;
+  x: unknown;
+  y: unknown;
+  width: unknown;
+  height: unknown;
+  outline?: unknown;
+  theme?: unknown;
+}): WhiteboardTableSpec {
+  if (
+    !Array.isArray(input.data) ||
+    input.data.length === 0 ||
+    input.data.length > WHITEBOARD_TABLE_MAX_ROWS ||
+    new TextEncoder().encode(JSON.stringify(input.data)).byteLength > WHITEBOARD_TABLE_MAX_RAW_BYTES
+  ) {
+    throw new Error('CLIENT_EFFECT_TABLE_INPUT_INVALID');
+  }
+  const firstRow = input.data[0];
+  if (
+    !Array.isArray(firstRow) ||
+    firstRow.length === 0 ||
+    firstRow.length > WHITEBOARD_TABLE_MAX_COLUMNS ||
+    input.data.length * firstRow.length > WHITEBOARD_TABLE_MAX_CELLS ||
+    !input.data.every((row) => Array.isArray(row) && row.length === firstRow.length)
+  ) {
+    throw new Error('CLIENT_EFFECT_TABLE_DIMENSIONS_INVALID');
+  }
+  const data = input.data.map((row) => row.map(normalizeWhiteboardTableCell));
+
+  const { x, y, width, height } = input;
+  if (
+    typeof x !== 'number' ||
+    !Number.isFinite(x) ||
+    typeof y !== 'number' ||
+    !Number.isFinite(y) ||
+    typeof width !== 'number' ||
+    !Number.isFinite(width) ||
+    typeof height !== 'number' ||
+    !Number.isFinite(height)
+  ) {
+    throw new Error('CLIENT_EFFECT_TABLE_INPUT_INVALID');
+  }
+  const bounds = {
+    x: canonicalNumber(x),
+    y: canonicalNumber(y),
+    width: canonicalNumber(width),
+    height: canonicalNumber(height),
+  };
+  if (
+    bounds.x < 0 ||
+    bounds.y < 0 ||
+    bounds.width <= 0 ||
+    bounds.height <= 0 ||
+    bounds.x + bounds.width > 1000 ||
+    bounds.y + bounds.height > 563
+  ) {
+    throw new Error('CLIENT_EFFECT_TABLE_BOUNDS_INVALID');
+  }
+
+  let outline: WhiteboardTableOutline = {
+    width: 2,
+    style: 'solid',
+    color: '#eeece1',
+  };
+  if (input.outline !== undefined) {
+    if (!input.outline || typeof input.outline !== 'object' || Array.isArray(input.outline)) {
+      throw new Error('CLIENT_EFFECT_TABLE_OUTLINE_INVALID');
+    }
+    const rawOutline = input.outline as Record<string, unknown>;
+    if (
+      !hasExactKeys(rawOutline, ['width', 'style', 'color']) ||
+      typeof rawOutline.width !== 'number' ||
+      !Number.isFinite(rawOutline.width) ||
+      rawOutline.width < 0 ||
+      rawOutline.width > 20 ||
+      (rawOutline.style !== 'solid' && rawOutline.style !== 'dashed') ||
+      typeof rawOutline.color !== 'string' ||
+      !rawOutline.color.trim() ||
+      rawOutline.color.length > 64
+    ) {
+      throw new Error('CLIENT_EFFECT_TABLE_OUTLINE_INVALID');
+    }
+    outline = {
+      width: canonicalNumber(rawOutline.width),
+      style: rawOutline.style,
+      color: rawOutline.color.trim(),
+    };
+  }
+
+  let theme: WhiteboardTableTheme | undefined;
+  if (input.theme !== undefined) {
+    if (!input.theme || typeof input.theme !== 'object' || Array.isArray(input.theme)) {
+      throw new Error('CLIENT_EFFECT_TABLE_THEME_INVALID');
+    }
+    const rawTheme = input.theme as Record<string, unknown>;
+    if (
+      !hasExactKeys(rawTheme, ['color']) ||
+      typeof rawTheme.color !== 'string' ||
+      !rawTheme.color.trim() ||
+      rawTheme.color.length > 64
+    ) {
+      throw new Error('CLIENT_EFFECT_TABLE_THEME_INVALID');
+    }
+    theme = {
+      color: rawTheme.color.trim(),
+      rowHeader: true,
+      rowFooter: false,
+      colHeader: false,
+      colFooter: false,
+    };
+  }
+
+  return {
+    data,
+    bounds,
+    outline,
+    ...(theme ? { theme } : {}),
+    colWidths: Array(firstRow.length).fill(1 / firstRow.length) as number[],
+    cellMinHeight: 36,
+  };
+}
+
+export function assertWhiteboardTableSpecV1(input: WhiteboardTableSpec): WhiteboardTableSpec {
+  if (
+    !input ||
+    typeof input !== 'object' ||
+    !Array.isArray(input.data) ||
+    input.data.length === 0 ||
+    !Array.isArray(input.data[0]) ||
+    input.data[0].length === 0 ||
+    input.data.length > WHITEBOARD_TABLE_MAX_ROWS ||
+    input.data[0].length > WHITEBOARD_TABLE_MAX_COLUMNS ||
+    input.data.length * input.data[0].length > WHITEBOARD_TABLE_MAX_CELLS ||
+    !input.data.every(
+      (row) =>
+        Array.isArray(row) &&
+        row.length === input.data[0].length &&
+        row.every(
+          (cell) =>
+            typeof cell === 'string' &&
+            cell.length <= WHITEBOARD_TABLE_MAX_CELL_CHARACTERS * 6 &&
+            !/[\u0000-\u0009\u000b-\u001f\u007f]/.test(cell),
+        ),
+    ) ||
+    !input.bounds ||
+    !input.outline ||
+    input.cellMinHeight !== 36 ||
+    !Array.isArray(input.colWidths) ||
+    input.colWidths.length !== input.data[0].length ||
+    !input.colWidths.every((width) => width === 1 / input.data[0].length)
+  ) {
+    throw new Error('CLIENT_EFFECT_TABLE_SPEC_INVALID');
+  }
+  const { bounds, outline, theme } = input;
+  if (
+    !Number.isFinite(bounds.x) ||
+    !Number.isFinite(bounds.y) ||
+    !Number.isFinite(bounds.width) ||
+    !Number.isFinite(bounds.height) ||
+    bounds.x < 0 ||
+    bounds.y < 0 ||
+    bounds.width <= 0 ||
+    bounds.height <= 0 ||
+    bounds.x + bounds.width > 1000 ||
+    bounds.y + bounds.height > 563 ||
+    !Number.isFinite(outline.width) ||
+    outline.width < 0 ||
+    outline.width > 20 ||
+    (outline.style !== 'solid' && outline.style !== 'dashed') ||
+    typeof outline.color !== 'string' ||
+    !outline.color ||
+    outline.color.length > 64 ||
+    (theme !== undefined &&
+      (typeof theme.color !== 'string' ||
+        !theme.color ||
+        theme.color.length > 64 ||
+        theme.rowHeader !== true ||
+        theme.rowFooter !== false ||
+        theme.colHeader !== false ||
+        theme.colFooter !== false))
+  ) {
+    throw new Error('CLIENT_EFFECT_TABLE_SPEC_INVALID');
+  }
+  return input;
+}
+
+export async function digestWhiteboardTableV1(input: WhiteboardTableSpec): Promise<string> {
+  const canonical = assertWhiteboardTableSpecV1(input);
+  const bytes = new TextEncoder().encode(
+    `${CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION}\n${JSON.stringify(canonical)}`,
+  );
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  return `sha256:${Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('')}`;
+}
+
+export function whiteboardTableSpecsEqual(
+  left: WhiteboardTableSpec,
+  right: WhiteboardTableSpec,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
@@ -712,6 +989,23 @@ export function isClientEffectAck(value: unknown): value is ClientEffectAck {
         } catch {
           return false;
         }
+      }
+      if (
+        postcondition.elementType === 'table' &&
+        hasExactKeys(postcondition, [
+          'stableElementId',
+          'elementType',
+          'normalizationVersion',
+          'observedTableDigest',
+          'matchingElementCount',
+        ])
+      ) {
+        return (
+          isNonEmptyString(postcondition.stableElementId) &&
+          postcondition.normalizationVersion === CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION &&
+          isNonEmptyString(postcondition.observedTableDigest) &&
+          postcondition.matchingElementCount === 1
+        );
       }
       if (
         postcondition.elementType !== 'line' ||

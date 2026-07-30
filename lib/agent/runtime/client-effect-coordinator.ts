@@ -382,7 +382,10 @@ export class ClientEffectCoordinator {
               observed.bounds.width === expected.bounds.width &&
               observed.bounds.height === expected.bounds.height &&
               observed.color === expected.color &&
-              observed.renderVersion === expected.renderVersion));
+              observed.renderVersion === expected.renderVersion) ||
+            (expected.kind === 'whiteboard_table_exists' &&
+              observed.elementType === 'table' &&
+              observed.observedTableDigest === expected.expectedTableDigest));
         if (!postconditionMatches) {
           return 'Committed postcondition does not match the requested effect.';
         }
