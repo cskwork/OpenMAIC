@@ -5,8 +5,11 @@ import type { StageStore } from '@/lib/api/stage-api';
 import { BrowserClientEffectRuntime } from '@/lib/agent/client/client-effect-runtime';
 import {
   CLIENT_EFFECT_ACK_HEADER,
+  CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  digestWhiteboardShapeV1,
   digestVisibleTextV1,
+  normalizeWhiteboardShapeV1,
   type ClientEffectAck,
   type ClientEffectRequest,
 } from '@/lib/agent/runtime/client-effect-contract';
@@ -49,6 +52,44 @@ async function effectRequest(): Promise<ClientEffectRequest> {
       elementType: 'text',
       normalizationVersion: CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
       expectedContentDigest: await digestVisibleTextV1('hello'),
+    },
+  };
+}
+
+async function shapeEffectRequest(): Promise<ClientEffectRequest> {
+  const shape = normalizeWhiteboardShapeV1({
+    shape: 'circle',
+    x: 180,
+    y: 90,
+    width: 220,
+    height: 220,
+    fillColor: '#3366cc',
+  });
+  return {
+    ...(await effectRequest()),
+    traceId: 'trace-shape-1',
+    runId: 'run-shape-1',
+    agentInvocationId: 'message-shape-1',
+    toolCallId: 'tool-call-shape-1',
+    executionId: 'execution-shape-1',
+    idempotencyKey: 'run-shape-1:message-shape-1:tool-call-shape-1',
+    toolName: 'wb_draw_shape',
+    args: {
+      shape: 'circle',
+      x: 180,
+      y: 90,
+      width: 220,
+      height: 220,
+      fillColor: '#3366cc',
+    },
+    argsDigest: 'sha256:shape-args',
+    postcondition: {
+      kind: 'whiteboard_shape_exists',
+      stableElementId: 'shape-element-1',
+      elementType: 'shape',
+      normalizationVersion: CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
+      expectedShapeDigest: await digestWhiteboardShapeV1(shape),
+      ...shape,
     },
   };
 }
@@ -399,6 +440,54 @@ describe('client effect ACK route', () => {
     expect(
       store.getState().stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements),
     ).toHaveLength(1);
+  });
+
+  it('commits an exact shape postcondition through the real browser ACK route', async () => {
+    const effect = await shapeEffectRequest();
+    const registered = piClientEffectCoordinator.register(effect);
+    const fetchAck: typeof fetch = async (input, init) => {
+      const url = new URL(String(input), 'http://localhost');
+      const headers = new Headers(init?.headers);
+      headers.set('origin', url.origin);
+      return post(
+        new NextRequest(url, {
+          method: init?.method,
+          headers,
+          body: init?.body,
+        }),
+        effect.executionId,
+      );
+    };
+    const store = createStore();
+    const runtime = new BrowserClientEffectRuntime({
+      sessionId: effect.target.sessionId,
+      requestId: effect.target.requestId,
+      store,
+      fetchAck,
+      waitForPresentation: async () => {},
+      ensureWhiteboardVisible: async () => {},
+    });
+
+    await expect(runtime.execute(registered.delivery, new AbortController().signal)).resolves.toBe(
+      'effect_committed',
+    );
+    expect(piClientEffectCoordinator.getSnapshot(effect.executionId)).toMatchObject({
+      status: 'effect_committed',
+      terminalResult: { status: 'effect_committed', isError: false },
+    });
+    expect(
+      store.getState().stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements),
+    ).toEqual([
+      expect.objectContaining({
+        id: effect.postcondition.stableElementId,
+        type: 'shape',
+        left: 180,
+        top: 90,
+        width: 220,
+        height: 220,
+        fill: '#3366cc',
+      }),
+    ]);
   });
 
   it('is unreachable while the Phase 2 flag is disabled', async () => {

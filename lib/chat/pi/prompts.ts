@@ -250,7 +250,11 @@ export function buildNativeWebChildPrompt(
   body: StatelessChatRequest,
   agent: AgentConfig,
   agentResponses: AgentTurnSummary[],
-  options: { enableWebSearch?: boolean; enableWhiteboardText?: boolean } = {
+  options: {
+    enableWebSearch?: boolean;
+    enableWhiteboardText?: boolean;
+    enableWhiteboardShape?: boolean;
+  } = {
     enableWebSearch: true,
   },
 ): string {
@@ -274,15 +278,23 @@ export function buildNativeWebChildPrompt(
           'If search fails, times out, or has no legal source URL, state the limitation and do not reuse or invent evidence.',
         ].join('\n')
       : '',
-    options.enableWhiteboardText
+    options.enableWhiteboardText || options.enableWhiteboardShape
       ? [
           '# Native Whiteboard',
-          'You may call `wb_draw_text` to place concise teaching text on the whiteboard.',
-          'The board uses a 1000 × 563 coordinate system. Keep the complete text box within the visible board.',
+          options.enableWhiteboardText
+            ? 'You may call `wb_draw_text` to place concise teaching text on the whiteboard.'
+            : '',
+          options.enableWhiteboardShape
+            ? 'You may call `wb_draw_shape` to place one rectangle, circle, or triangle on the whiteboard.'
+            : '',
+          'The board uses a 1000 × 563 coordinate system. Keep every complete element within the visible board.',
           'Before calling it, say briefly what you are about to show. Wait for the tool result, then continue explaining in this same turn.',
           'A successful result means the browser verified the element. A failed result must not be described as successful.',
+          'Only the Native whiteboard tools listed above are available in this invocation. Do not request or imitate an unavailable whiteboard action.',
           'Do not emit JSON actions and do not attempt to close the whiteboard.',
-        ].join('\n')
+        ]
+          .filter(Boolean)
+          .join('\n')
       : '',
     '',
     '# Visible Response',
@@ -302,7 +314,11 @@ export function buildNativeWebChildTurnPrompt(
   instruction: string,
   role: string,
   evidence: { scene?: string; web?: string } = {},
-  options: { enableWebSearch?: boolean; enableWhiteboardText?: boolean } = {
+  options: {
+    enableWebSearch?: boolean;
+    enableWhiteboardText?: boolean;
+    enableWhiteboardShape?: boolean;
+  } = {
     enableWebSearch: true,
   },
 ): string {
@@ -328,6 +344,9 @@ export function buildNativeWebChildTurnPrompt(
       : '',
     options.enableWhiteboardText
       ? 'Use `wb_draw_text` only when a concise visual genuinely helps. Speak before the tool call and continue after its tool result.'
+      : '',
+    options.enableWhiteboardShape
+      ? 'Use `wb_draw_shape` only when one simple shape genuinely helps. Speak before the tool call and continue after its tool result.'
       : '',
     'After the tool result, provide the final classroom response in this same Child run.',
   ].join('\n');

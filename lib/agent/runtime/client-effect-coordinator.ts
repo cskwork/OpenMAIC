@@ -62,7 +62,7 @@ function registrationIdentity(request: ClientEffectRequest): string {
     idempotencyKey: request.idempotencyKey,
     toolName: request.toolName,
     target: request.target,
-    stableElementId: request.postcondition.stableElementId,
+    postcondition: request.postcondition,
     argsDigest: request.argsDigest,
   });
 }
@@ -341,13 +341,26 @@ export class ClientEffectCoordinator {
         }
         const expected = entry.request.postcondition;
         const observed = ack.postcondition;
-        if (
-          observed.stableElementId !== expected.stableElementId ||
-          observed.elementType !== expected.elementType ||
-          observed.normalizationVersion !== expected.normalizationVersion ||
-          observed.observedContentDigest !== expected.expectedContentDigest ||
-          observed.matchingElementCount !== 1
-        ) {
+        const baseMatches =
+          observed.stableElementId === expected.stableElementId &&
+          observed.elementType === expected.elementType &&
+          observed.normalizationVersion === expected.normalizationVersion &&
+          observed.matchingElementCount === 1;
+        const postconditionMatches =
+          baseMatches &&
+          ((expected.kind === 'whiteboard_text_exists' &&
+            observed.elementType === 'text' &&
+            observed.observedContentDigest === expected.expectedContentDigest) ||
+            (expected.kind === 'whiteboard_shape_exists' &&
+              observed.elementType === 'shape' &&
+              observed.observedShapeDigest === expected.expectedShapeDigest &&
+              observed.shape === expected.shape &&
+              observed.bounds.x === expected.bounds.x &&
+              observed.bounds.y === expected.bounds.y &&
+              observed.bounds.width === expected.bounds.width &&
+              observed.bounds.height === expected.bounds.height &&
+              observed.fillColor === expected.fillColor));
+        if (!postconditionMatches) {
           return 'Committed postcondition does not match the requested effect.';
         }
         this.settle(entry, 'effect_committed');

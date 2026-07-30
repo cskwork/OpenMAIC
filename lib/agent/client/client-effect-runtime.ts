@@ -12,6 +12,7 @@ import {
 } from '@/lib/agent/runtime/client-effect-contract';
 import { TOOL_EXECUTION_PROTOCOL_VERSION } from '@/lib/agent/runtime/native-child-contract';
 import {
+  executeNativeWhiteboardShapeEffect,
   executeNativeWhiteboardTextEffect,
   prepareNativeWhiteboardTarget,
 } from '@/lib/action/client-effect-whiteboard';
@@ -65,6 +66,35 @@ function errorDetails(error: unknown): { code: string; message: string; retryabl
   };
 }
 
+function postconditionsEqual(
+  left: ClientEffectDelivery['request']['postcondition'],
+  right: ClientEffectDelivery['request']['postcondition'],
+): boolean {
+  if (
+    left.kind !== right.kind ||
+    left.stableElementId !== right.stableElementId ||
+    left.elementType !== right.elementType ||
+    left.normalizationVersion !== right.normalizationVersion
+  ) {
+    return false;
+  }
+  if (left.kind === 'whiteboard_text_exists' && right.kind === 'whiteboard_text_exists') {
+    return left.expectedContentDigest === right.expectedContentDigest;
+  }
+  if (left.kind === 'whiteboard_shape_exists' && right.kind === 'whiteboard_shape_exists') {
+    return (
+      left.expectedShapeDigest === right.expectedShapeDigest &&
+      left.shape === right.shape &&
+      left.bounds.x === right.bounds.x &&
+      left.bounds.y === right.bounds.y &&
+      left.bounds.width === right.bounds.width &&
+      left.bounds.height === right.bounds.height &&
+      left.fillColor === right.fillColor
+    );
+  }
+  return false;
+}
+
 export class BrowserClientEffectRuntime {
   private readonly records = new Map<string, EffectRecord>();
   private readonly fetchAck: typeof fetch;
@@ -96,12 +126,7 @@ export class BrowserClientEffectRuntime {
         previous.idempotencyKey !== request.idempotencyKey ||
         previous.toolName !== request.toolName ||
         previous.argsDigest !== request.argsDigest ||
-        previous.postcondition.stableElementId !== request.postcondition.stableElementId ||
-        previous.postcondition.elementType !== request.postcondition.elementType ||
-        previous.postcondition.normalizationVersion !==
-          request.postcondition.normalizationVersion ||
-        previous.postcondition.expectedContentDigest !==
-          request.postcondition.expectedContentDigest ||
+        !postconditionsEqual(previous.postcondition, request.postcondition) ||
         previous.target.requestId !== request.target.requestId ||
         previous.target.sessionId !== request.target.sessionId ||
         previous.target.stageId !== request.target.stageId ||
@@ -201,23 +226,46 @@ export class BrowserClientEffectRuntime {
       await this.opts.ensureWhiteboardVisible(executionSignal);
       await this.waitWhilePaused(record, executionSignal);
       const params = request.args as Record<string, unknown>;
-      const result = await executeNativeWhiteboardTextEffect({
-        store: this.opts.store,
-        targetBinding: binding,
-        input: {
-          executionId: request.executionId,
-          stableElementId: request.postcondition.stableElementId,
-          content: String(params.content ?? ''),
-          x: Number(params.x),
-          y: Number(params.y),
-          ...(params.width !== undefined ? { width: Number(params.width) } : {}),
-          ...(params.height !== undefined ? { height: Number(params.height) } : {}),
-          ...(params.fontSize !== undefined ? { fontSize: Number(params.fontSize) } : {}),
-          ...(params.color !== undefined ? { color: String(params.color) } : {}),
-        },
-        expectedContentDigest: request.postcondition.expectedContentDigest,
-        signal: executionSignal,
-      });
+      const result =
+        request.toolName === 'wb_draw_text'
+          ? await executeNativeWhiteboardTextEffect({
+              store: this.opts.store,
+              targetBinding: binding,
+              input: {
+                executionId: request.executionId,
+                stableElementId: request.postcondition.stableElementId,
+                content: String(params.content ?? ''),
+                x: Number(params.x),
+                y: Number(params.y),
+                ...(params.width !== undefined ? { width: Number(params.width) } : {}),
+                ...(params.height !== undefined ? { height: Number(params.height) } : {}),
+                ...(params.fontSize !== undefined ? { fontSize: Number(params.fontSize) } : {}),
+                ...(params.color !== undefined ? { color: String(params.color) } : {}),
+              },
+              expectedContentDigest: request.postcondition.expectedContentDigest,
+              signal: executionSignal,
+            })
+          : await executeNativeWhiteboardShapeEffect({
+              store: this.opts.store,
+              targetBinding: binding,
+              input: {
+                executionId: request.executionId,
+                stableElementId: request.postcondition.stableElementId,
+                shape: String(params.shape) as typeof request.postcondition.shape,
+                x: Number(params.x),
+                y: Number(params.y),
+                width: Number(params.width),
+                height: Number(params.height),
+                ...(params.fillColor !== undefined ? { fillColor: String(params.fillColor) } : {}),
+              },
+              expectedShape: {
+                shape: request.postcondition.shape,
+                bounds: request.postcondition.bounds,
+                fillColor: request.postcondition.fillColor,
+              },
+              expectedShapeDigest: request.postcondition.expectedShapeDigest,
+              signal: executionSignal,
+            });
       await this.enqueueAck(record, {
         status: 'effect_committed',
         targetBinding: binding,

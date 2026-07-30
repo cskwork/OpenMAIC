@@ -1,9 +1,13 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type, type Static } from 'typebox';
 import {
+  CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
+  digestWhiteboardShapeV1,
   digestVisibleTextV1,
+  normalizeWhiteboardShapeV1,
   resolveActiveEffectBudget,
   type ClientEffectRequest,
+  type ClientEffectTarget,
 } from '@/lib/agent/runtime/client-effect-contract';
 import { piClientEffectCoordinator } from '@/lib/agent/runtime/client-effect-coordinator';
 import type {
@@ -45,18 +49,176 @@ const NativeWhiteboardTextParams = Type.Object({
 });
 
 type NativeWhiteboardTextParams = Static<typeof NativeWhiteboardTextParams>;
+
+const NativeWhiteboardShapeParams = Type.Object({
+  shape: Type.Union([Type.Literal('rectangle'), Type.Literal('circle'), Type.Literal('triangle')]),
+  x: Type.Number({
+    minimum: 0,
+    maximum: 999,
+    description: 'Left coordinate on a 1000×563 board.',
+  }),
+  y: Type.Number({
+    minimum: 0,
+    maximum: 562,
+    description: 'Top coordinate on a 1000×563 board.',
+  }),
+  width: Type.Number({
+    exclusiveMinimum: 0,
+    maximum: 1000,
+    description: 'Shape width; x + width must stay within 1000.',
+  }),
+  height: Type.Number({
+    exclusiveMinimum: 0,
+    maximum: 563,
+    description: 'Shape height; y + height must stay within 563.',
+  }),
+  fillColor: Type.Optional(
+    Type.String({ minLength: 1, maxLength: 64, description: 'CSS fill color.' }),
+  ),
+});
+
+type NativeWhiteboardShapeParams = Static<typeof NativeWhiteboardShapeParams>;
 const WHITEBOARD_OPEN_SETTLEMENT_MARGIN_MS = 500;
 
-export function buildNativeWhiteboardTextTool(opts: {
+interface NativeWhiteboardBaseOptions {
   body: StatelessChatRequest;
   messageId: string;
   send: SendEvent;
-  onCommitted?: (params: NativeWhiteboardTextParams) => void;
   onCancelled?: () => void;
   canExecute?: () => boolean;
   now?: () => number;
-}): { tool: AgentTool<typeof NativeWhiteboardTextParams>; handler: NativeClientEffectHandler } {
-  const now = opts.now ?? Date.now;
+}
+
+interface NativeWhiteboardToolOptions<TParams> extends NativeWhiteboardBaseOptions {
+  onCommitted?: (params: TParams) => void;
+}
+
+function prepareClientEffect(
+  opts: NativeWhiteboardBaseOptions,
+  request: Parameters<NativeClientEffectHandler>[0]['request'],
+): { target: ClientEffectTarget; activeEffectBudgetMs: number } | RuntimeAgentToolResult {
+  const target = {
+    requestId: opts.body.config.piRequestId ?? '',
+    sessionId: opts.body.config.piSessionId ?? '',
+    stageId: opts.body.storeState.stage?.id ?? '',
+    sceneId: opts.body.storeState.currentSceneId ?? '',
+    messageId: opts.messageId,
+  };
+  if (Object.values(target).some((value) => !value)) {
+    return {
+      content: [
+        { type: 'text', text: 'Whiteboard execution target is unavailable for this request.' },
+      ],
+      details: { code: 'CLIENT_EFFECT_TARGET_UNAVAILABLE' },
+      isError: true,
+    };
+  }
+
+  const activeEffectBudgetMs = resolveActiveEffectBudget({
+    configuredActiveEffectBudgetMs: 20_000,
+    deadlineAt: request.deadlineAt,
+    now: (opts.now ?? Date.now)(),
+    settlementSafetyMarginMs: 1_000,
+  });
+  if (
+    !activeEffectBudgetMs ||
+    (!opts.body.storeState.whiteboardOpen &&
+      activeEffectBudgetMs <= WB_OPEN_MS + WHITEBOARD_OPEN_SETTLEMENT_MARGIN_MS)
+  ) {
+    return {
+      content: [{ type: 'text', text: 'Whiteboard execution deadline is exhausted.' }],
+      details: { code: 'CLIENT_EFFECT_DEADLINE_EXHAUSTED' },
+      isError: true,
+    };
+  }
+  return { target, activeEffectBudgetMs };
+}
+
+async function deliverClientEffect<TParams>(opts: {
+  request: ClientEffectRequest;
+  params: TParams;
+  signal?: AbortSignal;
+  toolOptions: NativeWhiteboardToolOptions<TParams>;
+  successMessage: string;
+  failureLabel: string;
+}): Promise<RuntimeAgentToolResult> {
+  const registered = piClientEffectCoordinator.register(opts.request);
+  const cancel = () => {
+    piClientEffectCoordinator.cancel(
+      opts.request.executionId,
+      'REQUEST_ABORTED',
+      'The whiteboard request was cancelled.',
+    );
+  };
+  opts.signal?.addEventListener('abort', cancel, { once: true });
+  try {
+    try {
+      await opts.toolOptions.send({ type: 'client_effect', data: registered.delivery });
+    } catch {
+      piClientEffectCoordinator.cancel(
+        opts.request.executionId,
+        'DELIVERY_FAILED',
+        'The whiteboard request could not be delivered to the browser.',
+      );
+    }
+    const terminal = await registered.result;
+    if (terminal.status === 'effect_committed') {
+      opts.toolOptions.onCommitted?.(opts.params);
+      return {
+        content: [{ type: 'text', text: opts.successMessage }],
+        details: {
+          status: terminal.status,
+          executionId: opts.request.executionId,
+          stableElementId: opts.request.postcondition.stableElementId,
+          targetBinding: terminal.targetBinding,
+        },
+        isError: false,
+      };
+    }
+    if (terminal.status === 'cancelled') opts.toolOptions.onCancelled?.();
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `${opts.failureLabel} was not committed: ${terminal.error?.message ?? terminal.status}.`,
+        },
+      ],
+      details: {
+        status: terminal.status,
+        executionId: opts.request.executionId,
+        error: terminal.error,
+      },
+      isError: true,
+      executionStatus:
+        terminal.status === 'timed_out'
+          ? 'timeout'
+          : terminal.status === 'cancelled'
+            ? 'cancelled'
+            : 'execution_failed',
+      ...(terminal.status === 'cancelled' ? { terminate: true } : {}),
+    };
+  } finally {
+    opts.signal?.removeEventListener('abort', cancel);
+    piClientEffectCoordinator.cleanup(opts.request.executionId);
+  }
+}
+
+function actionBudgetFailure(): RuntimeAgentToolResult {
+  return {
+    content: [
+      {
+        type: 'text',
+        text: 'Whiteboard action skipped because this agent turn used its action budget.',
+      },
+    ],
+    details: { code: 'ACTION_BUDGET_EXHAUSTED' },
+    isError: true,
+  };
+}
+
+export function buildNativeWhiteboardTextTool(
+  opts: NativeWhiteboardToolOptions<NativeWhiteboardTextParams>,
+): { tool: AgentTool<typeof NativeWhiteboardTextParams>; handler: NativeClientEffectHandler } {
   const tool: AgentTool<typeof NativeWhiteboardTextParams> = {
     name: 'wb_draw_text',
     label: 'Draw whiteboard text',
@@ -70,60 +232,16 @@ export function buildNativeWhiteboardTextTool(opts: {
   };
 
   const handler: NativeClientEffectHandler = async ({ request, params, signal }) => {
-    if (opts.canExecute?.() === false) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: 'Whiteboard action skipped because this agent turn used its action budget.',
-          },
-        ],
-        details: { code: 'ACTION_BUDGET_EXHAUSTED' },
-        isError: true,
-      };
-    }
+    if (opts.canExecute?.() === false) return actionBudgetFailure();
     const input = params as NativeWhiteboardTextParams;
-    const target = {
-      requestId: opts.body.config.piRequestId ?? '',
-      sessionId: opts.body.config.piSessionId ?? '',
-      stageId: opts.body.storeState.stage?.id ?? '',
-      sceneId: opts.body.storeState.currentSceneId ?? '',
-      messageId: opts.messageId,
-    };
-    if (Object.values(target).some((value) => !value)) {
-      return {
-        content: [
-          { type: 'text', text: 'Whiteboard execution target is unavailable for this request.' },
-        ],
-        details: { code: 'CLIENT_EFFECT_TARGET_UNAVAILABLE' },
-        isError: true,
-      };
-    }
-
-    const activeEffectBudgetMs = resolveActiveEffectBudget({
-      configuredActiveEffectBudgetMs: 20_000,
-      deadlineAt: request.deadlineAt,
-      now: now(),
-      settlementSafetyMarginMs: 1_000,
-    });
-    if (
-      !activeEffectBudgetMs ||
-      (!opts.body.storeState.whiteboardOpen &&
-        activeEffectBudgetMs <= WB_OPEN_MS + WHITEBOARD_OPEN_SETTLEMENT_MARGIN_MS)
-    ) {
-      return {
-        content: [{ type: 'text', text: 'Whiteboard execution deadline is exhausted.' }],
-        details: { code: 'CLIENT_EFFECT_DEADLINE_EXHAUSTED' },
-        isError: true,
-      };
-    }
-
+    const prepared = prepareClientEffect(opts, request);
+    if ('isError' in prepared) return prepared;
     const stableElementId = `client-effect-${request.executionId}`;
     const effectRequest: ClientEffectRequest = {
       ...request,
       toolName: 'wb_draw_text',
-      target,
-      activeEffectBudgetMs,
+      target: prepared.target,
+      activeEffectBudgetMs: prepared.activeEffectBudgetMs,
       postcondition: {
         kind: 'whiteboard_text_exists',
         stableElementId,
@@ -132,70 +250,81 @@ export function buildNativeWhiteboardTextTool(opts: {
         expectedContentDigest: await digestVisibleTextV1(input.content),
       },
     };
-    const registered = piClientEffectCoordinator.register(effectRequest);
-    const cancel = () => {
-      piClientEffectCoordinator.cancel(
-        request.executionId,
-        'REQUEST_ABORTED',
-        'The whiteboard request was cancelled.',
-      );
-    };
-    signal?.addEventListener('abort', cancel, { once: true });
+    return deliverClientEffect({
+      request: effectRequest,
+      params: input,
+      signal,
+      toolOptions: opts,
+      successMessage: 'Whiteboard text was rendered and its postcondition was verified.',
+      failureLabel: 'Whiteboard text',
+    });
+  };
+
+  return { tool, handler };
+}
+
+export function buildNativeWhiteboardShapeTool(
+  opts: NativeWhiteboardToolOptions<NativeWhiteboardShapeParams>,
+): { tool: AgentTool<typeof NativeWhiteboardShapeParams>; handler: NativeClientEffectHandler } {
+  const tool: AgentTool<typeof NativeWhiteboardShapeParams> = {
+    name: 'wb_draw_shape',
+    label: 'Draw whiteboard shape',
+    description:
+      'Draw one rectangle, circle, or triangle on the classroom whiteboard. Explain what it represents before calling this tool, then continue teaching after the committed result.',
+    parameters: NativeWhiteboardShapeParams,
+    executionMode: 'sequential',
+    execute: async (): Promise<RuntimeAgentToolResult> => {
+      throw new Error('wb_draw_shape requires the browser client-effect executor.');
+    },
+  };
+
+  const handler: NativeClientEffectHandler = async ({ request, params, signal }) => {
+    if (opts.canExecute?.() === false) return actionBudgetFailure();
+    const input = params as NativeWhiteboardShapeParams;
+    let shapeSpec;
     try {
-      try {
-        await opts.send({ type: 'client_effect', data: registered.delivery });
-      } catch {
-        piClientEffectCoordinator.cancel(
-          request.executionId,
-          'DELIVERY_FAILED',
-          'The whiteboard request could not be delivered to the browser.',
-        );
-      }
-      const terminal = await registered.result;
-      if (terminal.status === 'effect_committed') {
-        opts.onCommitted?.(input);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: 'Whiteboard text was rendered and its postcondition was verified.',
-            },
-          ],
-          details: {
-            status: terminal.status,
-            executionId: request.executionId,
-            stableElementId,
-            targetBinding: terminal.targetBinding,
-          },
-          isError: false,
-        };
-      }
-      if (terminal.status === 'cancelled') opts.onCancelled?.();
+      shapeSpec = normalizeWhiteboardShapeV1(input);
+    } catch (error) {
       return {
         content: [
           {
             type: 'text',
-            text: `Whiteboard text was not committed: ${terminal.error?.message ?? terminal.status}.`,
+            text: `Whiteboard shape input was rejected: ${
+              error instanceof Error ? error.message : 'invalid input'
+            }.`,
           },
         ],
         details: {
-          status: terminal.status,
-          executionId: request.executionId,
-          error: terminal.error,
+          code: error instanceof Error ? error.message : 'CLIENT_EFFECT_SHAPE_INPUT_INVALID',
         },
         isError: true,
-        executionStatus:
-          terminal.status === 'timed_out'
-            ? 'timeout'
-            : terminal.status === 'cancelled'
-              ? 'cancelled'
-              : 'execution_failed',
-        ...(terminal.status === 'cancelled' ? { terminate: true } : {}),
       };
-    } finally {
-      signal?.removeEventListener('abort', cancel);
-      piClientEffectCoordinator.cleanup(request.executionId);
     }
+    const prepared = prepareClientEffect(opts, request);
+    if ('isError' in prepared) return prepared;
+    const stableElementId = `client-effect-${request.executionId}`;
+    const effectRequest: ClientEffectRequest = {
+      ...request,
+      toolName: 'wb_draw_shape',
+      target: prepared.target,
+      activeEffectBudgetMs: prepared.activeEffectBudgetMs,
+      postcondition: {
+        kind: 'whiteboard_shape_exists',
+        stableElementId,
+        elementType: 'shape',
+        normalizationVersion: CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
+        expectedShapeDigest: await digestWhiteboardShapeV1(shapeSpec),
+        ...shapeSpec,
+      },
+    };
+    return deliverClientEffect({
+      request: effectRequest,
+      params: input,
+      signal,
+      toolOptions: opts,
+      successMessage: 'Whiteboard shape was rendered and its postcondition was verified.',
+      failureLabel: 'Whiteboard shape',
+    });
   };
 
   return { tool, handler };

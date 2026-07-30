@@ -1,12 +1,18 @@
 import { createStageAPI, type StageStore } from '@/lib/api/stage-api';
 import {
+  CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  digestWhiteboardShapeV1,
   digestVisibleTextV1,
+  normalizeWhiteboardShapeV1,
   normalizeVisibleTextV1,
   type AcceptedTargetBinding,
   type ClientEffectTarget,
+  type WhiteboardShapeKind,
+  type WhiteboardShapeSpec,
 } from '@/lib/agent/runtime/client-effect-contract';
 import type { PPTElement } from '@openmaic/dsl';
+import { WHITEBOARD_SHAPE_PATHS } from './whiteboard-shapes';
 
 export interface NativeWbDrawTextInput {
   executionId: string;
@@ -28,14 +34,31 @@ export interface NativeWhiteboardTextPostconditionResult {
   matchingElementCount: 1;
 }
 
-export interface NativeWhiteboardExecutionResult {
+export interface NativeWhiteboardShapePostconditionResult extends WhiteboardShapeSpec {
+  stableElementId: string;
+  elementType: 'shape';
+  normalizationVersion: typeof CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION;
+  observedShapeDigest: string;
+  matchingElementCount: 1;
+}
+
+export interface NativeWhiteboardExecutionResult<
+  TPostcondition = NativeWhiteboardTextPostconditionResult,
+> {
   replayed: boolean;
-  postcondition: NativeWhiteboardTextPostconditionResult;
+  postcondition: TPostcondition;
 }
 
 type NativeTextElement = PPTElement & {
   clientEffectExecutionId?: string;
   clientEffectContentDigest?: string;
+  clientEffectNormalizationVersion?: string;
+};
+
+type NativeShapeElement = PPTElement & {
+  clientEffectExecutionId?: string;
+  clientEffectShapeDigest?: string;
+  clientEffectShapeKind?: WhiteboardShapeKind;
   clientEffectNormalizationVersion?: string;
 };
 
@@ -264,6 +287,209 @@ export async function executeNativeWhiteboardTextEffect(opts: {
     executionId: opts.input.executionId,
     stableElementId: opts.input.stableElementId,
     expectedContentDigest,
+    signal: opts.signal,
+  });
+  throwIfAborted(opts.signal);
+  return { replayed: false, postcondition };
+}
+
+export interface NativeWbDrawShapeInput {
+  executionId: string;
+  stableElementId: string;
+  shape: WhiteboardShapeKind;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fillColor?: string;
+}
+
+function shapeSpecFromElement(element: NativeShapeElement): WhiteboardShapeSpec {
+  if (
+    element.type !== 'shape' ||
+    typeof element.left !== 'number' ||
+    typeof element.top !== 'number' ||
+    typeof element.width !== 'number' ||
+    typeof element.height !== 'number' ||
+    typeof element.fill !== 'string' ||
+    (element.clientEffectShapeKind !== 'rectangle' &&
+      element.clientEffectShapeKind !== 'circle' &&
+      element.clientEffectShapeKind !== 'triangle') ||
+    element.path !== WHITEBOARD_SHAPE_PATHS[element.clientEffectShapeKind]
+  ) {
+    throw new Error('CLIENT_EFFECT_SHAPE_ELEMENT_MISMATCH');
+  }
+  return normalizeWhiteboardShapeV1({
+    shape: element.clientEffectShapeKind,
+    x: element.left,
+    y: element.top,
+    width: element.width,
+    height: element.height,
+    fillColor: element.fill,
+  });
+}
+
+function shapeSpecsEqual(left: WhiteboardShapeSpec, right: WhiteboardShapeSpec): boolean {
+  return (
+    left.shape === right.shape &&
+    left.bounds.x === right.bounds.x &&
+    left.bounds.y === right.bounds.y &&
+    left.bounds.width === right.bounds.width &&
+    left.bounds.height === right.bounds.height &&
+    left.fillColor === right.fillColor
+  );
+}
+
+export async function verifyNativeWhiteboardShapeEffect(opts: {
+  store: StageStore;
+  targetBinding: AcceptedTargetBinding;
+  executionId: string;
+  stableElementId: string;
+  expectedShape: WhiteboardShapeSpec;
+  expectedShapeDigest: string;
+  signal?: AbortSignal;
+}): Promise<NativeWhiteboardShapePostconditionResult> {
+  const readVerifiedElement = (): { element: NativeShapeElement; spec: WhiteboardShapeSpec } => {
+    throwIfAborted(opts.signal);
+    assertStageAndScene(opts.store, opts.targetBinding);
+    const elementsResult = createStageAPI(opts.store).whiteboard.listElements(
+      opts.targetBinding.whiteboardId,
+    );
+    if (!elementsResult.success || !elementsResult.data) {
+      throw new Error(elementsResult.error || 'CLIENT_EFFECT_WHITEBOARD_NOT_FOUND');
+    }
+    const matches = elementsResult.data.filter((element) => element.id === opts.stableElementId);
+    if (matches.length !== 1) {
+      throw new Error(
+        matches.length === 0
+          ? 'CLIENT_EFFECT_ELEMENT_NOT_FOUND'
+          : 'CLIENT_EFFECT_DUPLICATE_ELEMENT_ID',
+      );
+    }
+    const element = matches[0] as NativeShapeElement;
+    if (
+      element.clientEffectExecutionId !== opts.executionId ||
+      element.clientEffectNormalizationVersion !== CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION
+    ) {
+      throw new Error('CLIENT_EFFECT_ELEMENT_OWNERSHIP_MISMATCH');
+    }
+    return { element, spec: shapeSpecFromElement(element) };
+  };
+
+  const beforeDigest = readVerifiedElement();
+  const observedShapeDigest = await digestWhiteboardShapeV1(beforeDigest.spec);
+  throwIfAborted(opts.signal);
+  const afterDigest = readVerifiedElement();
+  if (
+    !shapeSpecsEqual(beforeDigest.spec, afterDigest.spec) ||
+    !shapeSpecsEqual(beforeDigest.spec, opts.expectedShape) ||
+    observedShapeDigest !== opts.expectedShapeDigest ||
+    afterDigest.element.clientEffectShapeDigest !== opts.expectedShapeDigest
+  ) {
+    throw new Error('CLIENT_EFFECT_SHAPE_MISMATCH');
+  }
+
+  return {
+    stableElementId: opts.stableElementId,
+    elementType: 'shape',
+    normalizationVersion: CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
+    observedShapeDigest,
+    matchingElementCount: 1,
+    ...beforeDigest.spec,
+  };
+}
+
+export async function executeNativeWhiteboardShapeEffect(opts: {
+  store: StageStore;
+  targetBinding: AcceptedTargetBinding;
+  input: NativeWbDrawShapeInput;
+  expectedShape: WhiteboardShapeSpec;
+  expectedShapeDigest: string;
+  signal?: AbortSignal;
+}): Promise<NativeWhiteboardExecutionResult<NativeWhiteboardShapePostconditionResult>> {
+  throwIfAborted(opts.signal);
+  if (
+    typeof opts.input.executionId !== 'string' ||
+    !opts.input.executionId.trim() ||
+    typeof opts.input.stableElementId !== 'string' ||
+    !opts.input.stableElementId.trim()
+  ) {
+    throw new Error('CLIENT_EFFECT_INPUT_INVALID');
+  }
+  const inputShape = normalizeWhiteboardShapeV1(opts.input);
+  const requestShape = normalizeWhiteboardShapeV1({
+    shape: opts.expectedShape.shape,
+    ...opts.expectedShape.bounds,
+    fillColor: opts.expectedShape.fillColor,
+  });
+  const inputDigest = await digestWhiteboardShapeV1(inputShape);
+  throwIfAborted(opts.signal);
+  if (
+    !shapeSpecsEqual(inputShape, requestShape) ||
+    inputDigest !== opts.expectedShapeDigest ||
+    (await digestWhiteboardShapeV1(requestShape)) !== opts.expectedShapeDigest
+  ) {
+    throw new Error('CLIENT_EFFECT_REQUEST_SHAPE_MISMATCH');
+  }
+
+  assertStageAndScene(opts.store, opts.targetBinding);
+  const whiteboardApi = createStageAPI(opts.store).whiteboard;
+  const elementsResult = whiteboardApi.listElements(opts.targetBinding.whiteboardId);
+  if (!elementsResult.success || !elementsResult.data) {
+    throw new Error(elementsResult.error || 'CLIENT_EFFECT_WHITEBOARD_NOT_FOUND');
+  }
+  const existing = elementsResult.data.filter(
+    (element) => element.id === opts.input.stableElementId,
+  );
+  if (existing.length > 1) throw new Error('CLIENT_EFFECT_DUPLICATE_ELEMENT_ID');
+  if (existing.length === 1) {
+    const postcondition = await verifyNativeWhiteboardShapeEffect({
+      store: opts.store,
+      targetBinding: opts.targetBinding,
+      executionId: opts.input.executionId,
+      stableElementId: opts.input.stableElementId,
+      expectedShape: requestShape,
+      expectedShapeDigest: opts.expectedShapeDigest,
+      signal: opts.signal,
+    });
+    throwIfAborted(opts.signal);
+    return { replayed: true, postcondition };
+  }
+
+  throwIfAborted(opts.signal);
+  assertStageAndScene(opts.store, opts.targetBinding);
+  const addResult = whiteboardApi.addElement(
+    {
+      id: opts.input.stableElementId,
+      type: 'shape',
+      viewBox: [1000, 1000] as [number, number],
+      path: WHITEBOARD_SHAPE_PATHS[inputShape.shape],
+      left: inputShape.bounds.x,
+      top: inputShape.bounds.y,
+      width: inputShape.bounds.width,
+      height: inputShape.bounds.height,
+      rotate: 0,
+      fill: inputShape.fillColor,
+      fixedRatio: false,
+      clientEffectExecutionId: opts.input.executionId,
+      clientEffectShapeDigest: opts.expectedShapeDigest,
+      clientEffectShapeKind: inputShape.shape,
+      clientEffectNormalizationVersion: CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
+    } as NativeShapeElement,
+    opts.targetBinding.whiteboardId,
+  );
+  if (!addResult.success) {
+    throw new Error(addResult.error || 'CLIENT_EFFECT_WHITEBOARD_MUTATION_FAILED');
+  }
+  throwIfAborted(opts.signal);
+
+  const postcondition = await verifyNativeWhiteboardShapeEffect({
+    store: opts.store,
+    targetBinding: opts.targetBinding,
+    executionId: opts.input.executionId,
+    stableElementId: opts.input.stableElementId,
+    expectedShape: requestShape,
+    expectedShapeDigest: opts.expectedShapeDigest,
     signal: opts.signal,
   });
   throwIfAborted(opts.signal);

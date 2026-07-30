@@ -1,12 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  digestWhiteboardShapeV1,
   digestVisibleTextV1,
   isClientEffectAck,
+  normalizeWhiteboardShapeV1,
   resolveActiveEffectBudget,
   type AcceptedTargetBinding,
   type ClientEffectAck,
   type ClientEffectRequest,
+  type WhiteboardShapeClientEffectRequest,
+  type WhiteboardShapePostcondition,
+  type WhiteboardTextClientEffectRequest,
 } from '@/lib/agent/runtime/client-effect-contract';
 import { ClientEffectCoordinator } from '@/lib/agent/runtime/client-effect-coordinator';
 import { TOOL_EXECUTION_PROTOCOL_VERSION } from '@/lib/agent/runtime/native-child-contract';
@@ -20,7 +26,9 @@ const targetBinding: AcceptedTargetBinding = {
   bindingVersion: 1,
 };
 
-async function request(overrides: Partial<ClientEffectRequest> = {}): Promise<ClientEffectRequest> {
+async function request(
+  overrides: Partial<WhiteboardTextClientEffectRequest> = {},
+): Promise<WhiteboardTextClientEffectRequest> {
   const expectedContentDigest = await digestVisibleTextV1('hello');
   return {
     protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
@@ -75,7 +83,7 @@ function accepted(
 }
 
 function committed(
-  effect: ClientEffectRequest,
+  effect: WhiteboardTextClientEffectRequest,
   clientEventId = 'event-committed',
 ): Extract<ClientEffectAck, { status: 'effect_committed' }> {
   return {
@@ -92,6 +100,56 @@ function committed(
       normalizationVersion: CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
       observedContentDigest: effect.postcondition.expectedContentDigest,
       matchingElementCount: 1,
+    },
+  };
+}
+
+async function shapeRequest(): Promise<WhiteboardShapeClientEffectRequest> {
+  const shape = normalizeWhiteboardShapeV1({
+    shape: 'rectangle',
+    x: 80,
+    y: 60,
+    width: 240,
+    height: 160,
+    fillColor: '#4477aa',
+  });
+  return {
+    ...(await request()),
+    toolName: 'wb_draw_shape',
+    args: { shape: 'rectangle', x: 80, y: 60, width: 240, height: 160 },
+    postcondition: {
+      kind: 'whiteboard_shape_exists',
+      stableElementId: 'shape-1',
+      elementType: 'shape',
+      normalizationVersion: CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
+      expectedShapeDigest: await digestWhiteboardShapeV1(shape),
+      ...shape,
+    },
+  };
+}
+
+function shapeCommitted(
+  effect: WhiteboardShapeClientEffectRequest,
+  overrides: Partial<Omit<WhiteboardShapePostcondition, 'kind' | 'expectedShapeDigest'>> = {},
+): Extract<ClientEffectAck, { status: 'effect_committed' }> {
+  return {
+    protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
+    executionId: effect.executionId,
+    idempotencyKey: effect.idempotencyKey,
+    clientEventId: 'event-shape-committed',
+    status: 'effect_committed',
+    observedAt: Date.now(),
+    targetBinding,
+    postcondition: {
+      stableElementId: effect.postcondition.stableElementId,
+      elementType: 'shape',
+      normalizationVersion: CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
+      observedShapeDigest: effect.postcondition.expectedShapeDigest,
+      matchingElementCount: 1,
+      shape: effect.postcondition.shape,
+      bounds: effect.postcondition.bounds,
+      fillColor: effect.postcondition.fillColor,
+      ...overrides,
     },
   };
 }
@@ -135,6 +193,54 @@ describe('ClientEffectCoordinator', () => {
     await expect(registered.result).resolves.toMatchObject({
       status: 'effect_committed',
       isError: false,
+    });
+  });
+
+  it('settles a shape only after its exact geometry and fill postcondition is verified', async () => {
+    const coordinator = new ClientEffectCoordinator();
+    const effect = await shapeRequest();
+    const registered = coordinator.register(effect);
+    coordinator.acknowledge(
+      effect.executionId,
+      registered.delivery.acknowledgementToken,
+      accepted(effect),
+    );
+
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        shapeCommitted(effect),
+      ),
+    ).toMatchObject({ kind: 'applied', snapshot: { status: 'effect_committed' } });
+    await expect(registered.result).resolves.toMatchObject({
+      status: 'effect_committed',
+      isError: false,
+    });
+  });
+
+  it('rejects a committed shape whose verified bounds differ from the request', async () => {
+    const coordinator = new ClientEffectCoordinator();
+    const effect = await shapeRequest();
+    const registered = coordinator.register(effect);
+    coordinator.acknowledge(
+      effect.executionId,
+      registered.delivery.acknowledgementToken,
+      accepted(effect),
+    );
+
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        shapeCommitted(effect, {
+          bounds: { ...effect.postcondition.bounds, width: 241 },
+        }),
+      ),
+    ).toMatchObject({
+      kind: 'invalid',
+      reason: 'Committed postcondition does not match the requested effect.',
+      snapshot: { status: 'accepted' },
     });
   });
 
@@ -523,5 +629,30 @@ describe('isClientEffectAck', () => {
     ];
 
     for (const candidate of invalid) expect(isClientEffectAck(candidate)).toBe(false);
+  });
+
+  it('accepts the exact shape commit variant and rejects malformed shape state', async () => {
+    const effect = await shapeRequest();
+    const valid = shapeCommitted(effect);
+    expect(isClientEffectAck(valid)).toBe(true);
+
+    expect(
+      isClientEffectAck({
+        ...valid,
+        postcondition: {
+          ...valid.postcondition,
+          bounds: { ...effect.postcondition.bounds, width: Number.NaN },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isClientEffectAck({
+        ...valid,
+        postcondition: {
+          ...valid.postcondition,
+          unexpected: true,
+        },
+      }),
+    ).toBe(false);
   });
 });

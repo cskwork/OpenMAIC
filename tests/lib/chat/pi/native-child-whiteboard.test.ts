@@ -9,6 +9,7 @@ import type { LanguageModel } from 'ai';
 import type {
   ClientEffectAck,
   ClientEffectDelivery,
+  WhiteboardTextPostcondition,
 } from '@/lib/agent/runtime/client-effect-contract';
 import { piClientEffectCoordinator } from '@/lib/agent/runtime/client-effect-coordinator';
 import {
@@ -171,6 +172,13 @@ function ackBase(delivery: ClientEffectDelivery) {
   };
 }
 
+function textPostcondition(delivery: ClientEffectDelivery): WhiteboardTextPostcondition {
+  if (delivery.request.postcondition.kind !== 'whiteboard_text_exists') {
+    throw new Error('Expected a wb_draw_text client effect.');
+  }
+  return delivery.request.postcondition;
+}
+
 describe('Teacher native wb_draw_text server bridge', () => {
   afterEach(() => piClientEffectCoordinator.clearForTests());
 
@@ -273,16 +281,17 @@ describe('Teacher native wb_draw_text server bridge', () => {
     await Promise.resolve();
     expect(settled).toBe(false);
 
+    const expected = textPostcondition(delivery);
     const committed: ClientEffectAck = {
       ...ackBase(delivery),
       clientEventId: 'committed-1',
       status: 'effect_committed',
       targetBinding,
       postcondition: {
-        stableElementId: delivery.request.postcondition.stableElementId,
+        stableElementId: expected.stableElementId,
         elementType: 'text',
-        normalizationVersion: delivery.request.postcondition.normalizationVersion,
-        observedContentDigest: delivery.request.postcondition.expectedContentDigest,
+        normalizationVersion: expected.normalizationVersion,
+        observedContentDigest: expected.expectedContentDigest,
         matchingElementCount: 1,
       },
     };
@@ -620,6 +629,7 @@ describe('Teacher native wb_draw_text server bridge', () => {
             event.data.acknowledgementToken,
             value,
           );
+        const expected = textPostcondition(event.data);
         ack({
           ...ackBase(event.data),
           clientEventId: 'pause',
@@ -642,10 +652,10 @@ describe('Teacher native wb_draw_text server bridge', () => {
           status: 'effect_committed',
           targetBinding,
           postcondition: {
-            stableElementId: event.data.request.postcondition.stableElementId,
+            stableElementId: expected.stableElementId,
             elementType: 'text',
-            normalizationVersion: event.data.request.postcondition.normalizationVersion,
-            observedContentDigest: event.data.request.postcondition.expectedContentDigest,
+            normalizationVersion: expected.normalizationVersion,
+            observedContentDigest: expected.expectedContentDigest,
             matchingElementCount: 1,
           },
         });

@@ -189,6 +189,7 @@ describe('Phase 1 Child native web_search', () => {
       allowedActions: ['wb_draw_text'],
       expected: {
         nativeWhiteboardEnabled: true,
+        nativeWhiteboardToolNames: ['wb_draw_text'],
         childWebSearchEnabled: true,
         nativeChildEnabled: true,
       },
@@ -198,6 +199,7 @@ describe('Phase 1 Child native web_search', () => {
       allowedActions: ['wb_draw_text'],
       expected: {
         nativeWhiteboardEnabled: false,
+        nativeWhiteboardToolNames: [],
         childWebSearchEnabled: false,
         nativeChildEnabled: false,
       },
@@ -207,6 +209,7 @@ describe('Phase 1 Child native web_search', () => {
       allowedActions: [],
       expected: {
         nativeWhiteboardEnabled: false,
+        nativeWhiteboardToolNames: [],
         childWebSearchEnabled: false,
         nativeChildEnabled: false,
       },
@@ -225,6 +228,47 @@ describe('Phase 1 Child native web_search', () => {
       ).toEqual(expected);
     },
   );
+
+  it('exposes only the migrated whiteboard tools allowed for this Teacher', () => {
+    const base = {
+      role: 'teacher' as const,
+      enableNativeChildWebSearch: false,
+      enableNativeChildWhiteboard: true,
+      enableWhiteboardTools: true,
+      maxActionsPerAgent: 2,
+    };
+
+    expect(
+      resolveNativeChildCapabilities({
+        ...base,
+        agent: { role: base.role, allowedActions: ['wb_draw_shape'] },
+      }),
+    ).toMatchObject({
+      nativeWhiteboardEnabled: true,
+      nativeWhiteboardToolNames: ['wb_draw_shape'],
+      nativeChildEnabled: true,
+    });
+    expect(
+      resolveNativeChildCapabilities({
+        ...base,
+        agent: { role: base.role, allowedActions: ['wb_draw_text', 'wb_draw_shape'] },
+      }),
+    ).toMatchObject({
+      nativeWhiteboardEnabled: true,
+      nativeWhiteboardToolNames: ['wb_draw_text', 'wb_draw_shape'],
+      nativeChildEnabled: true,
+    });
+    expect(
+      resolveNativeChildCapabilities({
+        ...base,
+        agent: { role: base.role, allowedActions: ['wb_draw_line'] },
+      }),
+    ).toMatchObject({
+      nativeWhiteboardEnabled: false,
+      nativeWhiteboardToolNames: [],
+      nativeChildEnabled: false,
+    });
+  });
 
   it.each([
     {

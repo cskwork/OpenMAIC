@@ -255,6 +255,34 @@ describe('Pi director prompt closure routing', () => {
     expect(childPrompt).not.toContain('Return ONLY a valid JSON array');
   });
 
+  it('lists only the migrated native whiteboard capability for the current Child', () => {
+    const shapeOnly = buildNativeWebChildPrompt(makeBody(), agents[0], [], {
+      enableWebSearch: false,
+      enableWhiteboardShape: true,
+    });
+    const textOnly = buildNativeWebChildPrompt(makeBody(), agents[0], [], {
+      enableWebSearch: false,
+      enableWhiteboardText: true,
+    });
+    const shapeTurn = buildNativeWebChildTurnPrompt(
+      'Draw one simple shape.',
+      'teacher',
+      {},
+      {
+        enableWebSearch: false,
+        enableWhiteboardShape: true,
+      },
+    );
+
+    expect(shapeOnly).toContain('call `wb_draw_shape`');
+    expect(shapeOnly).not.toContain('call `wb_draw_text`');
+    expect(shapeOnly).toContain('Only the Native whiteboard tools listed above are available');
+    expect(textOnly).toContain('call `wb_draw_text`');
+    expect(textOnly).not.toContain('call `wb_draw_shape`');
+    expect(shapeTurn).toContain('Use `wb_draw_shape` only when one simple shape genuinely helps');
+    expect(shapeTurn).not.toContain('Use `wb_draw_text`');
+  });
+
   it('describes hybrid Web Search without giving legacy agents a native tool', () => {
     const directorPrompt = buildDirectorPrompt(makeBody(), agents, 4, {
       enableWebSearch: true,

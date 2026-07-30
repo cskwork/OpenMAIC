@@ -50,16 +50,9 @@ import {
 } from '@/lib/choreography';
 import katex from 'katex';
 import { createLogger } from '@/lib/logger';
+import { WHITEBOARD_SHAPE_PATHS } from './whiteboard-shapes';
 
 const log = createLogger('ActionEngine');
-
-// ==================== SVG Paths for Shapes ====================
-
-const SHAPE_PATHS: Record<string, string> = {
-  rectangle: 'M 0 0 L 1000 0 L 1000 1000 L 0 1000 Z',
-  circle: 'M 500 0 A 500 500 0 1 1 499 0 Z',
-  triangle: 'M 500 0 L 1000 1000 L 0 1000 Z',
-};
 
 // ==================== Helpers ====================
 
@@ -450,7 +443,7 @@ export class ActionEngine {
         id: action.elementId || '',
         type: 'shape',
         viewBox: [1000, 1000] as [number, number],
-        path: SHAPE_PATHS[action.shape] ?? SHAPE_PATHS.rectangle,
+        path: WHITEBOARD_SHAPE_PATHS[action.shape],
         left: action.x,
         top: action.y,
         width: action.width,

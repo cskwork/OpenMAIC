@@ -2,8 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type { StageStore } from '@/lib/api/stage-api';
 import { BrowserClientEffectRuntime } from '@/lib/agent/client/client-effect-runtime';
 import {
+  CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  digestWhiteboardShapeV1,
   digestVisibleTextV1,
+  normalizeWhiteboardShapeV1,
   type ClientEffectAck,
   type ClientEffectDelivery,
 } from '@/lib/agent/runtime/client-effect-contract';
@@ -60,6 +63,62 @@ async function delivery(): Promise<ClientEffectDelivery> {
         elementType: 'text',
         normalizationVersion: CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
         expectedContentDigest: await digestVisibleTextV1('k 决定方向'),
+      },
+    },
+  };
+}
+
+async function shapeDelivery(): Promise<ClientEffectDelivery> {
+  const shape = normalizeWhiteboardShapeV1({
+    shape: 'triangle',
+    x: 200,
+    y: 100,
+    width: 260,
+    height: 180,
+    fillColor: '#8844cc',
+  });
+  return {
+    acknowledgementToken: 'shape-capability',
+    request: {
+      protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
+      kind: 'client_effect',
+      traceId: 'trace-shape-1',
+      runId: 'run-shape-1',
+      agentInvocationId: 'message-shape-1',
+      agentId: 'teacher-1',
+      depth: 1,
+      sequence: 1,
+      toolCallId: 'tool-call-shape-1',
+      executionId: 'execution-shape-1',
+      idempotencyKey: 'run-shape-1:message-shape-1:tool-call-shape-1',
+      toolName: 'wb_draw_shape',
+      args: {
+        shape: 'triangle',
+        x: 200,
+        y: 100,
+        width: 260,
+        height: 180,
+        fillColor: '#8844cc',
+      },
+      argsDigest: 'sha256:shape-args',
+      issuedAt: 1,
+      deadlineAt: Date.now() + 10_000,
+      attempt: 1,
+      target: {
+        requestId: 'request-1',
+        sessionId: 'session-1',
+        stageId: 'stage-1',
+        sceneId: 'scene-1',
+        messageId: 'message-shape-1',
+      },
+      activeEffectBudgetMs: 2_000,
+      postcondition: {
+        kind: 'whiteboard_shape_exists',
+        stableElementId: 'shape-element-1',
+        elementType: 'shape',
+        normalizationVersion: CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
+        expectedShapeDigest: await digestWhiteboardShapeV1(shape),
+        ...shape,
       },
     },
   };
@@ -148,6 +207,60 @@ describe('BrowserClientEffectRuntime', () => {
       'accepted',
       'effect_committed',
     ]);
+    expect(
+      store.getState().stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements),
+    ).toHaveLength(1);
+  });
+
+  it('executes a shape once and ACKs its verified geometry to the same server execution', async () => {
+    const store = createStore();
+    const acknowledgements: ClientEffectAck[] = [];
+    const runtime = new BrowserClientEffectRuntime({
+      sessionId: 'session-1',
+      requestId: 'request-1',
+      store,
+      fetchAck: async (_url, init) => {
+        const ack = JSON.parse(String(init?.body)) as ClientEffectAck;
+        acknowledgements.push(ack);
+        return new Response(JSON.stringify({ success: true, state: { status: ack.status } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+      waitForPresentation: async () => {},
+      ensureWhiteboardVisible: async () => {},
+    });
+    const effect = await shapeDelivery();
+
+    const first = runtime.execute(effect, new AbortController().signal);
+    const duplicate = runtime.execute(effect, new AbortController().signal);
+
+    await expect(first).resolves.toBe('effect_committed');
+    await expect(duplicate).resolves.toBe('effect_committed');
+    if (effect.request.postcondition.kind !== 'whiteboard_shape_exists') {
+      throw new Error('Expected a shape delivery.');
+    }
+    expect(acknowledgements.map((ack) => ack.status)).toEqual([
+      'presentation_paused',
+      'presentation_resumed',
+      'accepted',
+      'effect_committed',
+    ]);
+    const committed = acknowledgements.at(-1);
+    expect(committed).toMatchObject({
+      executionId: effect.request.executionId,
+      idempotencyKey: effect.request.idempotencyKey,
+      status: 'effect_committed',
+      postcondition: {
+        stableElementId: effect.request.postcondition.stableElementId,
+        elementType: 'shape',
+        observedShapeDigest: effect.request.postcondition.expectedShapeDigest,
+        shape: 'triangle',
+        bounds: { x: 200, y: 100, width: 260, height: 180 },
+        fillColor: '#8844cc',
+        matchingElementCount: 1,
+      },
+    });
     expect(
       store.getState().stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements),
     ).toHaveLength(1);

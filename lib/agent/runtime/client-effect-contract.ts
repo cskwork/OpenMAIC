@@ -4,6 +4,7 @@ import {
 } from './native-child-contract';
 
 export const CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION = 'maic.visible-text.v1' as const;
+export const CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION = 'maic.whiteboard-shape.v1' as const;
 export const CLIENT_EFFECT_ACK_HEADER = 'x-maic-effect-token';
 export const CLIENT_EFFECT_ACK_MAX_BYTES = 8 * 1024;
 
@@ -36,13 +37,48 @@ export interface WhiteboardTextPostcondition {
   expectedContentDigest: string;
 }
 
-export interface ClientEffectRequest extends ToolExecutionEnvelope {
+export type WhiteboardShapeKind = 'rectangle' | 'circle' | 'triangle';
+
+export interface WhiteboardShapeBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface WhiteboardShapeSpec {
+  shape: WhiteboardShapeKind;
+  bounds: WhiteboardShapeBounds;
+  fillColor: string;
+}
+
+export interface WhiteboardShapePostcondition extends WhiteboardShapeSpec {
+  kind: 'whiteboard_shape_exists';
+  stableElementId: string;
+  elementType: 'shape';
+  normalizationVersion: typeof CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION;
+  expectedShapeDigest: string;
+}
+
+interface ClientEffectRequestBase extends ToolExecutionEnvelope {
   kind: 'client_effect';
-  toolName: 'wb_draw_text';
   target: ClientEffectTarget;
   activeEffectBudgetMs: number;
-  postcondition: WhiteboardTextPostcondition;
 }
+
+export type WhiteboardTextClientEffectRequest = ClientEffectRequestBase & {
+  toolName: 'wb_draw_text';
+  postcondition: WhiteboardTextPostcondition;
+};
+
+export type WhiteboardShapeClientEffectRequest = ClientEffectRequestBase & {
+  toolName: 'wb_draw_shape';
+  postcondition: WhiteboardShapePostcondition;
+};
+
+export type ClientEffectRequest =
+  | WhiteboardTextClientEffectRequest
+  | WhiteboardShapeClientEffectRequest;
 
 export interface ClientEffectDelivery {
   request: ClientEffectRequest;
@@ -77,13 +113,21 @@ export type ClientEffectAck =
   | (ClientEffectAckBase & {
       status: 'effect_committed';
       targetBinding: AcceptedTargetBinding;
-      postcondition: {
-        stableElementId: string;
-        elementType: 'text';
-        normalizationVersion: typeof CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION;
-        observedContentDigest: string;
-        matchingElementCount: 1;
-      };
+      postcondition:
+        | {
+            stableElementId: string;
+            elementType: 'text';
+            normalizationVersion: typeof CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION;
+            observedContentDigest: string;
+            matchingElementCount: 1;
+          }
+        | ({
+            stableElementId: string;
+            elementType: 'shape';
+            normalizationVersion: typeof CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION;
+            observedShapeDigest: string;
+            matchingElementCount: 1;
+          } & WhiteboardShapeSpec);
     })
   | (ClientEffectAckBase & {
       status: 'effect_failed' | 'cancelled';
@@ -151,6 +195,74 @@ export async function digestVisibleTextV1(value: string): Promise<string> {
   const normalized = normalizeVisibleTextV1(value);
   const bytes = new TextEncoder().encode(
     `${CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION}\n${normalized}`,
+  );
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  return `sha256:${Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('')}`;
+}
+
+function canonicalNumber(value: number): number {
+  return Object.is(value, -0) ? 0 : value;
+}
+
+export function normalizeWhiteboardShapeV1(input: {
+  shape: unknown;
+  x: unknown;
+  y: unknown;
+  width: unknown;
+  height: unknown;
+  fillColor?: unknown;
+}): WhiteboardShapeSpec {
+  const { shape, x, y, width, height } = input;
+  const fillColor = input.fillColor ?? '#5b9bd5';
+  if (
+    (shape !== 'rectangle' && shape !== 'circle' && shape !== 'triangle') ||
+    typeof x !== 'number' ||
+    !Number.isFinite(x) ||
+    typeof y !== 'number' ||
+    !Number.isFinite(y) ||
+    typeof width !== 'number' ||
+    !Number.isFinite(width) ||
+    typeof height !== 'number' ||
+    !Number.isFinite(height) ||
+    typeof fillColor !== 'string' ||
+    !fillColor.trim() ||
+    fillColor.length > 64
+  ) {
+    throw new Error('CLIENT_EFFECT_SHAPE_INPUT_INVALID');
+  }
+  const bounds = {
+    x: canonicalNumber(x),
+    y: canonicalNumber(y),
+    width: canonicalNumber(width),
+    height: canonicalNumber(height),
+  };
+  if (
+    bounds.x < 0 ||
+    bounds.y < 0 ||
+    bounds.width <= 0 ||
+    bounds.height <= 0 ||
+    bounds.x + bounds.width > 1000 ||
+    bounds.y + bounds.height > 563
+  ) {
+    throw new Error('CLIENT_EFFECT_SHAPE_BOUNDS_INVALID');
+  }
+  return {
+    shape,
+    bounds,
+    fillColor: fillColor.trim(),
+  };
+}
+
+export async function digestWhiteboardShapeV1(input: WhiteboardShapeSpec): Promise<string> {
+  const normalized = normalizeWhiteboardShapeV1({
+    shape: input.shape,
+    ...input.bounds,
+    fillColor: input.fillColor,
+  });
+  const bytes = new TextEncoder().encode(
+    `${CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION}\n${JSON.stringify(normalized)}`,
   );
   const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
   return `sha256:${Array.from(new Uint8Array(digest), (byte) =>
@@ -254,20 +366,60 @@ export function isClientEffectAck(value: unknown): value is ClientEffectAck {
         return false;
       }
       const postcondition = ack.postcondition as Record<string, unknown>;
-      return (
+      if (
+        postcondition.elementType === 'text' &&
         hasExactKeys(postcondition, [
           'stableElementId',
           'elementType',
           'normalizationVersion',
           'observedContentDigest',
           'matchingElementCount',
-        ]) &&
-        isNonEmptyString(postcondition.stableElementId) &&
-        postcondition.elementType === 'text' &&
-        postcondition.normalizationVersion === CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION &&
-        isNonEmptyString(postcondition.observedContentDigest) &&
-        postcondition.matchingElementCount === 1
-      );
+        ])
+      ) {
+        return (
+          isNonEmptyString(postcondition.stableElementId) &&
+          postcondition.normalizationVersion === CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION &&
+          isNonEmptyString(postcondition.observedContentDigest) &&
+          postcondition.matchingElementCount === 1
+        );
+      }
+      if (
+        postcondition.elementType !== 'shape' ||
+        !hasExactKeys(postcondition, [
+          'stableElementId',
+          'elementType',
+          'normalizationVersion',
+          'observedShapeDigest',
+          'matchingElementCount',
+          'shape',
+          'bounds',
+          'fillColor',
+        ]) ||
+        !isNonEmptyString(postcondition.stableElementId) ||
+        postcondition.normalizationVersion !== CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION ||
+        !isNonEmptyString(postcondition.observedShapeDigest) ||
+        postcondition.matchingElementCount !== 1 ||
+        !postcondition.bounds ||
+        typeof postcondition.bounds !== 'object' ||
+        Array.isArray(postcondition.bounds)
+      ) {
+        return false;
+      }
+      const bounds = postcondition.bounds as Record<string, unknown>;
+      if (!hasExactKeys(bounds, ['x', 'y', 'width', 'height'])) return false;
+      try {
+        normalizeWhiteboardShapeV1({
+          shape: postcondition.shape,
+          x: bounds.x,
+          y: bounds.y,
+          width: bounds.width,
+          height: bounds.height,
+          fillColor: postcondition.fillColor,
+        });
+        return true;
+      } catch {
+        return false;
+      }
     }
     case 'effect_failed':
     case 'cancelled': {
