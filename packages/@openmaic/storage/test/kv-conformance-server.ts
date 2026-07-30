@@ -116,8 +116,16 @@ async function readJson<T>(req: IncomingMessage, maxBodyBytes: number): Promise<
 }
 
 // A DoS ceiling, far above any real identifier — not a contract length
-// constraint. Matches MAX_KV_KEY_BYTES so the two backends agree.
-const MAX_IDENTIFIER_BYTES = 8192;
+// constraint. Measured on the percent-encoded length (the size the key occupies
+// as a request target), matching the client's MAX_KV_KEY_ENCODED_LENGTH so the
+// two backends agree and no key that passes validation reaches Node's 431. The
+// server measures the *decoded* key by re-encoding it, so it judges the same
+// size the client bounded before sending.
+const MAX_IDENTIFIER_ENCODED_LENGTH = 4096;
+
+function encodedLength(value: string): number {
+  return encodeURIComponent(value).length;
+}
 
 /**
  * The server-side half of the "a key is opaque" rule. A key arrives
@@ -158,12 +166,12 @@ function assertAddressableKey(value: string, label: string): void {
       `@openmaic/storage: ${label} must not contain an unpaired UTF-16 surrogate`,
     );
   }
-  const bytes = Buffer.byteLength(value, 'utf8');
-  if (bytes > MAX_IDENTIFIER_BYTES) {
+  const encoded = encodedLength(value);
+  if (encoded > MAX_IDENTIFIER_ENCODED_LENGTH) {
     throw new ConformanceHttpError(
       400,
       'VALIDATION_FAILED',
-      `@openmaic/storage: ${label} exceeds ${MAX_IDENTIFIER_BYTES} UTF-8 bytes (got ${bytes})`,
+      `@openmaic/storage: ${label} exceeds ${MAX_IDENTIFIER_ENCODED_LENGTH} encoded bytes (got ${encoded})`,
     );
   }
 }
@@ -172,7 +180,8 @@ function assertAddressableKey(value: string, label: string): void {
  * A `keys()` prefix is opaque too, and it arrives in the query string rather
  * than as a path segment — so it may be empty (that is what "list everything"
  * means) and it may be `.` or `..`, legitimate prefixes of keys such as
- * `.hidden`. Only the transport-fatal characters and the length bound remain.
+ * `.hidden`. Only the transport-fatal characters and the encoded-size ceiling
+ * remain.
  */
 function assertAddressablePrefix(prefix: string): void {
   if (prefix === '') return;
@@ -190,12 +199,12 @@ function assertAddressablePrefix(prefix: string): void {
       '@openmaic/storage: kv key prefix must not contain an unpaired UTF-16 surrogate',
     );
   }
-  const bytes = Buffer.byteLength(prefix, 'utf8');
-  if (bytes > MAX_IDENTIFIER_BYTES) {
+  const encoded = encodedLength(prefix);
+  if (encoded > MAX_IDENTIFIER_ENCODED_LENGTH) {
     throw new ConformanceHttpError(
       400,
       'VALIDATION_FAILED',
-      `@openmaic/storage: kv key prefix exceeds ${MAX_IDENTIFIER_BYTES} UTF-8 bytes (got ${bytes})`,
+      `@openmaic/storage: kv key prefix exceeds ${MAX_IDENTIFIER_ENCODED_LENGTH} encoded bytes (got ${encoded})`,
     );
   }
 }

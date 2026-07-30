@@ -97,17 +97,29 @@ export function assertKVScope(scope: KVScope): KVScope {
  * length. The key domain is length-unconstrained: callers compose keys from
  * unconstrained DSL identifiers, so any tight bound eventually rejects a
  * legitimate key — a `stageId` is a string of any length, and `prefix + id` can
- * be long (a 500-char id under `editor-current-scene:` already crossed the old
- * 512-byte bound). This ceiling exists only so a single key cannot be megabytes
- * and blow out a URL or a server index; it sits far above any identifier a
- * caller could realistically produce — 8 KiB, against the tens of bytes a real
- * id runs to — so crossing it means something pathological, not a real key. In
- * UTF-8 bytes rather than characters, so a multi-byte key cannot slip past it.
+ * be long. This ceiling exists only so a single key cannot blow out a URL or a
+ * server index; it sits far above any identifier a caller could realistically
+ * produce (a 500-char id under `editor-current-scene:` encodes to ~523).
+ *
+ * Measured on the **percent-encoded** length — `encodeURIComponent(key).length`
+ * — not the UTF-8 byte length, because the key travels as a URL path segment and
+ * a non-ASCII character expands under encoding (`€` → `%E2%82%AC`, one code
+ * point becoming nine bytes on the wire). A UTF-8-byte bound let a key pass
+ * client validation and then blow past the HTTP server's request-target limit
+ * (`431` before routing) while the browser accepted it — a backend-parity break.
+ * Bounding the encoded size instead keeps both backends in step: whichever a key
+ * reaches, it is accepted iff its encoded form fits. `4096` is chosen well below
+ * Node's default `maxHeaderSize` (16 KiB, where the `431` fires) so no key that
+ * passes validation can ever reach that limit, and far above any real id.
  */
-export const MAX_KV_KEY_BYTES = 8192;
+export const MAX_KV_KEY_ENCODED_LENGTH = 4096;
 
-const UTF8 = new TextEncoder();
 const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
+
+/** The size a key or prefix occupies as a percent-encoded URL segment. */
+function encodedLength(value: string): number {
+  return encodeURIComponent(value).length;
+}
 
 /**
  * The key domain, enforced by **every** backend.
@@ -129,9 +141,10 @@ const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
  * The few rules that remain are the ones encoding cannot cover, and none of
  * them can be produced by a caller composing `prefix + id`: an empty key and a
  * whole-key `.` / `..` have no percent-encoding that survives URL path
- * normalization, and NUL or an unpaired surrogate does not survive the
- * transports underneath at all. Enforced by every backend so a key that round-
- * trips in the browser round-trips over HTTP too.
+ * normalization, NUL or an unpaired surrogate does not survive the transports
+ * underneath at all, and an encoded form past the DoS ceiling would exceed the
+ * server's request-target limit. Enforced by every backend so a key that
+ * round-trips in the browser round-trips over HTTP too.
  */
 export function assertKVKey(key: string): void {
   if (key === '') {
@@ -141,10 +154,10 @@ export function assertKVKey(key: string): void {
     throw new Error(`@openmaic/storage: URL path segment must not be ${JSON.stringify(key)}`);
   }
   assertKVKeyCharacters(key, 'kv key');
-  const bytes = UTF8.encode(key).length;
-  if (bytes > MAX_KV_KEY_BYTES) {
+  const encoded = encodedLength(key);
+  if (encoded > MAX_KV_KEY_ENCODED_LENGTH) {
     throw new Error(
-      `@openmaic/storage: kv key exceeds ${MAX_KV_KEY_BYTES} UTF-8 bytes (got ${bytes})`,
+      `@openmaic/storage: kv key exceeds ${MAX_KV_KEY_ENCODED_LENGTH} encoded bytes (got ${encoded})`,
     );
   }
 }
@@ -163,15 +176,15 @@ function assertKVKeyCharacters(value: string, label: string): void {
  * requirements that only make sense for a whole key: it may be empty (that is
  * what "list everything" means) and, like a key, it is opaque — a `/` is a
  * legitimate prefix character, not structure. Only the transport-fatal
- * characters and the length bound remain.
+ * characters and the same encoded-size ceiling remain.
  */
 export function assertKVKeyPrefix(prefix: string): void {
   if (prefix === '') return;
   assertKVKeyCharacters(prefix, 'kv key prefix');
-  const bytes = UTF8.encode(prefix).length;
-  if (bytes > MAX_KV_KEY_BYTES) {
+  const encoded = encodedLength(prefix);
+  if (encoded > MAX_KV_KEY_ENCODED_LENGTH) {
     throw new Error(
-      `@openmaic/storage: kv key prefix exceeds ${MAX_KV_KEY_BYTES} UTF-8 bytes (got ${bytes})`,
+      `@openmaic/storage: kv key prefix exceeds ${MAX_KV_KEY_ENCODED_LENGTH} encoded bytes (got ${encoded})`,
     );
   }
 }

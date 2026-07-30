@@ -478,16 +478,18 @@ describe('HttpKVStore key constraints', () => {
   });
 
   test('refuses a key past the DoS ceiling', async () => {
-    // A generous 8 KiB guard, not a domain constraint: a real id is orders of
-    // magnitude shorter, so only a pathological key crosses it.
-    await expect(store().set('k'.repeat(8193), 'v')).rejects.toThrow(/exceeds 8192 UTF-8 bytes/);
+    // A generous guard, not a domain constraint: a real id is orders of magnitude
+    // shorter, so only a pathological key crosses it.
+    await expect(store().set('k'.repeat(4097), 'v')).rejects.toThrow(/exceeds 4096 encoded bytes/);
   });
 
-  test('bounds the key by bytes, not characters', async () => {
-    // 2731 three-byte characters (U+20AC) is 8193 bytes: a character-counting bound
-    // would wave it through and hand the server a key past its stated ceiling.
-    await expect(store().set('\u20AC'.repeat(2731), 'v')).rejects.toThrow(
-      /exceeds 8192 UTF-8 bytes/,
+  test('bounds the key by its encoded length, not its UTF-8 byte length', async () => {
+    // 456 \u00D7 U+20AC is only 1368 UTF-8 bytes but 4104 *encoded* bytes (%E2%82%AC
+    // each) \u2014 the size the wire actually carries. A byte-length bound would wave
+    // it through client validation and then have it 431'd by the HTTP server,
+    // diverging from the browser backend; the encoded bound refuses it up front.
+    await expect(store().set('\u20AC'.repeat(456), 'v')).rejects.toThrow(
+      /exceeds 4096 encoded bytes/,
     );
   });
 
@@ -1136,6 +1138,65 @@ test('real fetch reaches the listening conformance server over loopback', async 
     await expect(store.keys()).resolves.toEqual(['provider']);
     await store.remove('provider');
     await expect(store.get('provider')).resolves.toBeNull();
+  } finally {
+    await networkServer.close();
+  }
+});
+
+// The reason the ceiling is measured on the encoded size: a non-ASCII key can be
+// small in UTF-8 bytes yet large on the wire, and a byte-length bound let it pass
+// client validation and then be 431'd by the real HTTP server while the browser
+// backend accepted it. Proven against a real node:http server so the 431 boundary
+// is exercised, not assumed.
+test('the encoded-size ceiling holds both backends to the same 431 boundary', async ({ skip }) => {
+  let networkServer: KvConformanceServer;
+  try {
+    networkServer = await startKvConformanceServer();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+      skip('sandbox does not permit binding a 127.0.0.1 listener');
+    }
+    throw error;
+  }
+  try {
+    const http = new HttpKVStore({
+      baseUrl: networkServer.baseUrl,
+      headers: () => ({ 'x-storage-namespace': 'encoded-ceiling' }),
+      deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
+    });
+    const browser = new BrowserKVStore({ storage: new MemoryStorage() });
+
+    // A max-legal non-ASCII key: 455 × U+20AC encodes to 4095 bytes, just under
+    // the 4096 ceiling. It round-trips over real HTTP with no 431...
+    const legal = '€'.repeat(455);
+    await http.set(legal, { ok: 1 });
+    expect(await http.get(legal)).toEqual({ ok: 1 });
+    // ...and the browser backend accepts the same key — parity on accept.
+    await browser.set(legal, { ok: 1 }, 'device');
+    expect(await browser.get(legal, 'device')).toEqual({ ok: 1 });
+
+    // One code point over: 456 × U+20AC encodes to 4104 bytes. BOTH backends
+    // reject it at validation, before any request — so the HTTP client never
+    // builds the oversized target and never sees a 431, and the browser does not
+    // diverge by accepting it.
+    const oversize = '€'.repeat(456);
+    await expect(http.set(oversize, { ok: 1 })).rejects.toThrow(/exceeds 4096 encoded bytes/);
+    await expect(browser.set(oversize, { ok: 1 }, 'device')).rejects.toThrow(
+      /exceeds 4096 encoded bytes/,
+    );
+
+    // Defense in depth: a raw client that skips client-side validation and sends
+    // an over-ceiling (but under Node's 16 KiB request-target limit) encoded key
+    // gets a clean application-level 400, not a 431 and not a silent 200.
+    const rawOversize = '€'.repeat(600); // encoded 5400: over 4096, under 16384
+    const { status, json } = await rawRequest(networkServer.baseUrl, {
+      method: 'PUT',
+      path: `/kv/entries/${encodeURIComponent(rawOversize)}`,
+      headers: { 'content-type': 'application/json', 'x-storage-namespace': 'encoded-ceiling' },
+      body: JSON.stringify({ value: 1 }),
+    });
+    expect(status).toBe(400);
+    expect(json).toMatchObject({ error: { code: 'VALIDATION_FAILED' } });
   } finally {
     await networkServer.close();
   }

@@ -21,7 +21,7 @@ export {
   assertKVScope,
   DEFAULT_KV_SCOPE,
   KVScopeViolationError,
-  MAX_KV_KEY_BYTES,
+  MAX_KV_KEY_ENCODED_LENGTH,
 } from './kv/types.js';
 export { BrowserKVStore, type BrowserKVStoreOptions } from './kv/browser.js';
 export {

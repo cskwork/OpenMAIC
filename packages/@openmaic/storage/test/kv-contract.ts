@@ -198,9 +198,18 @@ export function runKVStoreContract(name: string, makeStore: () => KVStore): void
       ['the dot segment ".."', '..', /URL path segment/],
       ['a key containing NUL', 'bad\u0000key', /NUL/],
       ['a key containing an unpaired surrogate', '\uD800', /surrogate/],
-      ['a key past the DoS ceiling', 'k'.repeat(8193), /exceeds 8192 UTF-8 bytes/],
-      // Bounded in bytes, not characters: 2731 three-byte characters is 8193.
-      ['a multi-byte key past the DoS ceiling', '\u20AC'.repeat(2731), /exceeds 8192 UTF-8 bytes/],
+      // The ceiling is on the ENCODED size. A pure-ASCII key encodes to itself,
+      // so 4097 chars is 4097 encoded bytes — one past the cap.
+      ['a key past the DoS ceiling', 'k'.repeat(4097), /exceeds 4096 encoded bytes/],
+      // The parity case a UTF-8-byte bound missed: 456 '\u20AC' is only 1368 UTF-8
+      // bytes (well under any byte cap) but 4104 *encoded* bytes (%E2%82%AC each),
+      // which is what the wire actually carries — so it must be refused, on both
+      // backends, rather than accepted locally and 431'd over HTTP.
+      [
+        'a key whose encoded form exceeds the ceiling',
+        '\u20AC'.repeat(456),
+        /exceeds 4096 encoded bytes/,
+      ],
     ])('refuses %s', async (_name, key, message) => {
       const kv = makeStore();
 
