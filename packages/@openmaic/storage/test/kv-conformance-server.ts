@@ -115,7 +115,9 @@ async function readJson<T>(req: IncomingMessage, maxBodyBytes: number): Promise<
   return body as T;
 }
 
-const MAX_IDENTIFIER_BYTES = 512;
+// A DoS ceiling, far above any real identifier — not a contract length
+// constraint. Matches MAX_KV_KEY_BYTES so the two backends agree.
+const MAX_IDENTIFIER_BYTES = 8192;
 
 /**
  * The server-side half of the "a key is opaque" rule. A key arrives
@@ -263,6 +265,27 @@ interface RouteContext {
   maxBodyBytes: number;
 }
 
+/**
+ * A body is a scope channel too, and the two bodyless methods (GET, DELETE) have
+ * no legitimate use for one — so any body on them is refused outright rather than
+ * parsed for the scope it might be smuggling. A GET route that simply ignored
+ * the body would let `GET /kv/keys` with `{"scope":"device"}` succeed, which is
+ * exactly the "every channel is closed" guarantee failing silently. PUT reads
+ * its body and rejects a scope *field* there instead, since it legitimately
+ * carries `value`.
+ */
+async function assertNoRequestBody(req: IncomingMessage, maxBodyBytes: number): Promise<void> {
+  const body = await readBytes(req, maxBodyBytes);
+  if (body.length > 0) {
+    throw new ConformanceHttpError(
+      400,
+      'VALIDATION_FAILED',
+      `@openmaic/storage: ${req.method ?? 'GET'} must not carry a request body — this contract is ` +
+        'account-scoped and the principal is derived server-side',
+    );
+  }
+}
+
 async function routeKv(
   req: IncomingMessage,
   res: ServerResponse,
@@ -271,6 +294,12 @@ async function routeKv(
   const { state, parts, url, maxBodyBytes } = context;
   const method = req.method ?? 'GET';
   assertNoScopeChannel(req, url);
+  // Close the body channel on every bodyless method up front, so no GET route
+  // can forget to look. PUT is the one method that reads a body, and it checks
+  // the body for a scope field itself.
+  if (method === 'GET' || method === 'DELETE') {
+    await assertNoRequestBody(req, maxBodyBytes);
+  }
 
   if (method === 'GET' && parts.length === 2 && parts[1] === 'keys') {
     const prefix = url.searchParams.get('prefix') ?? '';
@@ -334,20 +363,8 @@ async function routeKv(
       return true;
     }
     if (method === 'DELETE') {
-      // A bodyless method, so a body is refused outright rather than parsed for
-      // the scope it might be smuggling. Checking only the query and the header
-      // left the body as the one channel a delete could still describe a scope
-      // through, and a server that ignores it discards the caller's intent
-      // exactly as silently as one that ignores a scope field on a write.
-      const body = await readBytes(req, maxBodyBytes);
-      if (body.length > 0) {
-        throw new ConformanceHttpError(
-          400,
-          'VALIDATION_FAILED',
-          '@openmaic/storage: DELETE must not carry a request body — this contract is ' +
-            'account-scoped and the principal is derived server-side',
-        );
-      }
+      // The body was already refused up front (bodyless method); nothing to do
+      // here but delete.
       state.kv.delete(key);
       sendNoContent(res);
       return true;

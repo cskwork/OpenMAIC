@@ -1,3 +1,4 @@
+import { request as httpRequest } from 'node:http';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { BrowserKVStore } from '../src/kv/browser.js';
 import type { DeviceSafeKVStore, KVStore, LocalKVStore } from '../src/kv/types.js';
@@ -10,6 +11,49 @@ import { startKvConformanceServer, type KvConformanceServer } from './kv-conform
 
 let server: KvConformanceServer;
 let namespace = 0;
+
+/**
+ * Send a raw HTTP request, so a body can ride on a bodyless method — something
+ * `fetch` refuses to construct but a real HTTP client (or an attacker) can put
+ * on the wire, and exactly the shape the server must defend against.
+ */
+function rawRequest(
+  baseUrl: string,
+  options: { method: string; path: string; headers: Record<string, string>; body?: string },
+): Promise<{ status: number; json: unknown }> {
+  const url = new URL(baseUrl);
+  // An explicit Content-Length (not chunked framing) so the server flushes its
+  // full response body back on a bodyless-method rejection.
+  const headers =
+    options.body === undefined
+      ? options.headers
+      : { ...options.headers, 'content-length': String(Buffer.byteLength(options.body)) };
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      {
+        hostname: url.hostname,
+        port: url.port,
+        method: options.method,
+        path: options.path,
+        headers,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          resolve({
+            status: res.statusCode ?? 0,
+            json: text === '' ? undefined : (JSON.parse(text) as unknown),
+          });
+        });
+      },
+    );
+    req.on('error', reject);
+    if (options.body !== undefined) req.write(options.body);
+    req.end();
+  });
+}
 
 function makeStore(storageNamespace = `kv-${namespace++}`): HttpKVStore {
   return new HttpKVStore({
@@ -335,44 +379,87 @@ describe('HttpKVStore device-scope invariant', () => {
     await account.remove('k');
     expect(paths).toEqual(['/kv/entries/k', '/kv/entries/k']);
   });
+});
 
-  test('the server refuses a request body that invents a scope', async () => {
-    const response = await server.fetch(`${server.baseUrl}/kv/entries/k`, {
-      method: 'PUT',
-      headers: {
-        'content-type': 'application/json',
-        'x-storage-namespace': `scope-body-${namespace++}`,
-      },
-      body: JSON.stringify({ value: 'v', scope: 'device' }),
-    });
+// Coverage matrix — every operation × every channel a scope could hide in must
+// be closed. A gap here is not academic: the reason this matrix exists is that
+// the bodyless GET routes once ignored their body, so `GET /kv/keys` with a
+// `{"scope":"device"}` body returned 200 [] — one uncovered cell shipping the
+// exact silent-discard the contract forbids.
+const SCOPE_OPERATIONS = [
+  { name: 'get', method: 'GET', entryPath: true, writesValue: false },
+  { name: 'set', method: 'PUT', entryPath: true, writesValue: true },
+  { name: 'remove', method: 'DELETE', entryPath: true, writesValue: false },
+  { name: 'keys', method: 'GET', entryPath: false, writesValue: false },
+] as const;
 
-    expect(response.status).toBe(400);
+describe('scope-rejection matrix: {get,set,remove,keys} × {query,header}', () => {
+  // The query and header channels every method can carry, so they run in-process
+  // against the injected server. The body channel needs a client that can put a
+  // body on a bodyless method, which `fetch` refuses to construct — that cell is
+  // covered by the raw-request matrix below.
+  const cells = SCOPE_OPERATIONS.flatMap((op) =>
+    (['query', 'header'] as const).map(
+      (channel) => [`${op.name} via ${channel}`, op, channel] as const,
+    ),
+  );
+
+  test.each(cells)('rejects a device scope on %s', async (_title, op, channel) => {
+    const ns = `scope-matrix-${namespace++}`;
+    let path = `${server.baseUrl}${op.entryPath ? '/kv/entries/mk' : '/kv/keys'}`;
+    const headers: Record<string, string> = { 'x-storage-namespace': ns };
+    if (channel === 'query') path += '?scope=device';
+    if (channel === 'header') headers['x-scope'] = 'device';
+    const init: RequestInit = { method: op.method, headers };
+    if (op.writesValue) {
+      headers['content-type'] = 'application/json';
+      init.body = JSON.stringify({ value: 1 });
+    }
+
+    const response = await server.fetch(path, init);
+    expect(response.status, `${op.name} via ${channel}`).toBe(400);
     await expect(response.json()).resolves.toMatchObject({
       error: { code: 'VALIDATION_FAILED', message: expect.stringContaining('scope') },
     });
   });
+});
 
-  test.each([
-    ['a query parameter', '/kv/entries/k?scope=device', {}],
-    ['a header', '/kv/entries/k', { 'x-scope': 'device' }],
-  ])('the server refuses a scope smuggled in %s', async (_name, path, extraHeaders) => {
-    // The body is not the only channel a scope could hide in, and a server that
-    // ignored the others would silently discard a caller's stated intent.
-    const response = await server.fetch(`${server.baseUrl}${path}`, {
-      method: 'PUT',
-      headers: {
-        'content-type': 'application/json',
-        'x-storage-namespace': `scope-channel-${namespace++}`,
-        ...extraHeaders,
-      },
-      body: JSON.stringify({ value: 'v' }),
-    });
+describe('scope-rejection matrix: {get,set,remove,keys} × body', () => {
+  // The body channel, exercised by a raw client — precisely the non-conforming
+  // client the finding described, since `fetch` cannot put a body on a GET. For
+  // the bodyless methods the whole body is refused (that is where a scope would
+  // hide); for `set`, which legitimately carries a body, a `scope` field in it
+  // is refused. One test per operation (not `test.each`) so each can consult the
+  // per-test `skip` for sandboxes that cannot bind a loopback listener.
+  for (const op of SCOPE_OPERATIONS) {
+    test(`rejects a scope in the body of ${op.name}`, async ({ skip }) => {
+      let networkServer: KvConformanceServer;
+      try {
+        networkServer = await startKvConformanceServer();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+          skip('sandbox does not permit binding a 127.0.0.1 listener');
+        }
+        throw error;
+      }
+      try {
+        const body = op.writesValue
+          ? JSON.stringify({ value: 1, scope: 'device' })
+          : JSON.stringify({ scope: 'device' });
+        const { status, json } = await rawRequest(networkServer.baseUrl, {
+          method: op.method,
+          path: op.entryPath ? '/kv/entries/mk' : '/kv/keys',
+          headers: { 'content-type': 'application/json', 'x-storage-namespace': 'scope-raw' },
+          body,
+        });
 
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toMatchObject({
-      error: { code: 'VALIDATION_FAILED', message: expect.stringContaining('scope') },
+        expect(status, op.name).toBe(400);
+        expect(json).toMatchObject({ error: { code: 'VALIDATION_FAILED' } });
+      } finally {
+        await networkServer.close();
+      }
     });
-  });
+  }
 });
 
 describe('HttpKVStore key constraints', () => {
@@ -390,14 +477,28 @@ describe('HttpKVStore key constraints', () => {
     await expect(store().set('', 'v')).rejects.toThrow(/must not be empty/);
   });
 
-  test('refuses an over-long key', async () => {
-    await expect(store().set('k'.repeat(513), 'v')).rejects.toThrow(/exceeds 512 UTF-8 bytes/);
+  test('refuses a key past the DoS ceiling', async () => {
+    // A generous 8 KiB guard, not a domain constraint: a real id is orders of
+    // magnitude shorter, so only a pathological key crosses it.
+    await expect(store().set('k'.repeat(8193), 'v')).rejects.toThrow(/exceeds 8192 UTF-8 bytes/);
   });
 
   test('bounds the key by bytes, not characters', async () => {
-    // 256 three-byte characters (U+20AC) is 768 bytes: a character-counting bound would
-    // wave it through and hand the server a key half again its stated limit.
-    await expect(store().set('\u20AC'.repeat(256), 'v')).rejects.toThrow(/exceeds 512 UTF-8 bytes/);
+    // 2731 three-byte characters (U+20AC) is 8193 bytes: a character-counting bound
+    // would wave it through and hand the server a key past its stated ceiling.
+    await expect(store().set('\u20AC'.repeat(2731), 'v')).rejects.toThrow(
+      /exceeds 8192 UTF-8 bytes/,
+    );
+  });
+
+  test('round-trips a long but legitimate composed key through the real server', async () => {
+    // The exact regression: `editor-current-scene:` + a 500-char stage id is 521
+    // bytes, which the old 512-byte bound wrongly rejected before the wire.
+    const remote = makeStore(`kv-longkey-${namespace++}`);
+    const key = `editor-current-scene:${'s'.repeat(500)}`;
+    await remote.set(key, { sceneId: null });
+    expect(await remote.get(key)).toEqual({ sceneId: null });
+    expect(await remote.keys('editor-current-scene:')).toContain(key);
   });
 
   test('round-trips a key containing separators through the real server', async () => {

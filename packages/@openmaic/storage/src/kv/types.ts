@@ -93,12 +93,18 @@ export function assertKVScope(scope: KVScope): KVScope {
 }
 
 /**
- * Upper bound on a key, in UTF-8 bytes rather than characters, so a multi-byte
- * key cannot exceed the limit while appearing to comply. Keys become URL path
- * segments and server-side index entries; an unbounded key is a
- * denial-of-service knob and an index-size hazard.
+ * A denial-of-service ceiling on a key, **not** a contract constraint on key
+ * length. The key domain is length-unconstrained: callers compose keys from
+ * unconstrained DSL identifiers, so any tight bound eventually rejects a
+ * legitimate key — a `stageId` is a string of any length, and `prefix + id` can
+ * be long (a 500-char id under `editor-current-scene:` already crossed the old
+ * 512-byte bound). This ceiling exists only so a single key cannot be megabytes
+ * and blow out a URL or a server index; it sits far above any identifier a
+ * caller could realistically produce — 8 KiB, against the tens of bytes a real
+ * id runs to — so crossing it means something pathological, not a real key. In
+ * UTF-8 bytes rather than characters, so a multi-byte key cannot slip past it.
  */
-export const MAX_KV_KEY_BYTES = 512;
+export const MAX_KV_KEY_BYTES = 8192;
 
 const UTF8 = new TextEncoder();
 const LONE_SURROGATE = /[\uD800-\uDFFF]/u;

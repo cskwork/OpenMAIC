@@ -133,54 +133,74 @@ export function runKVStoreContract(name: string, makeStore: () => KVStore): void
       await expect(kv.keys('', unknownScope)).rejects.toThrow(/unknown KV scope/);
     });
 
-    // The prefix is a literal, byte-for-byte comparison. Spelled out as a case
-    // because the obvious SQL translation is `LIKE prefix || '%'`, where `%` and
-    // `_` in a caller-supplied prefix silently become wildcards and the listing
-    // starts returning keys it was never asked for.
-    test('keys() treats the prefix literally, not as a pattern', async () => {
+    // Coverage matrix — prefix-charset. The prefix is a literal, byte-for-byte
+    // comparison, never a pattern. The characters that matter are the ones the
+    // obvious SQL translation `key LIKE prefix || '%'` would treat as wildcards
+    // or escapes: `%`, `_`, and — the one an implementer skips because they
+    // assume a key can never contain it — `\\`, PostgreSQL's default LIKE escape.
+    // Each must match only itself, and combinations must not interact.
+    test.each([
+      ['%', 'literal-%', ['literal-%match', 'literal-Xmatch']],
+      ['_', 'literal-_', ['literal-_match', 'literal-Xmatch']],
+      ['a backslash', 'literal-\\', ['literal-\\match', 'literal-Xmatch']],
+      ['%_ combined', 'p-%_', ['p-%_match', 'p-XYmatch']],
+      ['backslash-percent combined', 'p-\\%', ['p-\\%match', 'p-\\Xmatch']],
+    ])('keys() matches a %s prefix literally, not as a pattern', async (_name, prefix, keys) => {
       const kv = makeStore();
-      await kv.set('50%-done', 1);
-      await kv.set('50x-done', 2);
-      await kv.set('a_b', 3);
-      await kv.set('axb', 4);
+      const [shouldMatch, shouldNotMatch] = keys as [string, string];
+      await kv.set(shouldMatch, 1);
+      await kv.set(shouldNotMatch, 2);
 
-      expect(await kv.keys('50%')).toEqual(['50%-done']);
-      expect(await kv.keys('a_')).toEqual(['a_b']);
+      expect(await kv.keys(prefix as string)).toEqual([shouldMatch]);
     });
 
-    // A key is opaque. Callers compose keys from unconstrained DSL identifiers —
-    // a stageId may be `stage/one` — so a key containing `/`, `\\`, `:`, or `%`
-    // must round-trip, not be rejected. Traversal is defended by encoding on the
-    // wire (a `/` becomes one path segment) and by the server storing the key as
-    // an opaque value, never a path — never by turning away a legitimate key.
+    // Coverage matrix — key-validity. A key is opaque: callers compose it from
+    // unconstrained DSL identifiers, so every representative shape below must
+    // round-trip on every backend — set/get consistent, listed under a matching
+    // prefix, removable — with no rejection and no mangling.
     test.each([
       ['a separator', 'editor-current-scene:stage/one'],
       ['a backslash', 'document-migration:stage\\one'],
       ['a traversal shape, harmless as opaque data', 'a/../../b'],
       ['a percent sign', 'k%2Fnot-decoded'],
-      ['a colon and spaces', 'ns: a b '],
-    ])('round-trips a key with %s', async (_name, key) => {
+      ['an underscore', 'ns_scene_1'],
+      ['a colon and trailing spaces', 'ns: a b '],
+      ['a bare dot inside', 'ns:a.b.c'],
+      ['a BMP unicode character', 'ns:\u573A/\u20AC'],
+      ['an astral emoji', 'ns:scene-\uD83D\uDD11'],
+      // The exact regression: a 500-character id under a real prefix is 521
+      // bytes, which the old 512-byte bound wrongly rejected.
+      ['a long but legitimate composed key', `editor-current-scene:${'s'.repeat(500)}`],
+      ['every special character at once', 'ns:/\\%_: .\u573A\uD83D\uDD11'],
+    ])('round-trips a key with %s across every backend', async (_name, key) => {
       const kv = makeStore();
       await kv.set(key, { ok: true });
       expect(await kv.get(key)).toEqual({ ok: true });
       expect(await kv.keys()).toContain(key);
+      // keys(prefix) semantics survive: a prefix of the key finds it. Take the
+      // first code point (not a UTF-16 slice, which could split a surrogate pair
+      // into a lone surrogate the prefix rules rightly refuse); the store is
+      // fresh, so this is the only key it can match.
+      expect(await kv.keys([...key][0]!)).toContain(key);
       await kv.remove(key);
       expect(await kv.get(key)).toBeNull();
+      expect(await kv.keys()).not.toContain(key);
     });
 
     // The few rules that remain are the ones encoding cannot cover and the
     // transport cannot carry — none of which a caller composing `prefix + id`
     // can produce. Enforced by every backend so a key that round-trips in the
-    // browser round-trips over HTTP too, before either stores anything.
+    // browser round-trips over HTTP too, before either stores anything. The
+    // length cap is a DoS ceiling far above any real id, not a domain constraint.
     test.each([
       ['an empty key', '', /must not be empty/],
       ['the dot segment "."', '.', /URL path segment/],
       ['the dot segment ".."', '..', /URL path segment/],
       ['a key containing NUL', 'bad\u0000key', /NUL/],
       ['a key containing an unpaired surrogate', '\uD800', /surrogate/],
-      ['an over-long key', 'k'.repeat(513), /exceeds 512 UTF-8 bytes/],
-      // Bounded in bytes, not characters: 256 three-byte characters is 768.
-      ['an over-long multi-byte key', '\u20AC'.repeat(256), /exceeds 512 UTF-8 bytes/],
+      ['a key past the DoS ceiling', 'k'.repeat(8193), /exceeds 8192 UTF-8 bytes/],
+      // Bounded in bytes, not characters: 2731 three-byte characters is 8193.
+      ['a multi-byte key past the DoS ceiling', '\u20AC'.repeat(2731), /exceeds 8192 UTF-8 bytes/],
     ])('refuses %s', async (_name, key, message) => {
       const kv = makeStore();
 
