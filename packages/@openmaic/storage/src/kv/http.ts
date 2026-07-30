@@ -95,29 +95,58 @@ function assertAccountScope(scope: AccountScope | undefined): void {
   );
 }
 
+function notEncodable(label: string, reason: string): HttpKVStoreError {
+  return new HttpKVStoreError(
+    // No exchange happened; the failure is local to building the request.
+    0,
+    'KEY_NOT_ENCODABLE',
+    `@openmaic/storage: this ${label} cannot be carried over the HTTP URL transport — ${reason}. ` +
+      `The key domain still permits it; a browser-backed deployment can store it.`,
+  );
+}
+
 /**
- * Percent-encode a key or prefix into a URL segment. The key domain is opaque
- * and unconstrained (see `types.ts`); this is the one place the key meets a
+ * Percent-encode a value into a URL component. The key domain is opaque and
+ * unconstrained (see `types.ts`); this is where a key or prefix meets a
  * transport that cannot carry every string. `encodeURIComponent` handles any
  * character — NUL becomes `%00`, a separator `%2F` — with a single structural
  * exception: an unpaired UTF-16 surrogate has no UTF-8 encoding, so it throws.
- * That is a limit of *this transport*, not of the key: the browser backend
- * stores such a key fine. Surface it as a clear transport error rather than a
- * bare `URIError`, and say so.
+ * That is a limit of *this transport*, not of the value: the browser backend
+ * stores such a key fine. Surface it as a clear transport error, not a bare
+ * `URIError`.
  */
-function encodeKeySegment(value: string, label: string): string {
+function encodeComponent(value: string, label: string): string {
   try {
     return encodeURIComponent(value);
   } catch {
-    throw new HttpKVStoreError(
-      // No exchange happened; the failure is local to building the request.
-      0,
-      'KEY_NOT_ENCODABLE',
-      `@openmaic/storage: this ${label} cannot be carried over the HTTP URL transport — it ` +
-        `contains an unpaired UTF-16 surrogate, which has no percent-encoding. The key domain ` +
-        `still permits it; a browser-backed deployment can store it.`,
+    throw notEncodable(
+      label,
+      'it contains an unpaired UTF-16 surrogate, which has no percent-encoding',
     );
   }
+}
+
+/**
+ * Encode a key as a URL **path segment**. Beyond the surrogate limit, a whole-key
+ * `.` or `..` cannot be carried this way: `encodeURIComponent` leaves the dots
+ * untouched (they are unreserved), so `/kv/entries/.` and `/kv/entries/..` are
+ * normalized by the URL parser *before the request leaves the client* — the
+ * first collapses to the empty-key segment, the second walks up a level. Sent as
+ * is, they would silently read, overwrite, or delete a *different* entry (an
+ * empty key, or a bad route) with no error. That is the same class of transport
+ * limit as the surrogate, so it fails loud here. Only the whole key is affected;
+ * a key that merely *contains* a dot (`a.b`, `prefix:id`) is an ordinary segment
+ * and round-trips.
+ */
+function encodeKeyPathSegment(key: string): string {
+  if (key === '.' || key === '..') {
+    throw notEncodable(
+      'kv key',
+      `a whole-key ${JSON.stringify(key)} is normalized away by URL path parsing and would ` +
+        `silently alias a different entry`,
+    );
+  }
+  return encodeComponent(key, 'kv key');
 }
 
 function normalizeHeaders(init: HeadersInit | undefined): Record<string, string> {
@@ -274,10 +303,7 @@ export class HttpAccountKV {
     assertAccountScope(scope);
     let response: { body: unknown; status: number };
     try {
-      response = await this.request<unknown>(
-        'GET',
-        `/kv/entries/${encodeKeySegment(key, 'kv key')}`,
-      );
+      response = await this.request<unknown>('GET', `/kv/entries/${encodeKeyPathSegment(key)}`);
     } catch (error) {
       // Both conditions, deliberately. A proxy or gateway that answers 401, 403
       // or 500 while echoing the body's error code must not have that answer
@@ -322,19 +348,19 @@ export class HttpAccountKV {
       return this.remove(key);
     }
     assertJsonValue(value, `kv value for key ${JSON.stringify(key)}`);
-    await this.request<void>('PUT', `/kv/entries/${encodeKeySegment(key, 'kv key')}`, { value });
+    await this.request<void>('PUT', `/kv/entries/${encodeKeyPathSegment(key)}`, { value });
   }
 
   /** Delete one account value. Absent keys succeed. */
   async remove(key: string, scope?: AccountScope): Promise<void> {
     assertAccountScope(scope);
-    await this.request<void>('DELETE', `/kv/entries/${encodeKeySegment(key, 'kv key')}`);
+    await this.request<void>('DELETE', `/kv/entries/${encodeKeyPathSegment(key)}`);
   }
 
   /** List the account keys, optionally restricted to those under `prefix`. */
   async keys(prefix = '', scope?: AccountScope): Promise<string[]> {
     assertAccountScope(scope);
-    const query = prefix === '' ? '' : `?prefix=${encodeKeySegment(prefix, 'kv key prefix')}`;
+    const query = prefix === '' ? '' : `?prefix=${encodeComponent(prefix, 'kv key prefix')}`;
     const response = await this.request<unknown>('GET', `/kv/keys${query}`);
     if (!Array.isArray(response.body) || response.body.some((key) => typeof key !== 'string')) {
       throw new HttpKVStoreError(

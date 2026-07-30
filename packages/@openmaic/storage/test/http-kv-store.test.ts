@@ -815,12 +815,45 @@ describe('HttpKVStore transport semantics', () => {
 
     await store.set('a\u0000b', 'v');
     await store.set('a/b', 'v');
-    expect(targets).toEqual(['/kv/entries/a%00b', '/kv/entries/a%2Fb']);
+    // A key that merely *contains* a dot is an ordinary segment — no special case.
+    await store.set('a.b', 'v');
+    expect(targets).toEqual(['/kv/entries/a%00b', '/kv/entries/a%2Fb', '/kv/entries/a.b']);
+  });
 
-    // A dot-only key is not rejected at the key domain either — the client
-    // encodes and sends it (whether the transport then normalizes it away is a
-    // deployment concern, so this only asserts no client-side rejection).
-    await expect(store.remove('..')).resolves.toBeUndefined();
+  test('a whole-key "." or ".." is an HTTP transport limit, not a key-domain rejection', async () => {
+    // The data-correctness case: `encodeURIComponent('.')` is `.`, so a standard
+    // `fetch` would normalize `/kv/entries/.` to `/kv/entries/` (the empty key)
+    // and `/kv/entries/..` up a level — silently reading, overwriting, or
+    // deleting a *different* entry. The client refuses these before the request
+    // is built, exactly as it refuses an unencodable surrogate. The browser
+    // primitive stores them opaquely, unchanged.
+    const fetchCalls: string[] = [];
+    const http = new HttpKVStore({
+      baseUrl: 'https://kv.invalid',
+      fetch: async (input) => {
+        fetchCalls.push(String(input));
+        return new Response(null, { status: 204 });
+      },
+      deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
+    });
+
+    for (const key of ['.', '..']) {
+      await expect(http.get(key), key).rejects.toMatchObject({ code: 'KEY_NOT_ENCODABLE' });
+      await expect(http.set(key, 'v'), key).rejects.toMatchObject({ code: 'KEY_NOT_ENCODABLE' });
+      await expect(http.remove(key), key).rejects.toMatchObject({ code: 'KEY_NOT_ENCODABLE' });
+    }
+    // No request was ever built — nothing aliased to another entry.
+    expect(fetchCalls).toEqual([]);
+
+    // Opaque on the browser primitive: stored and read back, distinct from the
+    // empty key.
+    const browser = new BrowserKVStore({ storage: new MemoryStorage() });
+    await browser.set('.', 'dot', 'device');
+    await browser.set('..', 'dotdot', 'device');
+    await browser.set('', 'empty', 'device');
+    expect(await browser.get('.', 'device')).toBe('dot');
+    expect(await browser.get('..', 'device')).toBe('dotdot');
+    expect(await browser.get('', 'device')).toBe('empty');
   });
 
   test('reports a malformed get response instead of inventing a value', async () => {
@@ -1192,4 +1225,29 @@ test('arbitrary opaque keys round-trip over a real HTTP connection', async ({ sk
       await browser.set(key, value, 'device');
       expect(await browser.get(key, 'device'), key).toEqual(value);
     }
+  }));
+
+test("a whole-key '.'/'..' never pollutes the empty-key entry over a real server", async ({
+  skip,
+}) =>
+  withNetworkServer(skip, async (networkServer) => {
+    const http = new HttpKVStore({
+      baseUrl: networkServer.baseUrl,
+      headers: () => ({ 'x-storage-namespace': 'dot-alias' }),
+      deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
+    });
+
+    // The empty key holds a distinct value; `.`/`..` would alias to it (or to a
+    // bad route) if the client sent them, corrupting or deleting it.
+    await http.set('', { entry: 'empty' });
+    for (const key of ['.', '..']) {
+      await expect(http.get(key), key).rejects.toMatchObject({ code: 'KEY_NOT_ENCODABLE' });
+      await expect(http.set(key, { entry: key }), key).rejects.toMatchObject({
+        code: 'KEY_NOT_ENCODABLE',
+      });
+      await expect(http.remove(key), key).rejects.toMatchObject({ code: 'KEY_NOT_ENCODABLE' });
+    }
+    // The empty-key entry is exactly as it was — never read, overwritten, or deleted.
+    expect(await http.get('')).toEqual({ entry: 'empty' });
+    expect(await http.keys()).toEqual(['']);
   }));

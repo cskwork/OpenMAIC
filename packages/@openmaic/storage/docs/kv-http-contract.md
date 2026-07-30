@@ -38,12 +38,12 @@ A KV key is **any string** — of any length, containing any character, includin
 **Validity is a property of the key; reachability is a property of the transport.** The two are kept separate, and this is the parity guarantee: a key is *valid* on every backend identically (all accept it), even where it is not *reachable* over a particular transport.
 
 - The **browser backend** uses no transport and imposes nothing — every key round-trips.
-- The **HTTP backend** carries a key as a URL path segment, so it inherits that transport's limits, which are **HTTP-deployment concerns, not key-domain constraints**:
-  - a deployment's **request-target / header size ceiling** (Node's default is ~16 KiB, above which the server answers `431` before routing) — so an extremely long key may be rejected by the transport, though no length is *invalid*;
-  - **URL path normalization**, which eats a whole-key `.` or `..` before it can be routed;
-  - the one character a percent-encoder structurally **cannot represent**, an **unpaired UTF-16 surrogate**, which the client surfaces as a clear transport error (code `KEY_NOT_ENCODABLE`) rather than a key-domain rejection.
+- The **HTTP backend** carries a key as a URL path segment, so it inherits exactly three limits of that transport. Each is **an HTTP-deployment concern, not a key-domain constraint**, each makes the affected key **fail loud** rather than silently misbehave, and the browser backend stores every one of them fine:
+  1. **An unpaired UTF-16 surrogate** has no percent-encoding — `encodeURIComponent` throws — so the client refuses it with `KEY_NOT_ENCODABLE` before building a request.
+  2. **A whole-key `.` or `..`** is normalized away by URL path parsing *before the request is sent* (`/kv/entries/.` collapses to the empty-key segment, `/kv/entries/..` walks up a level), so sending it would silently alias a different entry. The client refuses these two whole keys with `KEY_NOT_ENCODABLE` as well. This is only the whole key: a key that merely *contains* a dot (`a.b`, `prefix:id`) is an ordinary segment and round-trips, and a `.`/`..` *prefix* in a `keys()` query is unaffected (it is a query value, not a path segment).
+  3. **An extremely long key** may exceed a deployment's request-target / header size ceiling (Node's default is ~16 KiB, above which the server answers `431` before routing). No length is *invalid*; a long key is simply not reachable past that transport bound.
 
-None of these arise for the keys real callers produce (`prefix:id` from a DSL string), and all of them are the URL transport's, not the key's. A deployment that must accept literally any key over HTTP would carry the key outside the URL path; this contract takes the simpler path and documents the limits above. The browser backend is unaffected by all of them.
+None of these arise for the keys real callers produce (`prefix:id` from a DSL string). All are the URL transport's, not the key's; a deployment that must accept literally any key over HTTP would carry the key outside the URL path. This contract takes the simpler route and fails loud on the three cases above, and the browser backend is unaffected by all of them.
 
 ## Endpoints
 
