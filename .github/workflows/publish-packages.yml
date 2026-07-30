@@ -63,6 +63,10 @@ jobs:
   validate:
     name: Validate release candidate
     runs-on: ubuntu-latest
+    # This job runs `pnpm install` and the package builds, which execute
+    # third-party code. It gets no write scope and no git credential.
+    permissions:
+      contents: read
     # storage's PostgreSQL contract suites skip themselves without a database.
     # Publishing storage without ever running them would ship the one backend
     # whose behaviour only a real PostgreSQL can confirm.
@@ -81,6 +85,8 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: pnpm/action-setup@v4
 
@@ -154,14 +160,18 @@ jobs:
     runs-on: ubuntu-latest
     environment: release
     permissions:
-      contents: write # required to write the release marker tags
       actions: read # required to read this commit's CI conclusion
       id-token: write # required for npm provenance
     steps:
       - uses: actions/checkout@v4
         with:
-          # The first-parent check and the release markers need real history.
+          # The first-parent check needs real history.
           fetch-depth: 0
+          # This job installs dependencies and builds the packages, so it
+          # executes third-party code while holding NPM_TOKEN. It must not also
+          # hold a git credential that could push repository refs; writing the
+          # release markers is a separate job that runs no package code.
+          persist-credentials: false
 
       - uses: pnpm/action-setup@v4
 
@@ -253,22 +263,16 @@ jobs:
             exit 1
           fi
 
-      # Publish one package at a time, marking each as soon as it lands. A
-      # single recursive publish that dies partway leaves earlier packages on
-      # the registry with nothing recording it; per-package publishing makes an
-      # ordinary re-run pick up exactly where it stopped, because a version
-      # already on the registry is no longer in the plan.
-      #
-      # Failing to write a marker is a warning, not a reason to fail a release
-      # that already succeeded: nothing in the gate reads these tags. Tag pushes
-      # use the checkout's GITHUB_TOKEN credentials, and GitHub does not start
-      # new workflow runs from GITHUB_TOKEN pushes.
-      - name: Publish to npm and mark releases
+      # Publish one package at a time. A single recursive publish that dies
+      # partway leaves earlier packages on the registry with nothing recording
+      # it; per-package publishing makes an ordinary re-run pick up exactly
+      # where it stopped, because a version already on the registry is no
+      # longer in the plan.
+      - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
           RELEASE_PLAN_PATH: ${{ runner.temp }}/release-plan.json
-          GIT_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
           for pkg in dsl storage renderer importer; do
@@ -288,15 +292,55 @@ jobs:
             ( cd "packages/@openmaic/$pkg" \
               && pnpm publish --access public --provenance --no-git-checks --ignore-scripts )
             echo "Published $name@$version."
+          done
+
+  # Writing the release markers is the only thing that needs a git credential,
+  # so it is the only job that holds one, and it installs nothing and builds
+  # nothing. It reconciles rather than only marking this run's publishes: a
+  # marker that failed to write previously is retried here, which the release
+  # plan alone could never do, because a version already on the registry is
+  # excluded from it.
+  #
+  # Tag pushes use GITHUB_TOKEN credentials, and GitHub does not start new
+  # workflow runs from GITHUB_TOKEN pushes.
+  mark:
+    name: Mark released versions
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # required to push the release marker tags
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Write missing release markers
+        env:
+          GIT_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for pkg in dsl storage renderer importer; do
+            name="@openmaic/$pkg"
+            version="$(node -p "require('./packages/@openmaic/$pkg/package.json').version")"
             tag="$name@$version"
+            if ! npm view "$name@$version" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
+              echo "$tag is not on the registry; nothing to mark."
+              continue
+            fi
             if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
               existing="$(git rev-parse "refs/tags/$tag^{commit}")"
               if [ "$existing" = "$GIT_COMMIT" ]; then
                 echo "Release marker $tag already points at $GIT_COMMIT."
               else
-                echo "::warning::Release marker $tag points at $existing, not the released commit $GIT_COMMIT."
+                echo "Release marker $tag already exists at $existing; leaving it."
               fi
-            elif git tag "$tag" "$GIT_COMMIT" && git push origin "refs/tags/$tag"; then
+              continue
+            fi
+            if git tag "$tag" "$GIT_COMMIT" && git push origin "refs/tags/$tag"; then
               echo "Marked $tag at $GIT_COMMIT."
             else
               echo "::warning::Could not write the release marker $tag; $name@$version is published."
