@@ -695,8 +695,7 @@ export function buildCallAgentTool(opts: {
       // Take it before starting/building the child so any downstream failure cannot
       // leak the packet to a later agent.
       const sceneEvidence = opts.takeSceneEvidence?.();
-      const pendingWebEvidence = opts.takeWebEvidence?.();
-      const webEvidence = nativeChildEnabled ? undefined : pendingWebEvidence;
+      const webEvidence = opts.takeWebEvidence?.();
 
       const childAbort = new AbortController();
       const abortChild = () => childAbort.abort();
@@ -798,6 +797,7 @@ export function buildCallAgentTool(opts: {
               agent.role,
               {
                 scene: sceneEvidence?.content,
+                web: webEvidence?.content,
               },
               {
                 enableWebSearch: childWebSearchEnabled,
@@ -871,6 +871,7 @@ export function buildCallAgentTool(opts: {
             text: finalText,
             nativeChildRun: nativeResult,
             ...(sceneEvidence ? { sceneEvidence: sceneEvidence.metadata } : {}),
+            ...(webEvidence ? { webEvidence: webEvidence.metadata } : {}),
           },
           ...(nativeResult.status !== 'completed' ? { isError: true } : {}),
         };
