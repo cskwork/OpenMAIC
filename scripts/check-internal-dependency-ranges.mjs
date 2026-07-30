@@ -47,10 +47,20 @@ const OWNED = new Set(OPENMAIC_PACKAGES.map((name) => `@openmaic/${name}`));
 /** Published constraint fields in which an owned package must never appear. */
 const FORBIDDEN_FIELDS = ['peerDependencies', 'optionalDependencies'];
 
+function report(headline, problems) {
+  console.error([headline, ...problems.map((problem) => `- ${problem}`)].join('\n'));
+  process.exit(1);
+}
+
+// Checked first and fatally: every check below reads this list, so if the list
+// itself is wrong there is nothing meaningful to say about what it contains.
+const listProblems = assertPackageListIsComplete();
+if (listProblems.length > 0) {
+  report('The shared @openmaic package list has drifted:', listProblems);
+}
+
 const failures = [];
 const seen = new Map();
-
-failures.push(...assertPackageListIsComplete());
 
 for (const name of OPENMAIC_PACKAGES) {
   const manifest = readManifest(name);
@@ -113,13 +123,7 @@ for (const [name, expected] of Object.entries(INTERNAL_DEPENDENTS)) {
 }
 
 if (failures.length > 0) {
-  console.error(
-    [
-      'Internal @openmaic dependency declarations are not in the required shape:',
-      ...failures.map((failure) => `- ${failure}`),
-    ].join('\n'),
-  );
-  process.exit(1);
+  report('Internal @openmaic dependency declarations are not in the required shape:', failures);
 }
 
 console.log(
