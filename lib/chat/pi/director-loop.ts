@@ -8,13 +8,12 @@ import type { StatelessChatRequest, StatelessEvent } from '@/lib/types/chat';
 import type { ThinkingConfig } from '@/lib/types/provider';
 import { buildDirectorPrompt, buildUserPrompt, toHistoryMessages } from './prompts';
 import { createDirectorCompactionRuntime } from './director-compaction';
-import type { DirectorToolTraceEntry, SendEvent } from './types';
 import {
   attachDirectorToolExecutionGate,
   createDirectorToolExecutionGate,
-  createInclassTerminalController,
   guardDirectorToolsWithExecutionGate,
-} from './terminal-control';
+} from './director-execution-gate';
+import type { DirectorToolTraceEntry, SendEvent } from './types';
 import { buildCallAgentTool } from './tools/call-agent';
 import { buildCloseSessionTool } from './tools/close-session';
 import { buildCueUserTool } from './tools/cue-user';
@@ -111,17 +110,9 @@ export async function runPiDirectorLoop(opts: {
   const maxDirectorToolCalls = Math.max(opts.maxAgentTurns * 3, opts.maxAgentTurns + 3);
   const piAgentResponses: AgentTurnSummary[] = [];
   const piWhiteboardLedger: WhiteboardActionRecord[] = [];
-  const terminalController = createInclassTerminalController({
-    seed: opts.body.config.piTaskContract,
-    maxDecisions: Math.max(opts.maxAgentTurns + 2, 4),
-    maxRejections: 2,
-    // Stay below the route's 300s ceiling without treating a slow-but-valid
-    // self-hosted model response as terminal-control exhaustion.
-    wallClockBudgetMs: 240_000,
-  });
   const directorToolExecutionGate = createDirectorToolExecutionGate({
-    controller: terminalController,
     maxToolCalls: maxDirectorToolCalls,
+    isTerminalReached: () => userCued || sessionClosed,
   });
   const getAgentTurnCount = (): number => piAgentResponses.length;
   const isTeachingSubstantiveTurn = (summary: AgentTurnSummary): boolean => {
@@ -197,9 +188,6 @@ export async function runPiDirectorLoop(opts: {
         if (summary.contentPreview || summary.actionCount > 0) agentHadContent = true;
         piAgentResponses.push(summary);
       },
-      onTrustedChildResult: (event) => {
-        terminalController.recordChildResult(event);
-      },
       onActionDone: (record) => {
         totalActions += 1;
         if (record) piWhiteboardLedger.push(record);
@@ -263,26 +251,15 @@ export async function runPiDirectorLoop(opts: {
     }),
     buildCloseSessionTool({
       closeSession,
-      terminalPreflight: (request) =>
-        terminalController.preflight(request, {
-          hasTeachingSubstantiveTurn: hasTeachingSubstantiveTurn(),
-          hasVisibleAgentTurn: hasVisibleAgentTurn(),
-          hasAgentContent: hasAgentContent(),
-          userCued,
-          sessionClosed,
-        }),
+      canCloseSession: hasVisibleAgentTurn,
+      isUserCued: () => userCued,
     }),
     buildCueUserTool({
       cueUser,
       getLastAgentId: () => piAgentResponses.at(-1)?.agentId,
-      terminalPreflight: (request) =>
-        terminalController.preflight(request, {
-          hasTeachingSubstantiveTurn: hasTeachingSubstantiveTurn(),
-          hasVisibleAgentTurn: hasVisibleAgentTurn(),
-          hasAgentContent: hasAgentContent(),
-          userCued,
-          sessionClosed,
-        }),
+      canCueUser: hasTeachingSubstantiveTurn,
+      cueUserSkipReason: 'no_substantive_teaching_turn',
+      isSessionClosed: () => sessionClosed,
     }),
   ];
   const tools = guardDirectorToolsWithExecutionGate(unguardedTools, directorToolExecutionGate);
@@ -292,7 +269,6 @@ export async function runPiDirectorLoop(opts: {
     systemPrompt: buildDirectorPrompt(opts.body, opts.agentConfigs, opts.maxAgentTurns, {
       enableWebSearch: directorWebSearchEnabled,
       enableChildWebSearch: nativeChildWebSearchEnabled,
-      taskState: terminalController.getPromptState(),
     }),
     tools,
     allowedToolNames: new Set(tools.map((tool) => tool.name)),
@@ -312,23 +288,16 @@ export async function runPiDirectorLoop(opts: {
               ?.nativeChildRun?.status
           : undefined;
       const nativeChildError = nativeChildStatus !== undefined && nativeChildStatus !== 'completed';
-      const terminalDecision = (
-        context.result.details as
-          | {
-              terminalControl?: {
-                status?: 'allowed' | 'rejected' | 'exhausted';
-              };
-            }
-          | undefined
-      )?.terminalControl;
-      const terminalRejected = terminalDecision?.status === 'rejected';
-      const terminalExhausted = terminalDecision?.status === 'exhausted';
+      const directorExecutionBlocked =
+        (
+          context.result.details as
+            | {
+                directorExecutionGuard?: boolean;
+              }
+            | undefined
+        )?.directorExecutionGuard === true;
       const isError =
-        context.isError ||
-        evidenceError ||
-        nativeChildError ||
-        terminalRejected ||
-        terminalExhausted;
+        context.isError || evidenceError || nativeChildError || directorExecutionBlocked;
       const resultPreview = context.result.content
         .map((content) => (content.type === 'text' ? content.text : '[image]'))
         .join('\n')
@@ -342,16 +311,13 @@ export async function runPiDirectorLoop(opts: {
         details: context.result.details,
       });
       const directorBudgetExhausted = directorToolCalls >= maxDirectorToolCalls;
-      if (directorBudgetExhausted && !sessionClosed && !userCued && !terminalExhausted) {
-        terminalController.recordRuntimeExhaustion('director_tool_call_budget');
+      const terminate = sessionClosed || userCued || directorBudgetExhausted;
+      if (!terminate && !evidenceError && !nativeChildError && !directorExecutionBlocked) {
+        return undefined;
       }
-      const terminate = sessionClosed || userCued || terminalExhausted || directorBudgetExhausted;
-      if (!terminate && !evidenceError && !nativeChildError && !terminalRejected) return undefined;
       return {
         ...(terminate ? { terminate: true } : {}),
-        ...(evidenceError || nativeChildError || terminalRejected || terminalExhausted
-          ? { isError: true }
-          : {}),
+        ...(evidenceError || nativeChildError || directorExecutionBlocked ? { isError: true } : {}),
       };
     },
   });
@@ -370,24 +336,8 @@ export async function runPiDirectorLoop(opts: {
 
   if (opts.signal.aborted) return;
 
-  if (!sessionClosed && !userCued && !terminalController.getTrace().terminal) {
-    const fallbackDecision = terminalController.preflight(
-      {
-        kind: 'cue_user',
-        source: 'runtime_fallback',
-        reason: 'task_complete_followup',
-      },
-      {
-        hasTeachingSubstantiveTurn: hasTeachingSubstantiveTurn(),
-        hasVisibleAgentTurn: hasVisibleAgentTurn(),
-        hasAgentContent: hasAgentContent(),
-        userCued,
-        sessionClosed,
-      },
-    );
-    if (fallbackDecision.status === 'allowed') {
-      await cueUser({ fromAgentId: piAgentResponses.at(-1)?.agentId });
-    }
+  if (!sessionClosed && !userCued && hasAgentContent()) {
+    await cueUser({ fromAgentId: piAgentResponses.at(-1)?.agentId });
   }
 
   await opts.send({
@@ -402,7 +352,6 @@ export async function runPiDirectorLoop(opts: {
       directorCompaction: compactionRuntime.getTrace(),
       directorToolAttemptCount: directorToolExecutionGate.getAttemptCount(),
       directorToolTrace,
-      terminalControl: terminalController.getTrace(),
       directorState: {
         turnCount: getAgentTurnCount(),
         agentResponses: [...(opts.body.directorState?.agentResponses ?? []), ...piAgentResponses],

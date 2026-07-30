@@ -15,10 +15,6 @@ import {
   TOOL_EXECUTION_PROTOCOL_VERSION,
   type ClientEffectExecutionRequest,
 } from '@/lib/agent/runtime/native-child-contract';
-import {
-  createInclassTerminalController,
-  type TrustedChildResultEvent,
-} from '@/lib/chat/pi/terminal-control';
 import { buildNativeWhiteboardTextTool } from '@/lib/chat/pi/tools/native-whiteboard';
 import { buildCallAgentTool } from '@/lib/chat/pi/tools/call-agent';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
@@ -135,7 +131,6 @@ function streamMessage(message: AssistantMessage) {
 function buildDoneOnlyNativeTeacherCall(
   streamFn: StreamFn,
   events: StatelessEvent[],
-  onTrustedChildResult: (event: TrustedChildResultEvent) => void = vi.fn(),
   takeWebEvidence?: () =>
     | {
         content: string;
@@ -151,7 +146,6 @@ function buildDoneOnlyNativeTeacherCall(
     },
     languageModel: {} as LanguageModel,
     onAgentDone: vi.fn(),
-    onTrustedChildResult,
     onActionDone: vi.fn(),
     thinkingConfig: { mode: 'disabled', enabled: false },
     abortSignal: new AbortController().signal,
@@ -377,7 +371,7 @@ describe('Teacher native wb_draw_text server bridge', () => {
       return evidence;
     });
     const events: StatelessEvent[] = [];
-    const callAgent = buildDoneOnlyNativeTeacherCall(streamFn, events, vi.fn(), takeWebEvidence);
+    const callAgent = buildDoneOnlyNativeTeacherCall(streamFn, events, takeWebEvidence);
 
     const invalid = await callAgent.execute('director-call-invalid', {
       agentId: 'missing-agent',
@@ -452,7 +446,7 @@ describe('Teacher native wb_draw_text server bridge', () => {
       pendingWebEvidence = undefined;
       return evidence;
     };
-    const callAgent = buildDoneOnlyNativeTeacherCall(streamFn, [], vi.fn(), takeWebEvidence);
+    const callAgent = buildDoneOnlyNativeTeacherCall(streamFn, [], takeWebEvidence);
 
     const failed = await callAgent.execute('director-call-failed-native', {
       agentId: teacher.id,
@@ -474,54 +468,6 @@ describe('Teacher native wb_draw_text server bridge', () => {
     });
     expect((failed as { isError?: boolean }).isError).toBe(true);
     expect(later.details).not.toHaveProperty('webEvidence');
-  });
-
-  it('commits a successful native Child result into the real terminal controller', async () => {
-    const controller = createInclassTerminalController({
-      seed: {
-        requestedOutcomes: [{ id: 'teacher_explanation', agentId: teacher.id }],
-      },
-    });
-    const events: StatelessEvent[] = [];
-    const callAgent = buildDoneOnlyNativeTeacherCall(
-      doneOnlyTextStream('这是来自真实 native Child run 的完整讲解。'),
-      events,
-      (event) => controller.recordChildResult(event),
-    );
-
-    const result = await callAgent.execute('director-call-trusted-result', {
-      agentId: teacher.id,
-      outcomeId: 'teacher_explanation',
-      instruction: 'Explain the concept.',
-    });
-    const agentInvocationId = (result.details as { agentInvocationId: string }).agentInvocationId;
-
-    expect(result.details).toMatchObject({
-      outcomeId: 'teacher_explanation',
-      text: '这是来自真实 native Child run 的完整讲解。',
-      nativeChildRun: { status: 'completed' },
-    });
-    expect(controller.getTrace()).toMatchObject({
-      revision: 1,
-      outcomes: [
-        {
-          id: 'teacher_explanation',
-          status: 'completed',
-          completedBy: {
-            agentInvocationId,
-            source: 'runtime_child_result',
-            revision: 1,
-          },
-        },
-      ],
-      updates: [
-        {
-          revision: 1,
-          outcomeId: 'teacher_explanation',
-          agentInvocationId,
-        },
-      ],
-    });
   });
 
   it('records a coordinator active timeout as a native tool timeout', async () => {
@@ -562,7 +508,6 @@ describe('Teacher native wb_draw_text server bridge', () => {
       },
       languageModel: {} as LanguageModel,
       onAgentDone: vi.fn(),
-      onTrustedChildResult: vi.fn(),
       onActionDone: vi.fn(),
       thinkingConfig: { mode: 'disabled', enabled: false },
       abortSignal: new AbortController().signal,

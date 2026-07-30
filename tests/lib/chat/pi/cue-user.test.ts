@@ -17,11 +17,9 @@ describe('Pi chat cue_user tool', () => {
     });
 
     const first = await tool.execute('cue-1', {
-      reason: 'task_complete_followup',
       prompt: 'Any follow-up?',
     });
     const second = await tool.execute('cue-2', {
-      reason: 'task_complete_followup',
       prompt: 'Again?',
     });
 
@@ -47,7 +45,6 @@ describe('Pi chat cue_user tool', () => {
     });
 
     const result = await tool.execute('cue-1', {
-      reason: 'task_complete_followup',
       prompt: 'Any follow-up?',
     });
 
@@ -72,7 +69,6 @@ describe('Pi chat cue_user tool', () => {
     });
 
     const result = await tool.execute('cue-1', {
-      reason: 'task_complete_followup',
       prompt: 'Any follow-up?',
     });
 
@@ -97,7 +93,6 @@ describe('Pi chat cue_user tool', () => {
     });
 
     const result = await tool.execute('cue-1', {
-      reason: 'task_complete_followup',
       prompt: 'Any follow-up?',
     });
 
@@ -128,7 +123,6 @@ describe('Pi chat cue_user tool', () => {
     });
 
     const result = await tool.execute('cue-1', {
-      reason: 'task_complete_followup',
       prompt: 'Any follow-up?',
     });
 
@@ -154,7 +148,6 @@ describe('Pi chat cue_user tool', () => {
     });
 
     const result = await tool.execute('cue-1', {
-      reason: 'task_complete_followup',
       prompt: 'Any follow-up?',
     });
 
@@ -179,7 +172,6 @@ describe('Pi chat cue_user tool', () => {
     });
 
     const result = await tool.execute('cue-1', {
-      reason: 'task_complete_followup',
       prompt: 'Any follow-up?',
     });
 

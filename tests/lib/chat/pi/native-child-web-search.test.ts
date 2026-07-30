@@ -141,7 +141,6 @@ function makeCallAgent(opts: {
     },
     languageModel: {} as LanguageModel,
     onAgentDone: vi.fn(),
-    onTrustedChildResult: vi.fn(),
     onActionDone: vi.fn(),
     thinkingConfig: { mode: 'disabled', enabled: false },
     abortSignal: opts.abortSignal ?? new AbortController().signal,

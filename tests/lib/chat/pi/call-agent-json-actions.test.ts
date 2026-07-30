@@ -2075,37 +2075,26 @@ describe('Pi call_agent JSON action output', () => {
         ],
       },
     });
-    const { createInclassTerminalController } = await import('@/lib/chat/pi/terminal-control');
-    const controller = createInclassTerminalController({
-      seed: {
-        requestedOutcomes: [{ id: 'teacher_explanation', agentId: teacher.id }],
-      },
-    });
-    const onTrustedChildResult = vi.fn((event) => controller.recordChildResult(event));
     const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
     const events: StatelessEvent[] = [];
-    const tool = buildCallAgentTool({
-      ...baseToolOpts(events),
-      onTrustedChildResult,
-    });
+    const tool = buildCallAgentTool(baseToolOpts(events));
 
     await tool.execute('partial-then-error', {
       agentId: teacher.id,
-      outcomeId: 'teacher_explanation',
       instruction: 'Explain the concept.',
     });
+    await tool.execute('partial-then-error-again', {
+      agentId: teacher.id,
+      instruction: 'Try the explanation again.',
+    });
+    const blocked = await tool.execute('after-error-cap', {
+      agentId: teacher.id,
+      instruction: 'This call should be skipped.',
+    });
 
-    expect(onTrustedChildResult).toHaveBeenCalledWith(
-      expect.objectContaining({
-        outcomeId: 'teacher_explanation',
-        status: 'failed',
-        substantive: false,
-      }),
-    );
-    expect(controller.getTrace()).toMatchObject({
-      revision: 0,
-      outcomes: [{ id: 'teacher_explanation', status: 'pending' }],
-      updates: [],
+    expect(blocked.details).toMatchObject({
+      skipped: true,
+      reason: 'consecutive_empty_turns',
     });
   });
 });

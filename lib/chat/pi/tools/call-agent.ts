@@ -33,7 +33,6 @@ import {
   toHistoryMessages,
 } from '../prompts';
 import type { SendEvent } from '../types';
-import type { TrustedChildResultEvent } from '../terminal-control';
 import { buildChildActionTools, createPiWhiteboardRuntimeState } from './classroom-actions';
 import { buildNativeWhiteboardTextTool } from './native-whiteboard';
 
@@ -44,12 +43,6 @@ const CallAgentParams = Type.Object({
   instruction: Type.String({
     description: 'Specific instruction and context for the selected agent response.',
   }),
-  outcomeId: Type.Optional(
-    Type.String({
-      description:
-        'Exact pending request-scoped outcome ID this delegation is intended to complete. Omit when no explicit outcome applies.',
-    }),
-  ),
 });
 
 type CallAgentParams = Static<typeof CallAgentParams>;
@@ -560,7 +553,6 @@ export function buildCallAgentTool(opts: {
   send: SendEvent;
   languageModel: LanguageModel;
   onAgentDone: (summary: AgentTurnSummary) => void;
-  onTrustedChildResult?: (event: TrustedChildResultEvent) => void;
   onActionDone: (record?: WhiteboardActionRecord) => void;
   thinkingConfig: ThinkingConfig;
   maxOutputTokens?: number;
@@ -846,16 +838,6 @@ export function buildCallAgentTool(opts: {
           whiteboardActions,
           actionWarnings: [],
         });
-        opts.onTrustedChildResult?.({
-          source: 'runtime_child_result',
-          agentInvocationId: messageId,
-          agentId: agent.id,
-          outcomeId: params.outcomeId,
-          status:
-            nativeResult.status === 'completed' ? (isEmptyTurn ? 'empty' : 'completed') : 'failed',
-          substantive: !isEmptyTurn,
-        });
-
         return {
           content: [
             {
@@ -867,7 +849,6 @@ export function buildCallAgentTool(opts: {
             agentInvocationId: messageId,
             agentId: agent.id,
             agentName: agent.name,
-            ...(params.outcomeId ? { outcomeId: params.outcomeId } : {}),
             text: finalText,
             nativeChildRun: nativeResult,
             ...(sceneEvidence ? { sceneEvidence: sceneEvidence.metadata } : {}),
@@ -1007,15 +988,6 @@ export function buildCallAgentTool(opts: {
         whiteboardActions,
         actionWarnings,
       });
-      opts.onTrustedChildResult?.({
-        source: 'runtime_child_result',
-        agentInvocationId: messageId,
-        agentId: agent.id,
-        outcomeId: params.outcomeId,
-        status: childRunFailed ? 'failed' : isEmptyTurn ? 'empty' : 'completed',
-        substantive: !isEmptyTurn,
-      });
-
       return {
         content: [
           {
@@ -1027,7 +999,6 @@ export function buildCallAgentTool(opts: {
           agentInvocationId: messageId,
           agentId: agent.id,
           agentName: agent.name,
-          ...(params.outcomeId ? { outcomeId: params.outcomeId } : {}),
           text: finalText,
           actionWarnings,
           ...(sceneEvidence ? { sceneEvidence: sceneEvidence.metadata } : {}),
