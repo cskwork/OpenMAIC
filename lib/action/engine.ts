@@ -51,7 +51,7 @@ import {
 } from '@/lib/choreography';
 import { createLogger } from '@/lib/logger';
 import { createWhiteboardLineElement } from './whiteboard-lines';
-import { WHITEBOARD_SHAPE_PATHS } from './whiteboard-shapes';
+import { resolveLegacyWhiteboardShapePath } from './whiteboard-shapes';
 
 const log = createLogger('ActionEngine');
 
@@ -444,7 +444,7 @@ export class ActionEngine {
         id: action.elementId || '',
         type: 'shape',
         viewBox: [1000, 1000] as [number, number],
-        path: WHITEBOARD_SHAPE_PATHS[action.shape],
+        path: resolveLegacyWhiteboardShapePath(action.shape),
         left: action.x,
         top: action.y,
         width: action.width,

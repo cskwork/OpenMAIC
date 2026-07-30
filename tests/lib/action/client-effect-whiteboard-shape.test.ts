@@ -6,6 +6,10 @@ import {
   type NativeWbDrawShapeInput,
 } from '@/lib/action/client-effect-whiteboard';
 import {
+  resolveLegacyWhiteboardShapePath,
+  WHITEBOARD_SHAPE_PATHS,
+} from '@/lib/action/whiteboard-shapes';
+import {
   digestWhiteboardShapeV1,
   normalizeWhiteboardShapeV1,
 } from '@/lib/agent/runtime/client-effect-contract';
@@ -58,6 +62,12 @@ async function expectedShape() {
 }
 
 describe('native wb_draw_shape client effect', () => {
+  it('preserves the Legacy rectangle fallback for an unknown runtime shape value', () => {
+    expect(resolveLegacyWhiteboardShapePath('legacy-unknown-shape')).toBe(
+      WHITEBOARD_SHAPE_PATHS.rectangle,
+    );
+  });
+
   it('creates one owned shape and verifies kind, bounds, fill, and digest', async () => {
     const store = createStore();
     const binding = prepareNativeWhiteboardTarget(store, target);
