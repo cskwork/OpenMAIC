@@ -1,24 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  digestWhiteboardLatexHtmlV1,
+  digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
   digestWhiteboardShapeV1,
   digestVisibleTextV1,
   isClientEffectAck,
+  normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
   resolveActiveEffectBudget,
   type AcceptedTargetBinding,
   type ClientEffectAck,
   type ClientEffectRequest,
+  type WhiteboardLatexClientEffectRequest,
+  type WhiteboardLatexPostcondition,
   type WhiteboardLineClientEffectRequest,
   type WhiteboardLinePostcondition,
   type WhiteboardShapeClientEffectRequest,
   type WhiteboardShapePostcondition,
   type WhiteboardTextClientEffectRequest,
 } from '@/lib/agent/runtime/client-effect-contract';
+import { renderNativeWhiteboardLatexHtmlV1 } from '@/lib/action/whiteboard-latex';
 import { ClientEffectCoordinator } from '@/lib/agent/runtime/client-effect-coordinator';
 import { TOOL_EXECUTION_PROTOCOL_VERSION } from '@/lib/agent/runtime/native-child-contract';
 
@@ -218,6 +225,69 @@ function lineCommitted(
       strokeWidth: effect.postcondition.strokeWidth,
       strokeStyle: effect.postcondition.strokeStyle,
       markers: effect.postcondition.markers,
+      ...overrides,
+    },
+  };
+}
+
+async function latexRequest(): Promise<WhiteboardLatexClientEffectRequest> {
+  const latex = normalizeWhiteboardLatexV1({
+    latex: String.raw`\frac{a}{b}`,
+    x: 100,
+    y: 80,
+    width: 400,
+    height: 80,
+    color: '#113355',
+  });
+  const html = renderNativeWhiteboardLatexHtmlV1(latex.latex);
+  return {
+    ...(await request()),
+    toolName: 'wb_draw_latex',
+    args: {
+      latex: latex.latex,
+      x: 100,
+      y: 80,
+      width: 400,
+      height: 80,
+      color: '#113355',
+    },
+    postcondition: {
+      kind: 'whiteboard_latex_exists',
+      stableElementId: 'latex-1',
+      elementType: 'latex',
+      normalizationVersion: CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
+      expectedFormulaDigest: await digestWhiteboardLatexV1(latex),
+      expectedHtmlDigest: await digestWhiteboardLatexHtmlV1(html),
+      ...latex,
+    },
+  };
+}
+
+function latexCommitted(
+  effect: WhiteboardLatexClientEffectRequest,
+  overrides: Partial<
+    Omit<WhiteboardLatexPostcondition, 'kind' | 'expectedFormulaDigest' | 'expectedHtmlDigest'>
+  > = {},
+): Extract<ClientEffectAck, { status: 'effect_committed' }> {
+  return {
+    protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
+    executionId: effect.executionId,
+    idempotencyKey: effect.idempotencyKey,
+    clientEventId: 'event-latex-committed',
+    status: 'effect_committed',
+    observedAt: Date.now(),
+    targetBinding,
+    postcondition: {
+      stableElementId: effect.postcondition.stableElementId,
+      elementType: 'latex',
+      normalizationVersion: CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
+      observedFormulaDigest: effect.postcondition.expectedFormulaDigest,
+      observedHtmlDigest: effect.postcondition.expectedHtmlDigest,
+      matchingElementCount: 1,
+      latex: effect.postcondition.latex,
+      bounds: effect.postcondition.bounds,
+      color: effect.postcondition.color,
+      renderVersion: effect.postcondition.renderVersion,
       ...overrides,
     },
   };
@@ -805,6 +875,67 @@ describe('isClientEffectAck', () => {
           ...valid.postcondition,
           unexpected: true,
         },
+      }),
+    ).toBe(false);
+  });
+
+  it('settles LaTeX only for the exact formula, HTML digest, bounds, and render version', async () => {
+    const effect = await latexRequest();
+    const coordinator = new ClientEffectCoordinator();
+    const registered = coordinator.register(effect);
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        accepted(effect),
+      ),
+    ).toMatchObject({ kind: 'applied', snapshot: { status: 'accepted' } });
+
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        latexCommitted(effect, { latex: 'x+1' }),
+      ),
+    ).toMatchObject({ kind: 'invalid' });
+    expect(coordinator.getSnapshot(effect.executionId)).toMatchObject({ status: 'accepted' });
+
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        latexCommitted(effect),
+      ),
+    ).toMatchObject({ kind: 'applied', snapshot: { status: 'effect_committed' } });
+    await expect(registered.result).resolves.toMatchObject({
+      status: 'effect_committed',
+      isError: false,
+    });
+  });
+
+  it('accepts the exact LaTeX ACK variant and rejects extra or malformed derived state', async () => {
+    const effect = await latexRequest();
+    const valid = latexCommitted(effect);
+    expect(isClientEffectAck(valid)).toBe(true);
+    expect(
+      isClientEffectAck({
+        ...valid,
+        postcondition: { ...valid.postcondition, observedHtmlDigest: '' },
+      }),
+    ).toBe(false);
+    expect(
+      isClientEffectAck({
+        ...valid,
+        postcondition: {
+          ...valid.postcondition,
+          bounds: { ...effect.postcondition.bounds, height: Number.NaN },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isClientEffectAck({
+        ...valid,
+        postcondition: { ...valid.postcondition, unexpected: true },
       }),
     ).toBe(false);
   });

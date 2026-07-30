@@ -1,27 +1,37 @@
 import { createStageAPI, type StageStore } from '@/lib/api/stage-api';
 import {
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_LATEX_RENDER_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  digestWhiteboardLatexHtmlV1,
+  digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
   digestWhiteboardShapeV1,
   digestVisibleTextV1,
+  normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
   normalizeVisibleTextV1,
   type AcceptedTargetBinding,
   type ClientEffectTarget,
+  type WhiteboardLatexSpec,
   type WhiteboardLineMarker,
   type WhiteboardLineSpec,
   type WhiteboardLineStyle,
   type WhiteboardShapeKind,
   type WhiteboardShapeSpec,
 } from '@/lib/agent/runtime/client-effect-contract';
-import type { PPTElement, PPTLineElement } from '@openmaic/dsl';
+import type { PPTElement, PPTLatexElement, PPTLineElement } from '@openmaic/dsl';
 import {
   createWhiteboardLineElement,
   readAbsoluteWhiteboardLineEndpoints,
 } from './whiteboard-lines';
+import {
+  createWhiteboardLatexElement,
+  renderNativeWhiteboardLatexHtmlV1,
+} from './whiteboard-latex';
 import { WHITEBOARD_SHAPE_PATHS } from './whiteboard-shapes';
 
 export interface NativeWbDrawTextInput {
@@ -60,6 +70,15 @@ export interface NativeWhiteboardLinePostconditionResult extends WhiteboardLineS
   matchingElementCount: 1;
 }
 
+export interface NativeWhiteboardLatexPostconditionResult extends WhiteboardLatexSpec {
+  stableElementId: string;
+  elementType: 'latex';
+  normalizationVersion: typeof CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION;
+  observedFormulaDigest: string;
+  observedHtmlDigest: string;
+  matchingElementCount: 1;
+}
+
 export interface NativeWhiteboardExecutionResult<
   TPostcondition = NativeWhiteboardTextPostconditionResult,
 > {
@@ -84,6 +103,14 @@ type NativeLineElement = PPTLineElement & {
   clientEffectExecutionId?: string;
   clientEffectLineDigest?: string;
   clientEffectNormalizationVersion?: string;
+};
+
+type NativeLatexElement = PPTLatexElement & {
+  clientEffectExecutionId?: string;
+  clientEffectFormulaDigest?: string;
+  clientEffectHtmlDigest?: string;
+  clientEffectNormalizationVersion?: string;
+  clientEffectRenderVersion?: string;
 };
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -728,6 +755,237 @@ export async function executeNativeWhiteboardLineEffect(opts: {
     stableElementId: opts.input.stableElementId,
     expectedLine: requestLine,
     expectedLineDigest: opts.expectedLineDigest,
+    signal: opts.signal,
+  });
+  throwIfAborted(opts.signal);
+  return { replayed: false, postcondition };
+}
+
+export interface NativeWbDrawLatexInput {
+  executionId: string;
+  stableElementId: string;
+  latex: string;
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  color?: string;
+}
+
+function latexSpecFromElement(element: NativeLatexElement): {
+  spec: WhiteboardLatexSpec;
+  html: string;
+} {
+  if (
+    element.type !== 'latex' ||
+    typeof element.latex !== 'string' ||
+    typeof element.html !== 'string' ||
+    !element.html ||
+    typeof element.left !== 'number' ||
+    typeof element.top !== 'number' ||
+    typeof element.width !== 'number' ||
+    typeof element.height !== 'number' ||
+    typeof element.color !== 'string' ||
+    element.rotate !== 0 ||
+    element.fixedRatio !== true ||
+    element.clientEffectRenderVersion !== CLIENT_EFFECT_LATEX_RENDER_VERSION
+  ) {
+    throw new Error('CLIENT_EFFECT_LATEX_ELEMENT_MISMATCH');
+  }
+  return {
+    spec: normalizeWhiteboardLatexV1({
+      latex: element.latex,
+      x: element.left,
+      y: element.top,
+      width: element.width,
+      height: element.height,
+      color: element.color,
+    }),
+    html: element.html,
+  };
+}
+
+function latexSpecsEqual(left: WhiteboardLatexSpec, right: WhiteboardLatexSpec): boolean {
+  return (
+    left.latex === right.latex &&
+    left.bounds.x === right.bounds.x &&
+    left.bounds.y === right.bounds.y &&
+    left.bounds.width === right.bounds.width &&
+    left.bounds.height === right.bounds.height &&
+    left.color === right.color &&
+    left.renderVersion === right.renderVersion
+  );
+}
+
+export async function verifyNativeWhiteboardLatexEffect(opts: {
+  store: StageStore;
+  targetBinding: AcceptedTargetBinding;
+  executionId: string;
+  stableElementId: string;
+  expectedLatex: WhiteboardLatexSpec;
+  expectedFormulaDigest: string;
+  expectedHtmlDigest: string;
+  signal?: AbortSignal;
+}): Promise<NativeWhiteboardLatexPostconditionResult> {
+  const readVerifiedElement = (): {
+    element: NativeLatexElement;
+    spec: WhiteboardLatexSpec;
+    html: string;
+  } => {
+    throwIfAborted(opts.signal);
+    assertStageAndScene(opts.store, opts.targetBinding);
+    const elementsResult = createStageAPI(opts.store).whiteboard.listElements(
+      opts.targetBinding.whiteboardId,
+    );
+    if (!elementsResult.success || !elementsResult.data) {
+      throw new Error(elementsResult.error || 'CLIENT_EFFECT_WHITEBOARD_NOT_FOUND');
+    }
+    const matches = elementsResult.data.filter((element) => element.id === opts.stableElementId);
+    if (matches.length !== 1) {
+      throw new Error(
+        matches.length === 0
+          ? 'CLIENT_EFFECT_ELEMENT_NOT_FOUND'
+          : 'CLIENT_EFFECT_DUPLICATE_ELEMENT_ID',
+      );
+    }
+    const element = matches[0] as NativeLatexElement;
+    if (
+      element.clientEffectExecutionId !== opts.executionId ||
+      element.clientEffectNormalizationVersion !== CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION
+    ) {
+      throw new Error('CLIENT_EFFECT_ELEMENT_OWNERSHIP_MISMATCH');
+    }
+    return { element, ...latexSpecFromElement(element) };
+  };
+
+  const beforeDigest = readVerifiedElement();
+  const observedFormulaDigest = await digestWhiteboardLatexV1(beforeDigest.spec);
+  const observedHtmlDigest = await digestWhiteboardLatexHtmlV1(beforeDigest.html);
+  throwIfAborted(opts.signal);
+  const afterDigest = readVerifiedElement();
+  if (
+    !latexSpecsEqual(beforeDigest.spec, afterDigest.spec) ||
+    beforeDigest.html !== afterDigest.html ||
+    !latexSpecsEqual(beforeDigest.spec, opts.expectedLatex) ||
+    beforeDigest.html !== renderNativeWhiteboardLatexHtmlV1(beforeDigest.spec.latex) ||
+    observedFormulaDigest !== opts.expectedFormulaDigest ||
+    observedHtmlDigest !== opts.expectedHtmlDigest ||
+    afterDigest.element.clientEffectFormulaDigest !== opts.expectedFormulaDigest ||
+    afterDigest.element.clientEffectHtmlDigest !== opts.expectedHtmlDigest
+  ) {
+    throw new Error('CLIENT_EFFECT_LATEX_MISMATCH');
+  }
+
+  return {
+    stableElementId: opts.stableElementId,
+    elementType: 'latex',
+    normalizationVersion: CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
+    observedFormulaDigest,
+    observedHtmlDigest,
+    matchingElementCount: 1,
+    ...beforeDigest.spec,
+  };
+}
+
+export async function executeNativeWhiteboardLatexEffect(opts: {
+  store: StageStore;
+  targetBinding: AcceptedTargetBinding;
+  input: NativeWbDrawLatexInput;
+  expectedLatex: WhiteboardLatexSpec;
+  expectedFormulaDigest: string;
+  expectedHtmlDigest: string;
+  signal?: AbortSignal;
+}): Promise<NativeWhiteboardExecutionResult<NativeWhiteboardLatexPostconditionResult>> {
+  throwIfAborted(opts.signal);
+  if (
+    typeof opts.input.executionId !== 'string' ||
+    !opts.input.executionId.trim() ||
+    typeof opts.input.stableElementId !== 'string' ||
+    !opts.input.stableElementId.trim()
+  ) {
+    throw new Error('CLIENT_EFFECT_INPUT_INVALID');
+  }
+  const inputLatex = normalizeWhiteboardLatexV1(opts.input);
+  const requestLatex = normalizeWhiteboardLatexV1({
+    latex: opts.expectedLatex.latex,
+    ...opts.expectedLatex.bounds,
+    color: opts.expectedLatex.color,
+  });
+  const inputHtml = renderNativeWhiteboardLatexHtmlV1(inputLatex.latex);
+  const inputFormulaDigest = await digestWhiteboardLatexV1(inputLatex);
+  const inputHtmlDigest = await digestWhiteboardLatexHtmlV1(inputHtml);
+  throwIfAborted(opts.signal);
+  if (
+    !latexSpecsEqual(inputLatex, requestLatex) ||
+    inputFormulaDigest !== opts.expectedFormulaDigest ||
+    inputHtmlDigest !== opts.expectedHtmlDigest ||
+    (await digestWhiteboardLatexV1(requestLatex)) !== opts.expectedFormulaDigest ||
+    (await digestWhiteboardLatexHtmlV1(renderNativeWhiteboardLatexHtmlV1(requestLatex.latex))) !==
+      opts.expectedHtmlDigest
+  ) {
+    throw new Error('CLIENT_EFFECT_REQUEST_LATEX_MISMATCH');
+  }
+
+  assertStageAndScene(opts.store, opts.targetBinding);
+  const whiteboardApi = createStageAPI(opts.store).whiteboard;
+  const elementsResult = whiteboardApi.listElements(opts.targetBinding.whiteboardId);
+  if (!elementsResult.success || !elementsResult.data) {
+    throw new Error(elementsResult.error || 'CLIENT_EFFECT_WHITEBOARD_NOT_FOUND');
+  }
+  const existing = elementsResult.data.filter(
+    (element) => element.id === opts.input.stableElementId,
+  );
+  if (existing.length > 1) throw new Error('CLIENT_EFFECT_DUPLICATE_ELEMENT_ID');
+  if (existing.length === 1) {
+    const postcondition = await verifyNativeWhiteboardLatexEffect({
+      store: opts.store,
+      targetBinding: opts.targetBinding,
+      executionId: opts.input.executionId,
+      stableElementId: opts.input.stableElementId,
+      expectedLatex: requestLatex,
+      expectedFormulaDigest: opts.expectedFormulaDigest,
+      expectedHtmlDigest: opts.expectedHtmlDigest,
+      signal: opts.signal,
+    });
+    throwIfAborted(opts.signal);
+    return { replayed: true, postcondition };
+  }
+
+  throwIfAborted(opts.signal);
+  assertStageAndScene(opts.store, opts.targetBinding);
+  const addResult = whiteboardApi.addElement(
+    {
+      ...createWhiteboardLatexElement({
+        id: opts.input.stableElementId,
+        latex: inputLatex.latex,
+        x: inputLatex.bounds.x,
+        y: inputLatex.bounds.y,
+        width: inputLatex.bounds.width,
+        height: inputLatex.bounds.height,
+        color: inputLatex.color,
+        html: inputHtml,
+      }),
+      clientEffectExecutionId: opts.input.executionId,
+      clientEffectFormulaDigest: opts.expectedFormulaDigest,
+      clientEffectHtmlDigest: opts.expectedHtmlDigest,
+      clientEffectNormalizationVersion: CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
+      clientEffectRenderVersion: CLIENT_EFFECT_LATEX_RENDER_VERSION,
+    } as NativeLatexElement,
+    opts.targetBinding.whiteboardId,
+  );
+  if (!addResult.success) {
+    throw new Error(addResult.error || 'CLIENT_EFFECT_WHITEBOARD_MUTATION_FAILED');
+  }
+  throwIfAborted(opts.signal);
+
+  const postcondition = await verifyNativeWhiteboardLatexEffect({
+    store: opts.store,
+    targetBinding: opts.targetBinding,
+    executionId: opts.input.executionId,
+    stableElementId: opts.input.stableElementId,
+    expectedLatex: requestLatex,
+    expectedFormulaDigest: opts.expectedFormulaDigest,
+    expectedHtmlDigest: opts.expectedHtmlDigest,
     signal: opts.signal,
   });
   throwIfAborted(opts.signal);

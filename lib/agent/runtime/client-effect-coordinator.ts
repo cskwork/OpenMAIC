@@ -371,7 +371,18 @@ export class ClientEffectCoordinator {
               observed.strokeWidth === expected.strokeWidth &&
               observed.strokeStyle === expected.strokeStyle &&
               observed.markers[0] === expected.markers[0] &&
-              observed.markers[1] === expected.markers[1]));
+              observed.markers[1] === expected.markers[1]) ||
+            (expected.kind === 'whiteboard_latex_exists' &&
+              observed.elementType === 'latex' &&
+              observed.observedFormulaDigest === expected.expectedFormulaDigest &&
+              observed.observedHtmlDigest === expected.expectedHtmlDigest &&
+              observed.latex === expected.latex &&
+              observed.bounds.x === expected.bounds.x &&
+              observed.bounds.y === expected.bounds.y &&
+              observed.bounds.width === expected.bounds.width &&
+              observed.bounds.height === expected.bounds.height &&
+              observed.color === expected.color &&
+              observed.renderVersion === expected.renderVersion));
         if (!postconditionMatches) {
           return 'Committed postcondition does not match the requested effect.';
         }

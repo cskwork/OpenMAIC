@@ -12,6 +12,7 @@ import {
 } from '@/lib/agent/runtime/client-effect-contract';
 import { TOOL_EXECUTION_PROTOCOL_VERSION } from '@/lib/agent/runtime/native-child-contract';
 import {
+  executeNativeWhiteboardLatexEffect,
   executeNativeWhiteboardLineEffect,
   executeNativeWhiteboardShapeEffect,
   executeNativeWhiteboardTextEffect,
@@ -105,6 +106,19 @@ function postconditionsEqual(
       left.strokeStyle === right.strokeStyle &&
       left.markers[0] === right.markers[0] &&
       left.markers[1] === right.markers[1]
+    );
+  }
+  if (left.kind === 'whiteboard_latex_exists' && right.kind === 'whiteboard_latex_exists') {
+    return (
+      left.expectedFormulaDigest === right.expectedFormulaDigest &&
+      left.expectedHtmlDigest === right.expectedHtmlDigest &&
+      left.latex === right.latex &&
+      left.bounds.x === right.bounds.x &&
+      left.bounds.y === right.bounds.y &&
+      left.bounds.width === right.bounds.width &&
+      left.bounds.height === right.bounds.height &&
+      left.color === right.color &&
+      left.renderVersion === right.renderVersion
     );
   }
   return false;
@@ -316,6 +330,31 @@ export class BrowserClientEffectRuntime {
               markers: request.postcondition.markers,
             },
             expectedLineDigest: request.postcondition.expectedLineDigest,
+            signal: executionSignal,
+          });
+          break;
+        case 'wb_draw_latex':
+          result = await executeNativeWhiteboardLatexEffect({
+            store: this.opts.store,
+            targetBinding: binding,
+            input: {
+              executionId: request.executionId,
+              stableElementId: request.postcondition.stableElementId,
+              latex: String(params.latex ?? ''),
+              x: Number(params.x),
+              y: Number(params.y),
+              ...(params.width !== undefined ? { width: Number(params.width) } : {}),
+              ...(params.height !== undefined ? { height: Number(params.height) } : {}),
+              ...(params.color !== undefined ? { color: String(params.color) } : {}),
+            },
+            expectedLatex: {
+              latex: request.postcondition.latex,
+              bounds: request.postcondition.bounds,
+              color: request.postcondition.color,
+              renderVersion: request.postcondition.renderVersion,
+            },
+            expectedFormulaDigest: request.postcondition.expectedFormulaDigest,
+            expectedHtmlDigest: request.postcondition.expectedHtmlDigest,
             signal: executionSignal,
           });
           break;

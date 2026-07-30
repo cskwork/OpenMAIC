@@ -268,6 +268,10 @@ describe('Pi director prompt closure routing', () => {
       enableWebSearch: false,
       enableWhiteboardLine: true,
     });
+    const latexOnly = buildNativeWebChildPrompt(makeBody(), agents[0], [], {
+      enableWebSearch: false,
+      enableWhiteboardLatex: true,
+    });
     const shapeTurn = buildNativeWebChildTurnPrompt(
       'Draw one simple shape.',
       'teacher',
@@ -286,18 +290,35 @@ describe('Pi director prompt closure routing', () => {
         enableWhiteboardLine: true,
       },
     );
+    const latexTurn = buildNativeWebChildTurnPrompt(
+      'Write one formula.',
+      'teacher',
+      {},
+      {
+        enableWebSearch: false,
+        enableWhiteboardLatex: true,
+      },
+    );
 
     expect(shapeOnly).toContain('call `wb_draw_shape`');
     expect(shapeOnly).not.toContain('call `wb_draw_text`');
     expect(shapeOnly).not.toContain('call `wb_draw_line`');
+    expect(shapeOnly).not.toContain('call `wb_draw_latex`');
     expect(shapeOnly).toContain('Only the Native whiteboard tools listed above are available');
     expect(textOnly).toContain('call `wb_draw_text`');
     expect(textOnly).not.toContain('call `wb_draw_shape`');
     expect(textOnly).not.toContain('call `wb_draw_line`');
+    expect(textOnly).not.toContain('call `wb_draw_latex`');
     expect(lineOnly).toContain('call `wb_draw_line`');
     expect(lineOnly).toContain('connection, relationship, flow, or annotation');
     expect(lineOnly).not.toContain('call `wb_draw_text`');
     expect(lineOnly).not.toContain('call `wb_draw_shape`');
+    expect(lineOnly).not.toContain('call `wb_draw_latex`');
+    expect(latexOnly).toContain('call `wb_draw_latex`');
+    expect(latexOnly).toContain('valid display-mode formula');
+    expect(latexOnly).not.toContain('call `wb_draw_text`');
+    expect(latexOnly).not.toContain('call `wb_draw_shape`');
+    expect(latexOnly).not.toContain('call `wb_draw_line`');
     expect(shapeTurn).toContain('Use `wb_draw_shape` only when one simple shape genuinely helps');
     expect(shapeTurn).not.toContain('Use `wb_draw_text`');
     expect(lineTurn).toContain(
@@ -305,6 +326,13 @@ describe('Pi director prompt closure routing', () => {
     );
     expect(lineTurn).not.toContain('Use `wb_draw_text`');
     expect(lineTurn).not.toContain('Use `wb_draw_shape`');
+    expect(latexTurn).toContain(
+      'Use `wb_draw_latex` only when one display formula genuinely helps',
+    );
+    expect(latexTurn).toContain('If the formula is rejected, correct the LaTeX');
+    expect(latexTurn).not.toContain('Use `wb_draw_text`');
+    expect(latexTurn).not.toContain('Use `wb_draw_shape`');
+    expect(latexTurn).not.toContain('Use `wb_draw_line`');
   });
 
   it('describes hybrid Web Search without giving legacy agents a native tool', () => {

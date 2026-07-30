@@ -5,17 +5,22 @@ import type { StageStore } from '@/lib/api/stage-api';
 import { BrowserClientEffectRuntime } from '@/lib/agent/client/client-effect-runtime';
 import {
   CLIENT_EFFECT_ACK_HEADER,
+  CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  digestWhiteboardLatexHtmlV1,
+  digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
   digestWhiteboardShapeV1,
   digestVisibleTextV1,
+  normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
   type ClientEffectAck,
   type ClientEffectRequest,
 } from '@/lib/agent/runtime/client-effect-contract';
+import { renderNativeWhiteboardLatexHtmlV1 } from '@/lib/action/whiteboard-latex';
 import { piClientEffectCoordinator } from '@/lib/agent/runtime/client-effect-coordinator';
 import { TOOL_EXECUTION_PROTOCOL_VERSION } from '@/lib/agent/runtime/native-child-contract';
 
@@ -135,6 +140,46 @@ async function lineEffectRequest(): Promise<ClientEffectRequest> {
       normalizationVersion: CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
       expectedLineDigest: await digestWhiteboardLineV1(line),
       ...line,
+    },
+  };
+}
+
+async function latexEffectRequest(): Promise<ClientEffectRequest> {
+  const latex = normalizeWhiteboardLatexV1({
+    latex: String.raw`\sum_{i=1}^{n} i`,
+    x: 120,
+    y: 90,
+    width: 400,
+    height: 80,
+    color: '#2255aa',
+  });
+  const html = renderNativeWhiteboardLatexHtmlV1(latex.latex);
+  return {
+    ...(await effectRequest()),
+    traceId: 'trace-latex-1',
+    runId: 'run-latex-1',
+    agentInvocationId: 'message-latex-1',
+    toolCallId: 'tool-call-latex-1',
+    executionId: 'execution-latex-1',
+    idempotencyKey: 'run-latex-1:message-latex-1:tool-call-latex-1',
+    toolName: 'wb_draw_latex',
+    args: {
+      latex: latex.latex,
+      x: 120,
+      y: 90,
+      width: 400,
+      height: 80,
+      color: '#2255aa',
+    },
+    argsDigest: 'sha256:latex-args',
+    postcondition: {
+      kind: 'whiteboard_latex_exists',
+      stableElementId: 'latex-element-1',
+      elementType: 'latex',
+      normalizationVersion: CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
+      expectedFormulaDigest: await digestWhiteboardLatexV1(latex),
+      expectedHtmlDigest: await digestWhiteboardLatexHtmlV1(html),
+      ...latex,
     },
   };
 }
@@ -582,6 +627,56 @@ describe('client effect ACK route', () => {
         style: 'dashed',
         color: '#3366cc',
         points: ['', 'arrow'],
+      }),
+    ]);
+  });
+
+  it('commits exact formula and derived HTML state through the real browser ACK route', async () => {
+    const effect = await latexEffectRequest();
+    const registered = piClientEffectCoordinator.register(effect);
+    const fetchAck: typeof fetch = async (input, init) => {
+      const url = new URL(String(input), 'http://localhost');
+      const headers = new Headers(init?.headers);
+      headers.set('origin', url.origin);
+      return post(
+        new NextRequest(url, {
+          method: init?.method,
+          headers,
+          body: init?.body,
+        }),
+        effect.executionId,
+      );
+    };
+    const store = createStore();
+    const runtime = new BrowserClientEffectRuntime({
+      sessionId: effect.target.sessionId,
+      requestId: effect.target.requestId,
+      store,
+      fetchAck,
+      waitForPresentation: async () => {},
+      ensureWhiteboardVisible: async () => {},
+    });
+
+    await expect(runtime.execute(registered.delivery, new AbortController().signal)).resolves.toBe(
+      'effect_committed',
+    );
+    expect(piClientEffectCoordinator.getSnapshot(effect.executionId)).toMatchObject({
+      status: 'effect_committed',
+      terminalResult: { status: 'effect_committed', isError: false },
+    });
+    expect(
+      store.getState().stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements),
+    ).toEqual([
+      expect.objectContaining({
+        id: effect.postcondition.stableElementId,
+        type: 'latex',
+        left: 120,
+        top: 90,
+        width: 400,
+        height: 80,
+        latex: String.raw`\sum_{i=1}^{n} i`,
+        color: '#2255aa',
+        fixedRatio: true,
       }),
     ]);
   });

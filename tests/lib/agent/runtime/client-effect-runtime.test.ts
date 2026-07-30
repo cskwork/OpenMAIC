@@ -2,17 +2,22 @@ import { describe, expect, it, vi } from 'vitest';
 import type { StageStore } from '@/lib/api/stage-api';
 import { BrowserClientEffectRuntime } from '@/lib/agent/client/client-effect-runtime';
 import {
+  CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  digestWhiteboardLatexHtmlV1,
+  digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
   digestWhiteboardShapeV1,
   digestVisibleTextV1,
+  normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
   type ClientEffectAck,
   type ClientEffectDelivery,
 } from '@/lib/agent/runtime/client-effect-contract';
+import { renderNativeWhiteboardLatexHtmlV1 } from '@/lib/action/whiteboard-latex';
 import { TOOL_EXECUTION_PROTOCOL_VERSION } from '@/lib/agent/runtime/native-child-contract';
 
 function createStore(): StageStore {
@@ -182,6 +187,64 @@ async function lineDelivery(): Promise<ClientEffectDelivery> {
         normalizationVersion: CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
         expectedLineDigest: await digestWhiteboardLineV1(line),
         ...line,
+      },
+    },
+  };
+}
+
+async function latexDelivery(): Promise<ClientEffectDelivery> {
+  const latex = normalizeWhiteboardLatexV1({
+    latex: String.raw`\frac{a}{b}`,
+    x: 120,
+    y: 80,
+    width: 400,
+    height: 80,
+    color: '#224466',
+  });
+  const html = renderNativeWhiteboardLatexHtmlV1(latex.latex);
+  return {
+    acknowledgementToken: 'latex-capability',
+    request: {
+      protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
+      kind: 'client_effect',
+      traceId: 'trace-latex-1',
+      runId: 'run-latex-1',
+      agentInvocationId: 'message-latex-1',
+      agentId: 'teacher-1',
+      depth: 1,
+      sequence: 1,
+      toolCallId: 'tool-call-latex-1',
+      executionId: 'execution-latex-1',
+      idempotencyKey: 'run-latex-1:message-latex-1:tool-call-latex-1',
+      toolName: 'wb_draw_latex',
+      args: {
+        latex: latex.latex,
+        x: 120,
+        y: 80,
+        width: 400,
+        height: 80,
+        color: '#224466',
+      },
+      argsDigest: 'sha256:latex-args',
+      issuedAt: 1,
+      deadlineAt: Date.now() + 10_000,
+      attempt: 1,
+      target: {
+        requestId: 'request-1',
+        sessionId: 'session-1',
+        stageId: 'stage-1',
+        sceneId: 'scene-1',
+        messageId: 'message-latex-1',
+      },
+      activeEffectBudgetMs: 2_000,
+      postcondition: {
+        kind: 'whiteboard_latex_exists',
+        stableElementId: 'latex-element-1',
+        elementType: 'latex',
+        normalizationVersion: CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
+        expectedFormulaDigest: await digestWhiteboardLatexV1(latex),
+        expectedHtmlDigest: await digestWhiteboardLatexHtmlV1(html),
+        ...latex,
       },
     },
   };
@@ -377,6 +440,57 @@ describe('BrowserClientEffectRuntime', () => {
         strokeWidth: 4,
         strokeStyle: 'dashed',
         markers: ['', 'arrow'],
+        matchingElementCount: 1,
+      },
+    });
+    expect(
+      store.getState().stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements),
+    ).toHaveLength(1);
+  });
+
+  it('executes one formula and ACKs exact source, derived HTML digest, and geometry', async () => {
+    const store = createStore();
+    const acknowledgements: ClientEffectAck[] = [];
+    const runtime = new BrowserClientEffectRuntime({
+      sessionId: 'session-1',
+      requestId: 'request-1',
+      store,
+      fetchAck: async (_url, init) => {
+        const ack = JSON.parse(String(init?.body)) as ClientEffectAck;
+        acknowledgements.push(ack);
+        return new Response(JSON.stringify({ success: true, state: { status: ack.status } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+      waitForPresentation: async () => {},
+      ensureWhiteboardVisible: async () => {},
+    });
+    const effect = await latexDelivery();
+
+    const first = runtime.execute(effect, new AbortController().signal);
+    const duplicate = runtime.execute(effect, new AbortController().signal);
+    await expect(first).resolves.toBe('effect_committed');
+    await expect(duplicate).resolves.toBe('effect_committed');
+    if (effect.request.postcondition.kind !== 'whiteboard_latex_exists') {
+      throw new Error('Expected a LaTeX delivery.');
+    }
+    expect(acknowledgements.map((ack) => ack.status)).toEqual([
+      'presentation_paused',
+      'presentation_resumed',
+      'accepted',
+      'effect_committed',
+    ]);
+    expect(acknowledgements.at(-1)).toMatchObject({
+      status: 'effect_committed',
+      postcondition: {
+        stableElementId: effect.request.postcondition.stableElementId,
+        elementType: 'latex',
+        observedFormulaDigest: effect.request.postcondition.expectedFormulaDigest,
+        observedHtmlDigest: effect.request.postcondition.expectedHtmlDigest,
+        latex: String.raw`\frac{a}{b}`,
+        bounds: { x: 120, y: 80, width: 400, height: 80 },
+        color: '#224466',
         matchingElementCount: 1,
       },
     });

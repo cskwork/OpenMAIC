@@ -1,17 +1,22 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type, type Static } from 'typebox';
 import {
+  CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
+  digestWhiteboardLatexHtmlV1,
+  digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
   digestWhiteboardShapeV1,
   digestVisibleTextV1,
+  normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
   resolveActiveEffectBudget,
   type ClientEffectRequest,
   type ClientEffectTarget,
 } from '@/lib/agent/runtime/client-effect-contract';
+import { renderNativeWhiteboardLatexHtmlV1 } from '@/lib/action/whiteboard-latex';
 import { piClientEffectCoordinator } from '@/lib/agent/runtime/client-effect-coordinator';
 import type {
   NativeClientEffectHandler,
@@ -121,6 +126,44 @@ const NativeWhiteboardLineParams = Type.Object({
 });
 
 type NativeWhiteboardLineParams = Static<typeof NativeWhiteboardLineParams>;
+
+const NativeWhiteboardLatexParams = Type.Object({
+  latex: Type.String({
+    minLength: 1,
+    maxLength: 2_000,
+    description:
+      'LaTeX source for one display formula. Escape backslashes according to the native tool-call JSON protocol.',
+  }),
+  x: Type.Number({
+    minimum: 0,
+    maximum: 999,
+    description: 'Left coordinate on a 1000×563 board.',
+  }),
+  y: Type.Number({
+    minimum: 0,
+    maximum: 562,
+    description: 'Top coordinate on a 1000×563 board.',
+  }),
+  width: Type.Optional(
+    Type.Number({
+      exclusiveMinimum: 0,
+      maximum: 1000,
+      description: 'Formula box width; x + width must stay within 1000. Defaults to 400.',
+    }),
+  ),
+  height: Type.Optional(
+    Type.Number({
+      exclusiveMinimum: 0,
+      maximum: 563,
+      description: 'Formula box height; y + height must stay within 563. Defaults to 80.',
+    }),
+  ),
+  color: Type.Optional(
+    Type.String({ minLength: 1, maxLength: 64, description: 'Outer CSS formula color.' }),
+  ),
+});
+
+type NativeWhiteboardLatexParams = Static<typeof NativeWhiteboardLatexParams>;
 const WHITEBOARD_OPEN_SETTLEMENT_MARGIN_MS = 500;
 
 interface NativeWhiteboardBaseOptions {
@@ -434,6 +477,76 @@ export function buildNativeWhiteboardLineTool(
       toolOptions: opts,
       successMessage: 'Whiteboard line was rendered and its postcondition was verified.',
       failureLabel: 'Whiteboard line',
+    });
+  };
+
+  return { tool, handler };
+}
+
+export function buildNativeWhiteboardLatexTool(
+  opts: NativeWhiteboardToolOptions<NativeWhiteboardLatexParams>,
+): { tool: AgentTool<typeof NativeWhiteboardLatexParams>; handler: NativeClientEffectHandler } {
+  const tool: AgentTool<typeof NativeWhiteboardLatexParams> = {
+    name: 'wb_draw_latex',
+    label: 'Draw whiteboard formula',
+    description:
+      'Draw one valid display-mode LaTeX formula on the classroom whiteboard. Explain what it represents before calling this tool, then continue teaching after the committed result.',
+    parameters: NativeWhiteboardLatexParams,
+    executionMode: 'sequential',
+    execute: async (): Promise<RuntimeAgentToolResult> => {
+      throw new Error('wb_draw_latex requires the browser client-effect executor.');
+    },
+  };
+
+  const handler: NativeClientEffectHandler = async ({ request, params, signal }) => {
+    if (opts.canExecute?.() === false) return actionBudgetFailure();
+    const input = params as NativeWhiteboardLatexParams;
+    let latexSpec;
+    let html;
+    try {
+      latexSpec = normalizeWhiteboardLatexV1(input);
+      html = renderNativeWhiteboardLatexHtmlV1(latexSpec.latex);
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Whiteboard formula input was rejected: ${
+              error instanceof Error ? error.message : 'invalid input'
+            }.`,
+          },
+        ],
+        details: {
+          code: error instanceof Error ? error.message : 'CLIENT_EFFECT_LATEX_INPUT_INVALID',
+        },
+        isError: true,
+      };
+    }
+    const prepared = prepareClientEffect(opts, request);
+    if ('isError' in prepared) return prepared;
+    const stableElementId = `client-effect-${request.executionId}`;
+    const effectRequest: ClientEffectRequest = {
+      ...request,
+      toolName: 'wb_draw_latex',
+      target: prepared.target,
+      activeEffectBudgetMs: prepared.activeEffectBudgetMs,
+      postcondition: {
+        kind: 'whiteboard_latex_exists',
+        stableElementId,
+        elementType: 'latex',
+        normalizationVersion: CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
+        expectedFormulaDigest: await digestWhiteboardLatexV1(latexSpec),
+        expectedHtmlDigest: await digestWhiteboardLatexHtmlV1(html),
+        ...latexSpec,
+      },
+    };
+    return deliverClientEffect({
+      request: effectRequest,
+      params: input,
+      signal,
+      toolOptions: opts,
+      successMessage: 'Whiteboard formula was rendered and its postcondition was verified.',
+      failureLabel: 'Whiteboard formula',
     });
   };
 

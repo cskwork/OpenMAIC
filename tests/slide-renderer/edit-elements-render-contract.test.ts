@@ -11,6 +11,7 @@ import { useClipImage as useAppClipImage } from '@/components/slide-renderer/com
 import { imageFiltersToCss as appImageFiltersToCss } from '@/components/slide-renderer/components/element/ImageElement/useFilter';
 import { BaseLatexElement } from '@/components/slide-renderer/components/element/LatexElement/BaseLatexElement';
 import { LatexElement } from '@/components/slide-renderer/components/element/LatexElement';
+import { renderNativeWhiteboardLatexHtmlV1 } from '@/lib/action/whiteboard-latex';
 import { BaseTextElement } from '@/components/slide-renderer/components/element/TextElement/BaseTextElement';
 import { StaticTable } from '@/components/slide-renderer/components/element/TableElement/StaticTable';
 import { useClipImage as usePackageClipImage } from '../../packages/@openmaic/renderer/src/elements/image/useClipImage';
@@ -86,6 +87,20 @@ describe('edit_elements renderer contracts', () => {
     expect(
       renderToStaticMarkup(React.createElement(BaseLatexElement, { elementInfo: htmlLatex })),
     ).toContain('color:#ff0000');
+  });
+
+  it('renders Runtime-derived KaTeX HTML without depending on model-supplied HTML', () => {
+    const derived = {
+      ...htmlLatex,
+      latex: String.raw`\frac{a}{b}`,
+      html: renderNativeWhiteboardLatexHtmlV1(String.raw`\frac{a}{b}`),
+    };
+    const markup = renderToStaticMarkup(
+      React.createElement(BaseLatexElement, { elementInfo: derived }),
+    );
+    expect(markup).toContain('class="katex"');
+    expect(markup).toContain('mfrac');
+    expect(markup).not.toContain('<script');
   });
 
   it('applies text fill and opacity to the rotating full box in both renderers', () => {

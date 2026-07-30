@@ -6,6 +6,8 @@ import {
 export const CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION = 'maic.visible-text.v1' as const;
 export const CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION = 'maic.whiteboard-shape.v1' as const;
 export const CLIENT_EFFECT_LINE_NORMALIZATION_VERSION = 'maic.whiteboard-line.v1' as const;
+export const CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION = 'maic.whiteboard-latex.v1' as const;
+export const CLIENT_EFFECT_LATEX_RENDER_VERSION = 'maic.katex-html.v1' as const;
 export const CLIENT_EFFECT_ACK_HEADER = 'x-maic-effect-token';
 export const CLIENT_EFFECT_ACK_MAX_BYTES = 8 * 1024;
 
@@ -86,6 +88,29 @@ export interface WhiteboardLinePostcondition extends WhiteboardLineSpec {
   expectedLineDigest: string;
 }
 
+export interface WhiteboardLatexBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface WhiteboardLatexSpec {
+  latex: string;
+  bounds: WhiteboardLatexBounds;
+  color: string;
+  renderVersion: typeof CLIENT_EFFECT_LATEX_RENDER_VERSION;
+}
+
+export interface WhiteboardLatexPostcondition extends WhiteboardLatexSpec {
+  kind: 'whiteboard_latex_exists';
+  stableElementId: string;
+  elementType: 'latex';
+  normalizationVersion: typeof CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION;
+  expectedFormulaDigest: string;
+  expectedHtmlDigest: string;
+}
+
 interface ClientEffectRequestBase extends ToolExecutionEnvelope {
   kind: 'client_effect';
   target: ClientEffectTarget;
@@ -107,10 +132,16 @@ export type WhiteboardLineClientEffectRequest = ClientEffectRequestBase & {
   postcondition: WhiteboardLinePostcondition;
 };
 
+export type WhiteboardLatexClientEffectRequest = ClientEffectRequestBase & {
+  toolName: 'wb_draw_latex';
+  postcondition: WhiteboardLatexPostcondition;
+};
+
 export type ClientEffectRequest =
   | WhiteboardTextClientEffectRequest
   | WhiteboardShapeClientEffectRequest
-  | WhiteboardLineClientEffectRequest;
+  | WhiteboardLineClientEffectRequest
+  | WhiteboardLatexClientEffectRequest;
 
 export interface ClientEffectDelivery {
   request: ClientEffectRequest;
@@ -166,7 +197,15 @@ export type ClientEffectAck =
             normalizationVersion: typeof CLIENT_EFFECT_LINE_NORMALIZATION_VERSION;
             observedLineDigest: string;
             matchingElementCount: 1;
-          } & WhiteboardLineSpec);
+          } & WhiteboardLineSpec)
+        | ({
+            stableElementId: string;
+            elementType: 'latex';
+            normalizationVersion: typeof CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION;
+            observedFormulaDigest: string;
+            observedHtmlDigest: string;
+            matchingElementCount: 1;
+          } & WhiteboardLatexSpec);
     })
   | (ClientEffectAckBase & {
       status: 'effect_failed' | 'cancelled';
@@ -395,6 +434,88 @@ export async function digestWhiteboardLineV1(input: WhiteboardLineSpec): Promise
   ).join('')}`;
 }
 
+export function normalizeWhiteboardLatexV1(input: {
+  latex: unknown;
+  x: unknown;
+  y: unknown;
+  width?: unknown;
+  height?: unknown;
+  color?: unknown;
+}): WhiteboardLatexSpec {
+  const { latex, x, y } = input;
+  const width = input.width ?? 400;
+  const height = input.height ?? 80;
+  const color = input.color ?? '#000000';
+  if (
+    typeof latex !== 'string' ||
+    !latex.trim() ||
+    latex.length > 2_000 ||
+    new TextEncoder().encode(JSON.stringify(latex)).byteLength > 4_096 ||
+    /[\u0000-\u001f\u007f]/.test(latex) ||
+    typeof x !== 'number' ||
+    !Number.isFinite(x) ||
+    typeof y !== 'number' ||
+    !Number.isFinite(y) ||
+    typeof width !== 'number' ||
+    !Number.isFinite(width) ||
+    typeof height !== 'number' ||
+    !Number.isFinite(height) ||
+    typeof color !== 'string' ||
+    !color.trim() ||
+    color.length > 64
+  ) {
+    throw new Error('CLIENT_EFFECT_LATEX_INPUT_INVALID');
+  }
+  const bounds = {
+    x: canonicalNumber(x),
+    y: canonicalNumber(y),
+    width: canonicalNumber(width),
+    height: canonicalNumber(height),
+  };
+  if (
+    bounds.x < 0 ||
+    bounds.y < 0 ||
+    bounds.width <= 0 ||
+    bounds.height <= 0 ||
+    bounds.x + bounds.width > 1000 ||
+    bounds.y + bounds.height > 563
+  ) {
+    throw new Error('CLIENT_EFFECT_LATEX_BOUNDS_INVALID');
+  }
+  return {
+    latex,
+    bounds,
+    color: color.trim(),
+    renderVersion: CLIENT_EFFECT_LATEX_RENDER_VERSION,
+  };
+}
+
+export async function digestWhiteboardLatexV1(input: WhiteboardLatexSpec): Promise<string> {
+  const normalized = normalizeWhiteboardLatexV1({
+    latex: input.latex,
+    ...input.bounds,
+    color: input.color,
+  });
+  const bytes = new TextEncoder().encode(
+    `${CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION}\n${JSON.stringify(normalized)}`,
+  );
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  return `sha256:${Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('')}`;
+}
+
+export async function digestWhiteboardLatexHtmlV1(html: string): Promise<string> {
+  if (typeof html !== 'string' || !html) {
+    throw new Error('CLIENT_EFFECT_LATEX_HTML_INVALID');
+  }
+  const bytes = new TextEncoder().encode(`${CLIENT_EFFECT_LATEX_RENDER_VERSION}\n${html}`);
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  return `sha256:${Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('')}`;
+}
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
@@ -542,6 +663,50 @@ export function isClientEffectAck(value: unknown): value is ClientEffectAck {
             width: bounds.width,
             height: bounds.height,
             fillColor: postcondition.fillColor,
+          });
+          return true;
+        } catch {
+          return false;
+        }
+      }
+      if (
+        postcondition.elementType === 'latex' &&
+        hasExactKeys(postcondition, [
+          'stableElementId',
+          'elementType',
+          'normalizationVersion',
+          'observedFormulaDigest',
+          'observedHtmlDigest',
+          'matchingElementCount',
+          'latex',
+          'bounds',
+          'color',
+          'renderVersion',
+        ])
+      ) {
+        if (
+          !isNonEmptyString(postcondition.stableElementId) ||
+          postcondition.normalizationVersion !== CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION ||
+          postcondition.renderVersion !== CLIENT_EFFECT_LATEX_RENDER_VERSION ||
+          !isNonEmptyString(postcondition.observedFormulaDigest) ||
+          !isNonEmptyString(postcondition.observedHtmlDigest) ||
+          postcondition.matchingElementCount !== 1 ||
+          !postcondition.bounds ||
+          typeof postcondition.bounds !== 'object' ||
+          Array.isArray(postcondition.bounds)
+        ) {
+          return false;
+        }
+        const bounds = postcondition.bounds as Record<string, unknown>;
+        if (!hasExactKeys(bounds, ['x', 'y', 'width', 'height'])) return false;
+        try {
+          normalizeWhiteboardLatexV1({
+            latex: postcondition.latex,
+            x: bounds.x,
+            y: bounds.y,
+            width: bounds.width,
+            height: bounds.height,
+            color: postcondition.color,
           });
           return true;
         } catch {

@@ -255,6 +255,7 @@ export function buildNativeWebChildPrompt(
     enableWhiteboardText?: boolean;
     enableWhiteboardShape?: boolean;
     enableWhiteboardLine?: boolean;
+    enableWhiteboardLatex?: boolean;
   } = {
     enableWebSearch: true,
   },
@@ -279,7 +280,10 @@ export function buildNativeWebChildPrompt(
           'If search fails, times out, or has no legal source URL, state the limitation and do not reuse or invent evidence.',
         ].join('\n')
       : '',
-    options.enableWhiteboardText || options.enableWhiteboardShape || options.enableWhiteboardLine
+    options.enableWhiteboardText ||
+    options.enableWhiteboardShape ||
+    options.enableWhiteboardLine ||
+    options.enableWhiteboardLatex
       ? [
           '# Native Whiteboard',
           options.enableWhiteboardText
@@ -290,6 +294,9 @@ export function buildNativeWebChildPrompt(
             : '',
           options.enableWhiteboardLine
             ? 'You may call `wb_draw_line` to place one straight line or directed arrow for a connection, relationship, flow, or annotation.'
+            : '',
+          options.enableWhiteboardLatex
+            ? 'You may call `wb_draw_latex` to place one valid display-mode formula on the whiteboard.'
             : '',
           'The board uses a 1000 × 563 coordinate system. Keep every complete element within the visible board.',
           'Before calling it, say briefly what you are about to show. Wait for the tool result, then continue explaining in this same turn.',
@@ -323,6 +330,7 @@ export function buildNativeWebChildTurnPrompt(
     enableWhiteboardText?: boolean;
     enableWhiteboardShape?: boolean;
     enableWhiteboardLine?: boolean;
+    enableWhiteboardLatex?: boolean;
   } = {
     enableWebSearch: true,
   },
@@ -355,6 +363,9 @@ export function buildNativeWebChildTurnPrompt(
       : '',
     options.enableWhiteboardLine
       ? 'Use `wb_draw_line` only when one straight connection, relationship, flow, or annotation genuinely helps. Speak before the tool call and continue after its tool result.'
+      : '',
+    options.enableWhiteboardLatex
+      ? 'Use `wb_draw_latex` only when one display formula genuinely helps a derivation or explanation. Speak before the tool call and continue after its tool result. If the formula is rejected, correct the LaTeX or explain without claiming it was drawn.'
       : '',
     'After the tool result, provide the final classroom response in this same Child run.',
   ].join('\n');

@@ -36,6 +36,7 @@ import type {
   WidgetRevealAction,
 } from '@/lib/types/action';
 import type { CodeLine } from '@openmaic/dsl';
+import { createWhiteboardLatexElement, renderLegacyWhiteboardLatexHtml } from './whiteboard-latex';
 import {
   EFFECT_AUTO_CLEAR_MS,
   MAX_VIDEO_WAIT_MS,
@@ -48,7 +49,6 @@ import {
   wbDrawCodeMs,
   wbClearMs,
 } from '@/lib/choreography';
-import katex from 'katex';
 import { createLogger } from '@/lib/logger';
 import { createWhiteboardLineElement } from './whiteboard-lines';
 import { WHITEBOARD_SHAPE_PATHS } from './whiteboard-shapes';
@@ -498,27 +498,19 @@ export class ActionEngine {
     if (!wb.success || !wb.data) return;
 
     try {
-      const html = katex.renderToString(action.latex, {
-        throwOnError: false,
-        displayMode: true,
-        output: 'html',
-      });
+      const html = renderLegacyWhiteboardLatexHtml(action.latex);
 
       this.stageAPI.whiteboard.addElement(
-        {
+        createWhiteboardLatexElement({
           id: action.elementId || '',
-          type: 'latex',
-          left: action.x,
-          top: action.y,
-          width: action.width ?? 400,
-          height: action.height ?? 80,
-          rotate: 0,
+          x: action.x,
+          y: action.y,
+          width: action.width,
+          height: action.height,
           latex: action.latex,
           html,
-          color: action.color ?? '#000000',
-          fixedRatio: true,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any,
+          color: action.color,
+        }),
         wb.data.id,
       );
     } catch (err) {
