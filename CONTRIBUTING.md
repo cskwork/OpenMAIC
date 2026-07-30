@@ -73,6 +73,10 @@ pnpm lint --fix
 
 # 3. TypeScript type checking
 npx tsc --noEmit
+
+# 4. If you touched packages/@openmaic/*, declare the release
+#    (`--empty` if the change releases nothing — see "Changing a Published Package")
+pnpm changeset
 ```
 
 If formatting or lint auto-fixes produce changes, include them in your commit.
@@ -122,15 +126,28 @@ docs: add CONTRIBUTING.md
 
 Four packages under `packages/@openmaic/` are published to npm: `dsl`, `storage`, `renderer`, and `importer`. Anything that ships inside one of those tarballs is under version control in the literal sense — the version number on npm has to keep meaning "this exact source".
 
-**If your PR changes a publishable file in one of those packages, bump that package's `version` in its `package.json` in the same PR.** CI enforces this, and without the bump you will see:
+**Do not edit a `version` field in `packages/@openmaic/*/package.json`.** Versions are owned by [changesets](https://github.com/changesets/changesets): a release pull request applies them, updates the dependency ranges between these packages, and writes each `CHANGELOG.md`. A hand-edited number will be overwritten or will collide with the computed one.
 
+**If your PR changes a publishable file in one of those packages, add a changeset in the same PR:**
+
+```bash
+pnpm changeset
 ```
-<package>: publishable package inputs changed but version did not increase
+
+It asks which packages your change releases and at what level, then writes a file like this into `.changeset/`:
+
+```markdown
+---
+'@openmaic/dsl': minor
+'@openmaic/storage': patch
+---
+
+Add runtime and storage contracts to the DSL entry points.
 ```
 
-What counts as publishable: everything under the package directory except files that never reach the tarball, such as `docs/`, `test/`, and `vitest.config.ts`. Editing only those needs no bump. The exact set lives in `scripts/check-package-version-bumps.mjs`.
+Commit that file with the rest of your change. The summary becomes the changelog entry, so write it for someone reading the release notes rather than the diff. One change can declare different levels for different packages.
 
-Choosing the number is a [semver](https://semver.org/) judgement, and it is yours to make rather than something CI can infer:
+Choosing the level is a [semver](https://semver.org/) judgement, and it is yours to make rather than something CI can infer:
 
 - **patch** — a fix that changes no documented behaviour
 - **minor** — new behaviour that existing consumers can ignore
@@ -138,7 +155,33 @@ Choosing the number is a [semver](https://semver.org/) judgement, and it is your
 
 Be deliberate with `@openmaic/dsl`. It is the contract the other packages and downstream deployments validate against, so a change that narrows what an existing document may contain is a breaking change even when the diff looks small.
 
-You never publish anything yourself. Once your PR is merged, a version that is not yet on the registry is released automatically, and a `@openmaic/<name>@<version>` tag is written afterwards to record it. That tag is a marker, not a trigger: pushing one does not release anything.
+**The check is per package.** CI runs `scripts/check-changesets.mjs` on every pull request, and it fails unless every package you changed is named by one of your changesets. Naming a different package does not satisfy it:
+
+```
+@openmaic/renderer: publishable package inputs changed but no changeset in this range releases it.
+```
+
+Files that no package ships — `test/`, `docs/`, `vitest.config.ts`, `CHANGELOG.md`, and the importer's legacy `src1/` — do not count as changes, so editing only those needs nothing. The exact per-package list lives in [`scripts/check-changesets.mjs`](scripts/check-changesets.mjs).
+
+### When your change releases nothing
+
+Plenty of work touches a published package without changing what ships from it: a CI tweak, a comment, an internal refactor with no observable effect.
+
+```bash
+pnpm changeset --empty
+```
+
+An empty changeset records "this change releases nothing" and leaves that decision visible in the diff. Note that it is not a way past the per-package check — if you changed the renderer, the check wants the renderer named. Use `--empty` for the parts of a change that release nothing, and if you are unsure whether something needs releasing, name it at `patch`: a release nobody needed costs less than a published version that means nothing.
+
+[`.changeset/README.md`](.changeset/README.md) explains the rest of the configuration.
+
+### How releases happen
+
+You never publish anything yourself, and you never pick a version number. Once your PR is merged, its changeset sits in `.changeset/` until a maintainer runs `changeset version`, which consumes every pending changeset into one "Version Packages" pull request. Merging that pull request releases: each version that is not yet on the registry is published automatically, in dependency order, and a `@openmaic/<name>@<version>` tag is written afterwards to record it. That tag is a marker, not a trigger — pushing one does not release anything.
+
+Note that `changeset version` may bump packages you did not name. `storage`, `renderer` and `importer` depend on `@openmaic/dsl`, so a minor dsl release also releases them with an updated dependency range.
+
+So your changeset is the release intent, and a release may batch it with others. If you need something out quickly, say so on the PR.
 
 ## AI-Assisted PRs 🤖
 

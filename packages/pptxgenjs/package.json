@@ -1,6 +1,7 @@
 {
 	"name": "pptxgenjs",
 	"version": "4.0.1",
+	"private": true,
 	"author": {
 		"name": "Brent Ely",
 		"url": "https://github.com/gitbrent/"

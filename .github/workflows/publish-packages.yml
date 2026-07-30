@@ -4,15 +4,27 @@ name: Publish @openmaic packages
 #
 # Scope is pinned to those four packages by name on purpose: the workspace also
 # contains vendored forks (mathml2omml, pptxgenjs) whose names we do NOT own, so
-# a publish must never touch them.
+# a publish must never touch them. The scope is an ALLOWLIST, in
+# scripts/openmaic-packages.mjs, and it is asserted rather than assumed: a
+# release stops if the publishable workspace packages are not exactly that list,
+# so a new public package cannot join a release without first passing through the
+# build, tests, tarball inspection and registry preflight below.
 #
 # THE ONLY RELEASE INPUT IS A VERSION BUMP THAT LANDED ON MAIN.
 #
 # A package's version in its manifest is the release intent, and merging that
-# bump is what releases it. Which packages go out is decided by comparing those
+# bump is what releases it. Versions are computed by `changeset version` from the
+# changesets that pull requests declared, rather than typed by hand, but the
+# release input is unchanged: which packages go out is decided by comparing those
 # manifests against the registry, never by how the run was triggered. That keeps
 # one source of truth, puts every release through pull request review and CI,
 # and is the only shape a branch protection rule can actually guard.
+#
+# Publishing deliberately does NOT go through `changeset publish`. That command
+# publishes every non-private workspace package, in parallel, with no allowlist
+# and no registry preflight of its own, which would give up all three of those
+# properties. changesets is used for what it is good at — computing versions and
+# writing changelogs — and the publish path stays as it is below.
 #
 # `@openmaic/<name>@<version>` tags are an OUTPUT of a release, written after a
 # package lands on the registry. They are markers, not triggers: a tag cannot
@@ -95,7 +107,14 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      # ci.yml is a separate workflow, so its copy of the version check cannot
+      # The allowlist, as an executed assertion. Runs on its own so the log says
+      # which set was approved, and before `pnpm install` so a workspace that has
+      # grown a publishable package nobody vetted is rejected without executing
+      # any third-party code.
+      - name: Assert the publishable package set
+        run: node scripts/check-package-version-bumps.mjs --assert-set
+
+      # ci.yml is a separate workflow, so the merge-time changeset gate cannot
       # stop a release that reaches here with CI red, skipped, or never run.
       # This decides, against the registry, which packages may be published, and
       # refuses to reuse or downgrade a published version.
@@ -104,16 +123,20 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Build in dependency order (dsl first); storage/renderer/importer resolve
-      # @openmaic/dsl through the workspace link.
+      # Build in dependency order (dsl first, which `pnpm -r` resolves through the
+      # workspace links). The filter list comes from the allowlist rather than
+      # being typed here, so the set that is built, tested, packed and published
+      # is one set: a package added to the allowlist cannot reach the publish loop
+      # without also passing through everything below.
       - name: Build @openmaic packages
-        run: >-
-          pnpm -r
-          --filter "@openmaic/dsl"
-          --filter "@openmaic/storage"
-          --filter "@openmaic/renderer"
-          --filter "@openmaic/importer"
-          run build
+        run: |
+          set -euo pipefail
+          # A failing --list aborts here: a plain assignment takes the exit status
+          # of its command substitution, so `set -e` fires.
+          filters="$(node scripts/check-package-version-bumps.mjs --list | awk '{ printf " --filter %s", $1 }')"
+          echo "Building:$filters"
+          # shellcheck disable=SC2086
+          pnpm -r $filters run build
 
       # Some packages generate tracked, publishable files as part of `build`
       # (renderer's fonts.css and its KaTeX font snapshot). If the committed
@@ -122,10 +145,14 @@ jobs:
       - name: Verify the build did not rewrite tracked package files
         run: |
           set -euo pipefail
-          if ! git diff --quiet -- packages/@openmaic; then
+          # Against HEAD, not the index: `git diff --quiet` alone compares the
+          # worktree to the index, so a build that rewrote a tracked file AND
+          # staged it would compare clean and ship content the commit does not
+          # contain.
+          if ! git diff --quiet HEAD -- packages/@openmaic; then
             echo "::error::The build modified tracked files under packages/@openmaic."
             echo "Regenerate them and commit the result before releasing."
-            git --no-pager diff --stat -- packages/@openmaic
+            git --no-pager diff --stat HEAD -- packages/@openmaic
             exit 1
           fi
           echo "Tracked package files match the commit being released."
@@ -135,17 +162,24 @@ jobs:
           PG_CONTRACT_URL: postgresql://postgres:postgres@localhost:5432/openmaic
           STORAGE_PG_CONTRACT_REQUIRED: "1"
         run: |
-          pnpm --filter "@openmaic/dsl" --filter "@openmaic/storage" \
-            --filter "@openmaic/renderer" --filter "@openmaic/importer" run test
-          pnpm --filter "@openmaic/dsl" --filter "@openmaic/storage" --filter "@openmaic/renderer" run typecheck
+          set -euo pipefail
+          filters="$(node scripts/check-package-version-bumps.mjs --list | awk '{ printf " --filter %s", $1 }')"
+          # shellcheck disable=SC2086
+          pnpm -r $filters run test
+          # `pnpm -r run` skips a package that has no such script, so a package
+          # without a typecheck script is not a reason to skip the ones that do.
+          # shellcheck disable=SC2086
+          pnpm -r $filters run typecheck
 
       - name: Inspect tarball contents (dry-run pack)
         run: |
-          for pkg in dsl storage renderer importer; do
-            echo "::group::@openmaic/$pkg"
-            ( cd "packages/@openmaic/$pkg" && pnpm pack --dry-run )
+          set -euo pipefail
+          list="$(node scripts/check-package-version-bumps.mjs --list)"
+          while read -r name dir; do
+            echo "::group::$name"
+            ( cd "$dir" && pnpm pack --dry-run )
             echo "::endgroup::"
-          done
+          done <<< "$list"
 
       - name: Smoke-test publishable tarballs
         run: pnpm test:package-tarballs
@@ -237,7 +271,8 @@ jobs:
           done
 
       # Recomputed here rather than carried over from `validate`: this job must
-      # decide what to publish from the tree it is actually publishing.
+      # decide what to publish from the tree it is actually publishing. It
+      # re-asserts the allowlist for the same reason.
       - name: Plan the release
         run: node scripts/check-package-version-bumps.mjs --release
         env:
@@ -245,29 +280,46 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # ACCEPTED: this rebuilds instead of publishing the bytes `validate` packed.
+      # Handing tarballs between jobs would not remove the question, it would move
+      # it: the job holding NPM_TOKEN would publish bytes produced by a job that
+      # does not hold it, and the artifact store becomes something to trust. What
+      # is guaranteed instead is that both jobs build the same commit with the same
+      # frozen lockfile, that `validate` proved that build packs and imports
+      # cleanly, and that the check below proves the build did not rewrite anything
+      # tracked. The residual risk is a non-reproducible build, which is a property
+      # of the packages rather than of this workflow.
       - name: Build @openmaic packages
-        run: >-
-          pnpm -r
-          --filter "@openmaic/dsl"
-          --filter "@openmaic/storage"
-          --filter "@openmaic/renderer"
-          --filter "@openmaic/importer"
-          run build
+        run: |
+          set -euo pipefail
+          filters="$(node scripts/check-package-version-bumps.mjs --list | awk '{ printf " --filter %s", $1 }')"
+          # shellcheck disable=SC2086
+          pnpm -r $filters run build
 
       - name: Verify the build did not rewrite tracked package files
         run: |
           set -euo pipefail
-          if ! git diff --quiet -- packages/@openmaic; then
+          # Against HEAD, not the index: `git diff --quiet` alone compares the
+          # worktree to the index, so a build that rewrote a tracked file AND
+          # staged it would compare clean and ship content the commit does not
+          # contain.
+          if ! git diff --quiet HEAD -- packages/@openmaic; then
             echo "::error::The build modified tracked files under packages/@openmaic."
-            git --no-pager diff --stat -- packages/@openmaic
+            git --no-pager diff --stat HEAD -- packages/@openmaic
             exit 1
           fi
 
-      # Publish one package at a time. A single recursive publish that dies
-      # partway leaves earlier packages on the registry with nothing recording
-      # it; per-package publishing makes an ordinary re-run pick up exactly
-      # where it stopped, because a version already on the registry is no
-      # longer in the plan.
+      # Publish one package at a time, in allowlist order, stopping at the first
+      # failure. A single recursive publish that dies partway leaves earlier
+      # packages on the registry with nothing recording it; per-package publishing
+      # makes an ordinary re-run pick up exactly where it stopped, because a
+      # version already on the registry is no longer in the plan.
+      #
+      # Sequential, not concurrent, and dsl first. Each dependent resolves
+      # `workspace:^` against dsl's version in this tree, so publishing a
+      # dependent whose dsl release failed would put a package on the registry
+      # depending on a version that does not exist. Ordering the loop and letting
+      # `set -e` stop it is what prevents that.
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -275,9 +327,9 @@ jobs:
           RELEASE_PLAN_PATH: ${{ runner.temp }}/release-plan.json
         run: |
           set -euo pipefail
-          for pkg in dsl storage renderer importer; do
-            name="@openmaic/$pkg"
-            version="$(node -p "require('./packages/@openmaic/$pkg/package.json').version")"
+          list="$(node scripts/check-package-version-bumps.mjs --list)"
+          while read -r name dir; do
+            version="$(node -p "require('./$dir/package.json').version")"
             planned="$(node -e 'const plan = require(process.env.RELEASE_PLAN_PATH);
               const [name, version] = process.argv.slice(1);
               process.stdout.write(plan.some((e) => e.package === name && e.version === version) ? "yes" : "no");' \
@@ -289,10 +341,10 @@ jobs:
             # --ignore-scripts: every package's prepublishOnly reruns the build,
             # which would delete and regenerate the dist that was just verified,
             # so npm could receive bytes nothing checked.
-            ( cd "packages/@openmaic/$pkg" \
+            ( cd "$dir" \
               && pnpm publish --access public --provenance --no-git-checks --ignore-scripts )
             echo "Published $name@$version."
-          done
+          done <<< "$list"
 
   # Writing the release markers is the only thing that needs a git credential,
   # so it is the only job that holds one, and it installs nothing and builds
@@ -306,6 +358,12 @@ jobs:
   mark:
     name: Mark released versions
     needs: publish
+    # Also runs when `publish` failed part-way. What to mark is decided by asking
+    # the registry, not by what this run did, so a publish that got two packages
+    # out and then died leaves those two marked rather than stranded. The run
+    # still fails, because `publish` did. `skipped` is excluded so a dry run
+    # cannot write tags for a commit that is not being released.
+    if: ${{ !cancelled() && (needs.publish.result == 'success' || needs.publish.result == 'failure') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write # required to push the release marker tags
@@ -323,9 +381,9 @@ jobs:
           GIT_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
-          for pkg in dsl storage renderer importer; do
-            name="@openmaic/$pkg"
-            version="$(node -p "require('./packages/@openmaic/$pkg/package.json').version")"
+          list="$(node scripts/check-package-version-bumps.mjs --list)"
+          while read -r name dir; do
+            version="$(node -p "require('./$dir/package.json').version")"
             tag="$name@$version"
             if ! npm view "$name@$version" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
               echo "$tag is not on the registry; nothing to mark."
@@ -345,4 +403,4 @@ jobs:
             else
               echo "::warning::Could not write the release marker $tag; $name@$version is published."
             fi
-          done
+          done <<< "$list"

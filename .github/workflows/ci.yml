@@ -29,31 +29,34 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - name: Package version bumps
-        if: github.event_name == 'pull_request'
-        run: node scripts/check-package-version-bumps.mjs "$BASE_SHA"
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      - run: pnpm install --frozen-lockfile
 
+      # Versions are owned by `changeset version`, so a change no longer carries
+      # an edited number — it carries a changeset that names every publishable
+      # package it changed. Not `changeset status`: that fails only when a range
+      # contains no changesets at all, so changing the renderer while declaring
+      # only storage would pass it. The requirement is per package, and
+      # scripts/check-changesets.mjs is where that is asserted. It also handles
+      # the release itself, which consumes the changesets it applies and so can
+      # never carry one.
+      #
       # A branch creation or a force push reports an unusable `before`. Fail
       # rather than substituting HEAD^: a force push can replace many commits at
       # once, so the previous commit is not the range that needs checking, and
       # publishing requires this run to be green.
-      - name: Package version bumps (main push)
-        if: github.event_name == 'push'
+      - name: Changesets cover every changed package
         run: |
           set -euo pipefail
-          base="$BEFORE_SHA"
+          base="${BASE_SHA:-$BEFORE_SHA}"
           if [ -z "$base" ] || ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
-            echo "::error::Push range base ${base:-<empty>} is unavailable, so this push cannot be checked."
-            echo "Re-run after the branch has an ordinary push range, or verify the versions by hand."
+            echo "::error::Range base ${base:-<empty>} is unavailable, so this change cannot be checked."
+            echo "Re-run once the branch has an ordinary range, or verify the release intent by hand."
             exit 1
           fi
-          node scripts/check-package-version-bumps.mjs "$base"
+          node scripts/check-changesets.mjs "$base"
         env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           BEFORE_SHA: ${{ github.event.before }}
-
-      - run: pnpm install --frozen-lockfile
 
       - name: Prettier
         run: pnpm check

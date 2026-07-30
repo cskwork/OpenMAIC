@@ -1,6 +1,7 @@
 {
   "name": "mathml2omml",
   "version": "0.5.0",
+  "private": true,
   "description": "a MathML to OMML converter ",
   "main": "./dist/index.js",
   "type": "module",
