@@ -18,7 +18,16 @@ function run(command, args, options = {}) {
 
 function pack(name) {
   const packageDirectory = join(root, 'packages', '@openmaic', name);
-  run('pnpm', ['pack', '--pack-destination', temporaryDirectory], {
+  // `--config.ignore-scripts=true` because the publish step runs
+  // `pnpm publish --ignore-scripts`. Packing WITH lifecycle scripts while
+  // publishing without them means this smoke test inspects a different tarball
+  // than the one that reaches the registry: a `prepack` that rewrote the
+  // manifest — committing `workspace:*` alongside a `prepack` that turns it
+  // into `workspace:^`, say — would satisfy every assertion below and then not
+  // run at publish time, so the exact pin would ship anyway. Validation and
+  // publication must have identical lifecycle semantics, or validation proves
+  // nothing about what is published.
+  run('pnpm', ['pack', '--config.ignore-scripts=true', '--pack-destination', temporaryDirectory], {
     cwd: packageDirectory,
     stdio: 'pipe',
   });

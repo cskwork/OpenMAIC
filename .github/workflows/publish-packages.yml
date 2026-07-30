@@ -161,11 +161,15 @@ jobs:
           node scripts/assert-pg-contract-suites.mjs "$STORAGE_VITEST_RESULTS"
           pnpm --filter "@openmaic/dsl" --filter "@openmaic/storage" --filter "@openmaic/renderer" run typecheck
 
+      # `--config.ignore-scripts=true` mirrors the publish step's
+      # `--ignore-scripts`. Inspecting a tarball built with lifecycle scripts
+      # while publishing one built without them means this step describes a
+      # tarball the registry never receives.
       - name: Inspect tarball contents (dry-run pack)
         run: |
           for pkg in dsl storage renderer importer; do
             echo "::group::@openmaic/$pkg"
-            ( cd "packages/@openmaic/$pkg" && pnpm pack --dry-run )
+            ( cd "packages/@openmaic/$pkg" && pnpm pack --dry-run --config.ignore-scripts=true )
             echo "::endgroup::"
           done
 

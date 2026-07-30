@@ -19,9 +19,34 @@
  * {@link DSL_VERSION_KEY} envelope field to read the current version and stamp
  * the new one. Which aggregate carries that field is decided when a normalized
  * store first consumes this pipeline.
+ *
+ * ---
+ *
+ * RELEASE RULE, ENFORCED: changing {@link DSL_VERSION} or
+ * {@link RUNTIME_DSL_VERSION} requires **at least a MINOR increase of this
+ * package's npm version**. `scripts/check-package-version-bumps.mjs` fails the
+ * merge if it does not.
+ *
+ * Independence from the npm version, described above, is about which way the
+ * two numbers may move *apart*: a package release may leave the format alone.
+ * The reverse is constrained. `@openmaic/storage`, `@openmaic/renderer` and
+ * `@openmaic/importer` depend on this package as `workspace:^`, published as a
+ * caret, and a caret does not cross a 0.x minor. So a MINOR is what keeps a
+ * format change from reaching an already-published dependent: it makes that
+ * dependent's own maintainers opt in with a release of their own.
+ *
+ * Shipping a format change as a PATCH instead would deliver it silently. The
+ * same published `storage` version, resolved against two different dsl patches,
+ * would write and then refuse to read the same rows — storage compares these
+ * constants by value and rejects anything stamped newer than it knows.
  */
 
-/** Current version of the serialized slide contract. */
+/**
+ * Current version of the serialized slide contract.
+ *
+ * Changing it requires at least a MINOR increase of the package version; see
+ * the module docstring.
+ */
 export const DSL_VERSION = '0.1.0' as const;
 
 export type DslVersion = typeof DSL_VERSION;
@@ -175,6 +200,9 @@ export const DSL_MIGRATIONS: readonly DslMigration[] = [
  * not legacy data — it is a misrouted legacy document or an unstamped producer
  * write, and fails loud (see {@link noRuntimeEpochError}) rather than being
  * lifted. {@link RUNTIME_DSL_MIGRATIONS} accordingly ships empty.
+ *
+ * Like {@link DSL_VERSION}, changing this requires at least a MINOR increase of
+ * the package version; see the module docstring for why.
  */
 export const RUNTIME_DSL_VERSION = '0.1.0' as const;
 

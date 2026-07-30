@@ -184,6 +184,109 @@ function failIfAny(failures, headline) {
   process.exit(1);
 }
 
+const DSL_VERSION_SOURCE = 'packages/@openmaic/dsl/src/version.ts';
+
+/**
+ * The two SERIALIZED-FORMAT versions the dsl owns. They are deliberately
+ * decoupled from the npm version (see the module docstring in version.ts), and
+ * storage compares them by value across the package boundary, refusing to read
+ * a document or session written at a version it does not know.
+ */
+const DSL_FORMAT_CONSTANTS = ['DSL_VERSION', 'RUNTIME_DSL_VERSION'];
+
+function readFormatConstants(contents, source) {
+  const found = {};
+  for (const name of DSL_FORMAT_CONSTANTS) {
+    // `export const <name> =` anchors the match, so the longer identifiers that
+    // merely contain these names (RUNTIME_DSL_VERSION_KEY, INITIAL_DSL_VERSION,
+    // UNVERSIONED_DSL_VERSION) cannot be mistaken for them.
+    const match = new RegExp(`export const ${name}\\s*=\\s*'([^']*)'`).exec(contents);
+    if (!match) {
+      throw new Error(
+        `${source} no longer declares ${name} as a string literal; this check cannot read it`,
+      );
+    }
+    found[name] = match[1];
+  }
+  return found;
+}
+
+/**
+ * A change to a serialized-format version requires at least a MINOR increase of
+ * the dsl package version.
+ *
+ * The dependents declare `@openmaic/dsl` as `workspace:^`, published as
+ * `^0.5.0`. That range is what stops a consumer installing two copies of the
+ * dsl, but under 0.x it floats across every 0.5.x patch — and a patch is
+ * therefore free to change what the dependents can read.
+ *
+ * Without this rule: dsl ships 0.5.1 moving DSL_VERSION '0.1.0' -> '0.2.0' with
+ * a migration, which version.ts explicitly calls legitimate. Installation A
+ * resolves 0.5.1, and the very same published storage version stamps
+ * `dslVersion: '0.2.0'` into `document_stages`. Installation B, lockfile-pinned
+ * to dsl 0.5.0, reads that row and hard-fails as "newer than this client".
+ * Two installs of one published storage version, silently data-incompatible.
+ *
+ * Requiring a minor makes the format change cross the caret, so a dependent
+ * only ever picks up a new serialized format through a deliberate release of
+ * its own. The old exact pin was holding this invariant by accident; making the
+ * range useful means stating it out loud.
+ */
+function checkDslFormatVersionRule(base, failures) {
+  const beforeSource = gitFileAt(base, DSL_VERSION_SOURCE);
+  const afterSource = gitFileAt('HEAD', DSL_VERSION_SOURCE);
+  if (beforeSource === undefined || afterSource === undefined) return;
+
+  let before;
+  let after;
+  try {
+    before = readFormatConstants(beforeSource, `${DSL_VERSION_SOURCE} at ${base}`);
+    after = readFormatConstants(afterSource, `${DSL_VERSION_SOURCE} at HEAD`);
+  } catch (error) {
+    failures.push(error instanceof Error ? error.message : String(error));
+    return;
+  }
+
+  const moved = DSL_FORMAT_CONSTANTS.filter((name) => before[name] !== after[name]);
+  if (moved.length === 0) return;
+
+  const manifest = `${packageDirectory('dsl')}/package.json`;
+  const beforeManifest = gitFileAt(base, manifest);
+  const afterManifest = gitFileAt('HEAD', manifest);
+  if (beforeManifest === undefined || afterManifest === undefined) return;
+
+  let beforePackage;
+  let afterPackage;
+  try {
+    beforePackage = readVersion(beforeManifest, `${manifest} at ${base}`);
+    afterPackage = readVersion(afterManifest, `${manifest} at HEAD`);
+  } catch (error) {
+    failures.push(error instanceof Error ? error.message : String(error));
+    return;
+  }
+
+  const [beforeMajor, beforeMinor] = beforePackage.parts;
+  const [afterMajor, afterMinor] = afterPackage.parts;
+  const minorMoved =
+    afterMajor > beforeMajor || (afterMajor === beforeMajor && afterMinor > beforeMinor);
+  if (minorMoved) {
+    console.log(
+      `dsl: ${moved.join(', ')} changed and the package version crossed a minor ` +
+        `(${beforePackage.raw} -> ${afterPackage.raw}).`,
+    );
+    return;
+  }
+
+  failures.push(
+    `dsl: ${moved.map((name) => `${name} ${before[name]} -> ${after[name]}`).join(', ')}, ` +
+      `but the package version only moved ${beforePackage.raw} -> ${afterPackage.raw}. ` +
+      'A serialized-format change needs at least a MINOR increase, because dependents ' +
+      'declare `workspace:^` and a caret does not cross a 0.x minor: a patch would hand ' +
+      'the new format to already-published dependents, so two installs of the same ' +
+      'dependent version could write and refuse to read data written by the other.',
+  );
+}
+
 /**
  * Diff mode: every publishable change between `base` and HEAD must carry a
  * version increase.
@@ -234,6 +337,8 @@ function runDiffMode(base) {
       console.log(`${name}: ${before.raw} -> ${after.raw}`);
     }
   }
+
+  checkDslFormatVersionRule(base, failures);
 
   failIfAny(
     failures,
