@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { INTERNAL_DEPENDENTS, OPENMAIC_PACKAGES } from './openmaic-packages.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const temporaryDirectory = mkdtempSync(join(tmpdir(), 'openmaic-package-smoke-'));
@@ -56,13 +57,18 @@ function packedManifest(tarball) {
  * constants, two copies mean a document produced against one instance can be
  * validated by the other's schema revision.
  *
+ * The caret in `dependencies` is only half of it. `peerDependencies` and
+ * `optionalDependencies` are published constraints too, so an exact entry in
+ * either would reintroduce the duplicate while `dependencies` still read
+ * correctly. An owned package must therefore appear exactly once, here.
+ *
  * KNOWN LIMITATION: `^` deduplicates within one 0.x line only. A consumer that
  * mixes an older dependent requiring `^0.5.0` with a newer one requiring
  * `^0.6.0` still ends up with two dsl copies. Removing that possibility
  * entirely would mean making the dsl a peer dependency of all three dependents,
  * which changes their public installation contract and is a separate decision.
  */
-function assertDeduplicableDslRange(name, manifest, dslVersion) {
+function assertDeduplicableDslRange(name, manifest, dslVersion, ownedPackages) {
   const range = manifest.dependencies?.['@openmaic/dsl'];
   assert(
     range !== undefined,
@@ -75,11 +81,23 @@ function assertDeduplicableDslRange(name, manifest, dslVersion) {
       `"^${dslVersion}". An exact pin (what "workspace:*" publishes) forces consumers to ` +
       'install a second copy of the dsl alongside its siblings.',
   );
-  console.log(`@openmaic/${name} publishes @openmaic/dsl as ${range}.`);
+  for (const field of ['peerDependencies', 'optionalDependencies']) {
+    const declared = Object.keys(manifest[field] ?? {}).filter((dependency) =>
+      ownedPackages.has(dependency),
+    );
+    assert.deepEqual(
+      declared,
+      [],
+      `@openmaic/${name} publishes ${field} entries for owned packages ` +
+        `(${declared.join(', ')}). Those are published constraints as much as ` +
+        '`dependencies` is, so an exact one there pins the dsl regardless of the caret above.',
+    );
+  }
+  console.log(`@openmaic/${name} publishes @openmaic/dsl as ${range}, and nowhere else.`);
 }
 
 try {
-  const packageNames = ['dsl', 'storage', 'renderer', 'importer'];
+  const packageNames = OPENMAIC_PACKAGES;
   const localPackages = new Set(packageNames.map((name) => `@openmaic/${name}`));
   // The smoke program executes the renderer root, whose optional chart and
   // highlighting peers are imported by that entry. Other optional peers remain
@@ -107,8 +125,8 @@ try {
   const tarballs = Object.fromEntries(packageNames.map((name) => [name, pack(name)]));
 
   const dslVersion = packedManifest(tarballs.dsl).version;
-  for (const name of ['storage', 'renderer', 'importer']) {
-    assertDeduplicableDslRange(name, packedManifest(tarballs[name]), dslVersion);
+  for (const name of Object.keys(INTERNAL_DEPENDENTS)) {
+    assertDeduplicableDslRange(name, packedManifest(tarballs[name]), dslVersion, localPackages);
   }
 
   const consumerDirectory = join(temporaryDirectory, 'consumer');

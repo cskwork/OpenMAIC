@@ -151,14 +151,17 @@ jobs:
           PG_CONTRACT_URL: postgresql://postgres:postgres@localhost:5432/openmaic
           STORAGE_PG_CONTRACT_REQUIRED: "1"
           STORAGE_VITEST_RESULTS: ${{ runner.temp }}/storage-vitest.json
+          STORAGE_PG_BASELINE: ${{ runner.temp }}/storage-pg-baseline.json
         run: |
           set -euo pipefail
           pnpm --filter "@openmaic/dsl" \
             --filter "@openmaic/renderer" --filter "@openmaic/importer" run test
+          node scripts/assert-pg-contract-suites.mjs --capture-baseline "$STORAGE_PG_BASELINE"
           pnpm --filter "@openmaic/storage" exec \
             vitest run --reporter=default --reporter=json \
             --outputFile.json="$STORAGE_VITEST_RESULTS"
-          node scripts/assert-pg-contract-suites.mjs "$STORAGE_VITEST_RESULTS"
+          node scripts/assert-pg-contract-suites.mjs "$STORAGE_VITEST_RESULTS" \
+            --baseline "$STORAGE_PG_BASELINE"
           pnpm --filter "@openmaic/dsl" --filter "@openmaic/storage" --filter "@openmaic/renderer" run typecheck
 
       # `--config.ignore-scripts=true` mirrors the publish step's

@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { OPENMAIC_PACKAGES } from './openmaic-packages.mjs';
 
 const REGISTRY = 'https://registry.npmjs.org';
 
@@ -27,10 +28,7 @@ const commonIgnoredInputs = {
 // version bumps, or externalising the bundled dependencies. Both are decisions
 // about how the packages are built rather than about this check. Diff mode is a
 // merge-time guard against the common case, not a proof of byte equality.
-const ignoredPackageInputs = {
-  dsl: commonIgnoredInputs,
-  storage: commonIgnoredInputs,
-  renderer: commonIgnoredInputs,
+const ignoredInputOverrides = {
   importer: {
     // These are local tooling, demo assets, or the legacy reference
     // implementation. The importer build and package files exclude all of them.
@@ -47,6 +45,12 @@ const ignoredPackageInputs = {
     directories: [...commonIgnoredInputs.directories, 'scripts/', 'src1/'],
   },
 };
+
+// Built from the shared package list rather than spelled out again, so a new
+// package cannot be silently exempt from this gate by being absent here.
+const ignoredPackageInputs = Object.fromEntries(
+  OPENMAIC_PACKAGES.map((name) => [name, ignoredInputOverrides[name] ?? commonIgnoredInputs]),
+);
 
 const usage = [
   'Usage:',
@@ -86,6 +90,19 @@ function resolveCommit(ref) {
     return git(['rev-parse', '--verify', `${ref}^{commit}`], { quiet: true });
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * The commit `base` and HEAD diverged from — what `base...HEAD` compares
+ * against. Falls back to `base` itself if there is no common ancestor, which
+ * only happens for unrelated histories.
+ */
+function mergeBaseWithHead(base) {
+  try {
+    return git(['merge-base', base, 'HEAD'], { quiet: true });
+  } catch {
+    return base;
   }
 }
 
@@ -197,28 +214,57 @@ const DSL_FORMAT_CONSTANTS = ['DSL_VERSION', 'RUNTIME_DSL_VERSION'];
 function readFormatConstants(contents, source) {
   const found = {};
   for (const name of DSL_FORMAT_CONSTANTS) {
-    // `export const <name> =` anchors the match, so the longer identifiers that
-    // merely contain these names (RUNTIME_DSL_VERSION_KEY, INITIAL_DSL_VERSION,
-    // UNVERSIONED_DSL_VERSION) cannot be mistaken for them.
-    const match = new RegExp(`export const ${name}\\s*=\\s*'([^']*)'`).exec(contents);
-    if (!match) {
+    // Anchored to the start of a line (allowing only indentation) so that a
+    // commented-out `// export const DSL_VERSION = '0.1.0'` cannot be read as
+    // the live value. `export const <name> =` also keeps the longer identifiers
+    // that merely contain these names (RUNTIME_DSL_VERSION_KEY,
+    // INITIAL_DSL_VERSION, UNVERSIONED_DSL_VERSION) from matching.
+    const pattern = new RegExp(`^[ \\t]*export const ${name}\\s*=\\s*'([^']*)'`, 'gm');
+    const matches = [...contents.matchAll(pattern)];
+    if (matches.length === 0) {
       throw new Error(
-        `${source} no longer declares ${name} as a string literal; this check cannot read it`,
+        `${source} no longer declares ${name} as a top-level string literal; this check ` +
+          'cannot read it, and must not guess. Update the gate together with the change.',
       );
     }
-    found[name] = match[1];
+    if (matches.length > 1) {
+      throw new Error(
+        `${source} declares ${name} ${matches.length} times; this check cannot tell which ` +
+          'one is authoritative.',
+      );
+    }
+    found[name] = matches[0][1];
   }
   return found;
 }
 
 /**
- * A change to a serialized-format version requires at least a MINOR increase of
- * the dsl package version.
+ * The lowest version that `^before` does NOT admit — the smallest increase that
+ * actually stops an already-published dependent from resolving it.
  *
- * The dependents declare `@openmaic/dsl` as `workspace:^`, published as
- * `^0.5.0`. That range is what stops a consumer installing two copies of the
- * dsl, but under 0.x it floats across every 0.5.x patch — and a patch is
- * therefore free to change what the dependents can read.
+ *   ^1.4.2  admits >=1.4.2 <2.0.0   so the escape is a MAJOR: 2.0.0
+ *   ^0.5.1  admits >=0.5.1 <0.6.0   so the escape is a MINOR: 0.6.0
+ *   ^0.0.3  admits only 0.0.3       so the escape is a PATCH: 0.0.4
+ *
+ * Expressing the rule this way rather than naming a fixed level keeps it
+ * correct across the 1.0 boundary: once dsl is 1.x a caret admits minors, so
+ * "minor" would stop being enough exactly when it started to matter.
+ */
+function caretEscapeVersion(version) {
+  const [major, minor, patch] = version.parts;
+  if (major > 0) return { raw: `${major + 1}.0.0`, level: 'MAJOR' };
+  if (minor > 0) return { raw: `0.${minor + 1}.0`, level: 'MINOR' };
+  return { raw: `0.0.${patch + 1}`, level: 'PATCH' };
+}
+
+/**
+ * A change to a serialized-format version requires a dsl package version
+ * increase that the dependents' caret range will NOT admit.
+ *
+ * The dependents declare `@openmaic/dsl` as `workspace:^`, published as a
+ * caret. That range is what stops a consumer installing two copies of the dsl,
+ * but it also means any version the caret admits reaches them without a release
+ * of their own — so an admitted bump is free to change what they can read.
  *
  * Without this rule: dsl ships 0.5.1 moving DSL_VERSION '0.1.0' -> '0.2.0' with
  * a migration, which version.ts explicitly calls legitimate. Installation A
@@ -227,15 +273,39 @@ function readFormatConstants(contents, source) {
  * to dsl 0.5.0, reads that row and hard-fails as "newer than this client".
  * Two installs of one published storage version, silently data-incompatible.
  *
- * Requiring a minor makes the format change cross the caret, so a dependent
- * only ever picks up a new serialized format through a deliberate release of
- * its own. The old exact pin was holding this invariant by accident; making the
- * range useful means stating it out loud.
+ * The required increase is therefore whatever escapes the caret — a minor while
+ * dsl is 0.x, a major once it reaches 1.0.0 — so a dependent only ever picks up
+ * a new serialized format through a deliberate release of its own. The old
+ * exact pin was holding this invariant by accident; making the range useful
+ * means stating it out loud.
+ *
+ * FAILS CLOSED. If `version.ts` is missing at either revision while dsl changed
+ * at all, this reports an error rather than passing: the file being renamed or
+ * split is exactly the case where the rule would otherwise stop comparing and
+ * a format change could ride out on a patch.
  */
 function checkDslFormatVersionRule(base, failures) {
+  const manifest = `${packageDirectory('dsl')}/package.json`;
+  const beforeManifest = gitFileAt(base, manifest);
+  const afterManifest = gitFileAt('HEAD', manifest);
+  // dsl did not exist at `base`, or has been removed: there is no package for
+  // the rule to constrain, and the ordinary checks already cover both cases.
+  if (beforeManifest === undefined || afterManifest === undefined) return;
+
   const beforeSource = gitFileAt(base, DSL_VERSION_SOURCE);
   const afterSource = gitFileAt('HEAD', DSL_VERSION_SOURCE);
-  if (beforeSource === undefined || afterSource === undefined) return;
+  if (beforeSource === undefined || afterSource === undefined) {
+    // Nothing about dsl moved, so nothing can have moved the format either.
+    if (!publishableInputsChanged('dsl', base)) return;
+    const missingAt = beforeSource === undefined ? base : 'HEAD';
+    failures.push(
+      `dsl: ${DSL_VERSION_SOURCE} does not exist at ${missingAt}, so the serialized-format ` +
+        'version rule cannot be evaluated for a change that does touch dsl. This check must ' +
+        'not pass by default. If the constants moved, point DSL_VERSION_SOURCE in ' +
+        'scripts/check-package-version-bumps.mjs at their new home in the same change.',
+    );
+    return;
+  }
 
   let before;
   let after;
@@ -250,11 +320,6 @@ function checkDslFormatVersionRule(base, failures) {
   const moved = DSL_FORMAT_CONSTANTS.filter((name) => before[name] !== after[name]);
   if (moved.length === 0) return;
 
-  const manifest = `${packageDirectory('dsl')}/package.json`;
-  const beforeManifest = gitFileAt(base, manifest);
-  const afterManifest = gitFileAt('HEAD', manifest);
-  if (beforeManifest === undefined || afterManifest === undefined) return;
-
   let beforePackage;
   let afterPackage;
   try {
@@ -265,14 +330,11 @@ function checkDslFormatVersionRule(base, failures) {
     return;
   }
 
-  const [beforeMajor, beforeMinor] = beforePackage.parts;
-  const [afterMajor, afterMinor] = afterPackage.parts;
-  const minorMoved =
-    afterMajor > beforeMajor || (afterMajor === beforeMajor && afterMinor > beforeMinor);
-  if (minorMoved) {
+  const escape = caretEscapeVersion(beforePackage);
+  if (compareVersions(afterPackage, parseVersion(escape.raw)) >= 0) {
     console.log(
-      `dsl: ${moved.join(', ')} changed and the package version crossed a minor ` +
-        `(${beforePackage.raw} -> ${afterPackage.raw}).`,
+      `dsl: ${moved.join(', ')} changed and the package version escaped the dependents ` +
+        `caret range (${beforePackage.raw} -> ${afterPackage.raw}, needed >= ${escape.raw}).`,
     );
     return;
   }
@@ -280,10 +342,12 @@ function checkDslFormatVersionRule(base, failures) {
   failures.push(
     `dsl: ${moved.map((name) => `${name} ${before[name]} -> ${after[name]}`).join(', ')}, ` +
       `but the package version only moved ${beforePackage.raw} -> ${afterPackage.raw}. ` +
-      'A serialized-format change needs at least a MINOR increase, because dependents ' +
-      'declare `workspace:^` and a caret does not cross a 0.x minor: a patch would hand ' +
-      'the new format to already-published dependents, so two installs of the same ' +
-      'dependent version could write and refuse to read data written by the other.',
+      'A serialized-format change needs an increase that the dependents caret range ' +
+      `will NOT admit: here at least ${escape.raw} (a ${escape.level}), because they ` +
+      `declare \`workspace:^\` and \`^${beforePackage.raw}\` admits everything below ` +
+      `${escape.raw}. Anything it admits hands the new format to already-published ` +
+      'dependents, so two installs of the same dependent version could write and then ' +
+      'refuse to read data written by the other.',
   );
 }
 
@@ -338,7 +402,17 @@ function runDiffMode(base) {
     }
   }
 
-  checkDslFormatVersionRule(base, failures);
+  // Against the MERGE BASE, matching the `base...HEAD` form used above to find
+  // changed inputs. The question this rule asks is "did THIS branch move a
+  // format constant", which the base tip cannot answer: on an un-rebased branch
+  // the tip may already carry someone else's format change, and comparing
+  // against it reports the difference backwards.
+  //
+  // Deliberately not applied to the version comparison above. That one asks
+  // "does this version beat what is already on the base branch", where the tip
+  // is the right reference — using the merge base there would let a branch
+  // reuse a version another branch published in the meantime.
+  checkDslFormatVersionRule(mergeBaseWithHead(base), failures);
 
   failIfAny(
     failures,
