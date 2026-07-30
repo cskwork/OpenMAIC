@@ -201,7 +201,21 @@ function failIfAny(failures, headline) {
   process.exit(1);
 }
 
-const DSL_VERSION_SOURCE = 'packages/@openmaic/dsl/src/version.ts';
+/**
+ * Where the serialized-format constants live, newest first.
+ *
+ * A list rather than one path so that moving the constants stays LANDABLE
+ * without ever letting the rule stop comparing. Failing closed on a missing
+ * file is right, but on its own it makes a rename impossible to merge: the new
+ * path does not exist at the base revision either, so the check would refuse
+ * both before and after. Resolving each revision against the first candidate
+ * that exists there means a rename lands by PREPENDING the new path here, in
+ * the same change, and the comparison still happens across it.
+ *
+ * Retired paths stay until the base branch no longer reaches a revision that
+ * used them.
+ */
+const DSL_VERSION_SOURCES = ['packages/@openmaic/dsl/src/version.ts'];
 
 /**
  * The two SERIALIZED-FORMAT versions the dsl owns. They are deliberately
@@ -279,10 +293,10 @@ function caretEscapeVersion(version) {
  * exact pin was holding this invariant by accident; making the range useful
  * means stating it out loud.
  *
- * FAILS CLOSED. If `version.ts` is missing at either revision while dsl changed
- * at all, this reports an error rather than passing: the file being renamed or
- * split is exactly the case where the rule would otherwise stop comparing and
- * a format change could ride out on a patch.
+ * FAILS CLOSED. If the constants cannot be located at either revision while dsl
+ * changed at all, this reports an error rather than passing. Renaming or
+ * splitting that file is exactly the case where the rule would otherwise stop
+ * comparing and a format change could ride out inside the caret.
  */
 function checkDslFormatVersionRule(base, failures) {
   const manifest = `${packageDirectory('dsl')}/package.json`;
@@ -292,17 +306,26 @@ function checkDslFormatVersionRule(base, failures) {
   // the rule to constrain, and the ordinary checks already cover both cases.
   if (beforeManifest === undefined || afterManifest === undefined) return;
 
-  const beforeSource = gitFileAt(base, DSL_VERSION_SOURCE);
-  const afterSource = gitFileAt('HEAD', DSL_VERSION_SOURCE);
+  const locate = (ref) => {
+    for (const path of DSL_VERSION_SOURCES) {
+      const contents = gitFileAt(ref, path);
+      if (contents !== undefined) return { path, contents };
+    }
+    return undefined;
+  };
+
+  const beforeSource = locate(base);
+  const afterSource = locate('HEAD');
   if (beforeSource === undefined || afterSource === undefined) {
     // Nothing about dsl moved, so nothing can have moved the format either.
     if (!publishableInputsChanged('dsl', base)) return;
     const missingAt = beforeSource === undefined ? base : 'HEAD';
     failures.push(
-      `dsl: ${DSL_VERSION_SOURCE} does not exist at ${missingAt}, so the serialized-format ` +
-        'version rule cannot be evaluated for a change that does touch dsl. This check must ' +
-        'not pass by default. If the constants moved, point DSL_VERSION_SOURCE in ' +
-        'scripts/check-package-version-bumps.mjs at their new home in the same change.',
+      `dsl: none of ${DSL_VERSION_SOURCES.join(', ')} exists at ${missingAt}, so the ` +
+        'serialized-format version rule cannot be evaluated for a change that does touch ' +
+        'dsl. This check must not pass by default. If the constants moved, prepend their ' +
+        'new path to DSL_VERSION_SOURCES in scripts/check-package-version-bumps.mjs in the ' +
+        'same change; the old path stays listed so the comparison still works across the move.',
     );
     return;
   }
@@ -310,8 +333,8 @@ function checkDslFormatVersionRule(base, failures) {
   let before;
   let after;
   try {
-    before = readFormatConstants(beforeSource, `${DSL_VERSION_SOURCE} at ${base}`);
-    after = readFormatConstants(afterSource, `${DSL_VERSION_SOURCE} at HEAD`);
+    before = readFormatConstants(beforeSource.contents, `${beforeSource.path} at ${base}`);
+    after = readFormatConstants(afterSource.contents, `${afterSource.path} at HEAD`);
   } catch (error) {
     failures.push(error instanceof Error ? error.message : String(error));
     return;
