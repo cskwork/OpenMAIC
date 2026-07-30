@@ -60,6 +60,7 @@ if (listProblems.length > 0) {
 }
 
 const failures = [];
+/** package name -> every owned dependency it declares in `dependencies`. */
 const seen = new Map();
 
 for (const name of OPENMAIC_PACKAGES) {
@@ -67,7 +68,9 @@ for (const name of OPENMAIC_PACKAGES) {
 
   for (const [dependency, range] of Object.entries(manifest.dependencies ?? {})) {
     if (!OWNED.has(dependency)) continue;
-    seen.set(name, dependency);
+    // Collected as a list, not a single value: overwriting would hide a second
+    // owned dependency behind whichever happened to be declared last.
+    seen.set(name, [...(seen.get(name) ?? []), dependency]);
     if (range === 'workspace:^') {
       console.log(`@openmaic/${name}: dependencies.${dependency} = ${range}`);
       continue;
@@ -90,34 +93,59 @@ for (const name of OPENMAIC_PACKAGES) {
       );
     }
   }
-
-  // devDependencies are not a constraint any consumer resolves, but the same
-  // form keeps the workspace link unambiguous and costs nothing to require.
-  for (const [dependency, range] of Object.entries(manifest.devDependencies ?? {})) {
-    if (!OWNED.has(dependency)) continue;
-    if (range === 'workspace:^') continue;
-    failures.push(
-      `@openmaic/${name} declares devDependencies."${dependency}" as ${JSON.stringify(range)}; ` +
-        'use "workspace:^" for owned packages everywhere.',
-    );
-  }
 }
 
-// A count is not a coverage proof: zero declarations, or three declarations
-// that all came from one package, would both pass one. Name what must be there.
+// Cross-checked in BOTH directions. Checking only that each mapped dependent
+// still declares its dependency leaves the map itself unguarded: delete an
+// entry and that package is exempt from this check and from the packed-manifest
+// assertion, which iterates the same map. Moving its dsl declaration to
+// `devDependencies` would then let it publish declaring no dsl at all.
 for (const [name, expected] of Object.entries(INTERNAL_DEPENDENTS)) {
   const observed = seen.get(name);
   if (observed === undefined) {
     failures.push(
-      `@openmaic/${name} no longer declares any owned @openmaic dependency; it was expected ` +
-        `to depend on ${expected}. If that is intended, update INTERNAL_DEPENDENTS in ` +
-        'scripts/openmaic-packages.mjs — this check must not go quiet on its own.',
+      `@openmaic/${name} no longer declares any owned @openmaic dependency in \`dependencies\`; ` +
+        `it was expected to depend on ${expected}. If that is intended, update ` +
+        'INTERNAL_DEPENDENTS in scripts/openmaic-packages.mjs — this check must not go quiet ' +
+        'on its own.',
     );
     continue;
   }
-  if (observed !== expected) {
+  if (observed.length > 1) {
     failures.push(
-      `@openmaic/${name} depends on ${observed}, but INTERNAL_DEPENDENTS expects ${expected}.`,
+      `@openmaic/${name} declares ${observed.length} owned dependencies (${observed.join(', ')}); ` +
+        `INTERNAL_DEPENDENTS records only ${expected}.`,
+    );
+    continue;
+  }
+  if (observed[0] !== expected) {
+    failures.push(
+      `@openmaic/${name} depends on ${observed[0]}, but INTERNAL_DEPENDENTS expects ${expected}.`,
+    );
+  }
+}
+
+for (const [name, observed] of seen) {
+  if (name in INTERNAL_DEPENDENTS) continue;
+  failures.push(
+    `@openmaic/${name} declares the owned dependency ${observed.join(', ')} but is absent from ` +
+      'INTERNAL_DEPENDENTS in scripts/openmaic-packages.mjs, so nothing checks how it is ' +
+      'published. Add it there.',
+  );
+}
+
+// devDependencies last, and rejected outright rather than range-checked. An
+// owned package listed there is a second declaration of a sibling that no
+// consumer resolves, which is precisely how a dependent could stop declaring
+// its dsl dependency while still building and testing against it.
+for (const name of OPENMAIC_PACKAGES) {
+  for (const dependency of Object.keys(readManifest(name).devDependencies ?? {})) {
+    if (!OWNED.has(dependency)) continue;
+    failures.push(
+      `@openmaic/${name} declares devDependencies."${dependency}". An owned @openmaic package ` +
+        'belongs in `dependencies` and nowhere else: a devDependency is not published as a ' +
+        'constraint, so it would satisfy the workspace link while the tarball declared no ' +
+        'dependency on it at all.',
     );
   }
 }

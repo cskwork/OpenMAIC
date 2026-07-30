@@ -13,6 +13,23 @@ import { fileURLToPath } from 'node:url';
  * workflow's own list still agrees with this one.
  *
  * Ordered by dependency: dsl first, since the other three build against it.
+ *
+ * ── THREAT MODEL FOR EVERY GATE THAT READS THIS ──────────────────────────────
+ *
+ * This list, and the checks built on it, are configuration held in the same
+ * repository as the code they check. Anyone who can merge a change to
+ * `scripts/` can also edit the gate itself: shorten this list, relax a rule,
+ * delete a workflow step. No amount of additional checking closes that, because
+ * every new check arrives with its own editable configuration.
+ *
+ * That is fine, because it is not the threat these gates are for. They exist to
+ * catch MISTAKES — a package added in one place and forgotten in another, a
+ * dependency range that publishes differently from how it reads, a test suite
+ * that stops running without anyone noticing. Those are silent by default and
+ * expensive to find later, which is exactly what a gate is good at. Deliberate
+ * subversion is not in scope and cannot be: someone willing to edit these
+ * scripts to hide a change can edit the production sources directly, and code
+ * review, not tooling, is what stands in the way of that.
  */
 export const OPENMAIC_PACKAGES = ['dsl', 'storage', 'renderer', 'importer'];
 
@@ -72,10 +89,6 @@ export function assertPackageListIsComplete() {
     }
   }
 
-  // The workflow's `on.push.paths` trigger and its per-package loops are plain
-  // YAML text. Substring checks are coarse, but they do catch the failure that
-  // matters: a package added here and forgotten there, which would never
-  // publish and never complain.
   let workflow;
   try {
     workflow = readFileSync(join(repositoryRoot, PUBLISH_WORKFLOW), 'utf8');
@@ -83,15 +96,106 @@ export function assertPackageListIsComplete() {
     problems.push(`${PUBLISH_WORKFLOW} is missing, so its package list cannot be cross-checked.`);
     return problems;
   }
+  problems.push(...crossCheckPublishWorkflow(workflow));
+
+  return problems;
+}
+
+/** Compare two name sets and describe the difference from `expected`. */
+function describeSetDifference(expected, observed, subject) {
+  const problems = [];
+  for (const name of expected) {
+    if (!observed.includes(name)) {
+      problems.push(`${subject} omits ${name}.`);
+    }
+  }
+  for (const name of observed) {
+    if (!expected.includes(name)) {
+      problems.push(`${subject} names ${name}, which is not in OPENMAIC_PACKAGES.`);
+    }
+  }
+  return problems;
+}
+
+/**
+ * Check that every place `publish-packages.yml` enumerates packages still names
+ * exactly {@link OPENMAIC_PACKAGES}.
+ *
+ * Textual, because this runs before `pnpm install` and there is no YAML parser
+ * on hand. Done honestly rather than by substring search: full-line comments
+ * are stripped first, so a commented-out trigger path no longer satisfies the
+ * check while quietly disabling a package's release; and each enumeration is
+ * compared as a SET, so an unexpected entry fails as well as a missing one.
+ *
+ * WHAT IT COVERS, and therefore what it does not. Two enumerations are read as
+ * exact sets: the `on.push.paths` trigger, and every `for pkg in ...;` loop
+ * (the build, pack, publish and tag loops). `--filter "@openmaic/<name>"` is
+ * checked more loosely — every package must appear as a filter somewhere, and
+ * no filter may name an unknown package — because individual steps legitimately
+ * filter subsets, as the typecheck step does by omitting importer. A textual
+ * check cannot tell a deliberate subset from an accidental one; converting the
+ * workflow to a matrix would, and is a larger change than this.
+ */
+function crossCheckPublishWorkflow(workflow) {
+  const problems = [];
+  const source = workflow
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n');
+
+  // Scoped to the `paths:` list itself. Matching the whole file would also pick
+  // up `packages/@openmaic/$pkg/package.json` inside the shell loops, where
+  // `$pkg` is the loop variable rather than a package name.
+  const pathsBlock = /^\s*paths:\s*$((?:\n\s*-\s*.*)*)/m.exec(source);
+  if (!pathsBlock) {
+    problems.push(
+      `${PUBLISH_WORKFLOW} has no on.push.paths list, so either every push triggers a ` +
+        'release or none does; this check expected the trigger to enumerate the packages.',
+    );
+  } else {
+    const triggerPaths = [
+      ...pathsBlock[1].matchAll(/packages\/@openmaic\/([^/"'\s]+)\/package\.json/g),
+    ].map((match) => match[1]);
+    problems.push(
+      ...describeSetDifference(
+        OPENMAIC_PACKAGES,
+        [...new Set(triggerPaths)],
+        `${PUBLISH_WORKFLOW} on.push.paths`,
+      ),
+    );
+  }
+
+  const loops = [...source.matchAll(/for pkg in ([^;]+);/g)];
+  if (loops.length === 0) {
+    problems.push(`${PUBLISH_WORKFLOW} has no \`for pkg in ...\` loop; this check expected one.`);
+  }
+  for (const loop of loops) {
+    const names = loop[1].trim().split(/\s+/).filter(Boolean);
+    problems.push(
+      ...describeSetDifference(
+        OPENMAIC_PACKAGES,
+        names,
+        `${PUBLISH_WORKFLOW} loop \`for pkg in ${loop[1].trim()}\``,
+      ),
+    );
+  }
+
+  const filtered = new Set(
+    [...source.matchAll(/--filter\s+"?@openmaic\/([^"\s]+)"?/g)].map((match) => match[1]),
+  );
   for (const name of OPENMAIC_PACKAGES) {
-    if (!workflow.includes(`packages/@openmaic/${name}/package.json`)) {
+    if (!filtered.has(name)) {
       problems.push(
-        `${PUBLISH_WORKFLOW} does not list packages/@openmaic/${name}/package.json, so a ` +
-          `version bump to ${name} would not trigger a release.`,
+        `${PUBLISH_WORKFLOW} never passes --filter "@openmaic/${name}", so it is never built ` +
+          'or tested on the release path.',
       );
     }
-    if (!workflow.includes(`@openmaic/${name}`)) {
-      problems.push(`${PUBLISH_WORKFLOW} never mentions @openmaic/${name}.`);
+  }
+  for (const name of filtered) {
+    if (!OPENMAIC_PACKAGES.includes(name)) {
+      problems.push(
+        `${PUBLISH_WORKFLOW} filters @openmaic/${name}, which is not in OPENMAIC_PACKAGES.`,
+      );
     }
   }
 

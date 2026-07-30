@@ -85,17 +85,38 @@ const usage = [
   '      Audit the run against that baseline. Run AFTER the vitest invocation.',
 ].join('\n');
 
+// Parsed by consuming each flag with its value, so the remaining positionals
+// are exactly the positionals. Scanning for "the first argument that does not
+// start with --" would silently accept a flag's value as the results path.
 const argv = process.argv.slice(2);
-const baselineFlag = argv.indexOf('--baseline');
-const captureFlag = argv.indexOf('--capture-baseline');
-const capturingBaseline = captureFlag !== -1;
-const baselinePath = capturingBaseline ? argv[captureFlag + 1] : argv[baselineFlag + 1];
-const resultsPath = capturingBaseline ? undefined : argv.find((arg) => !arg.startsWith('--'));
+let capturingBaseline = false;
+let baselinePath;
+const positionals = [];
+for (let i = 0; i < argv.length; i += 1) {
+  const arg = argv[i];
+  if (arg === '--baseline' || arg === '--capture-baseline') {
+    capturingBaseline ||= arg === '--capture-baseline';
+    i += 1;
+    baselinePath = argv[i];
+    if (baselinePath === undefined) {
+      console.error(`${arg} needs a file path.\n\n${usage}`);
+      process.exit(2);
+    }
+    continue;
+  }
+  if (arg.startsWith('--')) {
+    console.error(`Unknown option ${arg}.\n\n${usage}`);
+    process.exit(2);
+  }
+  positionals.push(arg);
+}
 
-if (!baselinePath || (!capturingBaseline && (baselineFlag === -1 || !resultsPath))) {
+const expectedPositionals = capturingBaseline ? 0 : 1;
+if (!baselinePath || positionals.length !== expectedPositionals) {
   console.error(usage);
   process.exit(2);
 }
+const resultsPath = positionals[0];
 
 const contractUrl = process.env.PG_CONTRACT_URL;
 if (!contractUrl) {
