@@ -31,6 +31,31 @@ import {
  * The comparison is against the merge base and includes the working tree, which
  * is what `changeset status --since` does, so the two agree about what "changed
  * in this range" means.
+ *
+ * WHAT THIS CHECK DOES NOT PROVE. Four gaps are known and accepted; each is a
+ * decision about how the packages are built or released rather than something
+ * this file can close, and pretending otherwise would be worse than saying so.
+ *
+ *   1. Root-level build inputs. "Changed" means "a file under the package
+ *      directory changed", so a lockfile or toolchain bump can rewrite all four
+ *      tarballs with no changed package directory. See `ignoredPackageInputs`.
+ *
+ *   2. A later `files` whitelist change. The per-package ignore lists below
+ *      record what each package does not ship TODAY. Adding `test/` to a
+ *      package's `files` would start shipping it while this check still treats
+ *      it as free. The lists therefore have to be revisited whenever a `files`
+ *      whitelist grows; nothing here detects that on its own.
+ *
+ *   3. `workspace:^` deduplicates within a version line only. Publishing the
+ *      family with caret ranges means a consumer on one dsl line installs one
+ *      copy, but a consumer mixing an older dependent that needs `^0.5.0` with a
+ *      newer one that needs `^0.6.0` still resolves two dsl copies. Only a
+ *      coordinated major, or a peer dependency, would prevent that.
+ *
+ *   4. Whether a breaking dsl change is declared `minor` rather than `patch`
+ *      stays a human judgement. This check enforces that a release is declared
+ *      and that the level releases something; it cannot read a diff and decide
+ *      what it does to consumers. That is what review is for.
  */
 
 const usage = 'Usage: check-changesets.mjs <base-ref>';
@@ -53,7 +78,9 @@ const commonIgnoredInputs = {
  * does not — so one shared list would have to be either wrong for someone or so
  * short that it stops being useful. An entry here that does ship turns a real
  * release into a silently skipped one, which is the failure this gate exists to
- * prevent, so the lists stay conservative.
+ * prevent, so the lists stay conservative. They record what each package does
+ * not ship TODAY: a `files` whitelist that later grows to include one of these
+ * paths has to be reflected here, because nothing detects that on its own.
  *
  * KNOWN LIMITATION: this treats "publishable input" as "file under the package
  * directory", which is an under-approximation for all four packages.
@@ -175,20 +202,86 @@ function addedChangesets(from) {
   return changedFiles(from, { filter: 'A', pathspec: ['.changeset'] }).filter(isChangesetFile);
 }
 
+/** Manifest fields whose entries `changeset version` may rewrite. */
+const DEPENDENCY_FIELDS = [
+  'dependencies',
+  'devDependencies',
+  'peerDependencies',
+  'optionalDependencies',
+];
+
+/**
+ * A manifest reduced to everything `changeset version` is NOT allowed to change:
+ * the `version` field is dropped, and the range of a dependency on a sibling in
+ * this family is replaced by a placeholder.
+ *
+ * The dependency KEY is kept, so adding or removing an internal dependency still
+ * shows up. Only the range may move, because that is the one dependency edit
+ * `changeset version` makes.
+ */
+function manifestShape(contents, source) {
+  let manifest;
+  try {
+    manifest = JSON.parse(contents);
+  } catch (error) {
+    console.error(`Cannot parse ${source}: ${error instanceof Error ? error.message : error}`);
+    process.exit(1);
+  }
+  delete manifest.version;
+  for (const field of DEPENDENCY_FIELDS) {
+    const dependencies = manifest[field];
+    if (dependencies === null || typeof dependencies !== 'object') continue;
+    for (const name of Object.keys(dependencies)) {
+      if (PUBLISHABLE_PACKAGES.includes(name)) dependencies[name] = '<internal range>';
+    }
+  }
+  return JSON.stringify(manifest);
+}
+
+/**
+ * Whether a manifest changed only in the ways `changeset version` changes one.
+ *
+ * Without this, the release exemption below would accept any rewrite of a
+ * published package's `package.json` — `files`, `exports`, `main`, `scripts`, a
+ * third-party dependency — because those live in a file a release legitimately
+ * touches. Each of those decides what the tarball contains or how it resolves,
+ * so admitting them would put publishable content through the one path that
+ * requires no changeset.
+ */
+function manifestChangedOnlyAsARelease(file, from) {
+  const before = gitFileAt(from, file);
+  // A manifest that did not exist at the merge base is a new package, which is
+  // not something a release introduces.
+  if (before === undefined) return false;
+  let after;
+  try {
+    after = readFileSync(join(root, file), 'utf8');
+  } catch {
+    return false;
+  }
+  return (
+    manifestShape(before, `${file} at ${from}`) ===
+    manifestShape(after, `${file} in the working tree`)
+  );
+}
+
 /**
  * Files `changeset version` is allowed to touch, and nothing else.
  *
- * A version commit rewrites a manifest's `version` field, appends to a
- * CHANGELOG, and deletes the changesets it applied. Any other path in the range
- * means the change is not purely a release.
+ * A version commit rewrites a manifest's `version` field and its sibling
+ * dependency ranges, appends to a CHANGELOG, and deletes the changesets it
+ * applied. Any other path in the range — and any other EDIT to one of those
+ * manifests — means the change is not purely a release.
  */
 function isVersionCommitFile(file, from) {
   if (isChangesetFile(file)) {
     // Only a deletion. An added or modified changeset is authored content.
     return consumedChangesets(from).includes(file);
   }
-  const match = /^(packages\/@openmaic\/[^/]+)\/(package\.json|CHANGELOG\.md)$/.exec(file);
-  return match !== null && PUBLISHABLE_PACKAGES.includes(match[1].replace('packages/', ''));
+  const match = /^packages\/(@openmaic\/[^/]+)\/(package\.json|CHANGELOG\.md)$/.exec(file);
+  if (match === null || !PUBLISHABLE_PACKAGES.includes(match[1])) return false;
+  if (match[2] === 'CHANGELOG.md') return true;
+  return manifestChangedOnlyAsARelease(file, from);
 }
 
 /** Whether `name`'s manifest version strictly increased over the range. */
@@ -213,85 +306,17 @@ function versionIncreased(name, from) {
   }
 }
 
-async function main(baseRef) {
-  if (!resolveCommit(baseRef, root)) {
-    console.error(`Base ref ${JSON.stringify(baseRef)} is not an available commit.`);
-    process.exit(2);
-  }
-  const from = mergeBase(baseRef);
-
-  const consumed = consumedChangesets(from);
-  const changed = PUBLISHABLE_PACKAGES.filter((name) => publishableInputsChanged(name, from));
-
-  // A release, and nothing but a release.
-  //
-  // `changeset version` consumes every pending changeset, so the change that
-  // applies them alters packages with none left to find and can never satisfy
-  // the per-package requirement below — including on the pull request that
-  // carries it, which is where branch protection looks first. It needs an
-  // exemption, and the exemption is the most dangerous thing in this file: it is
-  // the one path that lets a package change reach main with nothing declaring
-  // it.
-  //
-  // So it is granted only to a range that CANNOT contain a laundered change:
-  // every file it touches is a manifest, a CHANGELOG, or a deleted changeset. An
-  // earlier version asked only for "changesets were consumed AND every changed
-  // package's version increased", which a hand-written version bump next to a
-  // real source edit satisfied.
-  //
-  // On top of that, every package the deleted changesets named must actually
-  // have moved, so a range that quietly drops somebody else's pending release
-  // intent is not a release either.
-  if (consumed.length > 0) {
-    const offending = changedFiles(from).filter((file) => !isVersionCommitFile(file, from));
-    const declaredByConsumed = [
-      ...new Set(
-        consumed
-          .flatMap((file) =>
-            parseChangeset(gitFileAt(from, file) ?? '', `${file} at the merge base`),
-          )
-          .filter((release) => RELEASING_TYPES.includes(release.type))
-          .map((release) => release.name),
-      ),
-    ].filter((name) => PUBLISHABLE_PACKAGES.includes(name));
-    const dropped = declaredByConsumed.filter((name) => !versionIncreased(name, from));
-
-    if (offending.length === 0 && dropped.length === 0) {
-      console.log(
-        `This range applies ${consumed.length} changeset(s) and touches nothing but package ` +
-          'manifests and changelogs, so it is a release and needs no changeset of its own.',
-      );
-      for (const name of declaredByConsumed) console.log(`  released: ${name}`);
-      return;
-    }
-    console.log(`This range deletes ${consumed.length} changeset file(s) but is not a release:`);
-    if (offending.length > 0) {
-      console.log(`  it also changes ${offending.slice(0, 10).join(', ')}`);
-    }
-    if (dropped.length > 0) {
-      console.log(`  it drops the pending release of ${dropped.join(', ')} without moving it`);
-    }
-    if (changed.length === 0) {
-      console.error(
-        'Refusing a change that deletes pending changesets without releasing what they declared:\n' +
-          dropped.map((name) => `- ${name}: its pending release intent would be lost`).join('\n'),
-      );
-      process.exit(1);
-    }
-  }
-
-  if (changed.length === 0) {
-    console.log('No publishable @openmaic package input changed in this range.');
-    return;
-  }
-  console.log(`Publishable inputs changed: ${changed.join(', ')}.`);
-
+/**
+ * The releases declared by changesets ADDED in this range.
+ *
+ * Only added ones. A pre-existing changeset that was merely edited is somebody
+ * else's release intent being borrowed, and one left pending by an earlier pull
+ * request is not this change's declaration either.
+ */
+function collectDeclarations(from) {
   const { ignore } = readChangesetsConfig(root);
   const failures = [];
   const declared = new Map();
-  // Only changesets ADDED in this range. A pre-existing one that was merely
-  // edited is somebody else's release intent being borrowed, and one left
-  // pending by an earlier pull request is not this change's declaration either.
   for (const file of addedChangesets(from)) {
     for (const release of parseChangeset(readChangesetFile(file), file)) {
       if (ignore.includes(release.name)) {
@@ -316,6 +341,95 @@ async function main(baseRef) {
       declared.set(release.name, existing);
     }
   }
+  return { declared, failures };
+}
+
+/** Packages a deleted changeset would have released, at a level that releases. */
+function declaredByConsumedChangesets(consumed, from) {
+  return [
+    ...new Set(
+      consumed
+        .flatMap((file) => parseChangeset(gitFileAt(from, file) ?? '', `${file} at the merge base`))
+        .filter((release) => RELEASING_TYPES.includes(release.type))
+        .map((release) => release.name),
+    ),
+  ].filter((name) => PUBLISHABLE_PACKAGES.includes(name));
+}
+
+async function main(baseRef) {
+  if (!resolveCommit(baseRef, root)) {
+    console.error(`Base ref ${JSON.stringify(baseRef)} is not an available commit.`);
+    process.exit(2);
+  }
+  const from = mergeBase(baseRef);
+
+  const consumed = consumedChangesets(from);
+  const changed = PUBLISHABLE_PACKAGES.filter((name) => publishableInputsChanged(name, from));
+  const { declared, failures } = collectDeclarations(from);
+
+  // A release, and nothing but a release.
+  //
+  // `changeset version` consumes every pending changeset, so the change that
+  // applies them alters packages with none left to find and can never satisfy
+  // the per-package requirement below — including on the pull request that
+  // carries it, which is where branch protection looks first. It needs an
+  // exemption, and the exemption is the most dangerous thing in this file: it is
+  // the one path that lets a package change reach main with nothing declaring
+  // it.
+  //
+  // Two conditions, and both are needed.
+  //
+  // FIRST: deleting a changeset must not destroy what it declared. A deleted
+  // changeset is a merged release intent, so every package it named must either
+  // have been released here or be re-declared here. Without this, a range that
+  // legitimately declares its own change could quietly drop somebody else's
+  // pending release on the way past, and a range that deletes changesets and
+  // does nothing else would be vacuously fine because it changed no package.
+  //
+  // SECOND: the exemption is granted only to a range that CANNOT contain a
+  // laundered change — every file it touches is a CHANGELOG, a deleted
+  // changeset, or a manifest edited the way `changeset version` edits one. An
+  // earlier version asked only for "changesets were consumed AND every changed
+  // package's version increased", which a hand-written version bump next to a
+  // real source edit satisfied.
+  if (consumed.length > 0) {
+    const declaredByConsumed = declaredByConsumedChangesets(consumed, from);
+    const dropped = declaredByConsumed.filter(
+      (name) => !versionIncreased(name, from) && !declared.has(name),
+    );
+    if (dropped.length > 0) {
+      console.error(
+        [
+          'Refusing a change that deletes pending changesets without releasing what they declared:',
+          ...dropped.map((name) => `- ${name}: its pending release intent would be lost`),
+          'Apply them with `changeset version` so the release happens, restore the deleted file,',
+          'or add a changeset of your own that names each package above.',
+        ].join('\n'),
+      );
+      process.exit(1);
+    }
+
+    const offending = changedFiles(from).filter((file) => !isVersionCommitFile(file, from));
+    if (offending.length === 0) {
+      console.log(
+        `This range applies ${consumed.length} changeset(s) and touches nothing but package ` +
+          'manifests and changelogs, so it is a release and needs no changeset of its own.',
+      );
+      for (const name of declaredByConsumed) console.log(`  released: ${name}`);
+      return;
+    }
+    console.log(
+      `This range deletes ${consumed.length} changeset file(s) but is not a release: it also ` +
+        `changes ${offending.slice(0, 10).join(', ')}. The per-package requirement applies to it ` +
+        'in full.',
+    );
+  }
+
+  if (changed.length === 0) {
+    console.log('No publishable @openmaic package input changed in this range.');
+    return;
+  }
+  console.log(`Publishable inputs changed: ${changed.join(', ')}.`);
 
   for (const name of changed.filter((candidate) => !declared.has(candidate))) {
     failures.push(

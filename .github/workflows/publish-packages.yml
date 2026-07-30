@@ -168,27 +168,14 @@ jobs:
           # shellcheck disable=SC2086
           pnpm -r $filters run build
 
-      # Some packages also generate tracked, publishable files as part of `build`
-      # (renderer's fonts.css and its KaTeX font snapshot). If the committed
-      # copies are stale, the build rewrites them here and the registry would
-      # receive content that is not in the commit being released.
-      # THE INTEGRITY CHECK. Deliberately the whole tree, not just
-      # packages/@openmaic.
+      # THE INTEGRITY CHECK, again and for the same reason: the build executes
+      # third-party code too, so everything below still has to be the commit.
       #
-      # Everything after this point trusts files in this checkout: the publish
-      # loop reads its package set from scripts/, the workflow steps are read from
-      # .github/, and a resolution comes from pnpm-lock.yaml. `pnpm install` and
-      # every package build execute third-party code, and until this passes there
-      # is nothing stopping that code from rewriting a check so it approves an
-      # extra package, or a step so it exfiltrates a token. Narrowing this to the
-      # package directories would leave exactly that gap.
-      #
-      # This blocks BUILD-TIME mutation, not mutation in general. A pull request
-      # that edits scripts/ can change any of this; that is what review is for.
-      #
-      # Against HEAD, not the index: `git diff --quiet` alone compares the
-      # worktree to the index, so code that rewrote a tracked file AND staged it
-      # would compare clean.
+      # It also catches a second thing. Some packages generate tracked,
+      # publishable files as part of `build` (renderer's fonts.css and its KaTeX
+      # font snapshot). If the committed copies are stale, the build rewrites
+      # them here and the registry would receive content that is not in the
+      # commit being released.
       - name: Verify the build did not rewrite tracked files
         run: |
           set -euo pipefail
@@ -255,6 +242,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: release
     permissions:
+      contents: read # required to check this commit out; deliberately not write
       actions: read # required to read this commit's CI conclusion
       id-token: write # required for npm provenance
     steps:
@@ -434,8 +422,9 @@ jobs:
             echo "Published $name@$version."
           done <<< "$list"
 
-      # `if: always()` so a publish that died part-way still hands `mark` the
-      # receipt for the packages that did go out.
+      # Uploaded even when the publish step failed, so a publish that died
+      # part-way still hands `mark` the receipt for the packages that did go out.
+      # `!cancelled()` rather than `always()`: a cancelled run has nothing to say.
       - name: Upload the publish receipt
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4

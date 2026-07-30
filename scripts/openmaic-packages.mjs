@@ -136,57 +136,68 @@ export function readChangesetsConfig(root = repositoryRoot()) {
 }
 
 /**
- * The workspace layout this module knows how to enumerate.
+ * The workspace definition this module knows how to enumerate, pinned literally.
  *
- * Asserted rather than assumed. Enumerating the workspace without a dependency
- * is what lets the release checks run before `pnpm install`, so nothing
- * third-party executes before a bad release is rejected — but a hand-rolled
- * expansion that silently disagrees with pnpm would be worse than a dependency.
- * So the globs are compared to pnpm-workspace.yaml and any change fails loudly.
+ * `getWorkspacePackages` walks two hard-coded parent directories rather than
+ * expanding globs, so the only question pnpm-workspace.yaml has to answer here
+ * is "is the layout still the one that walk covers?". That question is answered
+ * by comparing the file to this constant. Nothing is parsed, so nothing can
+ * disagree with pnpm about what the file means: any edit at all — a new glob, a
+ * moved directory, a YAML construct such as an anchor, an alias or a second
+ * document — stops the release until someone updates the walk below to match.
+ *
+ * Deliberately NOT a YAML parse. A hand-rolled line scanner can accept a file
+ * whose YAML meaning is different, which is the failure this replaces. A real
+ * parser would mean importing one, and these checks run BEFORE `pnpm install` so
+ * that a workspace which has grown an unvetted publishable package is rejected
+ * without executing any third-party code. Pinning the bytes needs neither and is
+ * strictly stricter than both: it cannot misread the file, because it does not
+ * read it.
+ *
+ * The cost is that a comment or formatting change here also has to be made in
+ * this constant. The file is four lines and changes about as often.
  */
-const EXPECTED_WORKSPACE_GLOBS = ['packages/*', 'packages/@openmaic/*', '!packages/docs'];
+const EXPECTED_WORKSPACE_FILE = [
+  'packages:',
+  '  - "packages/*"',
+  '  - "packages/@openmaic/*"',
+  '  - "!packages/docs" # standalone docs sub-app: own lockfile, build, deploy',
+].join('\n');
+
+/** The directories `getWorkspacePackages` walks, and what it skips inside them. */
+const WORKSPACE_PARENTS = ['packages', 'packages/@openmaic'];
+const WORKSPACE_EXCLUDED = ['packages/docs'];
 
 function bail(message) {
   console.error(message);
   process.exit(2);
 }
 
-/**
- * The `packages` list from pnpm-workspace.yaml.
- *
- * Deliberately narrow rather than tolerant. It understands one shape — a block
- * sequence of scalars under a top-level `packages:` key, with comments and blank
- * lines — and refuses to guess at anything else. An earlier version stopped at
- * the first line it did not recognise, which made a blank line hide every entry
- * after it while YAML still counted them.
- */
-function readWorkspaceGlobs(root) {
-  const lines = readFileSync(join(root, 'pnpm-workspace.yaml'), 'utf8').split('\n');
-  const globs = [];
-  let index = lines.findIndex((line) => /^packages:/.test(line));
-  if (index === -1) bail('pnpm-workspace.yaml has no top-level `packages:` key.');
-  if (!/^packages:\s*(#.*)?$/.test(lines[index])) {
-    bail(
-      `pnpm-workspace.yaml line ${index + 1} puts content on the \`packages:\` key itself ` +
-        '(a flow sequence?), which these checks do not parse. Use a block sequence.',
-    );
-  }
+/** Line endings and trailing whitespace only. No YAML construct is interpreted. */
+function normaliseWorkspaceFile(contents) {
+  return contents
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+$/gm, '')
+    .trimEnd();
+}
 
-  for (index += 1; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (/^\s*(#.*)?$/.test(line)) continue; // blank or comment-only
-    if (!/^\s/.test(line)) break; // a new top-level key ends the list
-    const item = /^\s+-\s+(.+?)\s*(?:\s#.*)?$/.exec(line);
-    if (!item) {
-      bail(
-        `pnpm-workspace.yaml line ${index + 1} is inside \`packages:\` but is not a plain list ` +
-          `item, so these checks cannot tell what the workspace contains:\n  ${line}`,
-      );
-    }
-    globs.push(item[1].replace(/^(["'])(.*)\1$/, '$2'));
+function assertWorkspaceLayout(root) {
+  const path = join(root, 'pnpm-workspace.yaml');
+  let contents;
+  try {
+    contents = readFileSync(path, 'utf8');
+  } catch (error) {
+    bail(`Cannot read pnpm-workspace.yaml, so the workspace layout is unknown: ${error.message}`);
   }
-  if (globs.length === 0) bail('pnpm-workspace.yaml declares an empty `packages:` list.');
-  return globs;
+  if (normaliseWorkspaceFile(contents) === EXPECTED_WORKSPACE_FILE) return;
+  bail(
+    'pnpm-workspace.yaml is no longer the layout the release checks know how to enumerate.\n' +
+      `- found:\n${normaliseWorkspaceFile(contents)}\n` +
+      `- expected:\n${EXPECTED_WORKSPACE_FILE}\n` +
+      'These checks walk fixed directories rather than expanding globs, so a change here has to ' +
+      'be reflected in EXPECTED_WORKSPACE_FILE, WORKSPACE_PARENTS and WORKSPACE_EXCLUDED in ' +
+      'scripts/openmaic-packages.mjs before a release can proceed.',
+  );
 }
 
 /**
@@ -196,22 +207,13 @@ function readWorkspaceGlobs(root) {
  * to the registry, so it is the only property this needs to get right.
  */
 export function getWorkspacePackages(root = repositoryRoot()) {
-  const globs = readWorkspaceGlobs(root);
-  const expected = [...EXPECTED_WORKSPACE_GLOBS].sort();
-  if (JSON.stringify([...globs].sort()) !== JSON.stringify(expected)) {
-    bail(
-      'pnpm-workspace.yaml no longer matches the layout the release checks know how to enumerate.\n' +
-        `- found:    ${JSON.stringify(globs)}\n` +
-        `- expected: ${JSON.stringify(EXPECTED_WORKSPACE_GLOBS)}\n` +
-        'Update EXPECTED_WORKSPACE_GLOBS and getWorkspacePackages in scripts/openmaic-packages.mjs.',
-    );
-  }
+  assertWorkspaceLayout(root);
 
   const packages = [];
-  for (const parent of ['packages', 'packages/@openmaic']) {
+  for (const parent of WORKSPACE_PARENTS) {
     for (const entry of readdirSync(join(root, parent))) {
       const dir = `${parent}/${entry}`;
-      if (dir === 'packages/docs') continue;
+      if (WORKSPACE_EXCLUDED.includes(dir)) continue;
       // statSync, not Dirent.isDirectory(): pnpm follows a symlinked package
       // directory, and a Dirent for a symlink reports isDirectory() === false,
       // which would have hidden such a package from every check here.

@@ -158,8 +158,10 @@ Be deliberate with `@openmaic/dsl`. It is the contract the other packages and do
 **The check is per package.** CI runs `scripts/check-changesets.mjs` on every pull request, and it fails unless every package you changed is named — at `patch`, `minor` or `major` — by a changeset your PR *adds*. Naming a different package does not satisfy it, and neither does editing a changeset somebody else left pending:
 
 ```
-@openmaic/renderer: publishable package inputs changed but no changeset in this range releases it.
+@openmaic/renderer: publishable package inputs changed but no changeset added in this range releases it.
 ```
+
+Deleting a pending changeset does not get you out of it either: whatever a deleted changeset named has to be released by the same change, or named again by a changeset you add.
 
 Files that no package ships — `test/`, `docs/`, `vitest.config.ts`, `CHANGELOG.md`, and the importer's legacy `src1/` — do not count as changes, so editing only those needs nothing. The exact per-package list lives in [`scripts/check-changesets.mjs`](scripts/check-changesets.mjs).
 
