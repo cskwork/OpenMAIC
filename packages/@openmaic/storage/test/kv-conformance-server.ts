@@ -115,99 +115,12 @@ async function readJson<T>(req: IncomingMessage, maxBodyBytes: number): Promise<
   return body as T;
 }
 
-// A DoS ceiling, far above any real identifier — not a contract length
-// constraint. Measured on the percent-encoded length (the size the key occupies
-// as a request target), matching the client's MAX_KV_KEY_ENCODED_LENGTH so the
-// two backends agree and no key that passes validation reaches Node's 431. The
-// server measures the *decoded* key by re-encoding it, so it judges the same
-// size the client bounded before sending.
-const MAX_IDENTIFIER_ENCODED_LENGTH = 4096;
-
-function encodedLength(value: string): number {
-  return encodeURIComponent(value).length;
-}
-
-/**
- * The server-side half of the "a key is opaque" rule. A key arrives
- * percent-decoded and may legitimately contain `/` or `\` — they came from an
- * unconstrained caller id and were single-segmented on the wire by the client's
- * encoding. This server stores the decoded key as a plain Map key, never as a
- * path component, so a separator (or a `..`) inside it is just data and cannot
- * traverse anything. The only rejections are the ones encoding cannot cover and
- * the transport cannot carry: an empty or whole-key `.` / `..` (which URL path
- * normalization would eat), NUL / unpaired surrogate, and over-length.
- */
-function assertAddressableKey(value: string, label: string): void {
-  if (value === '') {
-    throw new ConformanceHttpError(
-      400,
-      'VALIDATION_FAILED',
-      `@openmaic/storage: ${label} must not be empty`,
-    );
-  }
-  if (value === '.' || value === '..') {
-    throw new ConformanceHttpError(
-      400,
-      'VALIDATION_FAILED',
-      `@openmaic/storage: URL path segment must not be ${JSON.stringify(value)}`,
-    );
-  }
-  if (value.includes('\u0000')) {
-    throw new ConformanceHttpError(
-      400,
-      'VALIDATION_FAILED',
-      `@openmaic/storage: ${label} must not contain the NUL code point`,
-    );
-  }
-  if (/[\uD800-\uDFFF]/u.test(value)) {
-    throw new ConformanceHttpError(
-      400,
-      'VALIDATION_FAILED',
-      `@openmaic/storage: ${label} must not contain an unpaired UTF-16 surrogate`,
-    );
-  }
-  const encoded = encodedLength(value);
-  if (encoded > MAX_IDENTIFIER_ENCODED_LENGTH) {
-    throw new ConformanceHttpError(
-      400,
-      'VALIDATION_FAILED',
-      `@openmaic/storage: ${label} exceeds ${MAX_IDENTIFIER_ENCODED_LENGTH} encoded bytes (got ${encoded})`,
-    );
-  }
-}
-
-/**
- * A `keys()` prefix is opaque too, and it arrives in the query string rather
- * than as a path segment — so it may be empty (that is what "list everything"
- * means) and it may be `.` or `..`, legitimate prefixes of keys such as
- * `.hidden`. Only the transport-fatal characters and the encoded-size ceiling
- * remain.
- */
-function assertAddressablePrefix(prefix: string): void {
-  if (prefix === '') return;
-  if (prefix.includes('\u0000')) {
-    throw new ConformanceHttpError(
-      400,
-      'VALIDATION_FAILED',
-      '@openmaic/storage: kv key prefix must not contain the NUL code point',
-    );
-  }
-  if (/[\uD800-\uDFFF]/u.test(prefix)) {
-    throw new ConformanceHttpError(
-      400,
-      'VALIDATION_FAILED',
-      '@openmaic/storage: kv key prefix must not contain an unpaired UTF-16 surrogate',
-    );
-  }
-  const encoded = encodedLength(prefix);
-  if (encoded > MAX_IDENTIFIER_ENCODED_LENGTH) {
-    throw new ConformanceHttpError(
-      400,
-      'VALIDATION_FAILED',
-      `@openmaic/storage: kv key prefix exceeds ${MAX_IDENTIFIER_ENCODED_LENGTH} encoded bytes (got ${encoded})`,
-    );
-  }
-}
+// The server imposes **no** key-domain rules: a key arrives percent-decoded and
+// is stored as a plain Map key, so any string — empty, containing NUL, `/`, `\`,
+// a `..`, of any length — is a legitimate opaque key that traverses nothing. The
+// only transport-level rejections are a malformed percent-escape (handled in
+// pathParts) and, automatically, Node's own request-target size limit; both are
+// properties of the HTTP transport, not of the key. Prefixes are opaque too.
 
 function routeNotFound(res: ServerResponse): void {
   sendJson(res, 404, { error: { code: 'ROUTE_NOT_FOUND', message: 'route not found' } });
@@ -245,11 +158,32 @@ function pathParts(req: IncomingMessage): { parts: string[]; url: URL } {
 }
 
 /**
- * The contract has no scope anywhere on the wire, so a client that invents one
- * has to fail loud rather than have its intent silently discarded. That covers
- * every channel a scope could hide in, not just the body.
+ * Every header spelling that would convey a scope. The contract has no scope
+ * header, so a request carrying any of these is trying to describe one and must
+ * fail loud rather than have its intent silently discarded. Enumerated because
+ * "just `x-scope`" left the others open — a client could reach for `scope`,
+ * `kv-scope`, or the `x-` prefixed variants just as naturally.
  */
-function assertNoScopeChannel(req: IncomingMessage, url: URL): void {
+const PROHIBITED_SCOPE_HEADERS = ['scope', 'x-scope', 'kv-scope', 'x-kv-scope'];
+
+/**
+ * The contract has no scope anywhere on the wire, so a client that invents one
+ * has to fail loud. That covers every channel a scope could hide in: a path
+ * segment, the query string, any scope-spelling header, and (elsewhere) the body.
+ */
+function assertNoScopeChannel(req: IncomingMessage, url: URL, parts: string[]): void {
+  // A scope path segment — `/kv/device/keys`, `/kv/account/entries/k` — is an
+  // attempt to route by scope. The contract's segment after `kv` is `entries` or
+  // `keys`; a scope name there is rejected, not silently 404'd. (A *key* named
+  // `device` is fine: that sits at parts[2], after `entries`.)
+  if (parts[1] === 'device' || parts[1] === 'account') {
+    throw new ConformanceHttpError(
+      400,
+      'VALIDATION_FAILED',
+      '@openmaic/storage: kv requests must not carry a scope path segment — this contract is ' +
+        'account-scoped and the principal is derived server-side',
+    );
+  }
   if (url.searchParams.has('scope')) {
     throw new ConformanceHttpError(
       400,
@@ -258,12 +192,14 @@ function assertNoScopeChannel(req: IncomingMessage, url: URL): void {
         'account-scoped and the principal is derived server-side',
     );
   }
-  if (req.headers['x-scope'] !== undefined) {
-    throw new ConformanceHttpError(
-      400,
-      'VALIDATION_FAILED',
-      '@openmaic/storage: kv requests must not carry a scope header',
-    );
+  for (const header of PROHIBITED_SCOPE_HEADERS) {
+    if (req.headers[header] !== undefined) {
+      throw new ConformanceHttpError(
+        400,
+        'VALIDATION_FAILED',
+        `@openmaic/storage: kv requests must not carry a scope header (${header})`,
+      );
+    }
   }
 }
 
@@ -302,7 +238,7 @@ async function routeKv(
 ): Promise<boolean> {
   const { state, parts, url, maxBodyBytes } = context;
   const method = req.method ?? 'GET';
-  assertNoScopeChannel(req, url);
+  assertNoScopeChannel(req, url, parts);
   // Close the body channel on every bodyless method up front, so no GET route
   // can forget to look. PUT is the one method that reads a body, and it checks
   // the body for a scope field itself.
@@ -312,13 +248,10 @@ async function routeKv(
 
   if (method === 'GET' && parts.length === 2 && parts[1] === 'keys') {
     const prefix = url.searchParams.get('prefix') ?? '';
-    // The prefix is caller-controlled and reaches the same place a key does, so
-    // it is held to the same rules. A server trusting the client to have checked
-    // is trusting a client it does not control.
-    assertAddressablePrefix(prefix);
-    // A literal, byte-for-byte prefix comparison. Spelled out because the
-    // obvious SQL translation is `LIKE prefix || '%'`, where an unescaped `%`
-    // or `_` in a caller-supplied prefix silently becomes a wildcard.
+    // A literal, byte-for-byte prefix comparison over opaque keys. Spelled out
+    // because the obvious SQL translation is `LIKE prefix || '%'`, where an
+    // unescaped `%`, `_`, or `\` in a caller-supplied prefix silently becomes a
+    // wildcard or an escape.
     sendJson(
       res,
       200,
@@ -329,8 +262,8 @@ async function routeKv(
   }
 
   if (parts.length === 3 && parts[1] === 'entries') {
+    // The decoded key is opaque and stored as a plain Map key — no validation.
     const key = parts[2]!;
-    assertAddressableKey(key, 'kv key');
 
     if (method === 'GET') {
       const raw = state.kv.get(key);

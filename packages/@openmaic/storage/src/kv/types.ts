@@ -93,98 +93,25 @@ export function assertKVScope(scope: KVScope): KVScope {
 }
 
 /**
- * A denial-of-service ceiling on a key, **not** a contract constraint on key
- * length. The key domain is length-unconstrained: callers compose keys from
- * unconstrained DSL identifiers, so any tight bound eventually rejects a
- * legitimate key — a `stageId` is a string of any length, and `prefix + id` can
- * be long. This ceiling exists only so a single key cannot blow out a URL or a
- * server index; it sits far above any identifier a caller could realistically
- * produce (a 500-char id under `editor-current-scene:` encodes to ~523).
+ * The key domain is **truly opaque and unconstrained** — a KV key is any string.
  *
- * Measured on the **percent-encoded** length — `encodeURIComponent(key).length`
- * — not the UTF-8 byte length, because the key travels as a URL path segment and
- * a non-ASCII character expands under encoding (`€` → `%E2%82%AC`, one code
- * point becoming nine bytes on the wire). A UTF-8-byte bound let a key pass
- * client validation and then blow past the HTTP server's request-target limit
- * (`431` before routing) while the browser accepted it — a backend-parity break.
- * Bounding the encoded size instead keeps both backends in step: whichever a key
- * reaches, it is accepted iff its encoded form fits. `4096` is chosen well below
- * Node's default `maxHeaderSize` (16 KiB, where the `431` fires) so no key that
- * passes validation can ever reach that limit, and far above any real id.
+ * This is deliberately *not* validated. Callers compose keys from unconstrained
+ * DSL identifiers (a `stageId` is any string), and the browser primitive is a
+ * `Map` / `Storage`, which stores any string key of any length, containing any
+ * character — NUL, separators, whatever. Adding a transport-driven rule here
+ * (a length cap, a `/` ban, a NUL ban) reaches back into that primitive and
+ * makes a previously storable key unreadable, which is the bug this package
+ * kept reintroducing. So there is no key validator, and no `assertKVKey`.
+ *
+ * What a key can and cannot *travel over* is a property of the transport, not of
+ * the key. The browser backend uses no transport and imposes nothing. The HTTP
+ * backend carries a key as a URL path segment, so it inherits that transport's
+ * limits — a deployment's URL/header size ceiling, URL path normalization of a
+ * whole-key `.` / `..`, and the one character a percent-encoder cannot represent
+ * (an unpaired UTF-16 surrogate). Those live in `HttpAccountKV`, are documented
+ * as HTTP-deployment concerns, and never constrain the key domain: a key is
+ * *valid* on both backends identically (both accept it), even where it is not
+ * *reachable* over one transport. Scope, by contrast, is a fixed two-value axis
+ * of the primitive, not an opaque string, so it is still narrowed (see
+ * `assertKVScope`).
  */
-export const MAX_KV_KEY_ENCODED_LENGTH = 4096;
-
-const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
-
-/** The size a key or prefix occupies as a percent-encoded URL segment. */
-function encodedLength(value: string): number {
-  return encodeURIComponent(value).length;
-}
-
-/**
- * The key domain, enforced by **every** backend.
- *
- * A key is an **opaque string**. Callers compose keys from unconstrained DSL
- * identifiers — a `stageId` may legitimately be `stage/one` — so this must not
- * reject a key merely for containing `/`, `\`, `:`, or other characters that
- * look like structure. It once did, and that broke every caller whose key
- * embeds an id; the fix is the same one the asset ref took: keep the key opaque,
- * and defend against path traversal by *encoding*, not by rejecting.
- *
- * Encoding is where traversal protection lives. The HTTP client percent-encodes
- * the whole key into a single path segment (`stage/one` → `stage%2Fone`), so a
- * separator can never open a new segment on the wire, and the contract requires
- * the server to treat the decoded key as an opaque bound value — never a path
- * component. The browser backend stores the key verbatim, where a separator is
- * just a character.
- *
- * The few rules that remain are the ones encoding cannot cover, and none of
- * them can be produced by a caller composing `prefix + id`: an empty key and a
- * whole-key `.` / `..` have no percent-encoding that survives URL path
- * normalization, NUL or an unpaired surrogate does not survive the transports
- * underneath at all, and an encoded form past the DoS ceiling would exceed the
- * server's request-target limit. Enforced by every backend so a key that
- * round-trips in the browser round-trips over HTTP too.
- */
-export function assertKVKey(key: string): void {
-  if (key === '') {
-    throw new Error('@openmaic/storage: kv key must not be empty');
-  }
-  if (key === '.' || key === '..') {
-    throw new Error(`@openmaic/storage: URL path segment must not be ${JSON.stringify(key)}`);
-  }
-  assertKVKeyCharacters(key, 'kv key');
-  const encoded = encodedLength(key);
-  if (encoded > MAX_KV_KEY_ENCODED_LENGTH) {
-    throw new Error(
-      `@openmaic/storage: kv key exceeds ${MAX_KV_KEY_ENCODED_LENGTH} encoded bytes (got ${encoded})`,
-    );
-  }
-}
-
-function assertKVKeyCharacters(value: string, label: string): void {
-  if (value.includes('\u0000')) {
-    throw new Error(`@openmaic/storage: ${label} must not contain the NUL code point (\\u0000)`);
-  }
-  if (LONE_SURROGATE.test(value)) {
-    throw new Error(`@openmaic/storage: ${label} must not contain an unpaired UTF-16 surrogate`);
-  }
-}
-
-/**
- * A `keys()` prefix is held to the key rules it is a prefix *of*, minus the
- * requirements that only make sense for a whole key: it may be empty (that is
- * what "list everything" means) and, like a key, it is opaque — a `/` is a
- * legitimate prefix character, not structure. Only the transport-fatal
- * characters and the same encoded-size ceiling remain.
- */
-export function assertKVKeyPrefix(prefix: string): void {
-  if (prefix === '') return;
-  assertKVKeyCharacters(prefix, 'kv key prefix');
-  const encoded = encodedLength(prefix);
-  if (encoded > MAX_KV_KEY_ENCODED_LENGTH) {
-    throw new Error(
-      `@openmaic/storage: kv key prefix exceeds ${MAX_KV_KEY_ENCODED_LENGTH} encoded bytes (got ${encoded})`,
-    );
-  }
-}

@@ -1,7 +1,7 @@
 {
   "name": "@openmaic/storage",
-  "version": "0.1.3",
-  "description": "The MAIC pluggable persistence layer: KV / asset primitives with swappable backends (browser default, HTTP later), depending only on @openmaic/dsl.",
+  "version": "0.1.4",
+  "description": "The MAIC pluggable persistence layer: document / runtime / KV / asset primitives with browser and HTTP backends, depending only on @openmaic/dsl.",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",

@@ -1,8 +1,6 @@
 import { assertHttpBaseUrl } from '../http/base-url.js';
 import { assertJsonValue } from '../runtime/json-value.js';
 import {
-  assertKVKey,
-  assertKVKeyPrefix,
   assertKVScope,
   DEFAULT_KV_SCOPE,
   KVScopeViolationError,
@@ -95,6 +93,31 @@ function assertAccountScope(scope: AccountScope | undefined): void {
       `${JSON.stringify(scope as string)} — device values never leave the device. Route the ` +
       `device scope through HttpKVStore, which keeps it on a LocalKVStore.`,
   );
+}
+
+/**
+ * Percent-encode a key or prefix into a URL segment. The key domain is opaque
+ * and unconstrained (see `types.ts`); this is the one place the key meets a
+ * transport that cannot carry every string. `encodeURIComponent` handles any
+ * character — NUL becomes `%00`, a separator `%2F` — with a single structural
+ * exception: an unpaired UTF-16 surrogate has no UTF-8 encoding, so it throws.
+ * That is a limit of *this transport*, not of the key: the browser backend
+ * stores such a key fine. Surface it as a clear transport error rather than a
+ * bare `URIError`, and say so.
+ */
+function encodeKeySegment(value: string, label: string): string {
+  try {
+    return encodeURIComponent(value);
+  } catch {
+    throw new HttpKVStoreError(
+      // No exchange happened; the failure is local to building the request.
+      0,
+      'KEY_NOT_ENCODABLE',
+      `@openmaic/storage: this ${label} cannot be carried over the HTTP URL transport — it ` +
+        `contains an unpaired UTF-16 surrogate, which has no percent-encoding. The key domain ` +
+        `still permits it; a browser-backed deployment can store it.`,
+    );
+  }
 }
 
 function normalizeHeaders(init: HeadersInit | undefined): Record<string, string> {
@@ -249,10 +272,12 @@ export class HttpAccountKV {
   /** Read one account value, or `null` when the server holds no entry. */
   async get<T>(key: string, scope?: AccountScope): Promise<T | null> {
     assertAccountScope(scope);
-    assertKVKey(key);
     let response: { body: unknown; status: number };
     try {
-      response = await this.request<unknown>('GET', `/kv/entries/${encodeURIComponent(key)}`);
+      response = await this.request<unknown>(
+        'GET',
+        `/kv/entries/${encodeKeySegment(key, 'kv key')}`,
+      );
     } catch (error) {
       // Both conditions, deliberately. A proxy or gateway that answers 401, 403
       // or 500 while echoing the body's error code must not have that answer
@@ -283,7 +308,6 @@ export class HttpAccountKV {
     // Before anything else, including the delete-detection below: a device
     // write must fail, not quietly become a device delete.
     assertAccountScope(scope);
-    assertKVKey(key);
     // A value with no JSON representation at all (`undefined`, a function, a
     // symbol) is a removal, matching `BrowserKVStore`, which would otherwise
     // store the literal string "undefined" and throw on the next read.
@@ -298,21 +322,19 @@ export class HttpAccountKV {
       return this.remove(key);
     }
     assertJsonValue(value, `kv value for key ${JSON.stringify(key)}`);
-    await this.request<void>('PUT', `/kv/entries/${encodeURIComponent(key)}`, { value });
+    await this.request<void>('PUT', `/kv/entries/${encodeKeySegment(key, 'kv key')}`, { value });
   }
 
   /** Delete one account value. Absent keys succeed. */
   async remove(key: string, scope?: AccountScope): Promise<void> {
     assertAccountScope(scope);
-    assertKVKey(key);
-    await this.request<void>('DELETE', `/kv/entries/${encodeURIComponent(key)}`);
+    await this.request<void>('DELETE', `/kv/entries/${encodeKeySegment(key, 'kv key')}`);
   }
 
   /** List the account keys, optionally restricted to those under `prefix`. */
   async keys(prefix = '', scope?: AccountScope): Promise<string[]> {
     assertAccountScope(scope);
-    assertKVKeyPrefix(prefix);
-    const query = prefix === '' ? '' : `?prefix=${encodeURIComponent(prefix)}`;
+    const query = prefix === '' ? '' : `?prefix=${encodeKeySegment(prefix, 'kv key prefix')}`;
     const response = await this.request<unknown>('GET', `/kv/keys${query}`);
     if (!Array.isArray(response.body) || response.body.some((key) => typeof key !== 'string')) {
       throw new HttpKVStoreError(

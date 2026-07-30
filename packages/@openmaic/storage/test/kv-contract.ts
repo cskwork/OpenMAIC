@@ -102,7 +102,7 @@ export function runKVStoreContract(name: string, makeStore: () => KVStore): void
       expect(await kv.get('k')).toBe('present');
     });
 
-    test('the key is validated before anything reads the value', async () => {
+    test('the scope is validated before anything reads the value', async () => {
       const kv = makeStore();
       let reads = 0;
       const spy = {
@@ -112,9 +112,10 @@ export function runKVStoreContract(name: string, makeStore: () => KVStore): void
         },
       };
 
-      // A NUL key is rejected — one of the few keys that still is — and the
-      // rejection happens before the value is touched.
-      await expect(kv.set('bad\u0000key', spy)).rejects.toThrow(/NUL/);
+      // The key is opaque and never validated, but the scope still is — and it is
+      // checked before the value is serialized, so an invalid scope cannot make
+      // caller code (a getter, a toJSON) run on the way to a rejection.
+      await expect(kv.set('k', spy, 'Device' as KVScope)).rejects.toThrow(/unknown KV scope/);
       expect(reads).toBe(0);
     });
 
@@ -154,82 +155,35 @@ export function runKVStoreContract(name: string, makeStore: () => KVStore): void
       expect(await kv.keys(prefix as string)).toEqual([shouldMatch]);
     });
 
-    // Coverage matrix — key-validity. A key is opaque: callers compose it from
-    // unconstrained DSL identifiers, so every representative shape below must
-    // round-trip on every backend — set/get consistent, listed under a matching
-    // prefix, removable — with no rejection and no mangling.
+    // Coverage matrix — key-validity. The key domain is truly opaque and
+    // unconstrained: every representative shape below is a legitimate key and
+    // must round-trip on every backend — set/get consistent, listed, removable —
+    // with no rejection and no mangling, whatever it looks like. (Whole-key `.` /
+    // `..` and unpaired surrogates are excluded here only because they are HTTP
+    // *transport* limits, not key-domain rejections; they are covered separately.)
     test.each([
+      ['an empty string', ''],
+      ['a NUL code point', 'ns:before\u0000after'],
+      ['a control character', 'ns:tab\u0009here'],
       ['a separator', 'editor-current-scene:stage/one'],
       ['a backslash', 'document-migration:stage\\one'],
       ['a traversal shape, harmless as opaque data', 'a/../../b'],
       ['a percent sign', 'k%2Fnot-decoded'],
       ['an underscore', 'ns_scene_1'],
       ['a colon and trailing spaces', 'ns: a b '],
-      ['a bare dot inside', 'ns:a.b.c'],
-      ['a BMP unicode character', 'ns:\u573A/\u20AC'],
-      ['an astral emoji', 'ns:scene-\uD83D\uDD11'],
-      // The exact regression: a 500-character id under a real prefix is 521
-      // bytes, which the old 512-byte bound wrongly rejected.
-      ['a long but legitimate composed key', `editor-current-scene:${'s'.repeat(500)}`],
-      ['every special character at once', 'ns:/\\%_: .\u573A\uD83D\uDD11'],
-    ])('round-trips a key with %s across every backend', async (_name, key) => {
+      ['a BMP unicode character', 'ns:\u573A-\u20AC'],
+      ['an astral emoji (paired surrogates)', 'ns:scene-\uD83D\uDD11'],
+      // No length ceiling: an arbitrarily long composed key is just as valid.
+      ['a very long composed key', `editor-current-scene:${'s'.repeat(5000)}`],
+      ['many special characters at once', 'ns:/\\%_: .\u573A\uD83D\uDD11'],
+    ])('round-trips an opaque key with %s across every backend', async (_name, key) => {
       const kv = makeStore();
       await kv.set(key, { ok: true });
       expect(await kv.get(key)).toEqual({ ok: true });
       expect(await kv.keys()).toContain(key);
-      // keys(prefix) semantics survive: a prefix of the key finds it. Take the
-      // first code point (not a UTF-16 slice, which could split a surrogate pair
-      // into a lone surrogate the prefix rules rightly refuse); the store is
-      // fresh, so this is the only key it can match.
-      expect(await kv.keys([...key][0]!)).toContain(key);
       await kv.remove(key);
       expect(await kv.get(key)).toBeNull();
       expect(await kv.keys()).not.toContain(key);
-    });
-
-    // The few rules that remain are the ones encoding cannot cover and the
-    // transport cannot carry — none of which a caller composing `prefix + id`
-    // can produce. Enforced by every backend so a key that round-trips in the
-    // browser round-trips over HTTP too, before either stores anything. The
-    // length cap is a DoS ceiling far above any real id, not a domain constraint.
-    test.each([
-      ['an empty key', '', /must not be empty/],
-      ['the dot segment "."', '.', /URL path segment/],
-      ['the dot segment ".."', '..', /URL path segment/],
-      ['a key containing NUL', 'bad\u0000key', /NUL/],
-      ['a key containing an unpaired surrogate', '\uD800', /surrogate/],
-      // The ceiling is on the ENCODED size. A pure-ASCII key encodes to itself,
-      // so 4097 chars is 4097 encoded bytes — one past the cap.
-      ['a key past the DoS ceiling', 'k'.repeat(4097), /exceeds 4096 encoded bytes/],
-      // The parity case a UTF-8-byte bound missed: 456 '\u20AC' is only 1368 UTF-8
-      // bytes (well under any byte cap) but 4104 *encoded* bytes (%E2%82%AC each),
-      // which is what the wire actually carries — so it must be refused, on both
-      // backends, rather than accepted locally and 431'd over HTTP.
-      [
-        'a key whose encoded form exceeds the ceiling',
-        '\u20AC'.repeat(456),
-        /exceeds 4096 encoded bytes/,
-      ],
-    ])('refuses %s', async (_name, key, message) => {
-      const kv = makeStore();
-
-      await expect(kv.set(key, 'v')).rejects.toThrow(message);
-      await expect(kv.get(key)).rejects.toThrow(message);
-      await expect(kv.remove(key)).rejects.toThrow(message);
-      expect(await kv.keys()).not.toContain(key);
-    });
-
-    test('refuses a prefix only for what the transport cannot carry', async () => {
-      const kv = makeStore();
-      // A separator in a prefix is fine — it is opaque, like a key.
-      await kv.set('editor-current-scene:stage/one', 1);
-      expect(await kv.keys('editor-current-scene:stage/')).toEqual([
-        'editor-current-scene:stage/one',
-      ]);
-      // But a lone surrogate still cannot be carried.
-      await expect(kv.keys('\uD800')).rejects.toThrow(/surrogate/);
-      // The empty prefix is what "list everything" means, so it stays legal.
-      await expect(kv.keys('')).resolves.toEqual(['editor-current-scene:stage/one']);
     });
 
     // A prefix is not a path segment, so the dot-segment rule that governs keys

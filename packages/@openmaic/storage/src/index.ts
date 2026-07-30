@@ -15,14 +15,7 @@
  * here.
  */
 export type { DeviceSafeKVStore, KVScope, KVStore, LocalKVStore } from './kv/types.js';
-export {
-  assertKVKey,
-  assertKVKeyPrefix,
-  assertKVScope,
-  DEFAULT_KV_SCOPE,
-  KVScopeViolationError,
-  MAX_KV_KEY_ENCODED_LENGTH,
-} from './kv/types.js';
+export { assertKVScope, DEFAULT_KV_SCOPE, KVScopeViolationError } from './kv/types.js';
 export { BrowserKVStore, type BrowserKVStoreOptions } from './kv/browser.js';
 export {
   HttpAccountKV,

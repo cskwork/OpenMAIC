@@ -55,6 +55,32 @@ function rawRequest(
   });
 }
 
+/**
+ * Bind a real loopback conformance server, run `fn` against it, and always close
+ * it — skipping the test where the sandbox forbids binding a listener. Dedups the
+ * bind / EPERM-skip / close lifecycle the network-backed tests all repeat.
+ */
+async function withNetworkServer(
+  skip: (reason: string) => void,
+  fn: (server: KvConformanceServer) => Promise<void>,
+): Promise<void> {
+  let server: KvConformanceServer;
+  try {
+    server = await startKvConformanceServer();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+      skip('sandbox does not permit binding a 127.0.0.1 listener');
+      return;
+    }
+    throw error;
+  }
+  try {
+    await fn(server);
+  } finally {
+    await server.close();
+  }
+}
+
 function makeStore(storageNamespace = `kv-${namespace++}`): HttpKVStore {
   return new HttpKVStore({
     baseUrl: server.baseUrl,
@@ -199,7 +225,9 @@ describe('HttpKVStore device-scope invariant', () => {
     const account = new HttpAccountKV({
       baseUrl: 'https://kv.invalid',
       fetch: async (input) => {
-        paths.push(new URL(String(input)).pathname);
+        // The raw request string the client built — not `new URL(...).pathname`,
+        // which normalizes the `..` away and hides what the client emitted.
+        paths.push(String(input).replace('https://kv.invalid', ''));
         return new Response(null, { status: 204 });
       },
     });
@@ -393,23 +421,35 @@ const SCOPE_OPERATIONS = [
   { name: 'keys', method: 'GET', entryPath: false, writesValue: false },
 ] as const;
 
-describe('scope-rejection matrix: {get,set,remove,keys} × {query,header}', () => {
-  // The query and header channels every method can carry, so they run in-process
-  // against the injected server. The body channel needs a client that can put a
-  // body on a bodyless method, which `fetch` refuses to construct — that cell is
-  // covered by the raw-request matrix below.
+// Every header spelling that would carry a scope. Enumerated in the test so a
+// gap in the server's set (which once had only `x-scope`) shows up as a failing
+// cell rather than a silently-accepted scope.
+const SCOPE_HEADER_SPELLINGS = ['scope', 'x-scope', 'kv-scope', 'x-kv-scope'] as const;
+
+describe('scope-rejection matrix: {get,set,remove,keys} × {path,query,header spellings}', () => {
+  // Every non-body channel a scope could hide in, run in-process against the
+  // injected server. The body channel needs a client that can put a body on a
+  // bodyless method, which `fetch` refuses to construct — that cell is covered by
+  // the raw-request matrix below.
+  const channels = ['path', 'query', ...SCOPE_HEADER_SPELLINGS] as const;
   const cells = SCOPE_OPERATIONS.flatMap((op) =>
-    (['query', 'header'] as const).map(
-      (channel) => [`${op.name} via ${channel}`, op, channel] as const,
-    ),
+    channels.map((channel) => [`${op.name} via ${channel}`, op, channel] as const),
   );
 
   test.each(cells)('rejects a device scope on %s', async (_title, op, channel) => {
     const ns = `scope-matrix-${namespace++}`;
-    let path = `${server.baseUrl}${op.entryPath ? '/kv/entries/mk' : '/kv/keys'}`;
+    const entryTail = op.entryPath ? '/entries/mk' : '/keys';
+    // The scope-path-segment cell injects a scope as the segment after `kv`
+    // (`/kv/device/…`); the others keep the contract path and hide the scope in
+    // the query or a header.
+    let path =
+      channel === 'path'
+        ? `${server.baseUrl}/kv/device${entryTail}`
+        : `${server.baseUrl}/kv${entryTail}`;
     const headers: Record<string, string> = { 'x-storage-namespace': ns };
     if (channel === 'query') path += '?scope=device';
-    if (channel === 'header') headers['x-scope'] = 'device';
+    if ((SCOPE_HEADER_SPELLINGS as readonly string[]).includes(channel))
+      headers[channel] = 'device';
     const init: RequestInit = { method: op.method, headers };
     if (op.writesValue) {
       headers['content-type'] = 'application/json';
@@ -432,17 +472,8 @@ describe('scope-rejection matrix: {get,set,remove,keys} × body', () => {
   // is refused. One test per operation (not `test.each`) so each can consult the
   // per-test `skip` for sandboxes that cannot bind a loopback listener.
   for (const op of SCOPE_OPERATIONS) {
-    test(`rejects a scope in the body of ${op.name}`, async ({ skip }) => {
-      let networkServer: KvConformanceServer;
-      try {
-        networkServer = await startKvConformanceServer();
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'EPERM') {
-          skip('sandbox does not permit binding a 127.0.0.1 listener');
-        }
-        throw error;
-      }
-      try {
+    test(`rejects a scope in the body of ${op.name}`, async ({ skip }) =>
+      withNetworkServer(skip, async (networkServer) => {
         const body = op.writesValue
           ? JSON.stringify({ value: 1, scope: 'device' })
           : JSON.stringify({ scope: 'device' });
@@ -455,49 +486,37 @@ describe('scope-rejection matrix: {get,set,remove,keys} × body', () => {
 
         expect(status, op.name).toBe(400);
         expect(json).toMatchObject({ error: { code: 'VALIDATION_FAILED' } });
-      } finally {
-        await networkServer.close();
-      }
-    });
+      }));
   }
 });
 
-describe('HttpKVStore key constraints', () => {
-  const store = (): HttpKVStore =>
-    new HttpKVStore({
-      baseUrl: 'https://kv.invalid',
-      fetch: async () => {
-        throw new Error('fetch must not be called');
-      },
-      deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
-    });
-
-  test('refuses an empty key', async () => {
-    await expect(store().get('')).rejects.toThrow(/must not be empty/);
-    await expect(store().set('', 'v')).rejects.toThrow(/must not be empty/);
+describe('HttpKVStore opaque keys and transport limits', () => {
+  test('round-trips an empty key through the real server', async () => {
+    // The key domain is opaque, so an empty key is legitimate. It rides as a
+    // trailing-slash path segment and the server keeps it as the empty map key.
+    const remote = makeStore(`kv-empty-${namespace++}`);
+    await remote.set('', { ok: 1 });
+    expect(await remote.get('')).toEqual({ ok: 1 });
+    await remote.remove('');
+    expect(await remote.get('')).toBeNull();
   });
 
-  test('refuses a key past the DoS ceiling', async () => {
-    // A generous guard, not a domain constraint: a real id is orders of magnitude
-    // shorter, so only a pathological key crosses it.
-    await expect(store().set('k'.repeat(4097), 'v')).rejects.toThrow(/exceeds 4096 encoded bytes/);
+  test('round-trips a NUL-containing key through the real server', async () => {
+    // NUL is a legitimate opaque key: it percent-encodes to `%00`, which the URL
+    // parser preserves and the server decodes back. No key-domain rejection.
+    const remote = makeStore(`kv-nul-${namespace++}`);
+    const key = 'ns:before\u0000after';
+    await remote.set(key, { ok: 1 });
+    expect(await remote.get(key)).toEqual({ ok: 1 });
+    expect(await remote.keys('ns:')).toContain(key);
   });
 
-  test('bounds the key by its encoded length, not its UTF-8 byte length', async () => {
-    // 456 \u00D7 U+20AC is only 1368 UTF-8 bytes but 4104 *encoded* bytes (%E2%82%AC
-    // each) \u2014 the size the wire actually carries. A byte-length bound would wave
-    // it through client validation and then have it 431'd by the HTTP server,
-    // diverging from the browser backend; the encoded bound refuses it up front.
-    await expect(store().set('\u20AC'.repeat(456), 'v')).rejects.toThrow(
-      /exceeds 4096 encoded bytes/,
-    );
-  });
-
-  test('round-trips a long but legitimate composed key through the real server', async () => {
-    // The exact regression: `editor-current-scene:` + a 500-char stage id is 521
-    // bytes, which the old 512-byte bound wrongly rejected before the wire.
-    const remote = makeStore(`kv-longkey-${namespace++}`);
-    const key = `editor-current-scene:${'s'.repeat(500)}`;
+  test('round-trips an arbitrarily long key — there is no length ceiling', async () => {
+    // No DoS ceiling in the key domain: a long id is just as valid. (A deployment
+    // may still cap the request-target at its own transport layer; that is a
+    // deployment concern, documented, not a key-domain rule.)
+    const remote = makeStore(`kv-long-${namespace++}`);
+    const key = `editor-current-scene:${'s'.repeat(5000)}`;
     await remote.set(key, { sceneId: null });
     expect(await remote.get(key)).toEqual({ sceneId: null });
     expect(await remote.keys('editor-current-scene:')).toContain(key);
@@ -523,19 +542,26 @@ describe('HttpKVStore key constraints', () => {
     expect(await remote.get(key)).toBeNull();
   });
 
-  test.each([
-    ['%2e', '/kv/entries/%2e'],
-    ['%2e%2e', '/kv/entries/%2e%2e'],
-  ])('the server refuses the encoded dot segment %s', async (_name, path) => {
-    const response = await server.fetch(`${server.baseUrl}${path}`, {
-      method: 'DELETE',
-      headers: { 'x-storage-namespace': `kv-dot-${namespace++}` },
+  test('a lone-surrogate key is an HTTP transport limit, not a key-domain rejection', async () => {
+    // An unpaired UTF-16 surrogate has no percent-encoding, so the URL-path HTTP
+    // transport structurally cannot carry it — the client surfaces a clear
+    // transport error (not a key-domain "invalid key"). The browser primitive,
+    // which uses no URL, stores the very same key.
+    const http = new HttpKVStore({
+      baseUrl: 'https://kv.invalid',
+      fetch: async () => {
+        throw new Error('fetch must not be called');
+      },
+      deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
     });
+    const failure = http.set('\uD800', 'v');
+    await expect(failure).rejects.toMatchObject({ code: 'KEY_NOT_ENCODABLE' });
+    await expect(failure).rejects.toThrow(/cannot be carried over the HTTP URL transport/);
 
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toMatchObject({
-      error: { code: 'VALIDATION_FAILED' },
-    });
+    // Opaque on the browser primitive — stored and read back.
+    const browser = new BrowserKVStore({ storage: new MemoryStorage() });
+    await browser.set('\uD800', 'v', 'device');
+    expect(await browser.get('\uD800', 'device')).toBe('v');
   });
 
   test('the server accepts an opaque prefix containing a separator', async () => {
@@ -772,30 +798,29 @@ describe('HttpKVStore transport semantics', () => {
     expect(await store.keys()).not.toContain('k');
   });
 
-  test('rejects keys JSON cannot carry faithfully', async () => {
+  test('does not reject opaque keys — it encodes and sends them', async () => {
+    // The client applies no key-domain rules: a NUL and a separator are both
+    // encoded and sent (proven by the raw request target the client builds).
+    const targets: string[] = [];
     const store = new HttpKVStore({
       baseUrl: 'https://kv.invalid',
-      fetch: async () => {
-        throw new Error('fetch must not be called');
+      fetch: async (input) => {
+        // The raw string the client passed — not `new URL(...).pathname`, which
+        // would normalize a dot segment and hide what was actually emitted.
+        targets.push(String(input).replace('https://kv.invalid', ''));
+        return new Response(null, { status: 204 });
       },
       deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
     });
 
-    await expect(store.set('bad\u0000key', 'v')).rejects.toThrow(/must not contain the NUL/);
-    await expect(store.get('\uD800')).rejects.toThrow(/unpaired UTF-16 surrogate/);
-  });
+    await store.set('a\u0000b', 'v');
+    await store.set('a/b', 'v');
+    expect(targets).toEqual(['/kv/entries/a%00b', '/kv/entries/a%2Fb']);
 
-  test('rejects dot-only keys before URL construction', async () => {
-    const store = new HttpKVStore({
-      baseUrl: 'https://kv.invalid',
-      fetch: async () => {
-        throw new Error('fetch must not be called');
-      },
-      deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
-    });
-
-    await expect(store.get('.')).rejects.toThrow(/must not be ['"]\.['"]/);
-    await expect(store.remove('..')).rejects.toThrow(/must not be ['"]\.\.['"]/);
+    // A dot-only key is not rejected at the key domain either — the client
+    // encodes and sends it (whether the transport then normalizes it away is a
+    // deployment concern, so this only asserts no client-side rejection).
+    await expect(store.remove('..')).resolves.toBeUndefined();
   });
 
   test('reports a malformed get response instead of inventing a value', async () => {
@@ -1116,17 +1141,8 @@ describe('conformance server read-cache and delete hygiene', () => {
   });
 });
 
-test('real fetch reaches the listening conformance server over loopback', async ({ skip }) => {
-  let networkServer: KvConformanceServer;
-  try {
-    networkServer = await startKvConformanceServer();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EPERM') {
-      skip('sandbox does not permit binding a 127.0.0.1 listener');
-    }
-    throw error;
-  }
-  try {
+test('real fetch reaches the listening conformance server over loopback', async ({ skip }) =>
+  withNetworkServer(skip, async (networkServer) => {
     const store = new HttpKVStore({
       baseUrl: networkServer.baseUrl,
       headers: () => ({ 'x-storage-namespace': 'real-network' }),
@@ -1138,66 +1154,42 @@ test('real fetch reaches the listening conformance server over loopback', async 
     await expect(store.keys()).resolves.toEqual(['provider']);
     await store.remove('provider');
     await expect(store.get('provider')).resolves.toBeNull();
-  } finally {
-    await networkServer.close();
-  }
-});
+  }));
 
-// The reason the ceiling is measured on the encoded size: a non-ASCII key can be
-// small in UTF-8 bytes yet large on the wire, and a byte-length bound let it pass
-// client validation and then be 431'd by the real HTTP server while the browser
-// backend accepted it. Proven against a real node:http server so the 431 boundary
-// is exercised, not assumed.
-test('the encoded-size ceiling holds both backends to the same 431 boundary', async ({ skip }) => {
-  let networkServer: KvConformanceServer;
-  try {
-    networkServer = await startKvConformanceServer();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EPERM') {
-      skip('sandbox does not permit binding a 127.0.0.1 listener');
-    }
-    throw error;
-  }
-  try {
+// The key domain is opaque and unbounded, and that holds over a *real* HTTP
+// connection, not just the in-process harness: an arbitrarily long non-ASCII key
+// and a NUL-containing key both round-trip, with no ceiling and no NUL rejection.
+// The browser primitive accepts the same keys — parity on validity. A key the
+// URL transport genuinely cannot carry (an unpaired surrogate) is a transport
+// limit surfaced by the HTTP client, tested in the key-constraints suite.
+test('arbitrary opaque keys round-trip over a real HTTP connection', async ({ skip }) =>
+  withNetworkServer(skip, async (networkServer) => {
     const http = new HttpKVStore({
       baseUrl: networkServer.baseUrl,
-      headers: () => ({ 'x-storage-namespace': 'encoded-ceiling' }),
+      headers: () => ({ 'x-storage-namespace': 'opaque-real' }),
       deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
     });
     const browser = new BrowserKVStore({ storage: new MemoryStorage() });
 
-    // A max-legal non-ASCII key: 455 × U+20AC encodes to 4095 bytes, just under
-    // the 4096 ceiling. It round-trips over real HTTP with no 431...
-    const legal = '€'.repeat(455);
-    await http.set(legal, { ok: 1 });
-    expect(await http.get(legal)).toEqual({ ok: 1 });
-    // ...and the browser backend accepts the same key — parity on accept.
-    await browser.set(legal, { ok: 1 }, 'device');
-    expect(await browser.get(legal, 'device')).toEqual({ ok: 1 });
+    const keys = [
+      // Long and non-ASCII: 5000 × U+20AC (encoded ~45 KB would exceed a URL, so
+      // keep it long but within a real request-target — the point is "no domain
+      // ceiling", and a real transport still has its own separate limit).
+      `settings:${'€'.repeat(300)}`,
+      // NUL, which percent-encodes to %00 and is preserved end to end.
+      'ns:before\u0000after',
+      // A separator, the original regression.
+      'editor-current-scene:stage/one',
+    ];
 
-    // One code point over: 456 × U+20AC encodes to 4104 bytes. BOTH backends
-    // reject it at validation, before any request — so the HTTP client never
-    // builds the oversized target and never sees a 431, and the browser does not
-    // diverge by accepting it.
-    const oversize = '€'.repeat(456);
-    await expect(http.set(oversize, { ok: 1 })).rejects.toThrow(/exceeds 4096 encoded bytes/);
-    await expect(browser.set(oversize, { ok: 1 }, 'device')).rejects.toThrow(
-      /exceeds 4096 encoded bytes/,
-    );
-
-    // Defense in depth: a raw client that skips client-side validation and sends
-    // an over-ceiling (but under Node's 16 KiB request-target limit) encoded key
-    // gets a clean application-level 400, not a 431 and not a silent 200.
-    const rawOversize = '€'.repeat(600); // encoded 5400: over 4096, under 16384
-    const { status, json } = await rawRequest(networkServer.baseUrl, {
-      method: 'PUT',
-      path: `/kv/entries/${encodeURIComponent(rawOversize)}`,
-      headers: { 'content-type': 'application/json', 'x-storage-namespace': 'encoded-ceiling' },
-      body: JSON.stringify({ value: 1 }),
-    });
-    expect(status).toBe(400);
-    expect(json).toMatchObject({ error: { code: 'VALIDATION_FAILED' } });
-  } finally {
-    await networkServer.close();
-  }
-});
+    for (const [index, key] of keys.entries()) {
+      // The value is plain (the key may contain NUL; a *value* may not, per the
+      // JSON/jsonb value gate — a separate axis from the opaque key domain).
+      const value = { stored: index };
+      await http.set(key, value);
+      expect(await http.get(key), key).toEqual(value);
+      // The browser primitive stores the identical key — validity parity.
+      await browser.set(key, value, 'device');
+      expect(await browser.get(key, 'device'), key).toEqual(value);
+    }
+  }));
