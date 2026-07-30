@@ -1,6 +1,6 @@
 {
   "name": "@openmaic/storage",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "The MAIC pluggable persistence layer: KV / asset primitives with swappable backends (browser default, HTTP later), depending only on @openmaic/dsl.",
   "type": "module",
   "main": "./dist/index.js",
@@ -69,7 +69,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@openmaic/dsl": "workspace:*"
+    "@openmaic/dsl": "workspace:^"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.3.14",

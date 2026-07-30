@@ -31,6 +31,44 @@ function pack(name) {
   return join(temporaryDirectory, tarball);
 }
 
+/** The manifest as the registry will see it, read out of the tarball itself. */
+function packedManifest(tarball) {
+  return JSON.parse(
+    execFileSync('tar', ['-xzOf', tarball, 'package/package.json'], { encoding: 'utf8' }),
+  );
+}
+
+/**
+ * The dependents declare `@openmaic/dsl` as `workspace:^`, which pnpm publishes
+ * as `^<dsl version>`. That range is what lets a consumer installing several
+ * @openmaic packages together resolve ONE copy of the dsl. An exact pin — which
+ * is what the `workspace:*` form publishes — gives each dependent its own copy,
+ * and since the dsl carries the schema, the validators and the version
+ * constants, two copies mean a document produced against one instance can be
+ * validated by the other's schema revision.
+ *
+ * KNOWN LIMITATION: `^` deduplicates within one 0.x line only. A consumer that
+ * mixes an older dependent requiring `^0.5.0` with a newer one requiring
+ * `^0.6.0` still ends up with two dsl copies. Removing that possibility
+ * entirely would mean making the dsl a peer dependency of all three dependents,
+ * which changes their public installation contract and is a separate decision.
+ */
+function assertDeduplicableDslRange(name, manifest, dslVersion) {
+  const range = manifest.dependencies?.['@openmaic/dsl'];
+  assert(
+    range !== undefined,
+    `@openmaic/${name} no longer declares @openmaic/dsl; update this check if that is intended`,
+  );
+  assert.equal(
+    range,
+    `^${dslVersion}`,
+    `@openmaic/${name} publishes @openmaic/dsl as ${JSON.stringify(range)} rather than ` +
+      `"^${dslVersion}". An exact pin (what "workspace:*" publishes) forces consumers to ` +
+      'install a second copy of the dsl alongside its siblings.',
+  );
+  console.log(`@openmaic/${name} publishes @openmaic/dsl as ${range}.`);
+}
+
 try {
   const packageNames = ['dsl', 'storage', 'renderer', 'importer'];
   const localPackages = new Set(packageNames.map((name) => `@openmaic/${name}`));
@@ -58,6 +96,12 @@ try {
     }
   }
   const tarballs = Object.fromEntries(packageNames.map((name) => [name, pack(name)]));
+
+  const dslVersion = packedManifest(tarballs.dsl).version;
+  for (const name of ['storage', 'renderer', 'importer']) {
+    assertDeduplicableDslRange(name, packedManifest(tarballs[name]), dslVersion);
+  }
+
   const consumerDirectory = join(temporaryDirectory, 'consumer');
 
   mkdirSync(consumerDirectory);

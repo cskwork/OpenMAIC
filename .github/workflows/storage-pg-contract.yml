@@ -42,5 +42,19 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Run under the json reporter and then assert, from those results, that
+      # both `*.pg.test.ts` suites really executed. The in-module
+      # STORAGE_PG_CONTRACT_REQUIRED guard only covers a missing database: it is
+      # a `throw` inside the test modules, so it cannot fire if vitest stops
+      # collecting them, and collection is decided by storage's vitest.config.ts
+      # — a file no publishable-input rule covers, so excluding `*.pg.test.ts`
+      # there would silence this whole job while it still reported success.
       - name: Storage PostgreSQL contract
-        run: pnpm --filter @openmaic/storage test
+        env:
+          STORAGE_VITEST_RESULTS: ${{ runner.temp }}/storage-vitest.json
+        run: |
+          set -euo pipefail
+          pnpm --filter @openmaic/storage exec \
+            vitest run --reporter=default --reporter=json \
+            --outputFile.json="$STORAGE_VITEST_RESULTS"
+          node scripts/assert-pg-contract-suites.mjs "$STORAGE_VITEST_RESULTS"
