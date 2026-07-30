@@ -118,11 +118,14 @@ async function readJson<T>(req: IncomingMessage, maxBodyBytes: number): Promise<
 const MAX_IDENTIFIER_BYTES = 512;
 
 /**
- * The server-side half of the contract's "a key is never structure" rule. Keys
- * arrive percent-decoded, so `a%2F..%2F..%2Fb` becomes something with separators
- * here; a backend that joined it to a path or interpolated it into a query would
- * inherit that. Reject the shape at the boundary so no later storage layer can be
- * the first to look.
+ * The server-side half of the "a key is opaque" rule. A key arrives
+ * percent-decoded and may legitimately contain `/` or `\` — they came from an
+ * unconstrained caller id and were single-segmented on the wire by the client's
+ * encoding. This server stores the decoded key as a plain Map key, never as a
+ * path component, so a separator (or a `..`) inside it is just data and cannot
+ * traverse anything. The only rejections are the ones encoding cannot cover and
+ * the transport cannot carry: an empty or whole-key `.` / `..` (which URL path
+ * normalization would eat), NUL / unpaired surrogate, and over-length.
  */
 function assertAddressableKey(value: string, label: string): void {
   if (value === '') {
@@ -137,13 +140,6 @@ function assertAddressableKey(value: string, label: string): void {
       400,
       'VALIDATION_FAILED',
       `@openmaic/storage: URL path segment must not be ${JSON.stringify(value)}`,
-    );
-  }
-  if (value.includes('/') || value.includes('\\')) {
-    throw new ConformanceHttpError(
-      400,
-      'VALIDATION_FAILED',
-      `@openmaic/storage: ${label} ${JSON.stringify(value)} must not contain '/' or '\\'`,
     );
   }
   if (value.includes('\u0000')) {
@@ -171,21 +167,13 @@ function assertAddressableKey(value: string, label: string): void {
 }
 
 /**
- * A `keys()` prefix is not a path segment — it arrives in the query string — so
- * it is held to the key rules minus the two that only make sense for a segment:
- * it may be empty (that is what "list everything" means) and it may be `.` or
- * `..`, which are legal prefixes of legal keys such as `.hidden`. Reusing the
- * key validator here would reject prefixes the client rightly allows.
+ * A `keys()` prefix is opaque too, and it arrives in the query string rather
+ * than as a path segment — so it may be empty (that is what "list everything"
+ * means) and it may be `.` or `..`, legitimate prefixes of keys such as
+ * `.hidden`. Only the transport-fatal characters and the length bound remain.
  */
 function assertAddressablePrefix(prefix: string): void {
   if (prefix === '') return;
-  if (prefix.includes('/') || prefix.includes('\\')) {
-    throw new ConformanceHttpError(
-      400,
-      'VALIDATION_FAILED',
-      `@openmaic/storage: kv key prefix ${JSON.stringify(prefix)} must not contain '/' or '\\'`,
-    );
-  }
   if (prefix.includes('\u0000')) {
     throw new ConformanceHttpError(
       400,

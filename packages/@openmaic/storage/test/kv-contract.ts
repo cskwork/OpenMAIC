@@ -112,7 +112,9 @@ export function runKVStoreContract(name: string, makeStore: () => KVStore): void
         },
       };
 
-      await expect(kv.set('a/b', spy)).rejects.toThrow(/must not contain/);
+      // A NUL key is rejected — one of the few keys that still is — and the
+      // rejection happens before the value is touched.
+      await expect(kv.set('bad\u0000key', spy)).rejects.toThrow(/NUL/);
       expect(reads).toBe(0);
     });
 
@@ -146,16 +148,32 @@ export function runKVStoreContract(name: string, makeStore: () => KVStore): void
       expect(await kv.keys('a_')).toEqual(['a_b']);
     });
 
-    // The key domain belongs to the primitive, not to one backend. A key the
-    // browser accepted but a server cannot address would become unreachable the
-    // moment a deployment moved — the exact failure "every backend passes the
-    // same suite" is supposed to rule out — so both backends refuse the same
-    // keys, and both do it before storing anything.
+    // A key is opaque. Callers compose keys from unconstrained DSL identifiers —
+    // a stageId may be `stage/one` — so a key containing `/`, `\\`, `:`, or `%`
+    // must round-trip, not be rejected. Traversal is defended by encoding on the
+    // wire (a `/` becomes one path segment) and by the server storing the key as
+    // an opaque value, never a path — never by turning away a legitimate key.
+    test.each([
+      ['a separator', 'editor-current-scene:stage/one'],
+      ['a backslash', 'document-migration:stage\\one'],
+      ['a traversal shape, harmless as opaque data', 'a/../../b'],
+      ['a percent sign', 'k%2Fnot-decoded'],
+      ['a colon and spaces', 'ns: a b '],
+    ])('round-trips a key with %s', async (_name, key) => {
+      const kv = makeStore();
+      await kv.set(key, { ok: true });
+      expect(await kv.get(key)).toEqual({ ok: true });
+      expect(await kv.keys()).toContain(key);
+      await kv.remove(key);
+      expect(await kv.get(key)).toBeNull();
+    });
+
+    // The few rules that remain are the ones encoding cannot cover and the
+    // transport cannot carry — none of which a caller composing `prefix + id`
+    // can produce. Enforced by every backend so a key that round-trips in the
+    // browser round-trips over HTTP too, before either stores anything.
     test.each([
       ['an empty key', '', /must not be empty/],
-      ['a key containing "/"', 'a/b', /must not contain/],
-      ['a key containing "\\"', 'a\\b', /must not contain/],
-      ['a traversal-shaped key', 'a/../../b', /must not contain/],
       ['the dot segment "."', '.', /URL path segment/],
       ['the dot segment ".."', '..', /URL path segment/],
       ['a key containing NUL', 'bad\u0000key', /NUL/],
@@ -172,12 +190,17 @@ export function runKVStoreContract(name: string, makeStore: () => KVStore): void
       expect(await kv.keys()).not.toContain(key);
     });
 
-    test('refuses a prefix that could never match a legal key', async () => {
+    test('refuses a prefix only for what the transport cannot carry', async () => {
       const kv = makeStore();
-      await expect(kv.keys('a/b')).rejects.toThrow(/must not contain/);
+      // A separator in a prefix is fine — it is opaque, like a key.
+      await kv.set('editor-current-scene:stage/one', 1);
+      expect(await kv.keys('editor-current-scene:stage/')).toEqual([
+        'editor-current-scene:stage/one',
+      ]);
+      // But a lone surrogate still cannot be carried.
       await expect(kv.keys('\uD800')).rejects.toThrow(/surrogate/);
       // The empty prefix is what "list everything" means, so it stays legal.
-      await expect(kv.keys('')).resolves.toEqual([]);
+      await expect(kv.keys('')).resolves.toEqual(['editor-current-scene:stage/one']);
     });
 
     // A prefix is not a path segment, so the dot-segment rule that governs keys

@@ -390,16 +390,6 @@ describe('HttpKVStore key constraints', () => {
     await expect(store().set('', 'v')).rejects.toThrow(/must not be empty/);
   });
 
-  test.each([
-    ['forward slash', 'a/../../b'],
-    ['backslash', 'a\\..\\b'],
-    ['bare separator', 'a/b'],
-  ])('refuses a key containing a %s', async (_name, key) => {
-    await expect(store().get(key)).rejects.toThrow(/must not contain/);
-    await expect(store().set(key, 'v')).rejects.toThrow(/must not contain/);
-    await expect(store().remove(key)).rejects.toThrow(/must not contain/);
-  });
-
   test('refuses an over-long key', async () => {
     await expect(store().set('k'.repeat(513), 'v')).rejects.toThrow(/exceeds 512 UTF-8 bytes/);
   });
@@ -408,6 +398,26 @@ describe('HttpKVStore key constraints', () => {
     // 256 three-byte characters (U+20AC) is 768 bytes: a character-counting bound would
     // wave it through and hand the server a key half again its stated limit.
     await expect(store().set('\u20AC'.repeat(256), 'v')).rejects.toThrow(/exceeds 512 UTF-8 bytes/);
+  });
+
+  test('round-trips a key containing separators through the real server', async () => {
+    // A stageId of `stage/one` is a legitimate id, so the composed key must
+    // survive the wire. The client percent-encodes it into one path segment and
+    // the server stores the decoded key as an opaque value.
+    const storageNamespace = `kv-opaque-${namespace++}`;
+    const remote = new HttpKVStore({
+      baseUrl: server.baseUrl,
+      fetch: server.fetch,
+      headers: () => ({ 'x-storage-namespace': storageNamespace }),
+      deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
+    });
+
+    const key = 'editor-current-scene:stage/one';
+    await remote.set(key, { sceneId: null });
+    expect(await remote.get(key)).toEqual({ sceneId: null });
+    expect(await remote.keys('editor-current-scene:')).toContain(key);
+    await remote.remove(key);
+    expect(await remote.get(key)).toBeNull();
   });
 
   test.each([
@@ -425,30 +435,53 @@ describe('HttpKVStore key constraints', () => {
     });
   });
 
-  test('the server validates the keys() prefix, not just the key', async () => {
-    // The prefix is a separate caller-controlled input that reaches the same
-    // query a key does; a server trusting the client to have checked it is
-    // trusting a client it does not control.
-    const response = await server.fetch(
-      `${server.baseUrl}/kv/keys?prefix=${encodeURIComponent('a/b')}`,
-      { headers: { 'x-storage-namespace': `kv-prefix-${namespace++}` } },
-    );
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toMatchObject({
-      error: { code: 'VALIDATION_FAILED', message: expect.stringContaining('must not contain') },
+  test('the server accepts an opaque prefix containing a separator', async () => {
+    // A separator in a prefix is data, not structure: the client encodes it and
+    // the server matches it literally. It must not be rejected.
+    const storageNamespace = `kv-prefix-${namespace++}`;
+    await server.fetch(`${server.baseUrl}/kv/entries/${encodeURIComponent('a/one')}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-storage-namespace': storageNamespace },
+      body: JSON.stringify({ value: 1 }),
     });
+
+    const response = await server.fetch(
+      `${server.baseUrl}/kv/keys?prefix=${encodeURIComponent('a/')}`,
+      { headers: { 'x-storage-namespace': storageNamespace } },
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(['a/one']);
   });
 
-  test('the server refuses a percent-encoded traversal in a key', async () => {
-    const response = await server.fetch(
-      `${server.baseUrl}/kv/entries/${encodeURIComponent('../../etc/passwd')}`,
-      { method: 'DELETE', headers: { 'x-storage-namespace': `kv-traversal-${namespace++}` } },
-    );
+  test('a percent-encoded traversal is stored as an opaque key, not a path', async () => {
+    // Neutralized by encoding, not by rejection: the client single-segments it,
+    // and the server keeps it as a plain map key that traverses nothing.
+    const storageNamespace = `kv-traversal-${namespace++}`;
+    const remote = new HttpKVStore({
+      baseUrl: server.baseUrl,
+      fetch: server.fetch,
+      headers: () => ({ 'x-storage-namespace': storageNamespace }),
+      deviceStore: new BrowserKVStore({ storage: new MemoryStorage() }),
+    });
 
-    expect(response.status).toBe(400);
+    const key = '../../etc/passwd';
+    await remote.set(key, 'harmless');
+    expect(await remote.get(key)).toBe('harmless');
+    // It is one opaque key, not a walk up the tree — a sibling with the same
+    // trailing segment is a different key.
+    expect(await remote.get('passwd')).toBeNull();
+  });
+
+  test('a raw (unencoded) traversal path does not reach the entries route', async () => {
+    // Belt to the encoding's braces: a malicious client that puts literal
+    // separators on the wire produces extra path segments, which match no route.
+    const response = await server.fetch(`${server.baseUrl}/kv/entries/../../etc/passwd`, {
+      method: 'DELETE',
+      headers: { 'x-storage-namespace': `kv-raw-${namespace++}` },
+    });
+    expect(response.status).toBe(404);
     await expect(response.json()).resolves.toMatchObject({
-      error: { code: 'VALIDATION_FAILED', message: expect.stringContaining('must not contain') },
+      error: { code: 'ROUTE_NOT_FOUND' },
     });
   });
 });

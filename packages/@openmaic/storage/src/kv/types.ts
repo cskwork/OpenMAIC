@@ -106,15 +106,26 @@ const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
 /**
  * The key domain, enforced by **every** backend.
  *
- * It lives here rather than in the HTTP client because a key that one backend
- * accepts and another cannot address is not a portable primitive: a document
- * written in the browser under a key containing `/` would become unreachable
- * the moment a deployment moved to a server, and "the same contract suite
- * proves the backends equivalent" would be false in the one place it matters.
+ * A key is an **opaque string**. Callers compose keys from unconstrained DSL
+ * identifiers — a `stageId` may legitimately be `stage/one` — so this must not
+ * reject a key merely for containing `/`, `\`, `:`, or other characters that
+ * look like structure. It once did, and that broke every caller whose key
+ * embeds an id; the fix is the same one the asset ref took: keep the key opaque,
+ * and defend against path traversal by *encoding*, not by rejecting.
  *
- * The rules follow from a key becoming a URL path segment somewhere: separators
- * and dot segments would introduce structure a server could mistake for a path,
- * and NUL or an unpaired surrogate does not survive the transports underneath.
+ * Encoding is where traversal protection lives. The HTTP client percent-encodes
+ * the whole key into a single path segment (`stage/one` → `stage%2Fone`), so a
+ * separator can never open a new segment on the wire, and the contract requires
+ * the server to treat the decoded key as an opaque bound value — never a path
+ * component. The browser backend stores the key verbatim, where a separator is
+ * just a character.
+ *
+ * The few rules that remain are the ones encoding cannot cover, and none of
+ * them can be produced by a caller composing `prefix + id`: an empty key and a
+ * whole-key `.` / `..` have no percent-encoding that survives URL path
+ * normalization, and NUL or an unpaired surrogate does not survive the
+ * transports underneath at all. Enforced by every backend so a key that round-
+ * trips in the browser round-trips over HTTP too.
  */
 export function assertKVKey(key: string): void {
   if (key === '') {
@@ -122,11 +133,6 @@ export function assertKVKey(key: string): void {
   }
   if (key === '.' || key === '..') {
     throw new Error(`@openmaic/storage: URL path segment must not be ${JSON.stringify(key)}`);
-  }
-  if (key.includes('/') || key.includes('\\')) {
-    throw new Error(
-      `@openmaic/storage: kv key ${JSON.stringify(key)} must not contain '/' or '\\'`,
-    );
   }
   assertKVKeyCharacters(key, 'kv key');
   const bytes = UTF8.encode(key).length;
@@ -148,17 +154,13 @@ function assertKVKeyCharacters(value: string, label: string): void {
 
 /**
  * A `keys()` prefix is held to the key rules it is a prefix *of*, minus the
- * non-empty requirement: listing everything is what an empty prefix means. A
- * prefix that could never match a legal key is a caller mistake worth reporting
- * rather than an empty result to puzzle over.
+ * requirements that only make sense for a whole key: it may be empty (that is
+ * what "list everything" means) and, like a key, it is opaque — a `/` is a
+ * legitimate prefix character, not structure. Only the transport-fatal
+ * characters and the length bound remain.
  */
 export function assertKVKeyPrefix(prefix: string): void {
   if (prefix === '') return;
-  if (prefix.includes('/') || prefix.includes('\\')) {
-    throw new Error(
-      `@openmaic/storage: kv key prefix ${JSON.stringify(prefix)} must not contain '/' or '\\'`,
-    );
-  }
   assertKVKeyCharacters(prefix, 'kv key prefix');
   const bytes = UTF8.encode(prefix).length;
   if (bytes > MAX_KV_KEY_BYTES) {
