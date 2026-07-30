@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -146,21 +146,46 @@ export function readChangesetsConfig(root = repositoryRoot()) {
  */
 const EXPECTED_WORKSPACE_GLOBS = ['packages/*', 'packages/@openmaic/*', '!packages/docs'];
 
+function bail(message) {
+  console.error(message);
+  process.exit(2);
+}
+
+/**
+ * The `packages` list from pnpm-workspace.yaml.
+ *
+ * Deliberately narrow rather than tolerant. It understands one shape — a block
+ * sequence of scalars under a top-level `packages:` key, with comments and blank
+ * lines — and refuses to guess at anything else. An earlier version stopped at
+ * the first line it did not recognise, which made a blank line hide every entry
+ * after it while YAML still counted them.
+ */
 function readWorkspaceGlobs(root) {
-  const source = readFileSync(join(root, 'pnpm-workspace.yaml'), 'utf8');
+  const lines = readFileSync(join(root, 'pnpm-workspace.yaml'), 'utf8').split('\n');
   const globs = [];
-  let inPackages = false;
-  for (const rawLine of source.split('\n')) {
-    const line = rawLine.replace(/\s+#.*$/, '').trimEnd();
-    if (/^packages:\s*$/.test(line)) {
-      inPackages = true;
-      continue;
-    }
-    if (!inPackages) continue;
-    const item = /^\s+-\s*(.*)$/.exec(line);
-    if (!item) break; // the list ended
-    globs.push(item[1].trim().replace(/^["']|["']$/g, ''));
+  let index = lines.findIndex((line) => /^packages:/.test(line));
+  if (index === -1) bail('pnpm-workspace.yaml has no top-level `packages:` key.');
+  if (!/^packages:\s*(#.*)?$/.test(lines[index])) {
+    bail(
+      `pnpm-workspace.yaml line ${index + 1} puts content on the \`packages:\` key itself ` +
+        '(a flow sequence?), which these checks do not parse. Use a block sequence.',
+    );
   }
+
+  for (index += 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^\s*(#.*)?$/.test(line)) continue; // blank or comment-only
+    if (!/^\s/.test(line)) break; // a new top-level key ends the list
+    const item = /^\s+-\s+(.+?)\s*(?:\s#.*)?$/.exec(line);
+    if (!item) {
+      bail(
+        `pnpm-workspace.yaml line ${index + 1} is inside \`packages:\` but is not a plain list ` +
+          `item, so these checks cannot tell what the workspace contains:\n  ${line}`,
+      );
+    }
+    globs.push(item[1].replace(/^(["'])(.*)\1$/, '$2'));
+  }
+  if (globs.length === 0) bail('pnpm-workspace.yaml declares an empty `packages:` list.');
   return globs;
 }
 
@@ -174,26 +199,40 @@ export function getWorkspacePackages(root = repositoryRoot()) {
   const globs = readWorkspaceGlobs(root);
   const expected = [...EXPECTED_WORKSPACE_GLOBS].sort();
   if (JSON.stringify([...globs].sort()) !== JSON.stringify(expected)) {
-    console.error(
+    bail(
       'pnpm-workspace.yaml no longer matches the layout the release checks know how to enumerate.\n' +
         `- found:    ${JSON.stringify(globs)}\n` +
         `- expected: ${JSON.stringify(EXPECTED_WORKSPACE_GLOBS)}\n` +
         'Update EXPECTED_WORKSPACE_GLOBS and getWorkspacePackages in scripts/openmaic-packages.mjs.',
     );
-    process.exit(2);
   }
 
   const packages = [];
   for (const parent of ['packages', 'packages/@openmaic']) {
-    for (const entry of readdirSync(join(root, parent), { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const dir = `${parent}/${entry.name}`;
+    for (const entry of readdirSync(join(root, parent))) {
+      const dir = `${parent}/${entry}`;
       if (dir === 'packages/docs') continue;
+      // statSync, not Dirent.isDirectory(): pnpm follows a symlinked package
+      // directory, and a Dirent for a symlink reports isDirectory() === false,
+      // which would have hidden such a package from every check here.
+      let stats;
+      try {
+        stats = statSync(join(root, dir));
+      } catch (error) {
+        bail(`Cannot resolve the workspace entry ${dir}: ${error.message}`);
+      }
+      if (!stats.isDirectory()) continue;
       let manifest;
       try {
         manifest = JSON.parse(readFileSync(join(root, dir, 'package.json'), 'utf8'));
-      } catch {
-        continue; // not a package (e.g. the packages/@openmaic container itself)
+      } catch (error) {
+        // No manifest at all is normal: `packages/*` also matches the
+        // `packages/@openmaic` container. An unreadable or invalid one is not.
+        if (error.code === 'ENOENT') continue;
+        bail(`Cannot read ${dir}/package.json: ${error.message}`);
+      }
+      if (typeof manifest.name !== 'string' || manifest.name === '') {
+        bail(`${dir}/package.json has no name, so it cannot be checked against the allowlist.`);
       }
       packages.push({
         name: manifest.name,

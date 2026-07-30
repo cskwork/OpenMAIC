@@ -74,8 +74,8 @@ pnpm lint --fix
 # 3. TypeScript type checking
 npx tsc --noEmit
 
-# 4. If you touched packages/@openmaic/*, declare the release
-#    (`--empty` if the change releases nothing — see "Changing a Published Package")
+# 4. If you changed a file that ships from packages/@openmaic/*, declare the release
+#    (see "Changing a Published Package")
 pnpm changeset
 ```
 
@@ -155,7 +155,7 @@ Choosing the level is a [semver](https://semver.org/) judgement, and it is yours
 
 Be deliberate with `@openmaic/dsl`. It is the contract the other packages and downstream deployments validate against, so a change that narrows what an existing document may contain is a breaking change even when the diff looks small.
 
-**The check is per package.** CI runs `scripts/check-changesets.mjs` on every pull request, and it fails unless every package you changed is named by one of your changesets. Naming a different package does not satisfy it:
+**The check is per package.** CI runs `scripts/check-changesets.mjs` on every pull request, and it fails unless every package you changed is named — at `patch`, `minor` or `major` — by a changeset your PR *adds*. Naming a different package does not satisfy it, and neither does editing a changeset somebody else left pending:
 
 ```
 @openmaic/renderer: publishable package inputs changed but no changeset in this range releases it.
@@ -165,13 +165,11 @@ Files that no package ships — `test/`, `docs/`, `vitest.config.ts`, `CHANGELOG
 
 ### When your change releases nothing
 
-Plenty of work touches a published package without changing what ships from it: a CI tweak, a comment, an internal refactor with no observable effect.
+There is no changeset that means "I changed this package but do not release it", and that is deliberate: the version on npm has to keep meaning "this exact source", so a changed package gets a release. If you are unsure whether a change is worth releasing, name it at `patch` — a release nobody needed costs less than a published version that means nothing.
 
-```bash
-pnpm changeset --empty
-```
+What you often do *not* need is a changeset at all. Editing only files that no package ships — `test/`, `docs/`, `vitest.config.ts`, a `CHANGELOG.md`, the importer's `src1/` — needs nothing, and the check will say so and pass. The same goes for any change outside `packages/@openmaic/`.
 
-An empty changeset records "this change releases nothing" and leaves that decision visible in the diff. Note that it is not a way past the per-package check — if you changed the renderer, the check wants the renderer named. Use `--empty` for the parts of a change that release nothing, and if you are unsure whether something needs releasing, name it at `patch`: a release nobody needed costs less than a published version that means nothing.
+`pnpm changeset --empty` exists and other changesets repositories rely on it, but here it satisfies nothing: an empty changeset releases no package, so it cannot discharge the obligation to release one you changed. A `none` level is refused for the same reason. If [changeset-bot](https://github.com/apps/changeset-bot) suggests an empty changeset on your PR, that is its generic advice, not this repository's rule.
 
 [`.changeset/README.md`](.changeset/README.md) explains the rest of the configuration.
 

@@ -10,8 +10,7 @@ specific to this repository.
 ## Adding one
 
 ```bash
-pnpm changeset          # pick packages and levels, write a summary
-pnpm changeset --empty  # this change intentionally releases nothing
+pnpm changeset  # pick packages and levels, write a summary
 ```
 
 Commit the generated file with the rest of your change.
@@ -19,28 +18,39 @@ Commit the generated file with the rest of your change.
 ## What CI checks
 
 `scripts/check-changesets.mjs`, on every pull request and every push to `main`. It fails unless
-**every** publishable package changed in the range is named by a changeset added in that same
-range.
+**every** publishable package changed in the range is named, at `patch`, `minor` or `major`, by a
+changeset **added** in that same range.
 
 That is deliberately stricter than `changeset status`, which only fails when a range contains no
 changesets at all. Under plain `status`, changing the renderer while declaring only storage
-passes, and so does changing the renderer with `--empty`. The check that matters is per package.
+passes; so does changing the renderer with `--empty`; so does declaring it at `none`. The check
+that matters is per package.
 
-Only changesets added in the range count, so one left pending by an earlier pull request cannot
-stand in for a missing one.
+Three things deliberately do not satisfy it:
 
-`pnpm changeset --empty` is still the escape hatch, but it now has to be aimed. Work that touches
-no publishable input needs nothing at all — the check says so and passes. Work that does touch
-one has to name that package. If you are unsure whether a change needs releasing, name it at
-`patch`: a release nobody needed costs less than a published version that means nothing.
+- an **empty** changeset, or one declaring a changed package at `none` — both release nothing, so
+  accepting them would be accepting the drift the check exists to catch
+- a changeset left **pending** by an earlier pull request
+- a pending changeset that this change **edits** rather than adds — that is somebody else's
+  release intent being borrowed
+
+There is no escape hatch for a changed package. A change that touches no publishable input needs
+nothing at all, and the check says so and passes. If you are unsure whether a change needs
+releasing, name it at `patch`: a release nobody needed costs less than a published version that
+means nothing.
 
 ### The release itself
 
 `changeset version` consumes every pending changeset, so the change that applies them alters
-packages with none left to find and can never satisfy the check. It is recognised by what makes
-it legitimate: changesets were consumed **and** every changed package's version increased. Both
-halves are required, so a change cannot buy itself an exemption by deleting somebody else's
-pending changeset.
+packages with none left to find and can never satisfy the check — including on the pull request
+that carries it, which is where branch protection looks first. It needs an exemption, and that
+exemption is the most dangerous rule in the file, because it is the one path by which a package
+change can reach `main` with nothing declaring it.
+
+So it is granted only to a range that **cannot** contain anything else: every file it touches is
+a package manifest, a `CHANGELOG.md`, or a deleted changeset. A hand-written version bump sitting
+next to a real source edit does not qualify, and neither does a range that deletes pending
+changesets without releasing what they declared.
 
 ## How versions and publishing divide
 

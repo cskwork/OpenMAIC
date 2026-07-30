@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import parse from '@changesets/parse';
 import {
   PUBLISHABLE_PACKAGES,
   compareVersions,
@@ -21,9 +22,11 @@ import {
  * only storage passes it, and so does changing the renderer with
  * `changeset add --empty`. Per package, or the check does not bind.
  *
- * The empty changeset stays as the escape hatch, but it now has to be aimed:
- * work that touches no publishable input needs nothing, and work that touches
- * one has to name that package.
+ * There is no escape hatch for a changed package. A change that touches no
+ * publishable input needs nothing at all, and `changeset add --empty` cannot
+ * stand in for one that does: an empty changeset releases nothing, so accepting
+ * it would be accepting exactly the drift this check exists to catch. `none` is
+ * refused for the same reason.
  *
  * The comparison is against the merge base and includes the working tree, which
  * is what `changeset status --since` does, so the two agree about what "changed
@@ -89,6 +92,42 @@ const ignoredPackageInputs = {
   },
 };
 
+/** Release levels that actually publish something. `none` deliberately does not. */
+const RELEASING_TYPES = ['patch', 'minor', 'major'];
+
+/**
+ * The releases a changeset declares.
+ *
+ * Parsed by @changesets/parse, the same parser `changeset version` uses, so this
+ * gate cannot disagree with the tool about what a changeset says.
+ */
+function parseChangeset(contents, source) {
+  if (contents === '') return [];
+  let parsed;
+  try {
+    parsed = parse(contents);
+  } catch (error) {
+    console.error(`Cannot parse ${source}: ${error instanceof Error ? error.message : error}`);
+    process.exit(1);
+  }
+  return parsed.releases ?? [];
+}
+
+/**
+ * A changeset's contents, from HEAD if it is committed and from the working tree
+ * if it is staged but not yet committed, which is how it looks locally before
+ * `git commit`.
+ */
+function readChangesetFile(file) {
+  const committed = gitFileAt('HEAD', file);
+  if (committed !== undefined) return committed;
+  try {
+    return readFileSync(join(root, file), 'utf8');
+  } catch {
+    return '';
+  }
+}
+
 function gitFileAt(ref, file) {
   const path = git(['ls-tree', '--full-tree', '--name-only', ref, '--', file], { cwd: root });
   if (path === '') return undefined;
@@ -122,11 +161,34 @@ function publishableInputsChanged(name, from) {
   });
 }
 
+function isChangesetFile(file) {
+  return /^\.changeset\/[^/]+\.md$/.test(file) && !/README\.md$/i.test(file);
+}
+
 /** Changeset files consumed in this range. */
 function consumedChangesets(from) {
-  return changedFiles(from, { filter: 'D', pathspec: ['.changeset'] }).filter(
-    (file) => /^\.changeset\/[^/]+\.md$/.test(file) && !/README\.md$/i.test(file),
-  );
+  return changedFiles(from, { filter: 'D', pathspec: ['.changeset'] }).filter(isChangesetFile);
+}
+
+/** Changeset files ADDED in this range. */
+function addedChangesets(from) {
+  return changedFiles(from, { filter: 'A', pathspec: ['.changeset'] }).filter(isChangesetFile);
+}
+
+/**
+ * Files `changeset version` is allowed to touch, and nothing else.
+ *
+ * A version commit rewrites a manifest's `version` field, appends to a
+ * CHANGELOG, and deletes the changesets it applied. Any other path in the range
+ * means the change is not purely a release.
+ */
+function isVersionCommitFile(file, from) {
+  if (isChangesetFile(file)) {
+    // Only a deletion. An added or modified changeset is authored content.
+    return consumedChangesets(from).includes(file);
+  }
+  const match = /^(packages\/@openmaic\/[^/]+)\/(package\.json|CHANGELOG\.md)$/.exec(file);
+  return match !== null && PUBLISHABLE_PACKAGES.includes(match[1].replace('packages/', ''));
 }
 
 /** Whether `name`'s manifest version strictly increased over the range. */
@@ -158,71 +220,108 @@ async function main(baseRef) {
   }
   const from = mergeBase(baseRef);
 
+  const consumed = consumedChangesets(from);
   const changed = PUBLISHABLE_PACKAGES.filter((name) => publishableInputsChanged(name, from));
+
+  // A release, and nothing but a release.
+  //
+  // `changeset version` consumes every pending changeset, so the change that
+  // applies them alters packages with none left to find and can never satisfy
+  // the per-package requirement below — including on the pull request that
+  // carries it, which is where branch protection looks first. It needs an
+  // exemption, and the exemption is the most dangerous thing in this file: it is
+  // the one path that lets a package change reach main with nothing declaring
+  // it.
+  //
+  // So it is granted only to a range that CANNOT contain a laundered change:
+  // every file it touches is a manifest, a CHANGELOG, or a deleted changeset. An
+  // earlier version asked only for "changesets were consumed AND every changed
+  // package's version increased", which a hand-written version bump next to a
+  // real source edit satisfied.
+  //
+  // On top of that, every package the deleted changesets named must actually
+  // have moved, so a range that quietly drops somebody else's pending release
+  // intent is not a release either.
+  if (consumed.length > 0) {
+    const offending = changedFiles(from).filter((file) => !isVersionCommitFile(file, from));
+    const declaredByConsumed = [
+      ...new Set(
+        consumed
+          .flatMap((file) =>
+            parseChangeset(gitFileAt(from, file) ?? '', `${file} at the merge base`),
+          )
+          .filter((release) => RELEASING_TYPES.includes(release.type))
+          .map((release) => release.name),
+      ),
+    ].filter((name) => PUBLISHABLE_PACKAGES.includes(name));
+    const dropped = declaredByConsumed.filter((name) => !versionIncreased(name, from));
+
+    if (offending.length === 0 && dropped.length === 0) {
+      console.log(
+        `This range applies ${consumed.length} changeset(s) and touches nothing but package ` +
+          'manifests and changelogs, so it is a release and needs no changeset of its own.',
+      );
+      for (const name of declaredByConsumed) console.log(`  released: ${name}`);
+      return;
+    }
+    console.log(`This range deletes ${consumed.length} changeset file(s) but is not a release:`);
+    if (offending.length > 0) {
+      console.log(`  it also changes ${offending.slice(0, 10).join(', ')}`);
+    }
+    if (dropped.length > 0) {
+      console.log(`  it drops the pending release of ${dropped.join(', ')} without moving it`);
+    }
+    if (changed.length === 0) {
+      console.error(
+        'Refusing a change that deletes pending changesets without releasing what they declared:\n' +
+          dropped.map((name) => `- ${name}: its pending release intent would be lost`).join('\n'),
+      );
+      process.exit(1);
+    }
+  }
+
   if (changed.length === 0) {
     console.log('No publishable @openmaic package input changed in this range.');
     return;
   }
   console.log(`Publishable inputs changed: ${changed.join(', ')}.`);
 
-  // The release commit. `changeset version` consumes every pending changeset, so
-  // the change that applies them alters packages with none left to find and can
-  // never satisfy the check below — including on the pull request that carries
-  // it, which is where branch protection looks first.
-  //
-  // It is recognised by what makes it legitimate — consumed changesets AND a
-  // version increase for every changed package — rather than by an author or a
-  // commit message, which anyone can write. Requiring the version increases is
-  // what stops a change from buying an exemption by deleting somebody else's
-  // pending changeset: that is the merge-time version assertion this gate
-  // replaced, kept for the one case where a changeset cannot exist.
-  const consumed = consumedChangesets(from);
-  if (consumed.length > 0) {
-    const withoutBump = changed.filter((name) => !versionIncreased(name, from));
-    if (withoutBump.length === 0) {
-      console.log(
-        `This range applied ${consumed.length} changeset(s) and increased the version of every ` +
-          'changed package, so it is a release and needs no changeset of its own.',
-      );
-      return;
-    }
-    console.log(
-      `This range deleted ${consumed.length} changeset file(s) but did not increase the version of ` +
-        `${withoutBump.join(', ')}, so it is not a release and still needs changesets.`,
-    );
-  }
-
   const { ignore } = readChangesetsConfig(root);
-  const readChangesets = (await import('@changesets/read')).default;
-  const changesets = await readChangesets(root, baseRef);
-
   const failures = [];
   const declared = new Map();
-  for (const changeset of changesets) {
-    for (const release of changeset.releases) {
+  // Only changesets ADDED in this range. A pre-existing one that was merely
+  // edited is somebody else's release intent being borrowed, and one left
+  // pending by an earlier pull request is not this change's declaration either.
+  for (const file of addedChangesets(from)) {
+    for (const release of parseChangeset(readChangesetFile(file), file)) {
       if (ignore.includes(release.name)) {
-        failures.push(
-          `.changeset/${changeset.id}.md releases ${release.name}, which .changeset/config.json ignores.`,
-        );
+        failures.push(`${file} releases ${release.name}, which .changeset/config.json ignores.`);
         continue;
       }
       if (!PUBLISHABLE_PACKAGES.includes(release.name)) {
+        failures.push(`${file} releases ${release.name}, which is not a published package.`);
+        continue;
+      }
+      if (!RELEASING_TYPES.includes(release.type)) {
+        // `none` is legal changesets input and releases nothing, so it cannot
+        // discharge the obligation to release a changed package.
         failures.push(
-          `.changeset/${changeset.id}.md releases ${release.name}, which is not a published package.`,
+          `${file} declares ${release.name} at \`${release.type}\`, which releases nothing. ` +
+            'Use patch, minor or major.',
         );
         continue;
       }
       const existing = declared.get(release.name) ?? [];
-      existing.push(`${release.type} in .changeset/${changeset.id}.md`);
+      existing.push(`${release.type} in ${file}`);
       declared.set(release.name, existing);
     }
   }
 
   for (const name of changed.filter((candidate) => !declared.has(candidate))) {
     failures.push(
-      `${name}: publishable package inputs changed but no changeset in this range releases it. ` +
-        'Run `pnpm changeset` and name it, or name it at `patch` if you are unsure — a release you ' +
-        'did not need costs less than a published version that means nothing.',
+      `${name}: publishable package inputs changed but no changeset added in this range releases ` +
+        'it. Run `pnpm changeset` and name it — at `patch` if you are unsure, because a release ' +
+        'nobody needed costs less than a published version that means nothing.',
     );
   }
 

@@ -42,22 +42,28 @@ function failIfAny(failures, headline) {
  * Versions of `name` already on the registry.
  *
  * Returns `undefined` only for a definitive "this package does not exist"
- * answer. Every other outcome — a transient error, an auth or proxy failure, an
- * unparseable body, a registry that is not the one we publish to — exits
- * non-zero, because reading "unknown" as "never published" would skip the
- * checks below entirely.
+ * answer, and that means exactly one thing: a structured
+ * `{"error":{"code":"E404"}}` body on stdout. Every other outcome — a transient
+ * error, an auth or proxy failure, an unparseable body, a registry that is not
+ * the one we publish to — exits non-zero, because reading "unknown" as "never
+ * published" would skip the checks below entirely.
+ *
+ * There is deliberately no fallback that looks for "404" in stderr. npm writes
+ * the structured object to stdout for a genuinely missing package, so such a
+ * fallback could only ever match something else — a proxy or CDN error page
+ * whose text happens to contain "404 Not Found" — and it would turn that into
+ * "this package was never published", the most dangerous wrong answer available
+ * here.
  */
 function registryVersions(name) {
   let stdout = '';
   let stderr = '';
-  let failed = false;
   try {
     stdout = execFileSync('npm', ['view', name, 'versions', '--json', '--registry', REGISTRY], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
-    failed = true;
     stdout = String(error.stdout ?? '');
     stderr = String(error.stderr ?? '');
   }
@@ -85,7 +91,6 @@ function registryVersions(name) {
     process.exit(2);
   }
 
-  if (failed && /E404|404 Not Found/.test(stderr)) return undefined;
   console.error(
     `Unable to determine the published versions of ${name}: ${stderr.trim() || 'empty response'}`,
   );
