@@ -16,10 +16,20 @@
  */
 
 /**
- * A stable, backend-agnostic handle to a stored asset. A plain string so it
- * embeds cleanly in DSL documents (e.g. `PPTImageElement.src`,
- * `PPTVideoElement.mediaRef`). Opaque to consumers: only the issuing
- * {@link StorageProvider} interprets it.
+ * A stable, backend-agnostic handle to a stored asset: an identifier the
+ * provider **allocated** at `put` time, opaque to everyone else. A plain string
+ * so it embeds cleanly in DSL documents (e.g. `PPTImageElement.src`,
+ * `PPTVideoElement.mediaRef`).
+ *
+ * Allocated, not derived: a ref says nothing about the bytes behind it. That is
+ * what lets those bytes be regenerated or replaced without invalidating a
+ * single document pointing at the ref, and lets one set of bytes carry several
+ * refs with different metadata. A provider may still store identical bytes once
+ * internally, but that is a property of its storage layer, not of the ref.
+ *
+ * The ref domain is unconstrained: any string may be handed to `resolve` or
+ * `remove`, and a ref the provider never issued is simply one that resolves to
+ * nothing.
  */
 export type AssetRef = string;
 
@@ -46,13 +56,18 @@ export interface BinaryBlob {
 }
 
 /**
- * The blob-resolution contract: store bytes, get back a stable ref, and resolve
- * a ref to a URL usable as an `<img>` / `<audio>` / `<video>` `src`.
- * Implementations decide the ref scheme (content-addressed hashing is
- * recommended so identical bytes de-duplicate).
+ * The blob-resolution contract: store bytes, get back an allocated ref, and
+ * resolve a ref to a URL usable as an `<img>` / `<audio>` / `<video>` `src`.
+ *
+ * `put` allocates. Every call returns a *new* ref, and nothing the caller
+ * receives reveals whether those bytes were already stored. This is a contract
+ * requirement rather than an implementation preference: a provider that handed
+ * back an existing ref for repeated bytes would let any caller test whether
+ * arbitrary bytes are already present, which is an existence oracle over data
+ * the caller never stored.
  */
 export interface StorageProvider {
-  /** Store bytes and return a stable ref to them. */
+  /** Store bytes and return a newly allocated ref to them. */
   put(data: BinaryBlob, meta?: AssetMeta): Promise<AssetRef>;
   /** Resolve a ref to a URL, or `null` if no asset is stored under it. */
   resolve(ref: AssetRef): Promise<string | null>;
