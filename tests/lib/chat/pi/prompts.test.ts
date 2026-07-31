@@ -280,6 +280,10 @@ describe('Pi director prompt closure routing', () => {
       enableWebSearch: false,
       enableWhiteboardChart: true,
     });
+    const codeOnly = buildNativeWebChildPrompt(makeBody(), agents[0], [], {
+      enableWebSearch: false,
+      enableWhiteboardCode: true,
+    });
     const shapeTurn = buildNativeWebChildTurnPrompt(
       'Draw one simple shape.',
       'teacher',
@@ -325,6 +329,15 @@ describe('Pi director prompt closure routing', () => {
         enableWhiteboardChart: true,
       },
     );
+    const codeTurn = buildNativeWebChildTurnPrompt(
+      'Draw one concise code example.',
+      'teacher',
+      {},
+      {
+        enableWebSearch: false,
+        enableWhiteboardCode: true,
+      },
+    );
 
     expect(shapeOnly).toContain('call `wb_draw_shape`');
     expect(shapeOnly).not.toContain('call `wb_draw_text`');
@@ -367,6 +380,9 @@ describe('Pi director prompt closure routing', () => {
     expect(chartOnly).not.toContain('call `wb_draw_line`');
     expect(chartOnly).not.toContain('call `wb_draw_latex`');
     expect(chartOnly).not.toContain('call `wb_draw_table`');
+    expect(codeOnly).toContain('call `wb_draw_code`');
+    expect(codeOnly).toContain('stable Runtime-generated line IDs');
+    expect(codeOnly).not.toContain('call `wb_draw_chart`');
     expect(shapeTurn).toContain('Use `wb_draw_shape` only when one simple shape genuinely helps');
     expect(shapeTurn).not.toContain('Use `wb_draw_text`');
     expect(lineTurn).toContain(
@@ -385,6 +401,9 @@ describe('Pi director prompt closure routing', () => {
     );
     expect(chartTurn).not.toContain('Use `wb_draw_text`');
     expect(chartTurn).not.toContain('Use `wb_draw_table`');
+    expect(codeTurn).toContain('Use `wb_draw_code` only when a code example genuinely helps');
+    expect(codeTurn).toContain('Treat the returned element and line IDs as authoritative');
+    expect(codeTurn).not.toContain('later code edit');
     expect(latexTurn).toContain('If the formula is rejected, correct the LaTeX');
     expect(latexTurn).not.toContain('Use `wb_draw_text`');
     expect(latexTurn).not.toContain('Use `wb_draw_shape`');

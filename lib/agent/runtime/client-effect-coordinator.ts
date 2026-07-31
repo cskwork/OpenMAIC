@@ -388,7 +388,10 @@ export class ClientEffectCoordinator {
               observed.observedTableDigest === expected.expectedTableDigest) ||
             (expected.kind === 'whiteboard_chart_exists' &&
               observed.elementType === 'chart' &&
-              observed.observedChartDigest === expected.expectedChartDigest));
+              observed.observedChartDigest === expected.expectedChartDigest) ||
+            (expected.kind === 'whiteboard_code_exists' &&
+              observed.elementType === 'code' &&
+              observed.observedCodeDigest === expected.expectedCodeDigest));
         if (!postconditionMatches) {
           return 'Committed postcondition does not match the requested effect.';
         }

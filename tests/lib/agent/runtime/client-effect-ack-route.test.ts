@@ -5,16 +5,19 @@ import type { StageStore } from '@/lib/api/stage-api';
 import { BrowserClientEffectRuntime } from '@/lib/agent/client/client-effect-runtime';
 import {
   CLIENT_EFFECT_ACK_HEADER,
+  CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
   digestWhiteboardLatexHtmlV1,
+  digestWhiteboardCodeV1,
   digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
   digestWhiteboardShapeV1,
   digestVisibleTextV1,
   normalizeWhiteboardLatexV1,
+  normalizeWhiteboardCodeV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
   type ClientEffectAck,
@@ -180,6 +183,39 @@ async function latexEffectRequest(): Promise<ClientEffectRequest> {
       expectedFormulaDigest: await digestWhiteboardLatexV1(latex),
       expectedHtmlDigest: await digestWhiteboardLatexHtmlV1(html),
       ...latex,
+    },
+  };
+}
+
+async function codeEffectRequest(): Promise<ClientEffectRequest> {
+  const args = {
+    language: 'ts',
+    code: 'const slope = 2;\n\nreturn slope;',
+    x: 80,
+    y: 60,
+    width: 560,
+    height: 280,
+    fileName: 'slope.ts',
+  };
+  const code = normalizeWhiteboardCodeV1(args);
+  return {
+    ...(await effectRequest()),
+    traceId: 'trace-code-1',
+    runId: 'run-code-1',
+    agentInvocationId: 'message-code-1',
+    toolCallId: 'tool-call-code-1',
+    executionId: 'execution-code-1',
+    idempotencyKey: 'run-code-1:message-code-1:tool-call-code-1',
+    toolName: 'wb_draw_code',
+    args,
+    argsDigest: 'sha256:code-args',
+    postcondition: {
+      kind: 'whiteboard_code_exists',
+      stableElementId: 'code-element-1',
+      elementType: 'code',
+      normalizationVersion: CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
+      expectedCodeDigest: await digestWhiteboardCodeV1(code),
+      ...code,
     },
   };
 }
@@ -677,6 +713,60 @@ describe('client effect ACK route', () => {
         latex: String.raw`\sum_{i=1}^{n} i`,
         color: '#2255aa',
         fixedRatio: true,
+      }),
+    ]);
+  });
+
+  it('commits exact code source and stable line identities through the real browser ACK route', async () => {
+    const effect = await codeEffectRequest();
+    const registered = piClientEffectCoordinator.register(effect);
+    const fetchAck: typeof fetch = async (input, init) => {
+      const url = new URL(String(input), 'http://localhost');
+      const headers = new Headers(init?.headers);
+      headers.set('origin', url.origin);
+      return post(
+        new NextRequest(url, {
+          method: init?.method,
+          headers,
+          body: init?.body,
+        }),
+        effect.executionId,
+      );
+    };
+    const store = createStore();
+    const runtime = new BrowserClientEffectRuntime({
+      sessionId: effect.target.sessionId,
+      requestId: effect.target.requestId,
+      store,
+      fetchAck,
+      waitForPresentation: async () => {},
+      ensureWhiteboardVisible: async () => {},
+    });
+
+    await expect(runtime.execute(registered.delivery, new AbortController().signal)).resolves.toBe(
+      'effect_committed',
+    );
+    expect(piClientEffectCoordinator.getSnapshot(effect.executionId)).toMatchObject({
+      status: 'effect_committed',
+      terminalResult: { status: 'effect_committed', isError: false },
+    });
+    expect(
+      store.getState().stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements),
+    ).toEqual([
+      expect.objectContaining({
+        id: effect.postcondition.stableElementId,
+        type: 'code',
+        language: 'typescript',
+        fileName: 'slope.ts',
+        left: 80,
+        top: 60,
+        width: 560,
+        height: 280,
+        lines: [
+          { id: 'L1', content: 'const slope = 2;' },
+          { id: 'L2', content: '' },
+          { id: 'L3', content: 'return slope;' },
+        ],
       }),
     ]);
   });

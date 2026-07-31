@@ -10,11 +10,13 @@ import {
   type ClientEffectStatus,
   type ClientEffectTerminalStatus,
   whiteboardChartSpecsEqual,
+  whiteboardCodeSpecsEqual,
   whiteboardTableSpecsEqual,
 } from '@/lib/agent/runtime/client-effect-contract';
 import { TOOL_EXECUTION_PROTOCOL_VERSION } from '@/lib/agent/runtime/native-child-contract';
 import {
   executeNativeWhiteboardChartEffect,
+  executeNativeWhiteboardCodeEffect,
   executeNativeWhiteboardLatexEffect,
   executeNativeWhiteboardLineEffect,
   executeNativeWhiteboardShapeEffect,
@@ -164,6 +166,31 @@ function postconditionsEqual(
           data: right.data,
           bounds: right.bounds,
           themeColors: right.themeColors,
+          rotate: right.rotate,
+        },
+      )
+    );
+  }
+  if (left.kind === 'whiteboard_code_exists' && right.kind === 'whiteboard_code_exists') {
+    return (
+      left.expectedCodeDigest === right.expectedCodeDigest &&
+      whiteboardCodeSpecsEqual(
+        {
+          language: left.language,
+          lines: left.lines,
+          ...(left.fileName ? { fileName: left.fileName } : {}),
+          bounds: left.bounds,
+          showLineNumbers: left.showLineNumbers,
+          fontSize: left.fontSize,
+          rotate: left.rotate,
+        },
+        {
+          language: right.language,
+          lines: right.lines,
+          ...(right.fileName ? { fileName: right.fileName } : {}),
+          bounds: right.bounds,
+          showLineNumbers: right.showLineNumbers,
+          fontSize: right.fontSize,
           rotate: right.rotate,
         },
       )
@@ -466,6 +493,36 @@ export class BrowserClientEffectRuntime {
               rotate: request.postcondition.rotate,
             },
             expectedChartDigest: request.postcondition.expectedChartDigest,
+            signal: executionSignal,
+          });
+          break;
+        case 'wb_draw_code':
+          result = await executeNativeWhiteboardCodeEffect({
+            store: this.opts.store,
+            targetBinding: binding,
+            input: {
+              executionId: request.executionId,
+              stableElementId: request.postcondition.stableElementId,
+              language: String(params.language ?? ''),
+              code: String(params.code ?? ''),
+              x: Number(params.x),
+              y: Number(params.y),
+              ...(params.width !== undefined ? { width: Number(params.width) } : {}),
+              ...(params.height !== undefined ? { height: Number(params.height) } : {}),
+              ...(params.fileName !== undefined ? { fileName: String(params.fileName) } : {}),
+            },
+            expectedCode: {
+              language: request.postcondition.language,
+              lines: request.postcondition.lines,
+              ...(request.postcondition.fileName
+                ? { fileName: request.postcondition.fileName }
+                : {}),
+              bounds: request.postcondition.bounds,
+              showLineNumbers: request.postcondition.showLineNumbers,
+              fontSize: request.postcondition.fontSize,
+              rotate: request.postcondition.rotate,
+            },
+            expectedCodeDigest: request.postcondition.expectedCodeDigest,
             signal: executionSignal,
           });
           break;

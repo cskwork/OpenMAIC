@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
   digestWhiteboardChartV1,
+  digestWhiteboardCodeV1,
   digestWhiteboardLatexHtmlV1,
   digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
@@ -15,6 +17,7 @@ import {
   digestVisibleTextV1,
   isClientEffectAck,
   normalizeWhiteboardChartV1,
+  normalizeWhiteboardCodeV1,
   normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
@@ -31,6 +34,7 @@ import {
   type WhiteboardShapePostcondition,
   type WhiteboardTextClientEffectRequest,
   type WhiteboardChartClientEffectRequest,
+  type WhiteboardCodeClientEffectRequest,
   type WhiteboardTableClientEffectRequest,
 } from '@/lib/agent/runtime/client-effect-contract';
 import { renderNativeWhiteboardLatexHtmlV1 } from '@/lib/action/whiteboard-latex';
@@ -404,6 +408,54 @@ function chartCommitted(
   };
 }
 
+async function codeRequest(): Promise<WhiteboardCodeClientEffectRequest> {
+  const args = {
+    language: 'ts',
+    code: 'const slope = 2;\n\nreturn slope;',
+    x: 80,
+    y: 60,
+    width: 560,
+    height: 280,
+    fileName: 'slope.ts',
+  };
+  const code = normalizeWhiteboardCodeV1(args);
+  return {
+    ...(await request()),
+    toolName: 'wb_draw_code',
+    args,
+    postcondition: {
+      kind: 'whiteboard_code_exists',
+      stableElementId: 'code-1',
+      elementType: 'code',
+      normalizationVersion: CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
+      expectedCodeDigest: await digestWhiteboardCodeV1(code),
+      ...code,
+    },
+  };
+}
+
+function codeCommitted(
+  effect: WhiteboardCodeClientEffectRequest,
+  observedCodeDigest = effect.postcondition.expectedCodeDigest,
+): Extract<ClientEffectAck, { status: 'effect_committed' }> {
+  return {
+    protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
+    executionId: effect.executionId,
+    idempotencyKey: effect.idempotencyKey,
+    clientEventId: 'event-code-committed',
+    status: 'effect_committed',
+    observedAt: Date.now(),
+    targetBinding,
+    postcondition: {
+      stableElementId: effect.postcondition.stableElementId,
+      elementType: 'code',
+      normalizationVersion: CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
+      observedCodeDigest,
+      matchingElementCount: 1,
+    },
+  };
+}
+
 describe('ClientEffectCoordinator', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -514,6 +566,52 @@ describe('ClientEffectCoordinator', () => {
     await expect(registered.result).resolves.toMatchObject({
       status: 'effect_committed',
       isError: false,
+    });
+  });
+
+  it('settles code only after its exact canonical digest is verified', async () => {
+    const coordinator = new ClientEffectCoordinator();
+    const effect = await codeRequest();
+    const registered = coordinator.register(effect);
+    coordinator.acknowledge(
+      effect.executionId,
+      registered.delivery.acknowledgementToken,
+      accepted(effect),
+    );
+
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        codeCommitted(effect),
+      ),
+    ).toMatchObject({ kind: 'applied', snapshot: { status: 'effect_committed' } });
+    await expect(registered.result).resolves.toMatchObject({
+      status: 'effect_committed',
+      isError: false,
+    });
+  });
+
+  it('rejects a code commit whose canonical source digest differs from the request', async () => {
+    const coordinator = new ClientEffectCoordinator();
+    const effect = await codeRequest();
+    const registered = coordinator.register(effect);
+    coordinator.acknowledge(
+      effect.executionId,
+      registered.delivery.acknowledgementToken,
+      accepted(effect),
+    );
+
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        codeCommitted(effect, 'sha256:different-code'),
+      ),
+    ).toMatchObject({
+      kind: 'invalid',
+      reason: 'Committed postcondition does not match the requested effect.',
+      snapshot: { status: 'accepted' },
     });
   });
 

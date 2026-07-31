@@ -15,6 +15,7 @@ import { useCanvasStore } from '@/lib/store/canvas';
 import { useWhiteboardHistoryStore } from '@/lib/store/whiteboard-history';
 import { useMediaGenerationStore, isMediaPlaceholder } from '@/lib/store/media-generation';
 import type { AudioPlayer } from '@/lib/utils/audio-player';
+import type { CodeLine } from '@openmaic/dsl';
 import type {
   Action,
   SpotlightAction,
@@ -35,7 +36,6 @@ import type {
   WidgetAnnotationAction,
   WidgetRevealAction,
 } from '@/lib/types/action';
-import type { CodeLine } from '@openmaic/dsl';
 import { createWhiteboardLatexElement, renderLegacyWhiteboardLatexHtml } from './whiteboard-latex';
 import {
   EFFECT_AUTO_CLEAR_MS,
@@ -51,6 +51,7 @@ import {
 } from '@/lib/choreography';
 import { createLogger } from '@/lib/logger';
 import { createWhiteboardChartElement } from './whiteboard-charts';
+import { createWhiteboardCodeElement } from './whiteboard-code';
 import { createWhiteboardLineElement } from './whiteboard-lines';
 import { resolveLegacyWhiteboardShapePath } from './whiteboard-shapes';
 import { createWhiteboardTableElement } from './whiteboard-tables';
@@ -61,14 +62,6 @@ const log = createLogger('ActionEngine');
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** Convert raw code string to CodeLine array with unique IDs */
-function codeToLines(code: string): CodeLine[] {
-  return code.split('\n').map((content, i) => ({
-    id: `L${i + 1}`,
-    content,
-  }));
 }
 
 let lineIdCounter = 0;
@@ -578,36 +571,24 @@ export class ActionEngine {
     const wb = this.stageAPI.whiteboard.get();
     if (!wb.success || !wb.data) return;
 
-    const lines = codeToLines(action.code);
     const suppliedLineIds = (action as WbDrawCodeAction & { lineIds?: string[] }).lineIds;
-    if (suppliedLineIds?.length === lines.length) {
-      lines.forEach((line, index) => {
-        line.id = suppliedLineIds[index];
-      });
-    }
+    const element = createWhiteboardCodeElement({
+      id: action.elementId || '',
+      language: action.language,
+      code: action.code,
+      lineIds: suppliedLineIds,
+      x: action.x,
+      y: action.y,
+      width: action.width,
+      height: action.height,
+      fileName: action.fileName,
+    });
 
-    this.stageAPI.whiteboard.addElement(
-      {
-        id: action.elementId || '',
-        type: 'code',
-        language: action.language,
-        lines,
-        fileName: action.fileName,
-        showLineNumbers: true,
-        fontSize: 14,
-        left: action.x,
-        top: action.y,
-        width: action.width ?? 500,
-        height: action.height ?? 300,
-        rotate: 0,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
-      wb.data.id,
-    );
+    this.stageAPI.whiteboard.addElement(element, wb.data.id);
 
     if (!options.silent) {
       // Wait for typing animation (base 800ms + 50ms/line, capped at 3s)
-      const animMs = wbDrawCodeMs(lines.length);
+      const animMs = wbDrawCodeMs(element.lines.length);
       await delay(animMs);
     }
   }

@@ -270,6 +270,7 @@ describe('Phase 1 Child native web_search', () => {
             'wb_draw_latex',
             'wb_draw_table',
             'wb_draw_chart',
+            'wb_draw_code',
           ],
         },
       }),
@@ -282,6 +283,7 @@ describe('Phase 1 Child native web_search', () => {
         'wb_draw_latex',
         'wb_draw_table',
         'wb_draw_chart',
+        'wb_draw_code',
       ],
       nativeChildEnabled: true,
     });
@@ -313,12 +315,40 @@ describe('Phase 1 Child native web_search', () => {
         ...base,
         agent: {
           role: base.role,
+          allowedActions: ['wb_draw_code'],
+        },
+      }),
+    ).toMatchObject({
+      nativeWhiteboardEnabled: true,
+      nativeWhiteboardToolNames: ['wb_draw_code'],
+      nativeChildEnabled: true,
+    });
+    expect(
+      resolveNativeChildCapabilities({
+        ...base,
+        agent: {
+          role: base.role,
           allowedActions: ['wb_draw_code', 'wb_edit_code'],
         },
       }),
     ).toMatchObject({
       nativeWhiteboardEnabled: false,
       nativeWhiteboardToolNames: [],
+      childWebSearchEnabled: false,
+      nativeChildEnabled: false,
+    });
+    expect(
+      resolveNativeChildCapabilities({
+        ...base,
+        agent: {
+          role: base.role,
+          allowedActions: ['wb_draw_shape', 'wb_edit_code'],
+        },
+      }),
+    ).toMatchObject({
+      nativeWhiteboardEnabled: false,
+      nativeWhiteboardToolNames: [],
+      childWebSearchEnabled: false,
       nativeChildEnabled: false,
     });
   });

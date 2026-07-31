@@ -258,6 +258,7 @@ export function buildNativeWebChildPrompt(
     enableWhiteboardLatex?: boolean;
     enableWhiteboardTable?: boolean;
     enableWhiteboardChart?: boolean;
+    enableWhiteboardCode?: boolean;
   } = {
     enableWebSearch: true,
   },
@@ -287,7 +288,8 @@ export function buildNativeWebChildPrompt(
     options.enableWhiteboardLine ||
     options.enableWhiteboardLatex ||
     options.enableWhiteboardTable ||
-    options.enableWhiteboardChart
+    options.enableWhiteboardChart ||
+    options.enableWhiteboardCode
       ? [
           '# Native Whiteboard',
           options.enableWhiteboardText
@@ -307,6 +309,9 @@ export function buildNativeWebChildPrompt(
             : '',
           options.enableWhiteboardChart
             ? 'You may call `wb_draw_chart` to place one bounded data chart on the whiteboard. Match labels, legends, and series exactly for the selected chart type.'
+            : '',
+          options.enableWhiteboardCode
+            ? 'You may call `wb_draw_code` to place one bounded code block with stable Runtime-generated line IDs. Preserve indentation and line breaks.'
             : '',
           'The board uses a 1000 × 563 coordinate system. Keep every complete element within the visible board.',
           'Before calling it, say briefly what you are about to show. Wait for the tool result, then continue explaining in this same turn.',
@@ -343,6 +348,7 @@ export function buildNativeWebChildTurnPrompt(
     enableWhiteboardLatex?: boolean;
     enableWhiteboardTable?: boolean;
     enableWhiteboardChart?: boolean;
+    enableWhiteboardCode?: boolean;
   } = {
     enableWebSearch: true,
   },
@@ -384,6 +390,9 @@ export function buildNativeWebChildTurnPrompt(
       : '',
     options.enableWhiteboardChart
       ? 'Use `wb_draw_chart` only when bounded numeric data genuinely benefits from a chart. Keep every dimension aligned for the selected chart type, speak before the tool call, and continue after its tool result.'
+      : '',
+    options.enableWhiteboardCode
+      ? 'Use `wb_draw_code` only when a code example genuinely helps. Preserve indentation, speak before the tool call, and continue after its tool result. Treat the returned element and line IDs as authoritative references; do not invent replacements.'
       : '',
     'After the tool result, provide the final classroom response in this same Child run.',
   ].join('\n');

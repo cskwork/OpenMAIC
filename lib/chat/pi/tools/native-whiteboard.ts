@@ -2,11 +2,13 @@ import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type, type Static } from 'typebox';
 import {
   CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   digestWhiteboardChartV1,
+  digestWhiteboardCodeV1,
   digestWhiteboardLatexHtmlV1,
   digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
@@ -14,6 +16,7 @@ import {
   digestWhiteboardTableV1,
   digestVisibleTextV1,
   normalizeWhiteboardChartV1,
+  normalizeWhiteboardCodeV1,
   normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
@@ -290,6 +293,59 @@ const NativeWhiteboardChartParams = Type.Object({
 });
 
 type NativeWhiteboardChartParams = Static<typeof NativeWhiteboardChartParams>;
+
+const NativeWhiteboardCodeParams = Type.Object({
+  language: Type.String({
+    minLength: 1,
+    maxLength: 32,
+    pattern: '^[A-Za-z0-9][A-Za-z0-9_+#.\\-]*$',
+    description:
+      'Programming language identifier. Common aliases such as js, ts, py, sh, yml, and md are normalized.',
+  }),
+  code: Type.String({
+    minLength: 1,
+    maxLength: 16_384,
+    description:
+      'Exact code source. Preserve indentation and use newline characters between at most 200 lines.',
+  }),
+  x: Type.Number({
+    minimum: 0,
+    maximum: 999,
+    description: 'Left coordinate on a 1000×563 board.',
+  }),
+  y: Type.Number({
+    minimum: 0,
+    maximum: 562,
+    description: 'Top coordinate on a 1000×563 board.',
+  }),
+  width: Type.Optional(
+    Type.Number({
+      exclusiveMinimum: 0,
+      maximum: 1000,
+      description: 'Code block width; x + width must stay within 1000. Defaults to 500.',
+    }),
+  ),
+  height: Type.Optional(
+    Type.Number({
+      exclusiveMinimum: 0,
+      maximum: 563,
+      description: 'Code block height; y + height must stay within 563. Defaults to 300.',
+    }),
+  ),
+  fileName: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 128,
+      description: 'Optional display-only file name shown in the code-block header.',
+    }),
+  ),
+});
+
+type NativeWhiteboardCodeParams = Static<typeof NativeWhiteboardCodeParams>;
+type NativeWhiteboardCodeCommittedParams = NativeWhiteboardCodeParams & {
+  elementId: string;
+  lineIds: string[];
+};
 const WHITEBOARD_OPEN_SETTLEMENT_MARGIN_MS = 500;
 
 interface NativeWhiteboardBaseOptions {
@@ -352,6 +408,7 @@ async function deliverClientEffect<TParams>(opts: {
   signal?: AbortSignal;
   toolOptions: NativeWhiteboardToolOptions<TParams>;
   successMessage: string;
+  successDetails?: Record<string, unknown>;
   failureLabel: string;
 }): Promise<RuntimeAgentToolResult> {
   const registered = piClientEffectCoordinator.register(opts.request);
@@ -383,6 +440,7 @@ async function deliverClientEffect<TParams>(opts: {
           executionId: opts.request.executionId,
           stableElementId: opts.request.postcondition.stableElementId,
           targetBinding: terminal.targetBinding,
+          ...opts.successDetails,
         },
         isError: false,
       };
@@ -807,6 +865,91 @@ export function buildNativeWhiteboardChartTool(
       toolOptions: opts,
       successMessage: 'Whiteboard chart was committed and its postcondition was verified.',
       failureLabel: 'Whiteboard chart',
+    });
+  };
+
+  return { tool, handler };
+}
+
+export function buildNativeWhiteboardCodeTool(
+  opts: NativeWhiteboardToolOptions<NativeWhiteboardCodeCommittedParams>,
+): { tool: AgentTool<typeof NativeWhiteboardCodeParams>; handler: NativeClientEffectHandler } {
+  const tool: AgentTool<typeof NativeWhiteboardCodeParams> = {
+    name: 'wb_draw_code',
+    label: 'Draw whiteboard code',
+    description:
+      'Draw one bounded code block with stable Runtime-generated line IDs. Preserve indentation and line breaks. Explain what the code demonstrates before calling this tool, then continue teaching after the committed result.',
+    parameters: NativeWhiteboardCodeParams,
+    executionMode: 'sequential',
+    execute: async (): Promise<RuntimeAgentToolResult> => {
+      throw new Error('wb_draw_code requires the browser client-effect executor.');
+    },
+  };
+
+  const handler: NativeClientEffectHandler = async ({ request, params, signal }) => {
+    if (opts.canExecute?.() === false) return actionBudgetFailure();
+    const input = params as NativeWhiteboardCodeParams;
+    let codeSpec;
+    try {
+      codeSpec = normalizeWhiteboardCodeV1(input);
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Whiteboard code input was rejected: ${
+              error instanceof Error ? error.message : 'invalid input'
+            }.`,
+          },
+        ],
+        details: {
+          code: error instanceof Error ? error.message : 'CLIENT_EFFECT_CODE_INPUT_INVALID',
+        },
+        isError: true,
+      };
+    }
+    const prepared = prepareClientEffect(opts, request);
+    if ('isError' in prepared) return prepared;
+    const stableElementId = `client-effect-${request.executionId}`;
+    const lineIds = codeSpec.lines.map((line) => line.id);
+    const normalizedCode = codeSpec.lines.map((line) => line.content).join('\n');
+    const committedParams: NativeWhiteboardCodeCommittedParams = {
+      language: codeSpec.language,
+      code: normalizedCode,
+      x: codeSpec.bounds.x,
+      y: codeSpec.bounds.y,
+      width: codeSpec.bounds.width,
+      height: codeSpec.bounds.height,
+      ...(codeSpec.fileName ? { fileName: codeSpec.fileName } : {}),
+      elementId: stableElementId,
+      lineIds,
+    };
+    const effectRequest: ClientEffectRequest = {
+      ...request,
+      toolName: 'wb_draw_code',
+      target: prepared.target,
+      activeEffectBudgetMs: prepared.activeEffectBudgetMs,
+      postcondition: {
+        kind: 'whiteboard_code_exists',
+        stableElementId,
+        elementType: 'code',
+        normalizationVersion: CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
+        expectedCodeDigest: await digestWhiteboardCodeV1(codeSpec),
+        ...codeSpec,
+      },
+    };
+    const lineIdentity =
+      lineIds.length === 1
+        ? 'L1'
+        : `${lineIds[0]} through ${lineIds[lineIds.length - 1]} in source order`;
+    return deliverClientEffect({
+      request: effectRequest,
+      params: committedParams,
+      signal,
+      toolOptions: opts,
+      successMessage: `Whiteboard code block ${stableElementId} was committed and verified. Its stable line IDs are ${lineIdentity}.`,
+      successDetails: { lineIds },
+      failureLabel: 'Whiteboard code block',
     });
   };
 

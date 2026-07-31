@@ -1,6 +1,7 @@
 import { createStageAPI, type StageStore } from '@/lib/api/stage-api';
 import {
   CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_RENDER_VERSION,
@@ -8,8 +9,10 @@ import {
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
   assertWhiteboardChartSpecV1,
+  assertWhiteboardCodeSpecV1,
   assertWhiteboardTableSpecV1,
   digestWhiteboardChartV1,
+  digestWhiteboardCodeV1,
   digestWhiteboardLatexHtmlV1,
   digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
@@ -17,17 +20,20 @@ import {
   digestWhiteboardTableV1,
   digestVisibleTextV1,
   normalizeWhiteboardChartV1,
+  normalizeWhiteboardCodeV1,
   normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
   normalizeWhiteboardTableV1,
   normalizeVisibleTextV1,
   whiteboardChartSpecsEqual,
+  whiteboardCodeSpecsEqual,
   whiteboardTableSpecsEqual,
   type AcceptedTargetBinding,
   type ClientEffectTarget,
   type WhiteboardLatexSpec,
   type WhiteboardChartSpec,
+  type WhiteboardCodeSpec,
   type WhiteboardLineMarker,
   type WhiteboardLineSpec,
   type WhiteboardLineStyle,
@@ -40,12 +46,14 @@ import type {
   ChartData,
   ChartType,
   PPTChartElement,
+  PPTCodeElement,
   PPTElement,
   PPTLatexElement,
   PPTLineElement,
   PPTTableElement,
 } from '@openmaic/dsl';
 import { createWhiteboardChartElement } from './whiteboard-charts';
+import { createWhiteboardCodeElement } from './whiteboard-code';
 import {
   createWhiteboardLineElement,
   readAbsoluteWhiteboardLineEndpoints,
@@ -145,6 +153,12 @@ type NativeTableElement = PPTTableElement & {
 type NativeChartElement = PPTChartElement & {
   clientEffectExecutionId?: string;
   clientEffectChartDigest?: string;
+  clientEffectNormalizationVersion?: string;
+};
+
+type NativeCodeElement = PPTCodeElement & {
+  clientEffectExecutionId?: string;
+  clientEffectCodeDigest?: string;
   clientEffectNormalizationVersion?: string;
 };
 
@@ -1461,6 +1475,207 @@ export async function executeNativeWhiteboardChartEffect(opts: {
     stableElementId: opts.input.stableElementId,
     expectedChart: requestChart,
     expectedChartDigest: opts.expectedChartDigest,
+    signal: opts.signal,
+  });
+  throwIfAborted(opts.signal);
+  return { replayed: false, postcondition };
+}
+
+export interface NativeWbDrawCodeInput {
+  executionId: string;
+  stableElementId: string;
+  language: string;
+  code: string;
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  fileName?: string;
+}
+
+export interface NativeWhiteboardCodePostconditionResult {
+  stableElementId: string;
+  elementType: 'code';
+  normalizationVersion: typeof CLIENT_EFFECT_CODE_NORMALIZATION_VERSION;
+  observedCodeDigest: string;
+  matchingElementCount: 1;
+}
+
+function codeSpecFromElement(element: NativeCodeElement): WhiteboardCodeSpec {
+  if (
+    element.type !== 'code' ||
+    typeof element.left !== 'number' ||
+    typeof element.top !== 'number' ||
+    typeof element.width !== 'number' ||
+    typeof element.height !== 'number' ||
+    element.rotate !== 0 ||
+    element.showLineNumbers !== true ||
+    element.fontSize !== 14 ||
+    !Array.isArray(element.lines)
+  ) {
+    throw new Error('CLIENT_EFFECT_CODE_ELEMENT_MISMATCH');
+  }
+  return assertWhiteboardCodeSpecV1({
+    language: element.language,
+    lines: element.lines,
+    ...(element.fileName !== undefined ? { fileName: element.fileName } : {}),
+    bounds: {
+      x: element.left,
+      y: element.top,
+      width: element.width,
+      height: element.height,
+    },
+    showLineNumbers: true,
+    fontSize: 14,
+    rotate: 0,
+  });
+}
+
+export async function verifyNativeWhiteboardCodeEffect(opts: {
+  store: StageStore;
+  targetBinding: AcceptedTargetBinding;
+  executionId: string;
+  stableElementId: string;
+  expectedCode: WhiteboardCodeSpec;
+  expectedCodeDigest: string;
+  signal?: AbortSignal;
+}): Promise<NativeWhiteboardCodePostconditionResult> {
+  const readVerifiedElement = (): { element: NativeCodeElement; spec: WhiteboardCodeSpec } => {
+    throwIfAborted(opts.signal);
+    assertStageAndScene(opts.store, opts.targetBinding);
+    const elementsResult = createStageAPI(opts.store).whiteboard.listElements(
+      opts.targetBinding.whiteboardId,
+    );
+    if (!elementsResult.success || !elementsResult.data) {
+      throw new Error(elementsResult.error || 'CLIENT_EFFECT_WHITEBOARD_NOT_FOUND');
+    }
+    const matches = elementsResult.data.filter((element) => element.id === opts.stableElementId);
+    if (matches.length !== 1) {
+      throw new Error(
+        matches.length === 0
+          ? 'CLIENT_EFFECT_ELEMENT_NOT_FOUND'
+          : 'CLIENT_EFFECT_DUPLICATE_ELEMENT_ID',
+      );
+    }
+    const element = matches[0] as NativeCodeElement;
+    if (
+      element.clientEffectExecutionId !== opts.executionId ||
+      element.clientEffectNormalizationVersion !== CLIENT_EFFECT_CODE_NORMALIZATION_VERSION
+    ) {
+      throw new Error('CLIENT_EFFECT_ELEMENT_OWNERSHIP_MISMATCH');
+    }
+    return { element, spec: codeSpecFromElement(element) };
+  };
+
+  const beforeDigest = readVerifiedElement();
+  const observedCodeDigest = await digestWhiteboardCodeV1(beforeDigest.spec);
+  throwIfAborted(opts.signal);
+  const afterDigest = readVerifiedElement();
+  if (
+    !whiteboardCodeSpecsEqual(beforeDigest.spec, afterDigest.spec) ||
+    !whiteboardCodeSpecsEqual(beforeDigest.spec, opts.expectedCode) ||
+    observedCodeDigest !== opts.expectedCodeDigest ||
+    afterDigest.element.clientEffectCodeDigest !== opts.expectedCodeDigest
+  ) {
+    throw new Error('CLIENT_EFFECT_CODE_MISMATCH');
+  }
+
+  return {
+    stableElementId: opts.stableElementId,
+    elementType: 'code',
+    normalizationVersion: CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
+    observedCodeDigest,
+    matchingElementCount: 1,
+  };
+}
+
+export async function executeNativeWhiteboardCodeEffect(opts: {
+  store: StageStore;
+  targetBinding: AcceptedTargetBinding;
+  input: NativeWbDrawCodeInput;
+  expectedCode: WhiteboardCodeSpec;
+  expectedCodeDigest: string;
+  signal?: AbortSignal;
+}): Promise<NativeWhiteboardExecutionResult<NativeWhiteboardCodePostconditionResult>> {
+  throwIfAborted(opts.signal);
+  if (
+    typeof opts.input.executionId !== 'string' ||
+    !opts.input.executionId.trim() ||
+    typeof opts.input.stableElementId !== 'string' ||
+    !opts.input.stableElementId.trim()
+  ) {
+    throw new Error('CLIENT_EFFECT_INPUT_INVALID');
+  }
+  const inputCode = normalizeWhiteboardCodeV1(opts.input);
+  const requestCode = assertWhiteboardCodeSpecV1(opts.expectedCode);
+  const inputDigest = await digestWhiteboardCodeV1(inputCode);
+  throwIfAborted(opts.signal);
+  if (
+    !whiteboardCodeSpecsEqual(inputCode, requestCode) ||
+    inputDigest !== opts.expectedCodeDigest ||
+    (await digestWhiteboardCodeV1(requestCode)) !== opts.expectedCodeDigest
+  ) {
+    throw new Error('CLIENT_EFFECT_REQUEST_CODE_MISMATCH');
+  }
+
+  assertStageAndScene(opts.store, opts.targetBinding);
+  const whiteboardApi = createStageAPI(opts.store).whiteboard;
+  const elementsResult = whiteboardApi.listElements(opts.targetBinding.whiteboardId);
+  if (!elementsResult.success || !elementsResult.data) {
+    throw new Error(elementsResult.error || 'CLIENT_EFFECT_WHITEBOARD_NOT_FOUND');
+  }
+  const existing = elementsResult.data.filter(
+    (element) => element.id === opts.input.stableElementId,
+  );
+  if (existing.length > 1) throw new Error('CLIENT_EFFECT_DUPLICATE_ELEMENT_ID');
+  if (existing.length === 1) {
+    const postcondition = await verifyNativeWhiteboardCodeEffect({
+      store: opts.store,
+      targetBinding: opts.targetBinding,
+      executionId: opts.input.executionId,
+      stableElementId: opts.input.stableElementId,
+      expectedCode: requestCode,
+      expectedCodeDigest: opts.expectedCodeDigest,
+      signal: opts.signal,
+    });
+    throwIfAborted(opts.signal);
+    return { replayed: true, postcondition };
+  }
+
+  throwIfAborted(opts.signal);
+  assertStageAndScene(opts.store, opts.targetBinding);
+  const element = createWhiteboardCodeElement({
+    id: opts.input.stableElementId,
+    language: inputCode.language,
+    code: inputCode.lines.map((line) => line.content).join('\n'),
+    lineIds: inputCode.lines.map((line) => line.id),
+    x: inputCode.bounds.x,
+    y: inputCode.bounds.y,
+    width: inputCode.bounds.width,
+    height: inputCode.bounds.height,
+    fileName: inputCode.fileName,
+  });
+  const addResult = whiteboardApi.addElement(
+    {
+      ...element,
+      clientEffectExecutionId: opts.input.executionId,
+      clientEffectCodeDigest: opts.expectedCodeDigest,
+      clientEffectNormalizationVersion: CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
+    } as NativeCodeElement,
+    opts.targetBinding.whiteboardId,
+  );
+  if (!addResult.success) {
+    throw new Error(addResult.error || 'CLIENT_EFFECT_WHITEBOARD_MUTATION_FAILED');
+  }
+  throwIfAborted(opts.signal);
+
+  const postcondition = await verifyNativeWhiteboardCodeEffect({
+    store: opts.store,
+    targetBinding: opts.targetBinding,
+    executionId: opts.input.executionId,
+    stableElementId: opts.input.stableElementId,
+    expectedCode: requestCode,
+    expectedCodeDigest: opts.expectedCodeDigest,
     signal: opts.signal,
   });
   throwIfAborted(opts.signal);

@@ -3,12 +3,14 @@ import type { StageStore } from '@/lib/api/stage-api';
 import { BrowserClientEffectRuntime } from '@/lib/agent/client/client-effect-runtime';
 import {
   CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
   digestWhiteboardChartV1,
+  digestWhiteboardCodeV1,
   digestWhiteboardLatexHtmlV1,
   digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
@@ -16,6 +18,7 @@ import {
   digestWhiteboardTableV1,
   digestVisibleTextV1,
   normalizeWhiteboardChartV1,
+  normalizeWhiteboardCodeV1,
   normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
@@ -368,6 +371,57 @@ async function chartDelivery(): Promise<ClientEffectDelivery> {
   };
 }
 
+async function codeDelivery(): Promise<ClientEffectDelivery> {
+  const args = {
+    language: 'ts',
+    code: 'const slope = 2;\r\n\r\n  return slope;\n',
+    x: 80,
+    y: 60,
+    width: 560,
+    height: 280,
+    fileName: 'slope.ts',
+  };
+  const code = normalizeWhiteboardCodeV1(args);
+  return {
+    acknowledgementToken: 'code-capability',
+    request: {
+      protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
+      kind: 'client_effect',
+      traceId: 'trace-code-1',
+      runId: 'run-code-1',
+      agentInvocationId: 'message-code-1',
+      agentId: 'teacher-1',
+      depth: 1,
+      sequence: 1,
+      toolCallId: 'tool-call-code-1',
+      executionId: 'execution-code-1',
+      idempotencyKey: 'run-code-1:message-code-1:tool-call-code-1',
+      toolName: 'wb_draw_code',
+      args,
+      argsDigest: 'sha256:code-args',
+      issuedAt: 1,
+      deadlineAt: Date.now() + 10_000,
+      attempt: 1,
+      target: {
+        requestId: 'request-1',
+        sessionId: 'session-1',
+        stageId: 'stage-1',
+        sceneId: 'scene-1',
+        messageId: 'message-code-1',
+      },
+      activeEffectBudgetMs: 2_000,
+      postcondition: {
+        kind: 'whiteboard_code_exists',
+        stableElementId: 'code-element-1',
+        elementType: 'code',
+        normalizationVersion: CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
+        expectedCodeDigest: await digestWhiteboardCodeV1(code),
+        ...code,
+      },
+    },
+  };
+}
+
 describe('BrowserClientEffectRuntime', () => {
   it('invokes the default browser fetch with the global receiver', async () => {
     const acknowledgements: ClientEffectAck[] = [];
@@ -715,6 +769,68 @@ describe('BrowserClientEffectRuntime', () => {
     expect(
       store.getState().stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements),
     ).toHaveLength(1);
+  });
+
+  it('executes one code block and ACKs its exact normalized source and stable line IDs', async () => {
+    const store = createStore();
+    const acknowledgements: ClientEffectAck[] = [];
+    const runtime = new BrowserClientEffectRuntime({
+      sessionId: 'session-1',
+      requestId: 'request-1',
+      store,
+      fetchAck: async (_url, init) => {
+        const ack = JSON.parse(String(init?.body)) as ClientEffectAck;
+        acknowledgements.push(ack);
+        return new Response(JSON.stringify({ success: true, state: { status: ack.status } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+      waitForPresentation: async () => {},
+      ensureWhiteboardVisible: async () => {},
+    });
+    const effect = await codeDelivery();
+
+    const first = runtime.execute(effect, new AbortController().signal);
+    const duplicate = runtime.execute(effect, new AbortController().signal);
+    await expect(first).resolves.toBe('effect_committed');
+    await expect(duplicate).resolves.toBe('effect_committed');
+    if (effect.request.postcondition.kind !== 'whiteboard_code_exists') {
+      throw new Error('Expected a code delivery.');
+    }
+    expect(acknowledgements.map((ack) => ack.status)).toEqual([
+      'presentation_paused',
+      'presentation_resumed',
+      'accepted',
+      'effect_committed',
+    ]);
+    expect(acknowledgements.at(-1)).toMatchObject({
+      status: 'effect_committed',
+      postcondition: {
+        stableElementId: effect.request.postcondition.stableElementId,
+        elementType: 'code',
+        observedCodeDigest: effect.request.postcondition.expectedCodeDigest,
+        matchingElementCount: 1,
+      },
+    });
+    const elements = store
+      .getState()
+      .stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements);
+    expect(elements).toHaveLength(1);
+    expect(elements?.[0]).toMatchObject({
+      id: 'code-element-1',
+      type: 'code',
+      language: 'typescript',
+      fileName: 'slope.ts',
+      showLineNumbers: true,
+      fontSize: 14,
+      lines: [
+        { id: 'L1', content: 'const slope = 2;' },
+        { id: 'L2', content: '' },
+        { id: 'L3', content: '  return slope;' },
+        { id: 'L4', content: '' },
+      ],
+    });
   });
 
   it('rejects a duplicate line reservation whose direction or markers changed', async () => {

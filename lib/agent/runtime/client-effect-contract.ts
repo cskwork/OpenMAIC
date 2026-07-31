@@ -2,9 +2,10 @@ import {
   TOOL_EXECUTION_PROTOCOL_VERSION,
   type ToolExecutionEnvelope,
 } from './native-child-contract';
-import type { ChartData, ChartType } from '@openmaic/dsl';
+import type { ChartData, ChartType, CodeLine } from '@openmaic/dsl';
 import tinycolor from 'tinycolor2';
 import { DEFAULT_WHITEBOARD_CHART_THEME_COLORS } from '@/lib/action/whiteboard-charts';
+import { createWhiteboardCodeLines } from '@/lib/action/whiteboard-code';
 import { escapeWhiteboardTableCellText } from '@/lib/action/whiteboard-tables';
 
 export const CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION = 'maic.visible-text.v1' as const;
@@ -14,6 +15,7 @@ export const CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION = 'maic.whiteboard-latex.
 export const CLIENT_EFFECT_LATEX_RENDER_VERSION = 'maic.katex-html.v1' as const;
 export const CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION = 'maic.whiteboard-table.v1' as const;
 export const CLIENT_EFFECT_CHART_NORMALIZATION_VERSION = 'maic.whiteboard-chart.v1' as const;
+export const CLIENT_EFFECT_CODE_NORMALIZATION_VERSION = 'maic.whiteboard-code.v1' as const;
 export const CLIENT_EFFECT_ACK_HEADER = 'x-maic-effect-token';
 export const CLIENT_EFFECT_ACK_MAX_BYTES = 8 * 1024;
 
@@ -178,6 +180,31 @@ export interface WhiteboardChartPostcondition extends WhiteboardChartSpec {
   expectedChartDigest: string;
 }
 
+export interface WhiteboardCodeBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface WhiteboardCodeSpec {
+  language: string;
+  lines: CodeLine[];
+  fileName?: string;
+  bounds: WhiteboardCodeBounds;
+  showLineNumbers: true;
+  fontSize: 14;
+  rotate: 0;
+}
+
+export interface WhiteboardCodePostcondition extends WhiteboardCodeSpec {
+  kind: 'whiteboard_code_exists';
+  stableElementId: string;
+  elementType: 'code';
+  normalizationVersion: typeof CLIENT_EFFECT_CODE_NORMALIZATION_VERSION;
+  expectedCodeDigest: string;
+}
+
 interface ClientEffectRequestBase extends ToolExecutionEnvelope {
   kind: 'client_effect';
   target: ClientEffectTarget;
@@ -214,13 +241,19 @@ export type WhiteboardChartClientEffectRequest = ClientEffectRequestBase & {
   postcondition: WhiteboardChartPostcondition;
 };
 
+export type WhiteboardCodeClientEffectRequest = ClientEffectRequestBase & {
+  toolName: 'wb_draw_code';
+  postcondition: WhiteboardCodePostcondition;
+};
+
 export type ClientEffectRequest =
   | WhiteboardTextClientEffectRequest
   | WhiteboardShapeClientEffectRequest
   | WhiteboardLineClientEffectRequest
   | WhiteboardLatexClientEffectRequest
   | WhiteboardTableClientEffectRequest
-  | WhiteboardChartClientEffectRequest;
+  | WhiteboardChartClientEffectRequest
+  | WhiteboardCodeClientEffectRequest;
 
 export interface ClientEffectDelivery {
   request: ClientEffectRequest;
@@ -297,6 +330,13 @@ export type ClientEffectAck =
             elementType: 'chart';
             normalizationVersion: typeof CLIENT_EFFECT_CHART_NORMALIZATION_VERSION;
             observedChartDigest: string;
+            matchingElementCount: 1;
+          }
+        | {
+            stableElementId: string;
+            elementType: 'code';
+            normalizationVersion: typeof CLIENT_EFFECT_CODE_NORMALIZATION_VERSION;
+            observedCodeDigest: string;
             matchingElementCount: 1;
           };
     })
@@ -1111,6 +1151,207 @@ export function whiteboardChartSpecsEqual(
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+const WHITEBOARD_CODE_MAX_RAW_BYTES = 16 * 1024;
+const WHITEBOARD_CODE_MAX_LINES = 200;
+const WHITEBOARD_CODE_MAX_LINE_CHARACTERS = 1_000;
+const WHITEBOARD_CODE_MAX_LANGUAGE_CHARACTERS = 32;
+const WHITEBOARD_CODE_MAX_FILE_NAME_CHARACTERS = 128;
+const WHITEBOARD_CODE_LANGUAGE_PATTERN = /^[a-z0-9][a-z0-9_+#.-]*$/;
+const WHITEBOARD_CODE_LANGUAGE_ALIASES: Readonly<Record<string, string>> = {
+  cjs: 'javascript',
+  cts: 'typescript',
+  'c++': 'cpp',
+  js: 'javascript',
+  md: 'markdown',
+  mjs: 'javascript',
+  mts: 'typescript',
+  plaintext: 'text',
+  py: 'python',
+  rs: 'rust',
+  sh: 'bash',
+  shell: 'bash',
+  shellscript: 'bash',
+  ts: 'typescript',
+  txt: 'text',
+  yml: 'yaml',
+  zsh: 'bash',
+};
+const WHITEBOARD_CODE_DISALLOWED_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+
+function normalizeWhiteboardCodeLanguage(value: unknown): string {
+  if (typeof value !== 'string' || value.length > WHITEBOARD_CODE_MAX_LANGUAGE_CHARACTERS) {
+    throw new Error('CLIENT_EFFECT_CODE_LANGUAGE_INVALID');
+  }
+  const normalized = value.normalize('NFC').trim().toLowerCase();
+  if (
+    !normalized ||
+    normalized.length > WHITEBOARD_CODE_MAX_LANGUAGE_CHARACTERS ||
+    !WHITEBOARD_CODE_LANGUAGE_PATTERN.test(normalized)
+  ) {
+    throw new Error('CLIENT_EFFECT_CODE_LANGUAGE_INVALID');
+  }
+  return WHITEBOARD_CODE_LANGUAGE_ALIASES[normalized] ?? normalized;
+}
+
+function normalizeWhiteboardCodeFileName(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length > WHITEBOARD_CODE_MAX_FILE_NAME_CHARACTERS) {
+    throw new Error('CLIENT_EFFECT_CODE_FILE_NAME_INVALID');
+  }
+  const normalized = value.normalize('NFC').trim();
+  if (
+    !normalized ||
+    normalized.length > WHITEBOARD_CODE_MAX_FILE_NAME_CHARACTERS ||
+    /[\u0000-\u001f\u007f]/.test(normalized)
+  ) {
+    throw new Error('CLIENT_EFFECT_CODE_FILE_NAME_INVALID');
+  }
+  return normalized;
+}
+
+export function normalizeWhiteboardCodeV1(input: {
+  language: unknown;
+  code: unknown;
+  x: unknown;
+  y: unknown;
+  width?: unknown;
+  height?: unknown;
+  fileName?: unknown;
+}): WhiteboardCodeSpec {
+  let rawPayload: string;
+  try {
+    rawPayload = JSON.stringify({
+      language: input.language,
+      code: input.code,
+      x: input.x,
+      y: input.y,
+      ...(input.width !== undefined ? { width: input.width } : {}),
+      ...(input.height !== undefined ? { height: input.height } : {}),
+      ...(input.fileName !== undefined ? { fileName: input.fileName } : {}),
+    });
+  } catch {
+    throw new Error('CLIENT_EFFECT_CODE_PAYLOAD_INVALID');
+  }
+  if (
+    new TextEncoder().encode(rawPayload).byteLength > WHITEBOARD_CODE_MAX_RAW_BYTES ||
+    typeof input.code !== 'string'
+  ) {
+    throw new Error('CLIENT_EFFECT_CODE_PAYLOAD_INVALID');
+  }
+
+  const normalizedCode = input.code.replace(/\r\n?/g, '\n');
+  if (!normalizedCode.trim() || WHITEBOARD_CODE_DISALLOWED_CONTROL.test(normalizedCode)) {
+    throw new Error('CLIENT_EFFECT_CODE_CONTENT_INVALID');
+  }
+  const lines = createWhiteboardCodeLines(normalizedCode);
+  if (
+    lines.length > WHITEBOARD_CODE_MAX_LINES ||
+    lines.some((line) => line.content.length > WHITEBOARD_CODE_MAX_LINE_CHARACTERS)
+  ) {
+    throw new Error('CLIENT_EFFECT_CODE_CONTENT_INVALID');
+  }
+
+  const width = input.width ?? 500;
+  const height = input.height ?? 300;
+  if (
+    typeof input.x !== 'number' ||
+    !Number.isFinite(input.x) ||
+    typeof input.y !== 'number' ||
+    !Number.isFinite(input.y) ||
+    typeof width !== 'number' ||
+    !Number.isFinite(width) ||
+    typeof height !== 'number' ||
+    !Number.isFinite(height)
+  ) {
+    throw new Error('CLIENT_EFFECT_CODE_INPUT_INVALID');
+  }
+  const bounds = {
+    x: canonicalNumber(input.x),
+    y: canonicalNumber(input.y),
+    width: canonicalNumber(width),
+    height: canonicalNumber(height),
+  };
+  if (
+    bounds.x < 0 ||
+    bounds.y < 0 ||
+    bounds.width <= 0 ||
+    bounds.height <= 0 ||
+    bounds.x + bounds.width > 1000 ||
+    bounds.y + bounds.height > 563
+  ) {
+    throw new Error('CLIENT_EFFECT_CODE_BOUNDS_INVALID');
+  }
+
+  const fileName = normalizeWhiteboardCodeFileName(input.fileName);
+  return {
+    language: normalizeWhiteboardCodeLanguage(input.language),
+    lines,
+    ...(fileName ? { fileName } : {}),
+    bounds,
+    showLineNumbers: true,
+    fontSize: 14,
+    rotate: 0,
+  };
+}
+
+export function assertWhiteboardCodeSpecV1(input: WhiteboardCodeSpec): WhiteboardCodeSpec {
+  if (
+    !input ||
+    typeof input !== 'object' ||
+    !Array.isArray(input.lines) ||
+    input.lines.length === 0 ||
+    input.showLineNumbers !== true ||
+    input.fontSize !== 14 ||
+    input.rotate !== 0 ||
+    !input.bounds ||
+    input.lines.some(
+      (line, index) =>
+        !line ||
+        typeof line !== 'object' ||
+        line.id !== `L${index + 1}` ||
+        typeof line.content !== 'string',
+    )
+  ) {
+    throw new Error('CLIENT_EFFECT_CODE_SPEC_INVALID');
+  }
+  let normalized: WhiteboardCodeSpec;
+  try {
+    normalized = normalizeWhiteboardCodeV1({
+      language: input.language,
+      code: input.lines.map((line) => line.content).join('\n'),
+      x: input.bounds.x,
+      y: input.bounds.y,
+      width: input.bounds.width,
+      height: input.bounds.height,
+      fileName: input.fileName,
+    });
+  } catch {
+    throw new Error('CLIENT_EFFECT_CODE_SPEC_INVALID');
+  }
+  if (!whiteboardCodeSpecsEqual(input, normalized)) {
+    throw new Error('CLIENT_EFFECT_CODE_SPEC_INVALID');
+  }
+  return input;
+}
+
+export async function digestWhiteboardCodeV1(input: WhiteboardCodeSpec): Promise<string> {
+  const canonical = assertWhiteboardCodeSpecV1(input);
+  const bytes = new TextEncoder().encode(
+    `${CLIENT_EFFECT_CODE_NORMALIZATION_VERSION}\n${JSON.stringify(canonical)}`,
+  );
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  return `sha256:${Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('')}`;
+}
+
+export function whiteboardCodeSpecsEqual(
+  left: WhiteboardCodeSpec,
+  right: WhiteboardCodeSpec,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
@@ -1339,6 +1580,23 @@ export function isClientEffectAck(value: unknown): value is ClientEffectAck {
           isNonEmptyString(postcondition.stableElementId) &&
           postcondition.normalizationVersion === CLIENT_EFFECT_CHART_NORMALIZATION_VERSION &&
           isNonEmptyString(postcondition.observedChartDigest) &&
+          postcondition.matchingElementCount === 1
+        );
+      }
+      if (
+        postcondition.elementType === 'code' &&
+        hasExactKeys(postcondition, [
+          'stableElementId',
+          'elementType',
+          'normalizationVersion',
+          'observedCodeDigest',
+          'matchingElementCount',
+        ])
+      ) {
+        return (
+          isNonEmptyString(postcondition.stableElementId) &&
+          postcondition.normalizationVersion === CLIENT_EFFECT_CODE_NORMALIZATION_VERSION &&
+          isNonEmptyString(postcondition.observedCodeDigest) &&
           postcondition.matchingElementCount === 1
         );
       }

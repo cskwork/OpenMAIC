@@ -36,6 +36,7 @@ import type { SendEvent } from '../types';
 import { buildChildActionTools, createPiWhiteboardRuntimeState } from './classroom-actions';
 import {
   buildNativeWhiteboardChartTool,
+  buildNativeWhiteboardCodeTool,
   buildNativeWhiteboardLatexTool,
   buildNativeWhiteboardLineTool,
   buildNativeWhiteboardShapeTool,
@@ -74,15 +75,23 @@ export function resolveNativeChildCapabilities(opts: {
     | 'wb_draw_latex'
     | 'wb_draw_table'
     | 'wb_draw_chart'
+    | 'wb_draw_code'
   >;
   childWebSearchEnabled: boolean;
   nativeChildEnabled: boolean;
 } {
+  // Drawing and editing a code block are one coupled capability from the
+  // classroom Agent's perspective. Until wb_edit_code is native, routing an
+  // Agent that is allowed to edit into the mutually exclusive Native Child
+  // path would silently remove that existing capability.
+  const requiresLegacyCodeEditing =
+    opts.enableWhiteboardTools && opts.agent.allowedActions.includes('wb_edit_code');
   const nativeWhiteboardEligible =
     opts.enableNativeChildWhiteboard === true &&
     opts.enableWhiteboardTools &&
     opts.maxActionsPerAgent > 0 &&
-    opts.agent.role === 'teacher';
+    opts.agent.role === 'teacher' &&
+    !requiresLegacyCodeEditing;
   const nativeWhiteboardToolNames = nativeWhiteboardEligible
     ? (
         [
@@ -92,6 +101,7 @@ export function resolveNativeChildCapabilities(opts: {
           'wb_draw_latex',
           'wb_draw_table',
           'wb_draw_chart',
+          'wb_draw_code',
         ] as const
       ).filter((toolName) => opts.agent.allowedActions.includes(toolName))
     : [];
@@ -898,6 +908,28 @@ export function buildCallAgentTool(opts: {
           nativeTools.push(nativeWhiteboard.tool);
           clientEffectHandlers.set(nativeWhiteboard.tool.name, nativeWhiteboard.handler);
         }
+        if (nativeWhiteboardToolNames.includes('wb_draw_code')) {
+          const nativeWhiteboard = buildNativeWhiteboardCodeTool({
+            body: opts.body,
+            messageId,
+            send: opts.send,
+            canExecute: () => actionCount < opts.maxActionsPerAgent,
+            onCommitted: (params) => {
+              actionCount += 1;
+              const record: WhiteboardActionRecord = {
+                actionName: 'wb_draw_code',
+                agentId: agent.id,
+                agentName: agent.name,
+                params,
+              };
+              whiteboardActions.push(record);
+              opts.onActionDone(record);
+            },
+            onCancelled: abortChild,
+          });
+          nativeTools.push(nativeWhiteboard.tool);
+          clientEffectHandlers.set(nativeWhiteboard.tool.name, nativeWhiteboard.handler);
+        }
 
         const nativeStreamFn =
           opts.nativeChildStreamFn ??
@@ -926,6 +958,7 @@ export function buildCallAgentTool(opts: {
               enableWhiteboardLatex: nativeWhiteboardToolNames.includes('wb_draw_latex'),
               enableWhiteboardTable: nativeWhiteboardToolNames.includes('wb_draw_table'),
               enableWhiteboardChart: nativeWhiteboardToolNames.includes('wb_draw_chart'),
+              enableWhiteboardCode: nativeWhiteboardToolNames.includes('wb_draw_code'),
             }),
             prompt: buildNativeWebChildTurnPrompt(
               params.instruction,
@@ -942,6 +975,7 @@ export function buildCallAgentTool(opts: {
                 enableWhiteboardLatex: nativeWhiteboardToolNames.includes('wb_draw_latex'),
                 enableWhiteboardTable: nativeWhiteboardToolNames.includes('wb_draw_table'),
                 enableWhiteboardChart: nativeWhiteboardToolNames.includes('wb_draw_chart'),
+                enableWhiteboardCode: nativeWhiteboardToolNames.includes('wb_draw_code'),
               },
             ),
             tools: nativeTools,
