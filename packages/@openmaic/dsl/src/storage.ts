@@ -13,9 +13,9 @@
  * The DSL owns only the minimal `put` / `resolve` / `remove` interface.
  * Concrete backends — IndexedDB + object URLs in the browser, object storage /
  * CDN on a server — live in `@openmaic/storage`, keeping this package
- * dependency- and DOM-free. Richer registry operations such as replacing the
- * bytes behind a stable id remain on a concrete store until a later part grows
- * this contract.
+ * dependency- and DOM-free. Implementations may offer richer registry
+ * operations (for example an atomic byte replacement behind a stable ref)
+ * without the DSL contract growing them.
  */
 
 /**
@@ -25,12 +25,11 @@
  * `PPTVideoElement.mediaRef`).
  *
  * Allocated, not derived: a ref says nothing about the bytes behind it. That is
- * what lets a richer concrete store's replacement operation (currently
- * `BrowserAssetStore.replace` in `@openmaic/storage`) regenerate or replace
- * those bytes without invalidating a single document pointing at the ref, and
- * lets one set of bytes carry several refs with different metadata. A provider
- * may still store identical bytes once internally, but that is a property of
- * its storage layer, not of the ref.
+ * what lets a richer implementation regenerate or replace those bytes without
+ * invalidating a single document pointing at the ref, and lets one set of
+ * bytes carry several refs with different metadata. A provider may still store
+ * identical bytes once internally, but that is a property of its storage
+ * layer, not of the ref.
  *
  * The ref domain is unconstrained: any string may be handed to `resolve` or
  * `remove`, and a ref the provider never issued is simply one that resolves to

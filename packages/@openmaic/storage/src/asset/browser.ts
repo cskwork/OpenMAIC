@@ -98,15 +98,20 @@ export class BrowserAssetProvider implements BlobStore {
   };
 
   resolve = async (ref: ContentHash): Promise<string | null> => {
-    return this.urls.resolve(ref, () => this.readAsUrl(ref));
+    return this.urls.resolve(ref, ref, () => this.readAsUrl(ref));
   };
 
-  private async readAsUrl(ref: ContentHash): Promise<string | null> {
+  private async readAsUrl(
+    ref: ContentHash,
+  ): Promise<{ identity: ContentHash; url: string } | null> {
     const asset = await this.tx<StoredAsset | undefined>('readonly', (store) => store.get(ref));
     if (!asset) return null;
     // Mint only after the readonly transaction commits, so an aborted read
     // cannot leak an object URL that no caller ever receives.
-    return URL.createObjectURL(new Blob([asset.bytes], { type: asset.contentType }));
+    return {
+      identity: ref,
+      url: URL.createObjectURL(new Blob([asset.bytes], { type: asset.contentType })),
+    };
   }
 
   remove = async (ref: ContentHash): Promise<void> => {

@@ -1,8 +1,9 @@
 import { IDBFactory } from 'fake-indexeddb';
 import { describe, expect, test, vi } from 'vitest';
+import * as storageExports from '../src/index.js';
 import { BrowserAssetStore, newAssetId, toAssetId } from '../src/index.js';
 import { ASSET_ID_PREFIX } from '../src/asset/id.js';
-import { blobForObjectUrl } from './setup.js';
+import { blobForObjectUrl, objectUrlCount } from './setup.js';
 import { runAssetStoreContract } from './asset-contract.js';
 
 const readObjectUrl = async (url: string): Promise<Uint8Array> => {
@@ -94,6 +95,15 @@ function makePool(dbName: string): Pool {
 const blob = (s: string, type = 'text/plain'): Blob => new Blob([s], { type });
 const bytes = (s: string): Uint8Array => new TextEncoder().encode(s);
 
+function replaceGlobal(key: 'BroadcastChannel' | 'indexedDB', value: unknown): () => void {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, key);
+  Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+  return () => {
+    if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+    else Reflect.deleteProperty(globalThis, key);
+  };
+}
+
 describe('BrowserAssetStore de-duplicates bytes beneath allocated ids', () => {
   test('N ids over identical bytes keep N registry rows and one blob row', async () => {
     const pool = makePool('dedup-pool');
@@ -134,10 +144,10 @@ describe('BrowserAssetStore reclaims bytes at the last reference', () => {
     const url = await pool.store.resolve(id);
     expect(blobForObjectUrl(url!)).toBeDefined();
 
-    pool.store.release(id);
-    pool.store.release(id);
-    expect(() => pool.store.release('never allocated')).not.toThrow();
-    await vi.waitFor(() => expect(blobForObjectUrl(url!)).toBeUndefined());
+    await pool.store.release(id);
+    await pool.store.release(id);
+    await expect(pool.store.release('never allocated')).resolves.toBeUndefined();
+    expect(blobForObjectUrl(url!)).toBeUndefined();
     expect(await pool.assets()).toBe(1);
     expect(await pool.blobs()).toBe(1);
 
@@ -283,6 +293,19 @@ describe('BrowserAssetStore replaces bytes behind stable ids', () => {
     }
   });
 
+  test('replacing with the same bytes keeps one entry, one blob, and a resolvable id', async () => {
+    const pool = makePool('replace-same-bytes');
+    const id = await pool.store.put(blob('unchanged bytes'));
+
+    await pool.store.replace(id, blob('unchanged bytes'));
+
+    expect(await pool.assets()).toBe(1);
+    expect(await pool.blobs()).toBe(1);
+    const url = await pool.store.resolve(id);
+    expect(url).not.toBeNull();
+    expect(await readObjectUrl(url!)).toEqual(bytes('unchanged bytes'));
+  });
+
   test('rejects replacing an unknown id', async () => {
     const pool = makePool('replace-unknown');
     await expect(pool.store.replace(toAssetId('not allocated'), blob('bytes'))).rejects.toThrow(
@@ -292,10 +315,9 @@ describe('BrowserAssetStore replaces bytes behind stable ids', () => {
     expect(await pool.blobs()).toBe(0);
   });
 
-  test('keeps metadata when omitted and replaces it when provided', async () => {
+  test('keeps metadata when omitted and keeps MIME coherent with replacement input', async () => {
     const pool = makePool('replace-meta');
     const id = await pool.store.put(blob('one', 'image/png'), {
-      contentType: 'image/png',
       prompt: 'first prompt',
       nested: { seed: 1 },
     });
@@ -306,7 +328,6 @@ describe('BrowserAssetStore replaces bytes behind stable ids', () => {
       mime: string;
     };
     expect(row.meta).toEqual({
-      contentType: 'image/png',
       prompt: 'first prompt',
       nested: { seed: 1 },
     });
@@ -317,6 +338,55 @@ describe('BrowserAssetStore replaces bytes behind stable ids', () => {
     row = (await entryRow(pool.idb, pool.dbName, id)) as { meta: unknown; mime: string };
     expect(row.meta).toEqual(updated);
     expect(row.mime).toBe('image/jpeg');
+  });
+
+  test('an untyped replacement inherits old MIME when metadata is omitted', async () => {
+    const pool = makePool('replace-untyped-mime');
+    const id = await pool.store.put(blob('one', 'image/png'), {
+      contentType: 'image/png',
+      prompt: 'kept',
+    });
+
+    await pool.store.replace(id, new Blob(['two']));
+
+    const row = (await entryRow(pool.idb, pool.dbName, id)) as {
+      meta: { contentType?: string; prompt?: string };
+      mime: string;
+    };
+    expect(row.meta).toEqual({ contentType: 'image/png', prompt: 'kept' });
+    expect(row.mime).toBe('image/png');
+    expect(blobForObjectUrl((await pool.store.resolve(id))!)?.type).toBe('image/png');
+  });
+
+  test('a typed replacement updates MIME when metadata is omitted', async () => {
+    const pool = makePool('replace-typed-mime');
+    const id = await pool.store.put(blob('one', 'image/png'), { prompt: 'kept' });
+
+    await pool.store.replace(id, blob('two', 'image/webp'));
+
+    const row = (await entryRow(pool.idb, pool.dbName, id)) as {
+      meta: { prompt?: string };
+      mime: string;
+    };
+    expect(row.meta).toEqual({ prompt: 'kept' });
+    expect(row.mime).toBe('image/webp');
+  });
+
+  test('replacement metadata contentType is also the stored MIME', async () => {
+    const pool = makePool('replace-meta-mime');
+    const id = await pool.store.put(blob('one', 'image/png'));
+
+    await pool.store.replace(id, blob('two', 'image/webp'), {
+      contentType: 'image/jpeg',
+      prompt: 'new',
+    });
+
+    const row = (await entryRow(pool.idb, pool.dbName, id)) as {
+      meta: { contentType?: string };
+      mime: string;
+    };
+    expect(row.meta.contentType).toBe('image/jpeg');
+    expect(row.mime).toBe(row.meta.contentType);
   });
 
   test('a concurrent replace and remove leaves no orphan or dangling row', async () => {
@@ -363,6 +433,61 @@ describe('BrowserAssetStore registry rows', () => {
     const id = await pool.store.put(blob('pixels'), meta);
     const row = (await entryRow(pool.idb, pool.dbName, id)) as { meta: unknown };
     expect(row.meta).toEqual(meta);
+  });
+
+  test('put derives MIME from the pre-await metadata snapshot', async () => {
+    const pool = makePool('meta-race-put');
+    let continueRead!: () => void;
+    const readGate = new Promise<void>((resolve) => {
+      continueRead = resolve;
+    });
+    const data = {
+      size: 5,
+      type: 'image/webp',
+      async arrayBuffer() {
+        await readGate;
+        return new Blob(['bytes']).arrayBuffer();
+      },
+    };
+    const meta = { contentType: 'image/png', prompt: 'original' };
+
+    const putting = pool.store.put(data, meta);
+    meta.contentType = 'image/jpeg';
+    meta.prompt = 'mutated';
+    continueRead();
+    const id = await putting;
+
+    const row = (await entryRow(pool.idb, pool.dbName, id)) as { meta: unknown; mime: string };
+    expect(row.meta).toEqual({ contentType: 'image/png', prompt: 'original' });
+    expect(row.mime).toBe('image/png');
+  });
+
+  test('replace derives MIME from the pre-await metadata snapshot', async () => {
+    const pool = makePool('meta-race-replace');
+    const id = await pool.store.put(blob('before', 'image/png'));
+    let continueRead!: () => void;
+    const readGate = new Promise<void>((resolve) => {
+      continueRead = resolve;
+    });
+    const data = {
+      size: 5,
+      type: 'image/webp',
+      async arrayBuffer() {
+        await readGate;
+        return new Blob(['after']).arrayBuffer();
+      },
+    };
+    const meta = { contentType: 'image/png', prompt: 'original' };
+
+    const replacing = pool.store.replace(id, data, meta);
+    meta.contentType = 'image/jpeg';
+    meta.prompt = 'mutated';
+    continueRead();
+    await replacing;
+
+    const row = (await entryRow(pool.idb, pool.dbName, id)) as { meta: unknown; mime: string };
+    expect(row.meta).toEqual({ contentType: 'image/png', prompt: 'original' });
+    expect(row.mime).toBe('image/png');
   });
 
   test('default meta to an empty object when the caller passes none', async () => {
@@ -438,6 +563,200 @@ describe('BrowserAssetStore never surfaces a content hash', () => {
     await expect(pool.store.remove(contentHash)).resolves.toBeUndefined();
     expect(await pool.store.resolve(id)).not.toBeNull();
   });
+});
+
+describe('BrowserAssetStore cache coherence without BroadcastChannel', () => {
+  test('a hot instance observes another instance removing an entry', async () => {
+    const restoreBroadcastChannel = replaceGlobal('BroadcastChannel', undefined);
+    const idb = new IDBFactory();
+    const dbName = 'no-channel-remove';
+    const writer = new BrowserAssetStore({ indexedDB: idb, dbName });
+    const reader = new BrowserAssetStore({ indexedDB: idb, dbName });
+    restoreBroadcastChannel();
+
+    const id = await writer.put(blob('removed elsewhere'));
+    const oldUrl = await reader.resolve(id);
+    expect(blobForObjectUrl(oldUrl!)).toBeDefined();
+
+    await writer.remove(id);
+
+    expect(await reader.resolve(id)).toBeNull();
+    expect(blobForObjectUrl(oldUrl!)).toBeUndefined();
+    await Promise.all([reader.close(), writer.close()]);
+  });
+
+  test('a hot instance observes replacement bytes by content hash', async () => {
+    const restoreBroadcastChannel = replaceGlobal('BroadcastChannel', undefined);
+    const idb = new IDBFactory();
+    const dbName = 'no-channel-replace';
+    const writer = new BrowserAssetStore({ indexedDB: idb, dbName });
+    const reader = new BrowserAssetStore({ indexedDB: idb, dbName });
+    restoreBroadcastChannel();
+
+    const id = await writer.put(blob('before'));
+    const oldUrl = await reader.resolve(id);
+    await writer.replace(id, blob('after'));
+
+    const newUrl = await reader.resolve(id);
+    expect(newUrl).not.toBe(oldUrl);
+    expect(await readObjectUrl(newUrl!)).toEqual(bytes('after'));
+    expect(blobForObjectUrl(oldUrl!)).toBeUndefined();
+    await Promise.all([reader.close(), writer.close()]);
+  });
+
+  test('a throwing BroadcastChannel constructor is ignored', async () => {
+    let constructions = 0;
+    class ThrowingBroadcastChannel {
+      constructor() {
+        constructions += 1;
+        throw new Error('channel unavailable');
+      }
+    }
+    const restoreBroadcastChannel = replaceGlobal(
+      'BroadcastChannel',
+      ThrowingBroadcastChannel as unknown as typeof BroadcastChannel,
+    );
+    const store = new BrowserAssetStore({
+      indexedDB: new IDBFactory(),
+      dbName: 'throwing-channel',
+    });
+    restoreBroadcastChannel();
+
+    const id = await store.put(blob('still works'));
+    expect(await readObjectUrl((await store.resolve(id))!)).toEqual(bytes('still works'));
+    expect(constructions).toBe(1);
+    await store.close();
+  });
+});
+
+test('concurrent resolve and replace returns a live consistent snapshot without orphan growth', async () => {
+  const pool = makePool('resolve-replace-epoch');
+  const id = await pool.store.put(blob('version-0'));
+  let previous = 'version-0';
+
+  for (let i = 1; i <= 10; i += 1) {
+    const next = `version-${i}`;
+    const [url] = await Promise.all([pool.store.resolve(id), pool.store.replace(id, blob(next))]);
+    expect(url).not.toBeNull();
+    expect(blobForObjectUrl(url!)).toBeDefined();
+    const observed = new TextDecoder().decode(await readObjectUrl(url!));
+    expect([previous, next]).toContain(observed);
+    expect(objectUrlCount()).toBeLessThanOrEqual(2);
+    previous = next;
+  }
+
+  await pool.store.release(id);
+  expect(objectUrlCount()).toBe(0);
+  await pool.store.close();
+});
+
+describe('BrowserAssetStore lifecycle', () => {
+  test('close revokes URLs, closes the channel, and ignores later broadcasts', async () => {
+    const instances: FakeBroadcastChannel[] = [];
+    class FakeBroadcastChannel {
+      readonly name: string;
+      closed = false;
+      onmessage: ((event: MessageEvent<unknown>) => unknown) | null = null;
+
+      constructor(name: string) {
+        this.name = name;
+        instances.push(this);
+      }
+
+      postMessage(data: unknown): void {
+        for (const peer of instances) {
+          if (peer !== this && !peer.closed && peer.name === this.name) {
+            queueMicrotask(() => peer.onmessage?.({ data } as MessageEvent<unknown>));
+          }
+        }
+      }
+
+      close(): void {
+        this.closed = true;
+      }
+
+      unref(): void {}
+    }
+    const restoreBroadcastChannel = replaceGlobal(
+      'BroadcastChannel',
+      FakeBroadcastChannel as unknown as typeof BroadcastChannel,
+    );
+    const idb = new IDBFactory();
+    const dbName = 'close-channel';
+    const writer = new BrowserAssetStore({ indexedDB: idb, dbName });
+    const reader = new BrowserAssetStore({ indexedDB: idb, dbName });
+
+    const id = await writer.put(blob('before close'));
+    const url = await reader.resolve(id);
+    await reader.close();
+    expect(blobForObjectUrl(url!)).toBeUndefined();
+    expect(instances[1]?.closed).toBe(true);
+
+    await writer.replace(id, blob('after close'));
+    await Promise.resolve();
+    expect(objectUrlCount()).toBe(0);
+
+    await writer.close();
+    restoreBroadcastChannel();
+  });
+
+  test('double-close is safe and every later operation fails loudly', async () => {
+    const store = new BrowserAssetStore({
+      indexedDB: new IDBFactory(),
+      dbName: 'double-close',
+    });
+    const id = await store.put(blob('closed'));
+
+    await expect(store.close()).resolves.toBeUndefined();
+    await expect(store.close()).resolves.toBeUndefined();
+    await expect(store.put(blob('x'))).rejects.toThrow(/store is closed/i);
+    await expect(store.resolve(id)).rejects.toThrow(/store is closed/i);
+    await expect(store.replace(id, blob('x'))).rejects.toThrow(/store is closed/i);
+    await expect(store.remove(id)).rejects.toThrow(/store is closed/i);
+    expect(() => store.release(id)).toThrow(/store is closed/i);
+  });
+
+  test('close closes an opened IndexedDB connection', async () => {
+    const idb = new IDBFactory();
+    const store = new BrowserAssetStore({ indexedDB: idb, dbName: 'close-idb' });
+    await store.put(blob('open the database'));
+    const probe = await openRaw(idb, 'close-idb');
+    const prototype = Object.getPrototypeOf(probe) as IDBDatabase;
+    const close = vi.spyOn(prototype, 'close');
+    try {
+      await store.close();
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      close.mockRestore();
+      probe.close();
+    }
+  });
+
+  test('SSR-shaped construction does not create a BroadcastChannel', async () => {
+    let constructions = 0;
+    class CountingBroadcastChannel {
+      constructor() {
+        constructions += 1;
+      }
+    }
+    const restoreIndexedDB = replaceGlobal('indexedDB', undefined);
+    const restoreBroadcastChannel = replaceGlobal(
+      'BroadcastChannel',
+      CountingBroadcastChannel as unknown as typeof BroadcastChannel,
+    );
+    const store = new BrowserAssetStore({ dbName: 'ssr-no-idb' });
+
+    expect(constructions).toBe(0);
+    await store.close();
+    restoreBroadcastChannel();
+    restoreIndexedDB();
+  });
+});
+
+test('the package entry does not expose internal asset-layer symbols', () => {
+  for (const name of ['ASSET_ID_PREFIX', 'ContentHash', 'BlobStore', 'BrowserAssetProvider']) {
+    expect(storageExports).not.toHaveProperty(name);
+  }
 });
 
 test('BrowserAssetStore mints an object URL only after its read transaction commits', async () => {

@@ -51,45 +51,175 @@ export async function contentHashOf(
   return { contentHash: `sha256-${toHex(digest)}` as ContentHash, bytes };
 }
 
+interface ResolvedObjectUrl {
+  /** Identity of the exact bytes from which `url` was minted. */
+  identity: string;
+  url: string;
+}
+
+interface CachedObjectUrl {
+  epoch: number;
+  identity: string;
+  pending: Promise<ResolvedObjectUrl | null>;
+  settled?: ResolvedObjectUrl | null;
+  supersededEpoch?: number;
+  deliveries: number;
+}
+
 /**
  * Per-backend cache of minted object URLs, keyed on whatever reference the
  * backend resolves by.
  *
  * Keyed on the *promise* so concurrent `resolve(ref)` calls share one
  * `URL.createObjectURL` (a second would be orphaned, revocable by nothing), and
- * so repeated `resolve` returns one stable URL.
+ * so repeated `resolve` returns one stable URL. Each entry also records the
+ * identity of the bytes from which it was minted. Registry-backed callers use
+ * the content hash for that identity, making a warm hit conditional on exact
+ * content rather than merely on the reference still existing.
+ *
+ * An epoch per ref separates a superseded in-flight mint from the next cache
+ * generation. Such a mint remains alive for the raced caller's consistent
+ * snapshot but is never installed as the current cache entry. Its URL becomes
+ * an orphan, reclaimed by the next invalidation, an owner-level release, or
+ * cache shutdown.
  */
 export class ObjectUrlCache {
-  private readonly urls = new Map<AssetRef, Promise<string | null>>();
+  private readonly urls = new Map<AssetRef, CachedObjectUrl>();
+  private readonly epochs = new Map<AssetRef, number>();
+  private readonly orphans = new Map<AssetRef, Set<string>>();
 
   /**
-   * Return the cached resolution for `ref`, or run `read` and cache it.
+   * Return the cached resolution for `ref` when it has `identity`, or run
+   * `read` and cache the exact identity it reports.
    *
    * Neither a miss nor a failure is cached: a miss must not survive a later
    * `put` of the same reference, and a transient IndexedDB failure must be
    * retried by the next call rather than replayed forever.
    */
-  async resolve(ref: AssetRef, read: () => Promise<string | null>): Promise<string | null> {
+  async resolve(
+    ref: AssetRef,
+    identity: string,
+    read: () => Promise<ResolvedObjectUrl | null>,
+  ): Promise<string | null> {
     const cached = this.urls.get(ref);
-    if (cached) return cached;
-    const pending = read();
-    this.urls.set(ref, pending);
+    if (cached?.identity === identity && cached.epoch === (this.epochs.get(ref) ?? 0)) {
+      return this.deliver(cached);
+    }
+    // `invalidate` advances and removes synchronously even though it returns a
+    // Promise-shaped API. Do not yield here: the replacement entry must be
+    // installed before a second resolver can miss it and start a duplicate
+    // mint for the same generation.
+    if (cached) void this.invalidate(ref);
+
+    const entry: CachedObjectUrl = {
+      epoch: this.epochs.get(ref) ?? 0,
+      identity,
+      pending: Promise.resolve(null),
+      deliveries: 0,
+    };
+    entry.pending = read().then(
+      (resolved) => {
+        entry.settled = resolved;
+        if (resolved) entry.identity = resolved.identity;
+        if (this.urls.get(ref) !== entry) {
+          if (resolved) {
+            this.addOrphan(ref, resolved.url);
+            if ((this.epochs.get(ref) ?? 0) > (entry.supersededEpoch ?? 0)) {
+              // A later invalidation already occurred while this mint was
+              // pending. Reclaim after promise delivery, never before the
+              // raced caller can observe its consistent snapshot.
+              setTimeout(() => this.revokeOrphan(ref, resolved.url), 0);
+            }
+          }
+        } else if (resolved === null) {
+          this.urls.delete(ref);
+        }
+        return resolved;
+      },
+      (error: unknown) => {
+        if (this.urls.get(ref) === entry) this.urls.delete(ref);
+        throw error;
+      },
+    );
+    this.urls.set(ref, entry);
+    return this.deliver(entry);
+  }
+
+  private async deliver(entry: CachedObjectUrl): Promise<string | null> {
+    entry.deliveries += 1;
     try {
-      const url = await pending;
-      if (url === null) this.urls.delete(ref);
-      return url;
-    } catch (err) {
-      this.urls.delete(ref);
-      throw err;
+      return (await entry.pending)?.url ?? null;
+    } finally {
+      entry.deliveries -= 1;
     }
   }
 
-  /** Revoke and forget the cached object URL for a ref, if any. */
+  private addOrphan(ref: AssetRef, url: string): void {
+    let urls = this.orphans.get(ref);
+    if (!urls) {
+      urls = new Set();
+      this.orphans.set(ref, urls);
+    }
+    urls.add(url);
+  }
+
+  private revokeOrphans(ref: AssetRef): void {
+    const urls = this.orphans.get(ref);
+    if (!urls) return;
+    this.orphans.delete(ref);
+    for (const url of urls) URL.revokeObjectURL(url);
+  }
+
+  private revokeOrphan(ref: AssetRef, url: string): void {
+    const urls = this.orphans.get(ref);
+    if (!urls?.delete(url)) return;
+    URL.revokeObjectURL(url);
+    if (urls.size === 0) this.orphans.delete(ref);
+  }
+
+  /**
+   * Advance a ref's cache generation and forget its current entry.
+   *
+   * Settled superseded URLs are revoked immediately unless an active resolve
+   * is still delivering them. Pending or actively delivered URLs become
+   * orphans and remain alive until a later invalidation, owner-level release,
+   * or shutdown.
+   */
   async invalidate(ref: AssetRef): Promise<void> {
-    const pending = this.urls.get(ref);
-    if (!pending) return;
+    const entry = this.urls.get(ref);
+    if (!entry && !this.orphans.has(ref)) return;
+    this.epochs.set(ref, (this.epochs.get(ref) ?? 0) + 1);
+    this.revokeOrphans(ref);
+    if (!entry) return;
     this.urls.delete(ref);
-    const url = await pending.catch(() => null);
-    if (url) URL.revokeObjectURL(url);
+    entry.supersededEpoch = this.epochs.get(ref);
+    if (entry.settled) {
+      if (entry.deliveries > 0) this.addOrphan(ref, entry.settled.url);
+      else URL.revokeObjectURL(entry.settled.url);
+    }
+  }
+
+  /** Force-revoke every URL for one owner-controlled ref. */
+  async release(ref: AssetRef): Promise<void> {
+    this.epochs.set(ref, (this.epochs.get(ref) ?? 0) + 1);
+    this.revokeOrphans(ref);
+    const entry = this.urls.get(ref);
+    if (!entry) return;
+    this.urls.delete(ref);
+    const resolved = await entry.pending.catch(() => null);
+    if (resolved) {
+      const orphaned = this.orphans.get(ref)?.delete(resolved.url) ?? false;
+      if (this.orphans.get(ref)?.size === 0) this.orphans.delete(ref);
+      if (orphaned || entry.settled) URL.revokeObjectURL(resolved.url);
+    }
+  }
+
+  /** Force-revoke all cached, in-flight, and orphaned URLs. */
+  async close(): Promise<void> {
+    const refs = new Set([...this.urls.keys(), ...this.orphans.keys()]);
+    await Promise.all([...refs].map((ref) => this.release(ref)));
+    this.urls.clear();
+    this.orphans.clear();
+    this.epochs.clear();
   }
 }

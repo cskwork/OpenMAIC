@@ -59,11 +59,14 @@ a browser.
   are minted per id, not shared per `contentHash`: sharing would let a holder of
   two ids learn that their bytes match by comparing URL strings. The accepted
   cost is N in-memory blobs/URLs for N resolved ids over identical bytes. A
-  resolved URL pins its Blob in that store instance until `release`, `remove`,
-  `replace`, or a failed liveness check revokes it; media-heavy consumers should
-  call `release` when an asset is no longer displayed. The id domain is opaque
-  and unvalidated (the KV key-domain lesson, applied forward): an unrecognized
-  id is a miss, never an error. The server backend is still to come.
+  resolved URL pins its Blob in that store instance until `close`, `remove`,
+  `replace`, or a failed content-identity check revokes it. Application
+  lifecycles should close stores they no longer own; removing an asset also
+  releases it everywhere. `release` is an owner-level escape hatch for a
+  sole-consumer caller that owns every use of the shared URL in that instance.
+  The id domain is opaque and unvalidated (the KV key-domain lesson, applied
+  forward): an unrecognized id is a miss, never an error. The server backend is
+  still to come.
 - **Document normalization.** The DSL `document` is a portable embedded
   aggregate; `DocumentStore` normalizes it into per-entity rows so scene-level
   writes (`putScene`) stay cheap, and reassembles it on read. Each document is
