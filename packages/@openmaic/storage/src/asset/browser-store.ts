@@ -66,6 +66,14 @@ const BLOBS = 'blobs';
 /** Index over {@link AssetEntry.contentHash}, the reference count `remove` reads. */
 const BY_CONTENT_HASH = 'by-content-hash';
 
+function incompatibleSchemaError(dbName: string): Error {
+  return new Error(
+    `IndexedDB database "${dbName}" has an incompatible asset schema. ` +
+      'It may have been created by the 0.1.x content-addressed BrowserAssetProvider or another incompatible version. ' +
+      'Use a fresh dbName, or wait for or request the explicit one-time import helper.',
+  );
+}
+
 /**
  * One registry row. `mime` is a column, not a partition: images, audio and
  * video share one id space and one table, because splitting by medium is
@@ -166,7 +174,28 @@ export class BrowserAssetStore implements StorageProvider {
           assets.createIndex(BY_CONTENT_HASH, 'contentHash', { unique: false });
         }
       };
-      req.onsuccess = () => resolve(req.result);
+      req.onsuccess = () => {
+        const db = req.result;
+        try {
+          const hasExpectedStores =
+            db.objectStoreNames.contains(ASSETS) && db.objectStoreNames.contains(BLOBS);
+          const hasExpectedIndex =
+            hasExpectedStores &&
+            db
+              .transaction(ASSETS, 'readonly')
+              .objectStore(ASSETS)
+              .indexNames.contains(BY_CONTENT_HASH);
+          if (!hasExpectedStores || !hasExpectedIndex) {
+            db.close();
+            reject(incompatibleSchemaError(this.dbName));
+            return;
+          }
+          resolve(db);
+        } catch {
+          db.close();
+          reject(incompatibleSchemaError(this.dbName));
+        }
+      };
       req.onerror = () => reject(req.error);
     }).catch((err) => {
       this.dbPromise = undefined;
@@ -310,6 +339,7 @@ export class BrowserAssetStore implements StorageProvider {
    */
   async release(ref: AssetRef): Promise<void> {
     this.assertOpen();
+    await this.openDb();
     await this.urls.release(ref);
   }
 

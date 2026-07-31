@@ -29,6 +29,14 @@ export interface BrowserAssetProviderOptions {
 
 const STORE = 'assets';
 
+function incompatibleSchemaError(dbName: string): Error {
+  return new Error(
+    `IndexedDB database "${dbName}" has an incompatible asset schema. ` +
+      'It may have been created by BrowserAssetStore as a registry pool or by another incompatible version. ' +
+      'Use a fresh dbName, or wait for or request the explicit one-time import helper.',
+  );
+}
+
 interface StoredAsset {
   bytes: ArrayBuffer;
   contentType: string;
@@ -61,7 +69,25 @@ export class BrowserAssetProvider implements BlobStore {
       req.onupgradeneeded = () => {
         if (!req.result.objectStoreNames.contains(STORE)) req.result.createObjectStore(STORE);
       };
-      req.onsuccess = () => resolve(req.result);
+      req.onsuccess = () => {
+        const db = req.result;
+        try {
+          const hasOnlyExpectedStore =
+            db.objectStoreNames.length === 1 && db.objectStoreNames.contains(STORE);
+          const hasNoIndexes =
+            hasOnlyExpectedStore &&
+            db.transaction(STORE, 'readonly').objectStore(STORE).indexNames.length === 0;
+          if (!hasOnlyExpectedStore || !hasNoIndexes) {
+            db.close();
+            reject(incompatibleSchemaError(this.dbName));
+            return;
+          }
+          resolve(db);
+        } catch {
+          db.close();
+          reject(incompatibleSchemaError(this.dbName));
+        }
+      };
       req.onerror = () => reject(req.error);
     }).catch((err) => {
       this.dbPromise = undefined;
@@ -143,6 +169,7 @@ export class BrowserAssetProvider implements BlobStore {
    */
   release = async (ref: ContentHash): Promise<void> => {
     this.assertOpen();
+    await this.openDb();
     await this.urls.release(ref);
   };
 

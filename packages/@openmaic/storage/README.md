@@ -113,6 +113,9 @@ Version 0.2.0 removes `BrowserAssetProvider` from the package entry point. The
 outward asset API is now `BrowserAssetStore`, whose refs are allocated ids and
 whose data lives in the new `maic-asset-pool` database.
 
+Reusing a custom `dbName` created by a 0.1.x provider raises an explicit
+legacy-schema error rather than corrupting data or operating only partially.
+
 - `BrowserAssetStore` deliberately does not read data written by the 0.1.x
   provider in `maic-assets`. Its content-addressed `sha256-` refs are no longer
   outward references, and the contract suite pins sha256-shaped refs as misses;

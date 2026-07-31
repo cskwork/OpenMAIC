@@ -6,9 +6,15 @@ import { IDBFactory } from 'fake-indexeddb';
 import { expect, test } from 'vitest';
 import type { StorageProvider } from '@openmaic/dsl';
 import { BrowserAssetProvider } from '../src/asset/browser.js';
+import { BrowserAssetStore } from '../src/asset/browser-store.js';
 import { contentHashOf, type BlobStore } from '../src/asset/blob.js';
 import { blobForObjectUrl, objectUrlCount } from './setup.js';
 import { runBlobStoreContract } from './asset-blob-contract.js';
+
+const incompatibleSchemaMessage = (dbName: string): string =>
+  `IndexedDB database "${dbName}" has an incompatible asset schema. ` +
+  'It may have been created by BrowserAssetStore as a registry pool or by another incompatible version. ' +
+  'Use a fresh dbName, or wait for or request the explicit one-time import helper.';
 
 runBlobStoreContract(
   'BrowserAssetProvider',
@@ -66,6 +72,28 @@ test('BrowserAssetProvider re-put updates the resolved contentType', async () =>
   await provider.put(new Blob(['pixels'], { type: 'image/png' }));
   const second = await provider.resolve(key);
   expect(blobForObjectUrl(second!)?.type).toBe('image/png');
+});
+
+test('BrowserAssetProvider rejects every data operation against a registry-pool database', async () => {
+  const idb = new IDBFactory();
+  const dbName = 'registry-pool-as-provider';
+  const pool = new BrowserAssetStore({ indexedDB: idb, dbName });
+  await pool.put(new Blob(['pool bytes']));
+  await pool.close();
+
+  const provider = new BrowserAssetProvider({ indexedDB: idb, dbName });
+  const key = (await contentHashOf(new Blob(['provider bytes']))).contentHash;
+  const expected = incompatibleSchemaMessage(dbName);
+  const operations = [
+    () => provider.put(new Blob(['provider bytes'])),
+    () => provider.resolve(key),
+    () => provider.remove(key),
+    () => provider.release(key),
+  ];
+
+  for (const operation of operations) {
+    await expect(operation()).rejects.toMatchObject({ name: 'Error', message: expected });
+  }
 });
 
 test('BrowserAssetProvider release reclaims a removed key snapshot', async () => {

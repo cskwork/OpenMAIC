@@ -33,6 +33,30 @@ function openRaw(idb: IDBFactory, dbName: string): Promise<IDBDatabase> {
   });
 }
 
+function createRaw(
+  idb: IDBFactory,
+  dbName: string,
+  upgrade: (db: IDBDatabase) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const req = idb.open(dbName, 1);
+    req.onupgradeneeded = () => upgrade(req.result);
+    req.onsuccess = () => {
+      req.result.close();
+      resolve();
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function deleteRaw(idb: IDBFactory, dbName: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const req = idb.deleteDatabase(dbName);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
 async function rowCount(idb: IDBFactory, dbName: string, store: string): Promise<number> {
   const db = await openRaw(idb, dbName);
   return new Promise((resolve, reject) => {
@@ -1014,6 +1038,65 @@ describe('allocated asset ids', () => {
 });
 
 describe('BrowserAssetStore failure handling', () => {
+  const incompatibleSchemaMessage = (dbName: string): string =>
+    `IndexedDB database "${dbName}" has an incompatible asset schema. ` +
+    'It may have been created by the 0.1.x content-addressed BrowserAssetProvider or another incompatible version. ' +
+    'Use a fresh dbName, or wait for or request the explicit one-time import helper.';
+
+  test('every data operation rejects a legacy provider database with actionable guidance', async () => {
+    const idb = new IDBFactory();
+    const dbName = 'legacy-provider-db';
+    await createRaw(idb, dbName, (db) => db.createObjectStore('assets'));
+    const store = new BrowserAssetStore({ indexedDB: idb, dbName });
+    const expected = incompatibleSchemaMessage(dbName);
+    const operations = [
+      () => store.put(blob('new bytes')),
+      () => store.resolve('legacy-ref'),
+      () => store.remove('legacy-ref'),
+      () => store.replace(toAssetId('legacy-ref'), blob('replacement')),
+      () => store.release('legacy-ref'),
+    ];
+
+    for (const operation of operations) {
+      await expect(operation()).rejects.toMatchObject({ name: 'Error', message: expected });
+    }
+  });
+
+  test('a fresh database still works end to end after schema validation', async () => {
+    const store = new BrowserAssetStore({
+      indexedDB: new IDBFactory(),
+      dbName: 'schema-validation-fresh-pool',
+    });
+    const id = await store.put(blob('fresh bytes'));
+    const url = await store.resolve(id);
+
+    expect(url).not.toBeNull();
+    expect(await readObjectUrl(url!)).toEqual(bytes('fresh bytes'));
+    await store.replace(id, blob('replacement bytes'));
+    expect(await readObjectUrl((await store.resolve(id))!)).toEqual(bytes('replacement bytes'));
+    await store.remove(id);
+    expect(await store.resolve(id)).toBeNull();
+  });
+
+  test('does not memoize a schema rejection and retries after the same database is corrected', async () => {
+    const idb = new IDBFactory();
+    const dbName = 'corrected-schema-pool';
+    await createRaw(idb, dbName, (db) => db.createObjectStore('assets'));
+    const store = new BrowserAssetStore({ indexedDB: idb, dbName });
+    await expect(store.resolve('legacy-ref')).rejects.toMatchObject({
+      message: incompatibleSchemaMessage(dbName),
+    });
+
+    await deleteRaw(idb, dbName);
+    await createRaw(idb, dbName, (db) => {
+      db.createObjectStore('blobs');
+      db.createObjectStore('assets').createIndex('by-content-hash', 'contentHash');
+    });
+
+    const id = await store.put(blob('retry bytes'));
+    expect(await store.resolve(id)).not.toBeNull();
+  });
+
   test('an allocated-id collision aborts without overwriting or orphaning bytes', async () => {
     const pool = makePool('id-collision');
     const random = vi
