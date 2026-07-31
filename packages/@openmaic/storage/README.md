@@ -135,7 +135,10 @@ and PostgreSQL implementations cannot silently diverge from a primitive's
 semantics. The asset layer has two, because its two layers have deliberately
 opposite semantics: `test/asset-contract.ts` for the outward allocated-id store
 (identical bytes never share an id) and `test/asset-blob-contract.ts` for the
-internal blob layer (identical bytes always share a key).
+internal blob layer (identical bytes always share a key). Outward-store
+backends must expose allocator-instrumented construction so the suite can prove
+that every successful `put` consumes exactly one allocator output, independent
+of whether the bytes already existed.
 
 ## Roadmap
 

@@ -9,8 +9,18 @@
 // there identical bytes share a key, up here they never share an id.
 import { describe, expect, test } from 'vitest';
 import type { AssetMeta, AssetRef, StorageProvider } from '@openmaic/dsl';
+import { toAssetId, type AssetId } from '../src/asset/id.js';
 
 type ReadUrl = (url: string) => Promise<Uint8Array>;
+
+interface AssetStoreContractFactories {
+  makeStore: () => StorageProvider;
+  makeStoreWithAllocator: (idAllocator: () => AssetId) => StorageProvider;
+}
+
+interface ReplaceCapableStore extends StorageProvider {
+  replace: (ref: AssetId, data: Blob, meta?: AssetMeta) => Promise<void>;
+}
 
 const bytes = (s: string): Uint8Array => new TextEncoder().encode(s);
 // Build the Blob from the string directly (a string is a valid BlobPart). A
@@ -109,9 +119,10 @@ async function outcome(run: () => Promise<unknown>): Promise<string> {
 
 export function runAssetStoreContract(
   name: string,
-  makeStore: () => StorageProvider,
+  factories: AssetStoreContractFactories,
   readUrl: ReadUrl,
 ): void {
+  const { makeStore, makeStoreWithAllocator } = factories;
   const putAll = (store: StorageProvider, content: string, times: number): Promise<AssetRef[]> =>
     Promise.all(Array.from({ length: times }, () => store.put(blob(content))));
 
@@ -244,6 +255,55 @@ export function runAssetStoreContract(
         resolvedBytesMatch: true,
         removeOutcome: 'ok',
         resolvesAfterRemove: false,
+      });
+    });
+
+    describe('allocation independence', () => {
+      test('every put returns exactly one allocator output regardless of prior existence', async () => {
+        // These are the base32 renderings of six fixed 16-byte inputs.
+        const scriptedIds = [
+          'ast_00000000000000000000000000',
+          'ast_040g2081040g2081040g208104',
+          'ast_081040g2081040g2081040g208',
+          'ast_0c1g60r30c1g60r30c1g60r30c',
+          'ast_0g2081040g2081040g2081040g',
+          'ast_0m2ga1850m2ga1850m2ga1850m',
+        ].map(toAssetId);
+        let allocatorCalls = 0;
+        const allocator = (): AssetId => {
+          const id = scriptedIds[allocatorCalls];
+          allocatorCalls += 1;
+          if (id === undefined) throw new Error('Scripted asset id allocator exhausted.');
+          return id;
+        };
+        const s = makeStoreWithAllocator(allocator);
+        const returnedIds: AssetRef[] = [];
+        const put = async (content: string): Promise<void> => {
+          const expectedId = scriptedIds[returnedIds.length];
+          returnedIds.push(await s.put(blob(content)));
+          expect(returnedIds.at(-1)).toBe(expectedId);
+          expect(allocatorCalls).toBe(returnedIds.length);
+        };
+
+        await put('allocation A'); // fresh A
+        await put('allocation A'); // duplicate A
+        await put('allocation B'); // fresh B
+        await put('allocation B'); // duplicate B
+        await put('allocation A'); // duplicate A
+        await put('allocation C'); // fresh C
+
+        expect(returnedIds).toEqual(scriptedIds.slice(0, returnedIds.length));
+        expect(allocatorCalls).toBe(returnedIds.length);
+
+        if (typeof (s as Partial<ReplaceCapableStore>).replace === 'function') {
+          const callsBeforeReplace = allocatorCalls;
+          await (s as ReplaceCapableStore).replace(
+            returnedIds[0] as AssetId,
+            blob('allocation replacement'),
+          );
+          expect(allocatorCalls).toBe(callsBeforeReplace);
+          expect(await bytesAt(s, returnedIds[0])).toEqual(bytes('allocation replacement'));
+        }
       });
     });
 

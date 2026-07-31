@@ -14,7 +14,16 @@ const readObjectUrl = async (url: string): Promise<Uint8Array> => {
 
 runAssetStoreContract(
   'BrowserAssetStore',
-  () => new BrowserAssetStore({ indexedDB: new IDBFactory(), dbName: 'test-asset-pool' }),
+  {
+    makeStore: () =>
+      new BrowserAssetStore({ indexedDB: new IDBFactory(), dbName: 'test-asset-pool' }),
+    makeStoreWithAllocator: (idAllocator) =>
+      new BrowserAssetStore({
+        indexedDB: new IDBFactory(),
+        dbName: 'test-asset-pool',
+        idAllocator,
+      }),
+  },
   readObjectUrl,
 );
 
