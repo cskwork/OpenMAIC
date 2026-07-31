@@ -3,7 +3,9 @@ import type { NextRequest } from 'next/server';
 import { convertToLlm } from '@earendil-works/pi-agent-core';
 
 const PI_CHAT_FLAG = 'NEXT_PUBLIC_PI_CHAT_ENABLED';
+const NATIVE_CHILD_RUNTIME_FLAG = 'OPENMAIC_ENABLE_PI_NATIVE_CHILD_RUNTIME';
 let originalPiChatFlag: string | undefined;
+let originalNativeChildRuntimeFlag: string | undefined;
 
 type MockTool = {
   name: string;
@@ -157,10 +159,19 @@ function mockDirectorWithAgentTurn(opts: { explicitlyCueUser: boolean; closeAfte
           const callAgent = agentOpts.tools.find((tool) => tool.name === 'call_agent');
           const cueUser = agentOpts.tools.find((tool) => tool.name === 'cue_user');
           const closeSession = agentOpts.tools.find((tool) => tool.name === 'close_session');
-          await callAgent?.execute('call-1', {
+          const callAgentArgs = {
             agentId: 'default-1',
             instruction: 'Give one concise answer.',
-          });
+          };
+          const callAgentResult = await callAgent?.execute('call-1', callAgentArgs);
+          if (callAgent && callAgentResult) {
+            await agentOpts.afterToolCall?.({
+              toolCall: { name: callAgent.name },
+              args: callAgentArgs,
+              result: callAgentResult,
+              isError: false,
+            });
+          }
           if (opts.explicitlyCueUser) {
             await cueUser?.execute('cue-1', {
               prompt: 'Any follow-up?',
@@ -613,7 +624,9 @@ function mockDirectorWithFailedSceneRead() {
 describe('POST /api/chat/pi cue_user', () => {
   beforeEach(() => {
     originalPiChatFlag = process.env[PI_CHAT_FLAG];
+    originalNativeChildRuntimeFlag = process.env[NATIVE_CHILD_RUNTIME_FLAG];
     process.env[PI_CHAT_FLAG] = 'true';
+    delete process.env[NATIVE_CHILD_RUNTIME_FLAG];
     vi.resetModules();
     mocks.resolveModel.mockReset();
     mocks.buildAgent.mockReset();
@@ -636,6 +649,11 @@ describe('POST /api/chat/pi cue_user', () => {
     } else {
       process.env[PI_CHAT_FLAG] = originalPiChatFlag;
     }
+    if (originalNativeChildRuntimeFlag === undefined) {
+      delete process.env[NATIVE_CHILD_RUNTIME_FLAG];
+    } else {
+      process.env[NATIVE_CHILD_RUNTIME_FLAG] = originalNativeChildRuntimeFlag;
+    }
   });
 
   it('wires Pi standard message conversion only into the Director agent', async () => {
@@ -643,7 +661,7 @@ describe('POST /api/chat/pi cue_user', () => {
 
     const { POST } = await import('@/app/api/chat/pi/route');
     const response = await POST(makeRequest(makeBody()));
-    await readSseEvents(response);
+    const events = await readSseEvents(response);
 
     const agentOptions = mocks.buildAgent.mock.calls.map(
       ([options]) => options as MockAgentOptions,
@@ -656,6 +674,18 @@ describe('POST /api/chat/pi cue_user', () => {
     expect(response.status).toBe(200);
     expect(directorOptions?.convertToLlm).toBe(convertToLlm);
     expect(childOptions.every((options) => options.convertToLlm === undefined)).toBe(true);
+    const doneEvent = events.find((event) => event.type === 'done');
+    expect(doneEvent?.data.directorToolTrace).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolName: 'call_agent',
+          details: expect.objectContaining({
+            runtimeMode: 'legacy',
+            availableToolNames: [],
+          }),
+        }),
+      ]),
+    );
   });
 
   it('does not expose web_search when the server feature flag is disabled', async () => {

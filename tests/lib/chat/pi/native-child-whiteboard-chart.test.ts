@@ -213,6 +213,7 @@ function buildChartCallAgent(opts: {
     getWhiteboardLedger: () => [],
     maxActionsPerAgent: 1,
     enableWhiteboardTools: true,
+    childRuntimeMode: 'native',
     enableNativeChildWhiteboard: true,
     nativeChildStreamFn: opts.streamFn,
     nativeChildTimeoutMs: 5_000,

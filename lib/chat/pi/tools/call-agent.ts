@@ -32,6 +32,7 @@ import {
   sanitizeVisibleSpeech,
   toHistoryMessages,
 } from '../prompts';
+import type { ChildRuntimeMode } from '../child-runtime';
 import type { SendEvent } from '../types';
 import { buildChildActionTools, createPiWhiteboardRuntimeState } from './classroom-actions';
 import {
@@ -78,20 +79,12 @@ export function resolveNativeChildCapabilities(opts: {
     | 'wb_draw_code'
   >;
   childWebSearchEnabled: boolean;
-  nativeChildEnabled: boolean;
 } {
-  // Drawing and editing a code block are one coupled capability from the
-  // classroom Agent's perspective. Until wb_edit_code is native, routing an
-  // Agent that is allowed to edit into the mutually exclusive Native Child
-  // path would silently remove that existing capability.
-  const requiresLegacyCodeEditing =
-    opts.enableWhiteboardTools && opts.agent.allowedActions.includes('wb_edit_code');
   const nativeWhiteboardEligible =
     opts.enableNativeChildWhiteboard === true &&
     opts.enableWhiteboardTools &&
     opts.maxActionsPerAgent > 0 &&
-    opts.agent.role === 'teacher' &&
-    !requiresLegacyCodeEditing;
+    opts.agent.role === 'teacher';
   const nativeWhiteboardToolNames = nativeWhiteboardEligible
     ? (
         [
@@ -106,14 +99,10 @@ export function resolveNativeChildCapabilities(opts: {
       ).filter((toolName) => opts.agent.allowedActions.includes(toolName))
     : [];
   const nativeWhiteboardEnabled = nativeWhiteboardToolNames.length > 0;
-  const childWebSearchEnabled =
-    opts.enableNativeChildWebSearch === true &&
-    (!opts.enableWhiteboardTools || nativeWhiteboardEnabled);
   return {
     nativeWhiteboardEnabled,
     nativeWhiteboardToolNames: [...nativeWhiteboardToolNames],
-    childWebSearchEnabled,
-    nativeChildEnabled: nativeWhiteboardEnabled || childWebSearchEnabled,
+    childWebSearchEnabled: opts.enableNativeChildWebSearch === true,
   };
 }
 
@@ -601,6 +590,7 @@ export function buildCallAgentTool(opts: {
   getWhiteboardLedger: () => WhiteboardActionRecord[];
   maxActionsPerAgent: number;
   enableWhiteboardTools: boolean;
+  childRuntimeMode?: ChildRuntimeMode;
   isUserCued?: () => boolean;
   isSessionClosed?: () => boolean;
   takeSceneEvidence?: () => RuntimeEvidenceAttachment<DirectorSceneEvidenceMetadata[]> | undefined;
@@ -621,6 +611,7 @@ export function buildCallAgentTool(opts: {
   let totalAgentAttempts = 0;
   const requestTraceId = nanoid();
   const whiteboardState = createPiWhiteboardRuntimeState(opts.body);
+  const childRuntimeMode: ChildRuntimeMode = opts.childRuntimeMode ?? 'legacy';
   return {
     name: 'call_agent',
     label: 'Call classroom agent',
@@ -712,14 +703,21 @@ export function buildCallAgentTool(opts: {
         };
       }
 
-      const { nativeWhiteboardToolNames, childWebSearchEnabled, nativeChildEnabled } =
-        resolveNativeChildCapabilities({
-          agent,
-          enableNativeChildWebSearch: opts.enableNativeChildWebSearch,
-          enableNativeChildWhiteboard: opts.enableNativeChildWhiteboard,
-          enableWhiteboardTools: opts.enableWhiteboardTools,
-          maxActionsPerAgent: opts.maxActionsPerAgent,
-        });
+      const nativeCapabilities: ReturnType<typeof resolveNativeChildCapabilities> =
+        childRuntimeMode === 'native'
+          ? resolveNativeChildCapabilities({
+              agent,
+              enableNativeChildWebSearch: opts.enableNativeChildWebSearch,
+              enableNativeChildWhiteboard: opts.enableNativeChildWhiteboard,
+              enableWhiteboardTools: opts.enableWhiteboardTools,
+              maxActionsPerAgent: opts.maxActionsPerAgent,
+            })
+          : {
+              nativeWhiteboardEnabled: false,
+              nativeWhiteboardToolNames: [],
+              childWebSearchEnabled: false,
+            };
+      const { nativeWhiteboardToolNames, childWebSearchEnabled } = nativeCapabilities;
 
       // Evidence is request-scoped and belongs to exactly one valid child delegation.
       // Take it before starting/building the child so any downstream failure cannot
@@ -763,7 +761,7 @@ export function buildCallAgentTool(opts: {
         },
       });
 
-      if (nativeChildEnabled) {
+      if (childRuntimeMode === 'native') {
         const nativeTools: AgentTool[] = [];
         const clientEffectHandlers = new Map<string, NativeClientEffectHandler>();
         const nativeWebSearchTool = childWebSearchEnabled
@@ -931,6 +929,11 @@ export function buildCallAgentTool(opts: {
           clientEffectHandlers.set(nativeWhiteboard.tool.name, nativeWhiteboard.handler);
         }
 
+        const availableToolNames = nativeTools.map((tool) => tool.name);
+        const availableToolNameSet = new Set(availableToolNames);
+        const unavailableAllowedToolNames = agent.allowedActions.filter(
+          (toolName) => !availableToolNameSet.has(toolName),
+        );
         const nativeStreamFn =
           opts.nativeChildStreamFn ??
           createCallLlmStreamFn({
@@ -1032,6 +1035,9 @@ export function buildCallAgentTool(opts: {
             agentId: agent.id,
             agentName: agent.name,
             text: finalText,
+            runtimeMode: childRuntimeMode,
+            availableToolNames,
+            unavailableAllowedToolNames,
             nativeChildRun: nativeResult,
             ...(sceneEvidence ? { sceneEvidence: sceneEvidence.metadata } : {}),
             ...(webEvidence ? { webEvidence: webEvidence.metadata } : {}),
@@ -1055,6 +1061,11 @@ export function buildCallAgentTool(opts: {
         whiteboardState,
       });
       const childToolsByName = new Map(childTools.map((tool) => [tool.name, tool]));
+      const availableToolNames = childTools.map((tool) => tool.name);
+      const availableToolNameSet = new Set(availableToolNames);
+      const unavailableAllowedToolNames = agent.allowedActions.filter(
+        (toolName) => !availableToolNameSet.has(toolName),
+      );
 
       const child = buildAgent({
         streamFn: createCallLlmStreamFn({
@@ -1182,6 +1193,9 @@ export function buildCallAgentTool(opts: {
           agentId: agent.id,
           agentName: agent.name,
           text: finalText,
+          runtimeMode: childRuntimeMode,
+          availableToolNames,
+          unavailableAllowedToolNames,
           actionWarnings,
           ...(sceneEvidence ? { sceneEvidence: sceneEvidence.metadata } : {}),
           ...(webEvidence ? { webEvidence: webEvidence.metadata } : {}),

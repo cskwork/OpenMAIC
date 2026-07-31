@@ -6,7 +6,6 @@ import {
 } from '@earendil-works/pi-ai';
 import type { StreamFn } from '@earendil-works/pi-agent-core';
 import type { LanguageModel } from 'ai';
-import { MockLanguageModelV3, convertArrayToReadableStream } from 'ai/test';
 import type {
   ClientEffectAck,
   ClientEffectDelivery,
@@ -186,6 +185,7 @@ function acknowledgeCommitted(delivery: ClientEffectDelivery): void {
 function buildCodeCallAgent(opts: {
   streamFn: StreamFn;
   events: StatelessEvent[];
+  childRuntimeMode?: 'legacy' | 'native';
   agent?: AgentConfig;
   languageModel?: LanguageModel;
   onActionDone?: (record?: WhiteboardActionRecord) => void;
@@ -210,30 +210,10 @@ function buildCodeCallAgent(opts: {
     getWhiteboardLedger: () => [],
     maxActionsPerAgent: 1,
     enableWhiteboardTools: true,
+    childRuntimeMode: opts.childRuntimeMode ?? 'native',
     enableNativeChildWhiteboard: true,
     nativeChildStreamFn: opts.streamFn,
     nativeChildTimeoutMs: 5_000,
-  });
-}
-
-function legacyTextModel(text: string): LanguageModel {
-  return new MockLanguageModelV3({
-    doStream: async () => ({
-      stream: convertArrayToReadableStream([
-        { type: 'stream-start' as const, warnings: [] },
-        { type: 'text-start' as const, id: 'legacy-text' },
-        { type: 'text-delta' as const, id: 'legacy-text', delta: text },
-        { type: 'text-end' as const, id: 'legacy-text' },
-        {
-          type: 'finish' as const,
-          finishReason: { unified: 'stop' as const, raw: 'stop' },
-          usage: {
-            inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
-            outputTokens: { total: 0, text: 0, reasoning: 0 },
-          },
-        },
-      ]),
-    }),
   });
 }
 
@@ -495,36 +475,38 @@ describe('Teacher native wb_draw_code', () => {
     });
   });
 
-  it('keeps a Teacher with wb_edit_code on the Legacy Child path', async () => {
+  it('keeps explicit Native mode when the allowlist also declares an unmigrated edit tool', async () => {
     const mixedCodeTeacher: AgentConfig = {
       ...teacher,
       allowedActions: ['wb_draw_code', 'wb_edit_code'],
     };
     const nativeStreamFn = vi.fn((() =>
       streamed(
-        message([{ type: 'text', text: 'Native path must not run.' }], 'stop'),
+        message([{ type: 'text', text: 'Native draw remains available.' }], 'stop'),
       )) as StreamFn);
     const events: StatelessEvent[] = [];
     const callAgent = buildCodeCallAgent({
       streamFn: nativeStreamFn as StreamFn,
       events,
       agent: mixedCodeTeacher,
-      languageModel: legacyTextModel(
-        '[{"type":"text","content":"Legacy draw/edit capability remains available."}]',
-      ),
     });
 
     const result = await callAgent.execute('director-code-edit-call', {
       agentId: mixedCodeTeacher.id,
-      instruction: 'Explain how the existing code block can be edited.',
+      instruction: 'Explain the code example.',
     });
 
-    expect(nativeStreamFn).not.toHaveBeenCalled();
+    expect(nativeStreamFn).toHaveBeenCalledTimes(1);
     expect(events.some((event) => event.type === 'client_effect')).toBe(false);
     expect(result.details).toMatchObject({
       agentId: mixedCodeTeacher.id,
-      text: 'Legacy draw/edit capability remains available.',
+      text: 'Native draw remains available.',
+      runtimeMode: 'native',
+      availableToolNames: ['wb_draw_code'],
+      unavailableAllowedToolNames: ['wb_edit_code'],
+      nativeChildRun: {
+        status: 'completed',
+      },
     });
-    expect(result.details).not.toHaveProperty('nativeChildRun');
   });
 });

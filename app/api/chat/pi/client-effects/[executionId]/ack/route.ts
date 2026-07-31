@@ -5,7 +5,10 @@ import {
   isClientEffectAck,
 } from '@/lib/agent/runtime/client-effect-contract';
 import { piClientEffectCoordinator } from '@/lib/agent/runtime/client-effect-coordinator';
-import { isPiNativeChildWhiteboardEnabled } from '@/lib/config/feature-flags';
+import {
+  isPiNativeChildRuntimeEnabled,
+  isPiNativeChildWhiteboardEnabled,
+} from '@/lib/config/feature-flags';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 
 export const dynamic = 'force-dynamic';
@@ -55,7 +58,7 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ executionId: string }> },
 ) {
-  if (!isPiNativeChildWhiteboardEnabled()) {
+  if (!isPiNativeChildRuntimeEnabled() || !isPiNativeChildWhiteboardEnabled()) {
     return invalidRequest(404, 'Native Child whiteboard effects are disabled.');
   }
 

@@ -46,17 +46,27 @@ export function isPiWebSearchEnabled(): boolean {
 }
 
 /**
- * Phase 1 mode selector for running classroom Children through Pi native tool
- * calling with server-side web_search. The OPENMAIC_ENABLE_PI_WEB_SEARCH master
- * capability flag must also be enabled. Default OFF.
+ * Server-authoritative Child execution-engine selector. Default OFF preserves
+ * the Legacy structured/JSON Child path. When enabled, every Child invocation
+ * in the request uses the Native Pi tool_call/tool_result loop; capability
+ * flags below only control which tools are registered in that fixed runtime.
+ */
+export function isPiNativeChildRuntimeEnabled(): boolean {
+  return readBoolean(process.env.OPENMAIC_ENABLE_PI_NATIVE_CHILD_RUNTIME);
+}
+
+/**
+ * Native Child web_search capability. The OPENMAIC_ENABLE_PI_WEB_SEARCH master
+ * network capability must also be enabled. This flag does not select the Child
+ * execution engine. Default OFF.
  */
 export function isPiNativeChildWebSearchEnabled(): boolean {
   return readBoolean(process.env.OPENMAIC_ENABLE_PI_NATIVE_CHILD_WEB_SEARCH);
 }
 
 /**
- * Phase 2 mode selector for the Teacher native wb_draw_text client-effect
- * closure. Default OFF so the legacy JSON action path is unchanged.
+ * Native Child whiteboard capability. This flag does not select the Child
+ * execution engine. Default OFF.
  */
 export function isPiNativeChildWhiteboardEnabled(): boolean {
   return readBoolean(process.env.OPENMAIC_ENABLE_PI_NATIVE_CHILD_WHITEBOARD);

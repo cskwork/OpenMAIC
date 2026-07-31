@@ -28,7 +28,9 @@ import { piClientEffectCoordinator } from '@/lib/agent/runtime/client-effect-coo
 import { TOOL_EXECUTION_PROTOCOL_VERSION } from '@/lib/agent/runtime/native-child-contract';
 
 const flag = 'OPENMAIC_ENABLE_PI_NATIVE_CHILD_WHITEBOARD';
+const runtimeFlag = 'OPENMAIC_ENABLE_PI_NATIVE_CHILD_RUNTIME';
 let originalFlag: string | undefined;
+let originalRuntimeFlag: string | undefined;
 
 async function effectRequest(): Promise<ClientEffectRequest> {
   return {
@@ -304,13 +306,17 @@ function createStore(): StageStore {
 describe('client effect ACK route', () => {
   beforeEach(() => {
     originalFlag = process.env[flag];
+    originalRuntimeFlag = process.env[runtimeFlag];
     process.env[flag] = 'true';
+    process.env[runtimeFlag] = 'true';
   });
 
   afterEach(() => {
     piClientEffectCoordinator.clearForTests();
     if (originalFlag === undefined) delete process.env[flag];
     else process.env[flag] = originalFlag;
+    if (originalRuntimeFlag === undefined) delete process.env[runtimeFlag];
+    else process.env[runtimeFlag] = originalRuntimeFlag;
   });
 
   it('accepts an authenticated same-origin transition', async () => {
@@ -771,8 +777,18 @@ describe('client effect ACK route', () => {
     ]);
   });
 
-  it('is unreachable while the Phase 2 flag is disabled', async () => {
+  it('is unreachable while the Native whiteboard capability is disabled', async () => {
     delete process.env[flag];
+    const effect = await effectRequest();
+    const response = await post(
+      ackRequest({ executionId: effect.executionId, token: 'unused', body: accepted(effect) }),
+      effect.executionId,
+    );
+    expect(response.status).toBe(404);
+  });
+
+  it('is unreachable while the Native Child runtime is disabled', async () => {
+    delete process.env[runtimeFlag];
     const effect = await effectRequest();
     const response = await post(
       ackRequest({ executionId: effect.executionId, token: 'unused', body: accepted(effect) }),

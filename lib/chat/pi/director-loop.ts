@@ -6,6 +6,7 @@ import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import type { AgentTurnSummary, WhiteboardActionRecord } from '@/lib/orchestration/types';
 import type { StatelessChatRequest, StatelessEvent } from '@/lib/types/chat';
 import type { ThinkingConfig } from '@/lib/types/provider';
+import type { ChildRuntimeMode } from './child-runtime';
 import { buildDirectorPrompt, buildUserPrompt, toHistoryMessages } from './prompts';
 import { createDirectorCompactionRuntime } from './director-compaction';
 import {
@@ -48,25 +49,16 @@ function formatSceneEvidenceForDelegation(evidence: DirectorSceneEvidencePacket[
   return evidence.map((packet) => packet.content).join('\n\n');
 }
 
-export type PiWebSearchMode = 'disabled' | 'director' | 'child' | 'hybrid';
+export type PiWebSearchMode = 'disabled' | 'director' | 'hybrid';
 
 export function resolvePiWebSearchMode(opts: {
+  childRuntimeMode: ChildRuntimeMode;
   enableWebSearch?: boolean;
   enableNativeChildWebSearch?: boolean;
-  enableNativeChildWhiteboard?: boolean;
-  enableWhiteboardTools: boolean;
 }): PiWebSearchMode {
   if (opts.enableWebSearch !== true) return 'disabled';
-  if (
-    opts.enableNativeChildWebSearch === true &&
-    opts.enableWhiteboardTools &&
-    opts.enableNativeChildWhiteboard === true
-  ) {
+  if (opts.childRuntimeMode === 'native' && opts.enableNativeChildWebSearch === true)
     return 'hybrid';
-  }
-  if (opts.enableNativeChildWebSearch === true && !opts.enableWhiteboardTools) {
-    return 'child';
-  }
   return 'director';
 }
 
@@ -83,20 +75,20 @@ export async function runPiDirectorLoop(opts: {
   maxAgentTurns: number;
   maxActionsPerAgent: number;
   enableWhiteboardTools: boolean;
+  childRuntimeMode: ChildRuntimeMode;
   enableWebSearch?: boolean;
   enableNativeChildWebSearch?: boolean;
   enableNativeChildWhiteboard?: boolean;
 }): Promise<void> {
-  // OPENMAIC_ENABLE_PI_WEB_SEARCH remains the capability master switch. Child
-  // search can coexist with whiteboard tools only when the native client-effect
-  // closure is enabled; otherwise the legacy JSON Child retains Director search.
+  // OPENMAIC_ENABLE_PI_WEB_SEARCH remains the network capability master switch.
+  // Runtime mode is fixed by server configuration; the Child search flag only
+  // registers web_search inside an already-selected Native runtime.
   const webSearchMode = resolvePiWebSearchMode({
+    childRuntimeMode: opts.childRuntimeMode,
     enableWebSearch: opts.enableWebSearch,
     enableNativeChildWebSearch: opts.enableNativeChildWebSearch,
-    enableNativeChildWhiteboard: opts.enableNativeChildWhiteboard,
-    enableWhiteboardTools: opts.enableWhiteboardTools,
   });
-  const nativeChildWebSearchEnabled = webSearchMode === 'child' || webSearchMode === 'hybrid';
+  const nativeChildWebSearchEnabled = webSearchMode === 'hybrid';
   const directorWebSearchEnabled = webSearchMode === 'director' || webSearchMode === 'hybrid';
   let totalAgents = 0;
   let totalActions = 0;
@@ -206,6 +198,7 @@ export async function runPiDirectorLoop(opts: {
       getWhiteboardLedger: () => piWhiteboardLedger,
       maxActionsPerAgent: opts.maxActionsPerAgent,
       enableWhiteboardTools: opts.enableWhiteboardTools,
+      childRuntimeMode: opts.childRuntimeMode,
       enableNativeChildWebSearch: nativeChildWebSearchEnabled,
       enableNativeChildWhiteboard: opts.enableNativeChildWhiteboard,
       createNativeChildWebSearchTool: nativeChildWebSearchEnabled

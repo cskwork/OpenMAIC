@@ -9,6 +9,7 @@ import { NextRequest } from 'next/server';
 import { isProviderKeyRequired } from '@/lib/ai/providers';
 import {
   isPiChatEnabled,
+  isPiNativeChildRuntimeEnabled,
   isPiNativeChildWebSearchEnabled,
   isPiNativeChildWhiteboardEnabled,
   isPiWebSearchEnabled,
@@ -20,6 +21,7 @@ import {
   resolveAgentConfigs,
 } from '@/lib/chat/pi/config';
 import { runPiDirectorLoop } from '@/lib/chat/pi/director-loop';
+import type { ChildRuntimeMode } from '@/lib/chat/pi/child-runtime';
 import type { SendEvent } from '@/lib/chat/pi/types';
 import { resolveModel } from '@/lib/server/resolve-model';
 import { apiError } from '@/lib/server/api-response';
@@ -127,6 +129,9 @@ export async function POST(req: NextRequest) {
     const maxAgentTurns = getPiMaxAgentTurns(body);
     const maxActionsPerAgent = getPiMaxActionsPerAgent(body);
     const enableWhiteboardTools = body.config.piEnableWhiteboardTools === true;
+    const childRuntimeMode: ChildRuntimeMode = isPiNativeChildRuntimeEnabled()
+      ? 'native'
+      : 'legacy';
 
     log.info(
       `Pi request agents=${body.config.agentIds.join(', ')} messages=${body.messages.length} maxAgentTurns=${maxAgentTurns}`,
@@ -162,6 +167,7 @@ export async function POST(req: NextRequest) {
           maxAgentTurns,
           maxActionsPerAgent,
           enableWhiteboardTools,
+          childRuntimeMode,
           enableWebSearch: isPiWebSearchEnabled(),
           enableNativeChildWebSearch: isPiNativeChildWebSearchEnabled(),
           enableNativeChildWhiteboard: isPiNativeChildWhiteboardEnabled(),

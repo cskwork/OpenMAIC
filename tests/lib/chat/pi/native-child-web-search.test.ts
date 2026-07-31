@@ -150,6 +150,7 @@ function makeCallAgent(opts: {
     getWhiteboardLedger: () => [],
     maxActionsPerAgent: 0,
     enableWhiteboardTools: false,
+    childRuntimeMode: 'native',
     enableNativeChildWebSearch: true,
     createNativeChildWebSearchTool: opts.createTool,
     nativeChildStreamFn: opts.streamFn,
@@ -191,7 +192,6 @@ describe('Phase 1 Child native web_search', () => {
         nativeWhiteboardEnabled: true,
         nativeWhiteboardToolNames: ['wb_draw_text'],
         childWebSearchEnabled: true,
-        nativeChildEnabled: true,
       },
     },
     {
@@ -200,8 +200,7 @@ describe('Phase 1 Child native web_search', () => {
       expected: {
         nativeWhiteboardEnabled: false,
         nativeWhiteboardToolNames: [],
-        childWebSearchEnabled: false,
-        nativeChildEnabled: false,
+        childWebSearchEnabled: true,
       },
     },
     {
@@ -210,12 +209,11 @@ describe('Phase 1 Child native web_search', () => {
       expected: {
         nativeWhiteboardEnabled: false,
         nativeWhiteboardToolNames: [],
-        childWebSearchEnabled: false,
-        nativeChildEnabled: false,
+        childWebSearchEnabled: true,
       },
     },
   ])(
-    'keeps $role on the correct runtime when native web and whiteboard flags coexist',
+    'filters Native tools for $role without selecting the runtime',
     ({ role, allowedActions, expected }) => {
       expect(
         resolveNativeChildCapabilities({
@@ -246,7 +244,6 @@ describe('Phase 1 Child native web_search', () => {
     ).toMatchObject({
       nativeWhiteboardEnabled: true,
       nativeWhiteboardToolNames: ['wb_draw_shape'],
-      nativeChildEnabled: true,
     });
     expect(
       resolveNativeChildCapabilities({
@@ -256,7 +253,6 @@ describe('Phase 1 Child native web_search', () => {
     ).toMatchObject({
       nativeWhiteboardEnabled: true,
       nativeWhiteboardToolNames: ['wb_draw_latex'],
-      nativeChildEnabled: true,
     });
     expect(
       resolveNativeChildCapabilities({
@@ -285,7 +281,6 @@ describe('Phase 1 Child native web_search', () => {
         'wb_draw_chart',
         'wb_draw_code',
       ],
-      nativeChildEnabled: true,
     });
     expect(
       resolveNativeChildCapabilities({
@@ -295,7 +290,6 @@ describe('Phase 1 Child native web_search', () => {
     ).toMatchObject({
       nativeWhiteboardEnabled: true,
       nativeWhiteboardToolNames: ['wb_draw_line'],
-      nativeChildEnabled: true,
     });
     expect(
       resolveNativeChildCapabilities({
@@ -308,7 +302,6 @@ describe('Phase 1 Child native web_search', () => {
     ).toMatchObject({
       nativeWhiteboardEnabled: true,
       nativeWhiteboardToolNames: ['wb_draw_chart'],
-      nativeChildEnabled: true,
     });
     expect(
       resolveNativeChildCapabilities({
@@ -321,7 +314,6 @@ describe('Phase 1 Child native web_search', () => {
     ).toMatchObject({
       nativeWhiteboardEnabled: true,
       nativeWhiteboardToolNames: ['wb_draw_code'],
-      nativeChildEnabled: true,
     });
     expect(
       resolveNativeChildCapabilities({
@@ -332,10 +324,9 @@ describe('Phase 1 Child native web_search', () => {
         },
       }),
     ).toMatchObject({
-      nativeWhiteboardEnabled: false,
-      nativeWhiteboardToolNames: [],
+      nativeWhiteboardEnabled: true,
+      nativeWhiteboardToolNames: ['wb_draw_code'],
       childWebSearchEnabled: false,
-      nativeChildEnabled: false,
     });
     expect(
       resolveNativeChildCapabilities({
@@ -346,10 +337,9 @@ describe('Phase 1 Child native web_search', () => {
         },
       }),
     ).toMatchObject({
-      nativeWhiteboardEnabled: false,
-      nativeWhiteboardToolNames: [],
+      nativeWhiteboardEnabled: true,
+      nativeWhiteboardToolNames: ['wb_draw_shape'],
       childWebSearchEnabled: false,
-      nativeChildEnabled: false,
     });
   });
 
@@ -357,46 +347,36 @@ describe('Phase 1 Child native web_search', () => {
     {
       name: 'master off overrides native mode',
       input: {
+        childRuntimeMode: 'native' as const,
         enableWebSearch: false,
         enableNativeChildWebSearch: true,
-        enableWhiteboardTools: false,
       },
       expected: 'disabled',
     },
     {
-      name: 'master on plus native mode selects Child',
+      name: 'Legacy runtime keeps Director search even when Child capability is enabled',
       input: {
+        childRuntimeMode: 'legacy' as const,
         enableWebSearch: true,
         enableNativeChildWebSearch: true,
-        enableWhiteboardTools: false,
-      },
-      expected: 'child',
-    },
-    {
-      name: 'whiteboard without native effect mode keeps legacy Child and Director search',
-      input: {
-        enableWebSearch: true,
-        enableNativeChildWebSearch: true,
-        enableWhiteboardTools: true,
       },
       expected: 'director',
     },
     {
-      name: 'native whiteboard lets Child web search coexist in the same Pi run',
+      name: 'Native runtime exposes Child search alongside Director evidence',
       input: {
+        childRuntimeMode: 'native' as const,
         enableWebSearch: true,
         enableNativeChildWebSearch: true,
-        enableNativeChildWhiteboard: true,
-        enableWhiteboardTools: true,
       },
       expected: 'hybrid',
     },
     {
-      name: 'master on without native mode keeps Director search',
+      name: 'Native runtime without the Child capability keeps Director search',
       input: {
+        childRuntimeMode: 'native' as const,
         enableWebSearch: true,
         enableNativeChildWebSearch: false,
-        enableWhiteboardTools: false,
       },
       expected: 'director',
     },
