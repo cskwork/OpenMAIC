@@ -25,7 +25,7 @@ a browser.
 | Export | Role | Browser backend |
 | --- | --- | --- |
 | `KVStore` | small `device` / `account`-scoped values not owned by the DSL | `BrowserKVStore` over `localStorage` |
-| `StorageProvider` (from `@openmaic/dsl`) | the asset seam: `put(blob) → ref`, `resolve(ref) → url`, `remove(ref)` | `BrowserAssetProvider` over IndexedDB + object URLs |
+| `StorageProvider` (from `@openmaic/dsl`) | the asset seam: `put(blob) → ref`, `resolve(ref) → url`, `remove(ref)` | `BrowserAssetStore` over IndexedDB (`assets` registry + `blobs`) + object URLs |
 | `kvPersistStorage` | adapt a `KVStore` into a zustand `persist` storage | — |
 | `DocumentStore` | persist the DSL `document` aggregate (stage + scenes + embedded agents / quiz / actions + an outline snapshot) | `BrowserDocumentStore` over IndexedDB (normalized `stages` / `scenes` / `outlines`) |
 | `RuntimeStore` | persist what a learner produces while taking a course — sessions + append-only records (chat, quiz attempts, playback facts) | `BrowserRuntimeStore` over IndexedDB (`sessions` / `records`) |
@@ -38,13 +38,23 @@ a browser.
   routes `device` to a `LocalKVStore` it requires at construction — a *branded*
   local backend, because a networked store satisfies plain `KVStore`
   structurally and would otherwise be accepted as the place device values live.
-- **Content-addressed assets.** `BrowserAssetProvider` refs are `sha256-<hex>`,
-  so identical bytes de-duplicate to one stored asset. A document embeds only
-  the stable ref; the provider resolves it to a URL at render time (a raw URL
-  would bake in a provider + expiry and break portability). The ref stays
-  opaque to this package — only the issuing provider interprets it. The server
-  backend is being redesigned around a global resource pool (#1007) and is not
-  part of this package yet.
+- **The asset pool.** `BrowserAssetStore` is a global asset pool (#1007): an
+  **allocated** `AssetId` (`ast_` + 128 random bits) names a registry entry
+  (`contentHash`, `mime`, `meta`), and the registry names content-addressed
+  bytes. A document embeds only the id and the store resolves it to a URL at
+  render time (a raw URL would bake in a provider + expiry and break
+  portability). Two levels of indirection buy three things at once: an id
+  survives the bytes behind it being regenerated; identical bytes are stored
+  once however many ids name them; and the content hash never leaves the
+  package, so the "whoever knows the hash can reach the bytes" threat that pure
+  content-addressing must defend against does not arise. Images, audio and
+  video share one id space — the medium is a `mime` column, not a partition.
+  `put` **always allocates a new id**, so a caller cannot learn whether the
+  bytes were already present; the content-addressed blob backend beneath, whose
+  refs would disclose exactly that, is internal and unexported. The id domain is
+  opaque and unvalidated (the KV key-domain lesson, applied forward): an
+  unrecognized id is a miss, never an error. The server backend is still to
+  come.
 - **Document normalization.** The DSL `document` is a portable embedded
   aggregate; `DocumentStore` normalizes it into per-entity rows so scene-level
   writes (`putScene`) stay cheap, and reassembles it on read. Each document is
@@ -85,12 +95,18 @@ Each primitive has one implementation-agnostic contract suite
 `test/runtime-contract.ts`).
 Every backend is proven by running the same suite against it, so browser, HTTP,
 and PostgreSQL implementations cannot silently diverge from a primitive's
-semantics.
+semantics. The asset layer has two, because its two layers have deliberately
+opposite semantics: `test/asset-contract.ts` for the outward allocated-id store
+(identical bytes never share an id) and `test/asset-blob-contract.ts` for the
+internal blob layer (identical bytes always share a key).
 
 ## Roadmap
 
 - [x] `KVStore` + browser backend; zustand `persist` adapter
-- [x] `StorageProvider` (in `@openmaic/dsl`) + browser `BrowserAssetProvider`
+- [x] `StorageProvider` (in `@openmaic/dsl`) + browser content-addressed blob
+      backend
+- [x] asset registry: allocated `AssetId` over the blob layer, browser
+      `BrowserAssetStore` (#1007)
 - [x] implementation-agnostic contract suites
 - [x] `DocumentStore` (aggregate ↔ normalized adapter, migrate-on-read via the
       DSL migration registry, validation gate) + browser backend
@@ -117,8 +133,10 @@ semantics.
 - [x] DocumentStore PostgreSQL backend
 - [x] `KVStore` (`account`) HTTP backend + HTTP contract
 - [ ] `KVStore` server-side reference backend and reference-server route
-- [ ] `AssetProvider` server backend — redesigned around a global resource
-      pool (#1007)
+- [ ] asset server backend — registry (principal column, server-derived) +
+      blob store, over the global resource pool model (#1007)
+- [ ] asset manifest: the one enumeration of "which `AssetId`s does this course
+      reference?" the export paths converge on (#1007)
 
 ## License
 

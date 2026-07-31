@@ -1,4 +1,24 @@
+/**
+ * **Internal.** The standalone content-addressed blob backend — bytes in
+ * IndexedDB, keyed by `sha256-<hex>` over their own content, resolved as a
+ * `blob:` object URL.
+ *
+ * This is not the package's asset seam and is deliberately not exported:
+ * consumers get {@link BrowserAssetStore}, which layers an allocated-id
+ * registry over this addressing scheme. The distinction matters, because a
+ * content-addressed ref *is* a statement about the bytes — putting the same
+ * bytes twice yields the same ref, which is a de-duplication signal an outward
+ * API must not emit. That property is fine one layer down, where a hash is a
+ * private storage key nothing outside the package holds; it is not fine as a
+ * reference a document embeds.
+ *
+ * Kept as its own type because "map bytes to a stable storage key" is the
+ * pluggable half of the design — the layer an S3-compatible endpoint or a CDN
+ * would replace behind the same interface, with the registry above it
+ * unchanged.
+ */
 import type { AssetMeta, AssetRef, BinaryBlob, StorageProvider } from '@openmaic/dsl';
+import { contentHashOf, ObjectUrlCache } from './blob.js';
 
 export interface BrowserAssetProviderOptions {
   /** IndexedDB factory. Defaults to the ambient `indexedDB`. Injectable for tests. */
@@ -14,29 +34,11 @@ interface StoredAsset {
   contentType: string;
 }
 
-function toHex(buffer: ArrayBuffer): string {
-  const view = new Uint8Array(buffer);
-  let hex = '';
-  for (let i = 0; i < view.length; i++) hex += view[i].toString(16).padStart(2, '0');
-  return hex;
-}
-
-/**
- * Browser `StorageProvider` backend: bytes live in IndexedDB, and `resolve`
- * hands back a `blob:` object URL for use as a media `src`. Refs are
- * content-addressed (`sha256-<hex>`), so identical bytes de-duplicate to one
- * stored asset and one stable ref.
- */
 export class BrowserAssetProvider implements StorageProvider {
   private readonly idb: IDBFactory;
   private readonly dbName: string;
   private dbPromise?: Promise<IDBDatabase>;
-  /**
-   * ref → the in-flight/settled object-URL resolution. Keyed on the promise so
-   * concurrent `resolve(ref)` calls share one `URL.createObjectURL` (never
-   * orphaning a second URL), and repeated `resolve` returns one stable URL.
-   */
-  private readonly urls = new Map<AssetRef, Promise<string | null>>();
+  private readonly urls = new ObjectUrlCache();
 
   constructor(options: BrowserAssetProviderOptions = {}) {
     this.idb = options.indexedDB ?? globalThis.indexedDB;
@@ -82,51 +84,21 @@ export class BrowserAssetProvider implements StorageProvider {
     });
   }
 
-  private async computeRef(data: BinaryBlob): Promise<{ ref: AssetRef; bytes: ArrayBuffer }> {
-    const bytes = await data.arrayBuffer();
-    const digest = await crypto.subtle.digest('SHA-256', bytes);
-    return { ref: `sha256-${toHex(digest)}`, bytes };
-  }
-
   async put(data: BinaryBlob, meta?: AssetMeta): Promise<AssetRef> {
-    const { ref, bytes } = await this.computeRef(data);
+    const { contentHash, bytes } = await contentHashOf(data);
     const asset: StoredAsset = { bytes, contentType: meta?.contentType ?? data.type ?? '' };
-    await this.tx('readwrite', (store) => store.put(asset, ref));
+    await this.tx('readwrite', (store) => store.put(asset, contentHash));
     // A re-put with the same bytes but different metadata (e.g. a corrected
     // contentType) overwrites the stored asset; drop any cached object URL for
-    // this ref so resolve() reflects the latest write instead of a stale one.
+    // this key so resolve() reflects the latest write instead of a stale one.
     // Without this, resolved MIME would depend on cache warmth (a fresh
     // provider would see the new type, this one the old).
-    await this.invalidateUrl(ref);
-    return ref;
-  }
-
-  /** Revoke and forget the cached object URL for a ref, if any. */
-  private async invalidateUrl(ref: AssetRef): Promise<void> {
-    const pending = this.urls.get(ref);
-    if (!pending) return;
-    this.urls.delete(ref);
-    const url = await pending.catch(() => null);
-    if (url) URL.revokeObjectURL(url);
+    await this.urls.invalidate(contentHash);
+    return contentHash;
   }
 
   async resolve(ref: AssetRef): Promise<string | null> {
-    const cached = this.urls.get(ref);
-    if (cached) return cached;
-    const pending = this.readAsUrl(ref);
-    this.urls.set(ref, pending);
-    try {
-      const url = await pending;
-      // Don't cache a miss: a later put(sameBytes) + resolve must succeed. Only
-      // a real URL stays memoized (and is revoked on remove).
-      if (url === null) this.urls.delete(ref);
-      return url;
-    } catch (err) {
-      // Don't cache a transient failure either — otherwise every later
-      // resolve(ref) replays the same rejection, defeating openDb's retry.
-      this.urls.delete(ref);
-      throw err;
-    }
+    return this.urls.resolve(ref, () => this.readAsUrl(ref));
   }
 
   private async readAsUrl(ref: AssetRef): Promise<string | null> {
@@ -137,6 +109,6 @@ export class BrowserAssetProvider implements StorageProvider {
 
   async remove(ref: AssetRef): Promise<void> {
     await this.tx('readwrite', (store) => store.delete(ref));
-    await this.invalidateUrl(ref);
+    await this.urls.invalidate(ref);
   }
 }

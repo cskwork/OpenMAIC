@@ -9,10 +9,14 @@
  *
  * `KVStore` ships a browser backend and an HTTP backend, proven equivalent by
  * one shared contract suite, with one asymmetry: only its `account` scope has
- * an HTTP backend, because `device` values never leave the device. The
- * `AssetProvider` ships its browser backend only; its server design is being
- * reworked around a global resource pool (#1007), so no HTTP backend is exposed
- * here.
+ * an HTTP backend, because `device` values never leave the device.
+ *
+ * The asset seam ships `BrowserAssetStore`: a global asset pool, in which an
+ * allocated `AssetId` names a registry entry and the registry names
+ * content-addressed bytes (#1007). The content-addressed blob backend beneath
+ * it is internal — a hash is a private storage key, never a reference a
+ * document embeds — so it is not exported. The asset server backend is still to
+ * come; no HTTP backend is exposed here yet.
  */
 export type { DeviceSafeKVStore, KVScope, KVStore, LocalKVStore } from './kv/types.js';
 export { assertKVScope, DEFAULT_KV_SCOPE, KVScopeViolationError } from './kv/types.js';
@@ -27,7 +31,8 @@ export {
   type HttpKVHeadersHook,
   type HttpKVStoreOptions,
 } from './kv/http.js';
-export { BrowserAssetProvider, type BrowserAssetProviderOptions } from './asset/browser.js';
+export { BrowserAssetStore, type BrowserAssetStoreOptions } from './asset/browser-store.js';
+export { ASSET_ID_PREFIX, newAssetId, toAssetId, type AssetId } from './asset/id.js';
 
 export {
   kvPersistStorage,

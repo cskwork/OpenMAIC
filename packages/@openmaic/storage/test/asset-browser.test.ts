@@ -1,10 +1,14 @@
+// The INTERNAL blob layer. Imported from its module rather than the package
+// entry point on purpose: `BrowserAssetProvider` is not exported, because a
+// content-addressed ref is a de-duplication signal no outward API may emit.
+// Its semantics are still pinned here — the registry above it relies on them.
 import { IDBFactory } from 'fake-indexeddb';
 import { expect, test } from 'vitest';
-import { BrowserAssetProvider } from '../src/index.js';
+import { BrowserAssetProvider } from '../src/asset/browser.js';
 import { blobForObjectUrl } from './setup.js';
-import { runStorageProviderContract } from './asset-contract.js';
+import { runBlobStoreContract } from './asset-blob-contract.js';
 
-runStorageProviderContract(
+runBlobStoreContract(
   'BrowserAssetProvider',
   () => new BrowserAssetProvider({ indexedDB: new IDBFactory(), dbName: 'test-assets' }),
   async (url) => {
@@ -19,20 +23,20 @@ runStorageProviderContract(
 // whatever was cached first (otherwise MIME depends on cache warmth).
 test('BrowserAssetProvider re-put updates the resolved contentType', async () => {
   const provider = new BrowserAssetProvider({ indexedDB: new IDBFactory(), dbName: 'mime-db' });
-  const ref = await provider.put(new Blob(['pixels'], { type: '' }));
-  const first = await provider.resolve(ref);
+  const key = await provider.put(new Blob(['pixels'], { type: '' }));
+  const first = await provider.resolve(key);
   expect(blobForObjectUrl(first!)?.type).toBe('');
 
   await provider.put(new Blob(['pixels'], { type: 'image/png' }));
-  const second = await provider.resolve(ref);
+  const second = await provider.resolve(key);
   expect(blobForObjectUrl(second!)?.type).toBe('image/png');
 });
 
-// A transient failure in resolve() must not be cached: the next resolve(ref)
+// A transient failure in resolve() must not be cached: the next resolve(key)
 // has to retry, not replay the rejection.
 test('BrowserAssetProvider recovers after a transient resolve failure', async () => {
   const real = new IDBFactory();
-  const ref = await new BrowserAssetProvider({ indexedDB: real, dbName: 'flaky-db' }).put(
+  const key = await new BrowserAssetProvider({ indexedDB: real, dbName: 'flaky-db' }).put(
     new Blob(['seed'], { type: 'text/plain' }),
   );
 
@@ -51,13 +55,13 @@ test('BrowserAssetProvider recovers after a transient resolve failure', async ()
   } as unknown as IDBFactory;
 
   const provider = new BrowserAssetProvider({ indexedDB: flaky, dbName: 'flaky-db' });
-  await expect(provider.resolve(ref)).rejects.toThrow(); // first open throws
-  const url = await provider.resolve(ref); // retry must succeed, not replay the rejection
+  await expect(provider.resolve(key)).rejects.toThrow(); // first open throws
+  const url = await provider.resolve(key); // retry must succeed, not replay the rejection
   expect(url).not.toBeNull();
 });
 
 // Backend-specific: the content-addressing contract asserts identical bytes
-// yield the same ref; this asserts they actually collapse to ONE stored row,
+// yield the same key; this asserts they actually collapse to ONE stored row,
 // so a backend that appended duplicates couldn't pass silently.
 test('BrowserAssetProvider stores identical bytes exactly once', async () => {
   const idb = new IDBFactory();
