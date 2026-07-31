@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  digestWhiteboardChartV1,
   digestWhiteboardLatexHtmlV1,
   digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
@@ -12,6 +14,7 @@ import {
   digestWhiteboardTableV1,
   digestVisibleTextV1,
   isClientEffectAck,
+  normalizeWhiteboardChartV1,
   normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
@@ -27,6 +30,7 @@ import {
   type WhiteboardShapeClientEffectRequest,
   type WhiteboardShapePostcondition,
   type WhiteboardTextClientEffectRequest,
+  type WhiteboardChartClientEffectRequest,
   type WhiteboardTableClientEffectRequest,
 } from '@/lib/agent/runtime/client-effect-contract';
 import { renderNativeWhiteboardLatexHtmlV1 } from '@/lib/action/whiteboard-latex';
@@ -341,6 +345,60 @@ function tableCommitted(
       elementType: 'table',
       normalizationVersion: CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
       observedTableDigest,
+      matchingElementCount: 1,
+    },
+  };
+}
+
+async function chartRequest(): Promise<WhiteboardChartClientEffectRequest> {
+  const args = {
+    chartType: 'line' as const,
+    x: 80,
+    y: 60,
+    width: 500,
+    height: 260,
+    data: {
+      labels: ['一月', '二月'],
+      legends: ['甲', '乙'],
+      series: [
+        [1, 2],
+        [3, 4],
+      ],
+    },
+  };
+  const chart = normalizeWhiteboardChartV1(args);
+  return {
+    ...(await request()),
+    toolName: 'wb_draw_chart',
+    args,
+    postcondition: {
+      kind: 'whiteboard_chart_exists',
+      stableElementId: 'chart-1',
+      elementType: 'chart',
+      normalizationVersion: CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+      expectedChartDigest: await digestWhiteboardChartV1(chart),
+      ...chart,
+    },
+  };
+}
+
+function chartCommitted(
+  effect: WhiteboardChartClientEffectRequest,
+  observedChartDigest = effect.postcondition.expectedChartDigest,
+): Extract<ClientEffectAck, { status: 'effect_committed' }> {
+  return {
+    protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
+    executionId: effect.executionId,
+    idempotencyKey: effect.idempotencyKey,
+    clientEventId: 'event-chart-committed',
+    status: 'effect_committed',
+    observedAt: Date.now(),
+    targetBinding,
+    postcondition: {
+      stableElementId: effect.postcondition.stableElementId,
+      elementType: 'chart',
+      normalizationVersion: CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+      observedChartDigest,
       matchingElementCount: 1,
     },
   };
@@ -1035,6 +1093,58 @@ describe('isClientEffectAck', () => {
       isClientEffectAck({
         ...valid,
         postcondition: { ...valid.postcondition, observedTableDigest: '' },
+      }),
+    ).toBe(false);
+    expect(
+      isClientEffectAck({
+        ...valid,
+        postcondition: { ...valid.postcondition, data: effect.postcondition.data },
+      }),
+    ).toBe(false);
+  });
+
+  it('settles a chart only for the exact bounded digest ACK', async () => {
+    const effect = await chartRequest();
+    const coordinator = new ClientEffectCoordinator();
+    const registered = coordinator.register(effect);
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        accepted(effect),
+      ),
+    ).toMatchObject({ kind: 'applied', snapshot: { status: 'accepted' } });
+
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        chartCommitted(effect, 'sha256:wrong'),
+      ),
+    ).toMatchObject({ kind: 'invalid' });
+    expect(coordinator.getSnapshot(effect.executionId)).toMatchObject({ status: 'accepted' });
+
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        chartCommitted(effect),
+      ),
+    ).toMatchObject({ kind: 'applied', snapshot: { status: 'effect_committed' } });
+    await expect(registered.result).resolves.toMatchObject({
+      status: 'effect_committed',
+      isError: false,
+    });
+  });
+
+  it('accepts only the minimal exact chart ACK variant', async () => {
+    const effect = await chartRequest();
+    const valid = chartCommitted(effect);
+    expect(isClientEffectAck(valid)).toBe(true);
+    expect(
+      isClientEffectAck({
+        ...valid,
+        postcondition: { ...valid.postcondition, observedChartDigest: '' },
       }),
     ).toBe(false);
     expect(

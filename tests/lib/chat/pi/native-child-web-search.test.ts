@@ -269,6 +269,7 @@ describe('Phase 1 Child native web_search', () => {
             'wb_draw_line',
             'wb_draw_latex',
             'wb_draw_table',
+            'wb_draw_chart',
           ],
         },
       }),
@@ -280,6 +281,7 @@ describe('Phase 1 Child native web_search', () => {
         'wb_draw_line',
         'wb_draw_latex',
         'wb_draw_table',
+        'wb_draw_chart',
       ],
       nativeChildEnabled: true,
     });
@@ -298,7 +300,20 @@ describe('Phase 1 Child native web_search', () => {
         ...base,
         agent: {
           role: base.role,
-          allowedActions: ['wb_draw_chart', 'wb_draw_code'],
+          allowedActions: ['wb_draw_chart'],
+        },
+      }),
+    ).toMatchObject({
+      nativeWhiteboardEnabled: true,
+      nativeWhiteboardToolNames: ['wb_draw_chart'],
+      nativeChildEnabled: true,
+    });
+    expect(
+      resolveNativeChildCapabilities({
+        ...base,
+        agent: {
+          role: base.role,
+          allowedActions: ['wb_draw_code', 'wb_edit_code'],
         },
       }),
     ).toMatchObject({

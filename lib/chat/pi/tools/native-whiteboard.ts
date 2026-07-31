@@ -1,16 +1,19 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type, type Static } from 'typebox';
 import {
+  CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
+  digestWhiteboardChartV1,
   digestWhiteboardLatexHtmlV1,
   digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
   digestWhiteboardShapeV1,
   digestWhiteboardTableV1,
   digestVisibleTextV1,
+  normalizeWhiteboardChartV1,
   normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
@@ -216,6 +219,77 @@ const NativeWhiteboardTableParams = Type.Object({
 });
 
 type NativeWhiteboardTableParams = Static<typeof NativeWhiteboardTableParams>;
+
+const NativeWhiteboardChartType = Type.Union([
+  Type.Literal('bar'),
+  Type.Literal('column'),
+  Type.Literal('line'),
+  Type.Literal('pie'),
+  Type.Literal('ring'),
+  Type.Literal('area'),
+  Type.Literal('radar'),
+  Type.Literal('scatter'),
+]);
+const NativeWhiteboardChartParams = Type.Object({
+  chartType: NativeWhiteboardChartType,
+  x: Type.Number({
+    minimum: 0,
+    maximum: 999,
+    description: 'Left coordinate on a 1000×563 board.',
+  }),
+  y: Type.Number({
+    minimum: 0,
+    maximum: 562,
+    description: 'Top coordinate on a 1000×563 board.',
+  }),
+  width: Type.Number({
+    exclusiveMinimum: 0,
+    maximum: 1000,
+    description: 'Chart width; x + width must stay within 1000.',
+  }),
+  height: Type.Number({
+    exclusiveMinimum: 0,
+    maximum: 563,
+    description: 'Chart height; y + height must stay within 563.',
+  }),
+  data: Type.Object({
+    labels: Type.Array(Type.String({ minLength: 1, maxLength: 80 }), {
+      minItems: 1,
+      maxItems: 64,
+      description: 'Category, axis, slice, or point labels.',
+    }),
+    legends: Type.Array(Type.String({ minLength: 1, maxLength: 80 }), {
+      minItems: 1,
+      maxItems: 8,
+      description: 'Series legends. Their required count depends on chartType.',
+    }),
+    series: Type.Array(
+      Type.Array(
+        Type.Number({
+          minimum: -1_000_000_000_000,
+          maximum: 1_000_000_000_000,
+        }),
+        { minItems: 1, maxItems: 64 },
+      ),
+      {
+        minItems: 1,
+        maxItems: 8,
+        description:
+          'Cartesian/radar: one row per legend. Pie/ring: exactly one row. Scatter: exactly two X/Y rows.',
+      },
+    ),
+  }),
+  themeColors: Type.Optional(
+    Type.Array(Type.String({ minLength: 1, maxLength: 64 }), {
+      minItems: 1,
+      maxItems: 10,
+      description:
+        'Renderer-safe CSS colors using #hex, named colors, or comma-form rgb(a)/hsl(a).',
+    }),
+  ),
+});
+
+type NativeWhiteboardChartParams = Static<typeof NativeWhiteboardChartParams>;
 const WHITEBOARD_OPEN_SETTLEMENT_MARGIN_MS = 500;
 
 interface NativeWhiteboardBaseOptions {
@@ -666,6 +740,73 @@ export function buildNativeWhiteboardTableTool(
       toolOptions: opts,
       successMessage: 'Whiteboard table was rendered and its postcondition was verified.',
       failureLabel: 'Whiteboard table',
+    });
+  };
+
+  return { tool, handler };
+}
+
+export function buildNativeWhiteboardChartTool(
+  opts: NativeWhiteboardToolOptions<NativeWhiteboardChartParams>,
+): { tool: AgentTool<typeof NativeWhiteboardChartParams>; handler: NativeClientEffectHandler } {
+  const tool: AgentTool<typeof NativeWhiteboardChartParams> = {
+    name: 'wb_draw_chart',
+    label: 'Draw whiteboard chart',
+    description:
+      'Draw one bounded chart on the classroom whiteboard. Cartesian and radar series must align with labels and legends; pie/ring use one non-negative series; scatter uses exactly two X/Y series. Explain the comparison before calling this tool, then continue teaching after the committed result.',
+    parameters: NativeWhiteboardChartParams,
+    executionMode: 'sequential',
+    execute: async (): Promise<RuntimeAgentToolResult> => {
+      throw new Error('wb_draw_chart requires the browser client-effect executor.');
+    },
+  };
+
+  const handler: NativeClientEffectHandler = async ({ request, params, signal }) => {
+    if (opts.canExecute?.() === false) return actionBudgetFailure();
+    const input = params as NativeWhiteboardChartParams;
+    let chartSpec;
+    try {
+      chartSpec = normalizeWhiteboardChartV1(input);
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Whiteboard chart input was rejected: ${
+              error instanceof Error ? error.message : 'invalid input'
+            }.`,
+          },
+        ],
+        details: {
+          code: error instanceof Error ? error.message : 'CLIENT_EFFECT_CHART_INPUT_INVALID',
+        },
+        isError: true,
+      };
+    }
+    const prepared = prepareClientEffect(opts, request);
+    if ('isError' in prepared) return prepared;
+    const stableElementId = `client-effect-${request.executionId}`;
+    const effectRequest: ClientEffectRequest = {
+      ...request,
+      toolName: 'wb_draw_chart',
+      target: prepared.target,
+      activeEffectBudgetMs: prepared.activeEffectBudgetMs,
+      postcondition: {
+        kind: 'whiteboard_chart_exists',
+        stableElementId,
+        elementType: 'chart',
+        normalizationVersion: CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+        expectedChartDigest: await digestWhiteboardChartV1(chartSpec),
+        ...chartSpec,
+      },
+    };
+    return deliverClientEffect({
+      request: effectRequest,
+      params: input,
+      signal,
+      toolOptions: opts,
+      successMessage: 'Whiteboard chart was committed and its postcondition was verified.',
+      failureLabel: 'Whiteboard chart',
     });
   };
 

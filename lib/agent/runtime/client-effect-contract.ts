@@ -2,6 +2,9 @@ import {
   TOOL_EXECUTION_PROTOCOL_VERSION,
   type ToolExecutionEnvelope,
 } from './native-child-contract';
+import type { ChartData, ChartType } from '@openmaic/dsl';
+import tinycolor from 'tinycolor2';
+import { DEFAULT_WHITEBOARD_CHART_THEME_COLORS } from '@/lib/action/whiteboard-charts';
 import { escapeWhiteboardTableCellText } from '@/lib/action/whiteboard-tables';
 
 export const CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION = 'maic.visible-text.v1' as const;
@@ -10,6 +13,7 @@ export const CLIENT_EFFECT_LINE_NORMALIZATION_VERSION = 'maic.whiteboard-line.v1
 export const CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION = 'maic.whiteboard-latex.v1' as const;
 export const CLIENT_EFFECT_LATEX_RENDER_VERSION = 'maic.katex-html.v1' as const;
 export const CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION = 'maic.whiteboard-table.v1' as const;
+export const CLIENT_EFFECT_CHART_NORMALIZATION_VERSION = 'maic.whiteboard-chart.v1' as const;
 export const CLIENT_EFFECT_ACK_HEADER = 'x-maic-effect-token';
 export const CLIENT_EFFECT_ACK_MAX_BYTES = 8 * 1024;
 
@@ -151,6 +155,29 @@ export interface WhiteboardTablePostcondition extends WhiteboardTableSpec {
   expectedTableDigest: string;
 }
 
+export interface WhiteboardChartBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface WhiteboardChartSpec {
+  chartType: ChartType;
+  data: ChartData;
+  bounds: WhiteboardChartBounds;
+  themeColors: string[];
+  rotate: 0;
+}
+
+export interface WhiteboardChartPostcondition extends WhiteboardChartSpec {
+  kind: 'whiteboard_chart_exists';
+  stableElementId: string;
+  elementType: 'chart';
+  normalizationVersion: typeof CLIENT_EFFECT_CHART_NORMALIZATION_VERSION;
+  expectedChartDigest: string;
+}
+
 interface ClientEffectRequestBase extends ToolExecutionEnvelope {
   kind: 'client_effect';
   target: ClientEffectTarget;
@@ -182,12 +209,18 @@ export type WhiteboardTableClientEffectRequest = ClientEffectRequestBase & {
   postcondition: WhiteboardTablePostcondition;
 };
 
+export type WhiteboardChartClientEffectRequest = ClientEffectRequestBase & {
+  toolName: 'wb_draw_chart';
+  postcondition: WhiteboardChartPostcondition;
+};
+
 export type ClientEffectRequest =
   | WhiteboardTextClientEffectRequest
   | WhiteboardShapeClientEffectRequest
   | WhiteboardLineClientEffectRequest
   | WhiteboardLatexClientEffectRequest
-  | WhiteboardTableClientEffectRequest;
+  | WhiteboardTableClientEffectRequest
+  | WhiteboardChartClientEffectRequest;
 
 export interface ClientEffectDelivery {
   request: ClientEffectRequest;
@@ -257,6 +290,13 @@ export type ClientEffectAck =
             elementType: 'table';
             normalizationVersion: typeof CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION;
             observedTableDigest: string;
+            matchingElementCount: 1;
+          }
+        | {
+            stableElementId: string;
+            elementType: 'chart';
+            normalizationVersion: typeof CLIENT_EFFECT_CHART_NORMALIZATION_VERSION;
+            observedChartDigest: string;
             matchingElementCount: 1;
           };
     })
@@ -793,6 +833,284 @@ export function whiteboardTableSpecsEqual(
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+const WHITEBOARD_CHART_MAX_RAW_BYTES = 16 * 1024;
+const WHITEBOARD_CHART_MAX_TEXT_CHARACTERS = 80;
+const WHITEBOARD_CHART_MAX_ABSOLUTE_VALUE = 1_000_000_000_000;
+const WHITEBOARD_CHART_MAX_THEME_COLORS = 10;
+const WHITEBOARD_CHART_CARTESIAN_TYPES = new Set<ChartType>(['bar', 'column', 'line', 'area']);
+const WHITEBOARD_CHART_HEX_COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+const WHITEBOARD_CHART_CSS_NUMBER = String.raw`[+-]?(?:\d+(?:\.\d+)?|\.\d+)`;
+const WHITEBOARD_CHART_RGB_CHANNEL = `${WHITEBOARD_CHART_CSS_NUMBER}%?`;
+const WHITEBOARD_CHART_ALPHA = WHITEBOARD_CHART_CSS_NUMBER;
+const WHITEBOARD_CHART_HUE = WHITEBOARD_CHART_CSS_NUMBER;
+const WHITEBOARD_CHART_PERCENTAGE = `${WHITEBOARD_CHART_CSS_NUMBER}%`;
+const WHITEBOARD_CHART_RGB_COLOR = new RegExp(
+  `^rgb\\(\\s*${WHITEBOARD_CHART_RGB_CHANNEL}\\s*,\\s*${WHITEBOARD_CHART_RGB_CHANNEL}\\s*,\\s*${WHITEBOARD_CHART_RGB_CHANNEL}\\s*\\)$`,
+  'i',
+);
+const WHITEBOARD_CHART_RGBA_COLOR = new RegExp(
+  `^rgba\\(\\s*${WHITEBOARD_CHART_RGB_CHANNEL}\\s*,\\s*${WHITEBOARD_CHART_RGB_CHANNEL}\\s*,\\s*${WHITEBOARD_CHART_RGB_CHANNEL}\\s*,\\s*${WHITEBOARD_CHART_ALPHA}\\s*\\)$`,
+  'i',
+);
+const WHITEBOARD_CHART_HSL_COLOR = new RegExp(
+  `^hsl\\(\\s*${WHITEBOARD_CHART_HUE}\\s*,\\s*${WHITEBOARD_CHART_PERCENTAGE}\\s*,\\s*${WHITEBOARD_CHART_PERCENTAGE}\\s*\\)$`,
+  'i',
+);
+const WHITEBOARD_CHART_HSLA_COLOR = new RegExp(
+  `^hsla\\(\\s*${WHITEBOARD_CHART_HUE}\\s*,\\s*${WHITEBOARD_CHART_PERCENTAGE}\\s*,\\s*${WHITEBOARD_CHART_PERCENTAGE}\\s*,\\s*${WHITEBOARD_CHART_ALPHA}\\s*\\)$`,
+  'i',
+);
+const WHITEBOARD_CHART_TYPES = new Set<ChartType>([
+  ...WHITEBOARD_CHART_CARTESIAN_TYPES,
+  'pie',
+  'ring',
+  'radar',
+  'scatter',
+]);
+
+function normalizeWhiteboardChartText(value: unknown): string {
+  if (typeof value !== 'string' || value.length > WHITEBOARD_CHART_MAX_TEXT_CHARACTERS) {
+    throw new Error('CLIENT_EFFECT_CHART_TEXT_INVALID');
+  }
+  const normalized = value
+    .replace(/\r\n?/g, '\n')
+    .replace(/\u00a0/g, ' ')
+    .normalize('NFC')
+    .trim();
+  if (!normalized || /[\u0000-\u001f\u007f]/.test(normalized)) {
+    throw new Error('CLIENT_EFFECT_CHART_TEXT_INVALID');
+  }
+  return normalized;
+}
+
+function normalizeWhiteboardChartValue(value: unknown): number {
+  if (
+    typeof value !== 'number' ||
+    !Number.isFinite(value) ||
+    Math.abs(value) > WHITEBOARD_CHART_MAX_ABSOLUTE_VALUE
+  ) {
+    throw new Error('CLIENT_EFFECT_CHART_VALUE_INVALID');
+  }
+  return canonicalNumber(value);
+}
+
+function normalizeWhiteboardChartColor(value: unknown): string {
+  if (typeof value !== 'string' || value.length > 64) {
+    throw new Error('CLIENT_EFFECT_CHART_THEME_INVALID');
+  }
+  const normalized = value.trim();
+  const lower = normalized.toLowerCase();
+  const isNamedColor =
+    lower === 'transparent' || Object.prototype.hasOwnProperty.call(tinycolor.names, lower);
+  const hasStrictRendererSyntax =
+    WHITEBOARD_CHART_HEX_COLOR.test(normalized) ||
+    isNamedColor ||
+    WHITEBOARD_CHART_RGB_COLOR.test(normalized) ||
+    WHITEBOARD_CHART_RGBA_COLOR.test(normalized) ||
+    WHITEBOARD_CHART_HSL_COLOR.test(normalized) ||
+    WHITEBOARD_CHART_HSLA_COLOR.test(normalized);
+  const parsed = tinycolor(normalized);
+  if (
+    !normalized ||
+    /[\u0000-\u001f\u007f]/.test(normalized) ||
+    !hasStrictRendererSyntax ||
+    !parsed.isValid()
+  ) {
+    throw new Error('CLIENT_EFFECT_CHART_THEME_INVALID');
+  }
+  const alpha = parsed.getAlpha();
+  if (alpha === 1) return parsed.toHexString();
+  const { r, g, b } = parsed.toRgb();
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+export function normalizeWhiteboardChartV1(input: {
+  chartType: unknown;
+  x: unknown;
+  y: unknown;
+  width: unknown;
+  height: unknown;
+  data: unknown;
+  themeColors?: unknown;
+}): WhiteboardChartSpec {
+  let rawPayload: string;
+  try {
+    rawPayload = JSON.stringify({
+      chartType: input.chartType,
+      x: input.x,
+      y: input.y,
+      width: input.width,
+      height: input.height,
+      data: input.data,
+      ...(input.themeColors !== undefined ? { themeColors: input.themeColors } : {}),
+    });
+  } catch {
+    throw new Error('CLIENT_EFFECT_CHART_PAYLOAD_INVALID');
+  }
+  if (
+    new TextEncoder().encode(rawPayload).byteLength > WHITEBOARD_CHART_MAX_RAW_BYTES ||
+    typeof input.chartType !== 'string' ||
+    !WHITEBOARD_CHART_TYPES.has(input.chartType as ChartType)
+  ) {
+    throw new Error('CLIENT_EFFECT_CHART_PAYLOAD_INVALID');
+  }
+
+  const { x, y, width, height } = input;
+  if (
+    typeof x !== 'number' ||
+    !Number.isFinite(x) ||
+    typeof y !== 'number' ||
+    !Number.isFinite(y) ||
+    typeof width !== 'number' ||
+    !Number.isFinite(width) ||
+    typeof height !== 'number' ||
+    !Number.isFinite(height)
+  ) {
+    throw new Error('CLIENT_EFFECT_CHART_INPUT_INVALID');
+  }
+  const bounds = {
+    x: canonicalNumber(x),
+    y: canonicalNumber(y),
+    width: canonicalNumber(width),
+    height: canonicalNumber(height),
+  };
+  if (
+    bounds.x < 0 ||
+    bounds.y < 0 ||
+    bounds.width <= 0 ||
+    bounds.height <= 0 ||
+    bounds.x + bounds.width > 1000 ||
+    bounds.y + bounds.height > 563
+  ) {
+    throw new Error('CLIENT_EFFECT_CHART_BOUNDS_INVALID');
+  }
+
+  if (!input.data || typeof input.data !== 'object' || Array.isArray(input.data)) {
+    throw new Error('CLIENT_EFFECT_CHART_DATA_INVALID');
+  }
+  const rawData = input.data as Record<string, unknown>;
+  if (
+    !hasExactKeys(rawData, ['labels', 'legends', 'series']) ||
+    !Array.isArray(rawData.labels) ||
+    !Array.isArray(rawData.legends) ||
+    !Array.isArray(rawData.series)
+  ) {
+    throw new Error('CLIENT_EFFECT_CHART_DATA_INVALID');
+  }
+  const labels = rawData.labels.map(normalizeWhiteboardChartText);
+  const legends = rawData.legends.map(normalizeWhiteboardChartText);
+  const series = rawData.series.map((row) => {
+    if (!Array.isArray(row)) throw new Error('CLIENT_EFFECT_CHART_DATA_INVALID');
+    return row.map(normalizeWhiteboardChartValue);
+  });
+  const chartType = input.chartType as ChartType;
+
+  if (WHITEBOARD_CHART_CARTESIAN_TYPES.has(chartType)) {
+    if (
+      labels.length < 1 ||
+      labels.length > 24 ||
+      legends.length < 1 ||
+      legends.length > 8 ||
+      series.length !== legends.length ||
+      series.some((row) => row.length !== labels.length)
+    ) {
+      throw new Error('CLIENT_EFFECT_CHART_DIMENSIONS_INVALID');
+    }
+  } else if (chartType === 'radar') {
+    if (
+      labels.length < 3 ||
+      labels.length > 12 ||
+      legends.length < 1 ||
+      legends.length > 8 ||
+      series.length !== legends.length ||
+      series.some((row) => row.length !== labels.length)
+    ) {
+      throw new Error('CLIENT_EFFECT_CHART_DIMENSIONS_INVALID');
+    }
+  } else if (chartType === 'pie' || chartType === 'ring') {
+    if (
+      labels.length < 1 ||
+      labels.length > 16 ||
+      legends.length !== 1 ||
+      series.length !== 1 ||
+      series[0].length !== labels.length
+    ) {
+      throw new Error('CLIENT_EFFECT_CHART_DIMENSIONS_INVALID');
+    }
+    if (series[0].some((value) => value < 0) || !series[0].some((value) => value > 0)) {
+      throw new Error('CLIENT_EFFECT_CHART_VALUE_INVALID');
+    }
+  } else if (
+    labels.length < 1 ||
+    labels.length > 64 ||
+    legends.length !== 2 ||
+    series.length !== 2 ||
+    series[0].length !== labels.length ||
+    series[1].length !== labels.length
+  ) {
+    throw new Error('CLIENT_EFFECT_CHART_DIMENSIONS_INVALID');
+  }
+
+  let themeColors: string[];
+  if (input.themeColors === undefined) {
+    themeColors = [...DEFAULT_WHITEBOARD_CHART_THEME_COLORS];
+  } else {
+    if (
+      !Array.isArray(input.themeColors) ||
+      input.themeColors.length < 1 ||
+      input.themeColors.length > WHITEBOARD_CHART_MAX_THEME_COLORS
+    ) {
+      throw new Error('CLIENT_EFFECT_CHART_THEME_INVALID');
+    }
+    themeColors = input.themeColors.map(normalizeWhiteboardChartColor);
+  }
+
+  return {
+    chartType,
+    data: { labels, legends, series },
+    bounds,
+    themeColors,
+    rotate: 0,
+  };
+}
+
+export function assertWhiteboardChartSpecV1(input: WhiteboardChartSpec): WhiteboardChartSpec {
+  if (!input || typeof input !== 'object' || input.rotate !== 0 || !input.bounds) {
+    throw new Error('CLIENT_EFFECT_CHART_SPEC_INVALID');
+  }
+  try {
+    return normalizeWhiteboardChartV1({
+      chartType: input.chartType,
+      x: input.bounds.x,
+      y: input.bounds.y,
+      width: input.bounds.width,
+      height: input.bounds.height,
+      data: input.data,
+      themeColors: input.themeColors,
+    });
+  } catch {
+    throw new Error('CLIENT_EFFECT_CHART_SPEC_INVALID');
+  }
+}
+
+export async function digestWhiteboardChartV1(input: WhiteboardChartSpec): Promise<string> {
+  const canonical = assertWhiteboardChartSpecV1(input);
+  const bytes = new TextEncoder().encode(
+    `${CLIENT_EFFECT_CHART_NORMALIZATION_VERSION}\n${JSON.stringify(canonical)}`,
+  );
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  return `sha256:${Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('')}`;
+}
+
+export function whiteboardChartSpecsEqual(
+  left: WhiteboardChartSpec,
+  right: WhiteboardChartSpec,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
@@ -1004,6 +1322,23 @@ export function isClientEffectAck(value: unknown): value is ClientEffectAck {
           isNonEmptyString(postcondition.stableElementId) &&
           postcondition.normalizationVersion === CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION &&
           isNonEmptyString(postcondition.observedTableDigest) &&
+          postcondition.matchingElementCount === 1
+        );
+      }
+      if (
+        postcondition.elementType === 'chart' &&
+        hasExactKeys(postcondition, [
+          'stableElementId',
+          'elementType',
+          'normalizationVersion',
+          'observedChartDigest',
+          'matchingElementCount',
+        ])
+      ) {
+        return (
+          isNonEmptyString(postcondition.stableElementId) &&
+          postcondition.normalizationVersion === CLIENT_EFFECT_CHART_NORMALIZATION_VERSION &&
+          isNonEmptyString(postcondition.observedChartDigest) &&
           postcondition.matchingElementCount === 1
         );
       }

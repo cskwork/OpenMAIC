@@ -257,6 +257,7 @@ export function buildNativeWebChildPrompt(
     enableWhiteboardLine?: boolean;
     enableWhiteboardLatex?: boolean;
     enableWhiteboardTable?: boolean;
+    enableWhiteboardChart?: boolean;
   } = {
     enableWebSearch: true,
   },
@@ -285,7 +286,8 @@ export function buildNativeWebChildPrompt(
     options.enableWhiteboardShape ||
     options.enableWhiteboardLine ||
     options.enableWhiteboardLatex ||
-    options.enableWhiteboardTable
+    options.enableWhiteboardTable ||
+    options.enableWhiteboardChart
       ? [
           '# Native Whiteboard',
           options.enableWhiteboardText
@@ -302,6 +304,9 @@ export function buildNativeWebChildPrompt(
             : '',
           options.enableWhiteboardTable
             ? 'You may call `wb_draw_table` to place one concise rectangular comparison table on the whiteboard.'
+            : '',
+          options.enableWhiteboardChart
+            ? 'You may call `wb_draw_chart` to place one bounded data chart on the whiteboard. Match labels, legends, and series exactly for the selected chart type.'
             : '',
           'The board uses a 1000 × 563 coordinate system. Keep every complete element within the visible board.',
           'Before calling it, say briefly what you are about to show. Wait for the tool result, then continue explaining in this same turn.',
@@ -337,6 +342,7 @@ export function buildNativeWebChildTurnPrompt(
     enableWhiteboardLine?: boolean;
     enableWhiteboardLatex?: boolean;
     enableWhiteboardTable?: boolean;
+    enableWhiteboardChart?: boolean;
   } = {
     enableWebSearch: true,
   },
@@ -375,6 +381,9 @@ export function buildNativeWebChildTurnPrompt(
       : '',
     options.enableWhiteboardTable
       ? 'Use `wb_draw_table` only when a compact comparison genuinely helps. Keep the table rectangular and concise, speak before the tool call, and continue after its tool result.'
+      : '',
+    options.enableWhiteboardChart
+      ? 'Use `wb_draw_chart` only when bounded numeric data genuinely benefits from a chart. Keep every dimension aligned for the selected chart type, speak before the tool call, and continue after its tool result.'
       : '',
     'After the tool result, provide the final classroom response in this same Child run.',
   ].join('\n');

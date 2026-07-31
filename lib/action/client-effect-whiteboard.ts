@@ -1,27 +1,33 @@
 import { createStageAPI, type StageStore } from '@/lib/api/stage-api';
 import {
+  CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_RENDER_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  assertWhiteboardChartSpecV1,
   assertWhiteboardTableSpecV1,
+  digestWhiteboardChartV1,
   digestWhiteboardLatexHtmlV1,
   digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
   digestWhiteboardShapeV1,
   digestWhiteboardTableV1,
   digestVisibleTextV1,
+  normalizeWhiteboardChartV1,
   normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
   normalizeWhiteboardTableV1,
   normalizeVisibleTextV1,
+  whiteboardChartSpecsEqual,
   whiteboardTableSpecsEqual,
   type AcceptedTargetBinding,
   type ClientEffectTarget,
   type WhiteboardLatexSpec,
+  type WhiteboardChartSpec,
   type WhiteboardLineMarker,
   type WhiteboardLineSpec,
   type WhiteboardLineStyle,
@@ -30,7 +36,16 @@ import {
   type WhiteboardTableOutline,
   type WhiteboardTableSpec,
 } from '@/lib/agent/runtime/client-effect-contract';
-import type { PPTElement, PPTLatexElement, PPTLineElement, PPTTableElement } from '@openmaic/dsl';
+import type {
+  ChartData,
+  ChartType,
+  PPTChartElement,
+  PPTElement,
+  PPTLatexElement,
+  PPTLineElement,
+  PPTTableElement,
+} from '@openmaic/dsl';
+import { createWhiteboardChartElement } from './whiteboard-charts';
 import {
   createWhiteboardLineElement,
   readAbsoluteWhiteboardLineEndpoints,
@@ -124,6 +139,12 @@ type NativeLatexElement = PPTLatexElement & {
 type NativeTableElement = PPTTableElement & {
   clientEffectExecutionId?: string;
   clientEffectTableDigest?: string;
+  clientEffectNormalizationVersion?: string;
+};
+
+type NativeChartElement = PPTChartElement & {
+  clientEffectExecutionId?: string;
+  clientEffectChartDigest?: string;
   clientEffectNormalizationVersion?: string;
 };
 
@@ -1240,6 +1261,206 @@ export async function executeNativeWhiteboardTableEffect(opts: {
     stableElementId: opts.input.stableElementId,
     expectedTable: requestTable,
     expectedTableDigest: opts.expectedTableDigest,
+    signal: opts.signal,
+  });
+  throwIfAborted(opts.signal);
+  return { replayed: false, postcondition };
+}
+
+export interface NativeWbDrawChartInput {
+  executionId: string;
+  stableElementId: string;
+  chartType: ChartType;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  data: ChartData;
+  themeColors?: string[];
+}
+
+export interface NativeWhiteboardChartPostconditionResult {
+  stableElementId: string;
+  elementType: 'chart';
+  normalizationVersion: typeof CLIENT_EFFECT_CHART_NORMALIZATION_VERSION;
+  observedChartDigest: string;
+  matchingElementCount: 1;
+}
+
+function chartSpecFromElement(element: NativeChartElement): WhiteboardChartSpec {
+  if (
+    element.type !== 'chart' ||
+    typeof element.left !== 'number' ||
+    typeof element.top !== 'number' ||
+    typeof element.width !== 'number' ||
+    typeof element.height !== 'number' ||
+    element.rotate !== 0 ||
+    element.fill !== undefined ||
+    element.options !== undefined ||
+    element.outline !== undefined ||
+    element.textColor !== undefined ||
+    element.lineColor !== undefined
+  ) {
+    throw new Error('CLIENT_EFFECT_CHART_ELEMENT_MISMATCH');
+  }
+  return assertWhiteboardChartSpecV1({
+    chartType: element.chartType,
+    data: element.data,
+    bounds: {
+      x: element.left,
+      y: element.top,
+      width: element.width,
+      height: element.height,
+    },
+    themeColors: element.themeColors,
+    rotate: 0,
+  });
+}
+
+export async function verifyNativeWhiteboardChartEffect(opts: {
+  store: StageStore;
+  targetBinding: AcceptedTargetBinding;
+  executionId: string;
+  stableElementId: string;
+  expectedChart: WhiteboardChartSpec;
+  expectedChartDigest: string;
+  signal?: AbortSignal;
+}): Promise<NativeWhiteboardChartPostconditionResult> {
+  const readVerifiedElement = (): { element: NativeChartElement; spec: WhiteboardChartSpec } => {
+    throwIfAborted(opts.signal);
+    assertStageAndScene(opts.store, opts.targetBinding);
+    const elementsResult = createStageAPI(opts.store).whiteboard.listElements(
+      opts.targetBinding.whiteboardId,
+    );
+    if (!elementsResult.success || !elementsResult.data) {
+      throw new Error(elementsResult.error || 'CLIENT_EFFECT_WHITEBOARD_NOT_FOUND');
+    }
+    const matches = elementsResult.data.filter((element) => element.id === opts.stableElementId);
+    if (matches.length !== 1) {
+      throw new Error(
+        matches.length === 0
+          ? 'CLIENT_EFFECT_ELEMENT_NOT_FOUND'
+          : 'CLIENT_EFFECT_DUPLICATE_ELEMENT_ID',
+      );
+    }
+    const element = matches[0] as NativeChartElement;
+    if (
+      element.clientEffectExecutionId !== opts.executionId ||
+      element.clientEffectNormalizationVersion !== CLIENT_EFFECT_CHART_NORMALIZATION_VERSION
+    ) {
+      throw new Error('CLIENT_EFFECT_ELEMENT_OWNERSHIP_MISMATCH');
+    }
+    return { element, spec: chartSpecFromElement(element) };
+  };
+
+  const beforeDigest = readVerifiedElement();
+  const observedChartDigest = await digestWhiteboardChartV1(beforeDigest.spec);
+  throwIfAborted(opts.signal);
+  const afterDigest = readVerifiedElement();
+  if (
+    !whiteboardChartSpecsEqual(beforeDigest.spec, afterDigest.spec) ||
+    !whiteboardChartSpecsEqual(beforeDigest.spec, opts.expectedChart) ||
+    observedChartDigest !== opts.expectedChartDigest ||
+    afterDigest.element.clientEffectChartDigest !== opts.expectedChartDigest
+  ) {
+    throw new Error('CLIENT_EFFECT_CHART_MISMATCH');
+  }
+
+  return {
+    stableElementId: opts.stableElementId,
+    elementType: 'chart',
+    normalizationVersion: CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+    observedChartDigest,
+    matchingElementCount: 1,
+  };
+}
+
+export async function executeNativeWhiteboardChartEffect(opts: {
+  store: StageStore;
+  targetBinding: AcceptedTargetBinding;
+  input: NativeWbDrawChartInput;
+  expectedChart: WhiteboardChartSpec;
+  expectedChartDigest: string;
+  signal?: AbortSignal;
+}): Promise<NativeWhiteboardExecutionResult<NativeWhiteboardChartPostconditionResult>> {
+  throwIfAborted(opts.signal);
+  if (
+    typeof opts.input.executionId !== 'string' ||
+    !opts.input.executionId.trim() ||
+    typeof opts.input.stableElementId !== 'string' ||
+    !opts.input.stableElementId.trim()
+  ) {
+    throw new Error('CLIENT_EFFECT_INPUT_INVALID');
+  }
+  const inputChart = normalizeWhiteboardChartV1(opts.input);
+  const requestChart = assertWhiteboardChartSpecV1(opts.expectedChart);
+  const inputDigest = await digestWhiteboardChartV1(inputChart);
+  throwIfAborted(opts.signal);
+  if (
+    !whiteboardChartSpecsEqual(inputChart, requestChart) ||
+    inputDigest !== opts.expectedChartDigest ||
+    (await digestWhiteboardChartV1(requestChart)) !== opts.expectedChartDigest
+  ) {
+    throw new Error('CLIENT_EFFECT_REQUEST_CHART_MISMATCH');
+  }
+
+  assertStageAndScene(opts.store, opts.targetBinding);
+  const whiteboardApi = createStageAPI(opts.store).whiteboard;
+  const elementsResult = whiteboardApi.listElements(opts.targetBinding.whiteboardId);
+  if (!elementsResult.success || !elementsResult.data) {
+    throw new Error(elementsResult.error || 'CLIENT_EFFECT_WHITEBOARD_NOT_FOUND');
+  }
+  const existing = elementsResult.data.filter(
+    (element) => element.id === opts.input.stableElementId,
+  );
+  if (existing.length > 1) throw new Error('CLIENT_EFFECT_DUPLICATE_ELEMENT_ID');
+  if (existing.length === 1) {
+    const postcondition = await verifyNativeWhiteboardChartEffect({
+      store: opts.store,
+      targetBinding: opts.targetBinding,
+      executionId: opts.input.executionId,
+      stableElementId: opts.input.stableElementId,
+      expectedChart: requestChart,
+      expectedChartDigest: opts.expectedChartDigest,
+      signal: opts.signal,
+    });
+    throwIfAborted(opts.signal);
+    return { replayed: true, postcondition };
+  }
+
+  throwIfAborted(opts.signal);
+  assertStageAndScene(opts.store, opts.targetBinding);
+  const element = createWhiteboardChartElement({
+    id: opts.input.stableElementId,
+    chartType: inputChart.chartType,
+    x: inputChart.bounds.x,
+    y: inputChart.bounds.y,
+    width: inputChart.bounds.width,
+    height: inputChart.bounds.height,
+    data: inputChart.data,
+    themeColors: inputChart.themeColors,
+  });
+  const addResult = whiteboardApi.addElement(
+    {
+      ...element,
+      clientEffectExecutionId: opts.input.executionId,
+      clientEffectChartDigest: opts.expectedChartDigest,
+      clientEffectNormalizationVersion: CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+    } as NativeChartElement,
+    opts.targetBinding.whiteboardId,
+  );
+  if (!addResult.success) {
+    throw new Error(addResult.error || 'CLIENT_EFFECT_WHITEBOARD_MUTATION_FAILED');
+  }
+  throwIfAborted(opts.signal);
+
+  const postcondition = await verifyNativeWhiteboardChartEffect({
+    store: opts.store,
+    targetBinding: opts.targetBinding,
+    executionId: opts.input.executionId,
+    stableElementId: opts.input.stableElementId,
+    expectedChart: requestChart,
+    expectedChartDigest: opts.expectedChartDigest,
     signal: opts.signal,
   });
   throwIfAborted(opts.signal);

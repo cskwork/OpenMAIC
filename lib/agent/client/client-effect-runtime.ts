@@ -9,10 +9,12 @@ import {
   type ClientEffectDelivery,
   type ClientEffectStatus,
   type ClientEffectTerminalStatus,
+  whiteboardChartSpecsEqual,
   whiteboardTableSpecsEqual,
 } from '@/lib/agent/runtime/client-effect-contract';
 import { TOOL_EXECUTION_PROTOCOL_VERSION } from '@/lib/agent/runtime/native-child-contract';
 import {
+  executeNativeWhiteboardChartEffect,
   executeNativeWhiteboardLatexEffect,
   executeNativeWhiteboardLineEffect,
   executeNativeWhiteboardShapeEffect,
@@ -142,6 +144,27 @@ function postconditionsEqual(
           ...(right.theme ? { theme: right.theme } : {}),
           colWidths: right.colWidths,
           cellMinHeight: right.cellMinHeight,
+        },
+      )
+    );
+  }
+  if (left.kind === 'whiteboard_chart_exists' && right.kind === 'whiteboard_chart_exists') {
+    return (
+      left.expectedChartDigest === right.expectedChartDigest &&
+      whiteboardChartSpecsEqual(
+        {
+          chartType: left.chartType,
+          data: left.data,
+          bounds: left.bounds,
+          themeColors: left.themeColors,
+          rotate: left.rotate,
+        },
+        {
+          chartType: right.chartType,
+          data: right.data,
+          bounds: right.bounds,
+          themeColors: right.themeColors,
+          rotate: right.rotate,
         },
       )
     );
@@ -415,6 +438,34 @@ export class BrowserClientEffectRuntime {
               cellMinHeight: request.postcondition.cellMinHeight,
             },
             expectedTableDigest: request.postcondition.expectedTableDigest,
+            signal: executionSignal,
+          });
+          break;
+        case 'wb_draw_chart':
+          result = await executeNativeWhiteboardChartEffect({
+            store: this.opts.store,
+            targetBinding: binding,
+            input: {
+              executionId: request.executionId,
+              stableElementId: request.postcondition.stableElementId,
+              chartType: String(params.chartType) as typeof request.postcondition.chartType,
+              x: Number(params.x),
+              y: Number(params.y),
+              width: Number(params.width),
+              height: Number(params.height),
+              data: params.data as typeof request.postcondition.data,
+              ...(params.themeColors !== undefined
+                ? { themeColors: params.themeColors as string[] }
+                : {}),
+            },
+            expectedChart: {
+              chartType: request.postcondition.chartType,
+              data: request.postcondition.data,
+              bounds: request.postcondition.bounds,
+              themeColors: request.postcondition.themeColors,
+              rotate: request.postcondition.rotate,
+            },
+            expectedChartDigest: request.postcondition.expectedChartDigest,
             signal: executionSignal,
           });
           break;

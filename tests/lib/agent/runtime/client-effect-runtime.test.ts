@@ -2,17 +2,20 @@ import { describe, expect, it, vi } from 'vitest';
 import type { StageStore } from '@/lib/api/stage-api';
 import { BrowserClientEffectRuntime } from '@/lib/agent/client/client-effect-runtime';
 import {
+  CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  digestWhiteboardChartV1,
   digestWhiteboardLatexHtmlV1,
   digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
   digestWhiteboardShapeV1,
   digestWhiteboardTableV1,
   digestVisibleTextV1,
+  normalizeWhiteboardChartV1,
   normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
@@ -302,6 +305,64 @@ async function tableDelivery(): Promise<ClientEffectDelivery> {
         normalizationVersion: CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
         expectedTableDigest: await digestWhiteboardTableV1(table),
         ...table,
+      },
+    },
+  };
+}
+
+async function chartDelivery(): Promise<ClientEffectDelivery> {
+  const args = {
+    chartType: 'line' as const,
+    x: 80,
+    y: 60,
+    width: 600,
+    height: 300,
+    data: {
+      labels: ['一月', '二月'],
+      legends: ['甲', '乙'],
+      series: [
+        [1, 2],
+        [3, 4],
+      ],
+    },
+    themeColors: ['#4472c4', '#ed7d31'],
+  };
+  const chart = normalizeWhiteboardChartV1(args);
+  return {
+    acknowledgementToken: 'chart-capability',
+    request: {
+      protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
+      kind: 'client_effect',
+      traceId: 'trace-chart-1',
+      runId: 'run-chart-1',
+      agentInvocationId: 'message-chart-1',
+      agentId: 'teacher-1',
+      depth: 1,
+      sequence: 1,
+      toolCallId: 'tool-call-chart-1',
+      executionId: 'execution-chart-1',
+      idempotencyKey: 'run-chart-1:message-chart-1:tool-call-chart-1',
+      toolName: 'wb_draw_chart',
+      args,
+      argsDigest: 'sha256:chart-args',
+      issuedAt: 1,
+      deadlineAt: Date.now() + 10_000,
+      attempt: 1,
+      target: {
+        requestId: 'request-1',
+        sessionId: 'session-1',
+        stageId: 'stage-1',
+        sceneId: 'scene-1',
+        messageId: 'message-chart-1',
+      },
+      activeEffectBudgetMs: 2_000,
+      postcondition: {
+        kind: 'whiteboard_chart_exists',
+        stableElementId: 'chart-element-1',
+        elementType: 'chart',
+        normalizationVersion: CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+        expectedChartDigest: await digestWhiteboardChartV1(chart),
+        ...chart,
       },
     },
   };
@@ -600,6 +661,56 @@ describe('BrowserClientEffectRuntime', () => {
       },
     });
     expect(JSON.stringify(committed)).not.toContain('决定方向');
+    expect(new TextEncoder().encode(JSON.stringify(committed)).byteLength).toBeLessThan(8 * 1024);
+    expect(
+      store.getState().stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements),
+    ).toHaveLength(1);
+  });
+
+  it('executes one chart and ACKs only its verified bounded digest result', async () => {
+    const store = createStore();
+    const acknowledgements: ClientEffectAck[] = [];
+    const runtime = new BrowserClientEffectRuntime({
+      sessionId: 'session-1',
+      requestId: 'request-1',
+      store,
+      fetchAck: async (_url, init) => {
+        const ack = JSON.parse(String(init?.body)) as ClientEffectAck;
+        acknowledgements.push(ack);
+        return new Response(JSON.stringify({ success: true, state: { status: ack.status } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+      waitForPresentation: async () => {},
+      ensureWhiteboardVisible: async () => {},
+    });
+    const effect = await chartDelivery();
+
+    const first = runtime.execute(effect, new AbortController().signal);
+    const duplicate = runtime.execute(effect, new AbortController().signal);
+    await expect(first).resolves.toBe('effect_committed');
+    await expect(duplicate).resolves.toBe('effect_committed');
+    if (effect.request.postcondition.kind !== 'whiteboard_chart_exists') {
+      throw new Error('Expected a chart delivery.');
+    }
+    expect(acknowledgements.map((ack) => ack.status)).toEqual([
+      'presentation_paused',
+      'presentation_resumed',
+      'accepted',
+      'effect_committed',
+    ]);
+    const committed = acknowledgements.at(-1);
+    expect(committed).toMatchObject({
+      status: 'effect_committed',
+      postcondition: {
+        stableElementId: effect.request.postcondition.stableElementId,
+        elementType: 'chart',
+        observedChartDigest: effect.request.postcondition.expectedChartDigest,
+        matchingElementCount: 1,
+      },
+    });
+    expect(JSON.stringify(committed)).not.toContain('一月');
     expect(new TextEncoder().encode(JSON.stringify(committed)).byteLength).toBeLessThan(8 * 1024);
     expect(
       store.getState().stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements),

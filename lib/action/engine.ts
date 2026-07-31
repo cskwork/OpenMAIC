@@ -50,6 +50,7 @@ import {
   wbClearMs,
 } from '@/lib/choreography';
 import { createLogger } from '@/lib/logger';
+import { createWhiteboardChartElement } from './whiteboard-charts';
 import { createWhiteboardLineElement } from './whiteboard-lines';
 import { resolveLegacyWhiteboardShapePath } from './whiteboard-shapes';
 import { createWhiteboardTableElement } from './whiteboard-tables';
@@ -472,19 +473,16 @@ export class ActionEngine {
     if (!wb.success || !wb.data) return;
 
     this.stageAPI.whiteboard.addElement(
-      {
+      createWhiteboardChartElement({
         id: action.elementId || '',
-        type: 'chart',
-        left: action.x,
-        top: action.y,
+        chartType: action.chartType,
+        x: action.x,
+        y: action.y,
         width: action.width,
         height: action.height,
-        rotate: 0,
-        chartType: action.chartType,
         data: action.data,
-        themeColors: action.themeColors ?? ['#5b9bd5', '#ed7d31', '#a5a5a5', '#ffc000', '#4472c4'],
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
+        themeColors: action.themeColors,
+      }),
       wb.data.id,
     );
 
