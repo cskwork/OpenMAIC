@@ -203,6 +203,74 @@ function mockDirectorWithAgentTurn(opts: { explicitlyCueUser: boolean; closeAfte
   });
 }
 
+function mockDirectorWithNativeAgentTurn(captured: { nativeChildBuilds: number }) {
+  mocks.buildAgent.mockImplementation((agentOpts: MockAgentOptions) => {
+    const isDirector = agentOpts.tools.some((tool) => tool.name === 'cue_user');
+    if (isDirector) {
+      return {
+        prompt: async () => {
+          const callAgent = agentOpts.tools.find((tool) => tool.name === 'call_agent');
+          const callAgentArgs = {
+            agentId: 'default-1',
+            instruction: 'Give one concise Native answer.',
+          };
+          const callAgentResult = await callAgent?.execute('native-call-1', callAgentArgs);
+          if (callAgent && callAgentResult) {
+            await agentOpts.afterToolCall?.({
+              toolCall: { name: callAgent.name },
+              args: callAgentArgs,
+              result: callAgentResult,
+              isError: false,
+            });
+          }
+        },
+        waitForIdle: async () => {},
+        subscribe: () => () => {},
+        state: { messages: [] },
+      };
+    }
+
+    if (agentOpts.afterToolCall) {
+      captured.nativeChildBuilds += 1;
+      return {
+        subscribe: () => () => {},
+        prompt: async () => {},
+        waitForIdle: async () => {},
+        abort: () => {},
+        state: {
+          messages: [
+            {
+              role: 'assistant',
+              content: [{ type: 'text', text: 'Native roofs answer.' }],
+              api: 'test',
+              provider: 'test',
+              model: 'deterministic',
+              usage: {
+                input: 1,
+                output: 1,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 2,
+                cost: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  total: 0,
+                },
+              },
+              stopReason: 'stop',
+              timestamp: 1,
+            },
+          ],
+        },
+      };
+    }
+
+    throw new Error('Legacy Child was built while Native runtime mode was selected.');
+  });
+}
+
 function mockDirectorWebEvidenceLifecycle(captured: {
   childPrompts: string[];
   callAgentResults: Array<Record<string, unknown>>;
@@ -682,6 +750,42 @@ describe('POST /api/chat/pi cue_user', () => {
           details: expect.objectContaining({
             runtimeMode: 'legacy',
             availableToolNames: [],
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('routes the server Native flag through call_agent and records Native mode in Director trace', async () => {
+    process.env[NATIVE_CHILD_RUNTIME_FLAG] = 'true';
+    const captured = { nativeChildBuilds: 0 };
+    mockDirectorWithNativeAgentTurn(captured);
+
+    const { POST } = await import('@/app/api/chat/pi/route');
+    const response = await POST(makeRequest(makeBody()));
+    const events = await readSseEvents(response);
+    const doneEvent = events.find((event) => event.type === 'done');
+    const streamSources = mocks.createCallLlmStreamFn.mock.calls.map(
+      ([options]) => (options as { source?: string }).source,
+    );
+
+    expect(response.status).toBe(200);
+    expect(captured.nativeChildBuilds).toBe(1);
+    expect(streamSources).toContain('pi-chat-native-child');
+    expect(streamSources).not.toContain('pi-chat-child');
+    expect(doneEvent?.data.directorToolTrace).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolName: 'call_agent',
+          isError: false,
+          details: expect.objectContaining({
+            runtimeMode: 'native',
+            text: 'Native roofs answer.',
+            availableToolNames: [],
+            unavailableAllowedToolNames: [],
+            nativeChildRun: expect.objectContaining({
+              status: 'completed',
+            }),
           }),
         }),
       ]),
