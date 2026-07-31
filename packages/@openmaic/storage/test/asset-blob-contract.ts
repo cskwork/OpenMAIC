@@ -72,5 +72,33 @@ export function runBlobStoreContract(
       await p.remove(key);
       expect(await p.resolve(key)).toBeNull();
     });
+
+    test('release reclaims cached snapshots without removing stored bytes', async () => {
+      const p = makeProvider();
+      const key = await p.put(blob('release me'));
+      const first = await p.resolve(key);
+      expect(first).not.toBeNull();
+
+      await p.release(key);
+
+      const second = await p.resolve(key);
+      expect(second).not.toBeNull();
+      expect(second).not.toBe(first);
+      expect(await readUrl(second!)).toEqual(bytes('release me'));
+      await p.close();
+    });
+
+    test('close is idempotent and every later operation fails loudly', async () => {
+      const p = makeProvider();
+      const key = await p.put(blob('close me'));
+      await p.resolve(key);
+
+      await expect(p.close()).resolves.toBeUndefined();
+      await expect(p.close()).resolves.toBeUndefined();
+      await expect(p.put(blob('later'))).rejects.toThrow(/closed/i);
+      await expect(p.resolve(key)).rejects.toThrow(/closed/i);
+      await expect(p.remove(key)).rejects.toThrow(/closed/i);
+      await expect(p.release(key)).rejects.toThrow(/closed/i);
+    });
   });
 }

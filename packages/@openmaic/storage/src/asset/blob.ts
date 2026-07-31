@@ -21,12 +21,16 @@ export type ContentHash = string & { readonly [contentHashBrand]: true };
  * `put` returns the key derived from the bytes and may return the same key for
  * repeated content. Function-typed properties keep the branded hash parameters
  * contravariant under `strictFunctionTypes`, so this internal store cannot be
- * substituted for the allocated-id DSL contract.
+ * substituted for the allocated-id DSL contract. Implementations own every
+ * object URL they mint: `release` reclaims one key's snapshots and `close`
+ * reclaims the whole instance.
  */
 export interface BlobStore {
   put: (data: BinaryBlob, meta?: AssetMeta) => Promise<ContentHash>;
   resolve: (key: ContentHash) => Promise<string | null>;
   remove: (key: ContentHash) => Promise<void>;
+  release: (key: ContentHash) => Promise<void>;
+  close: () => Promise<void>;
 }
 
 function toHex(buffer: ArrayBuffer): string {
@@ -65,7 +69,6 @@ interface CachedObjectUrl<Identity> {
 
 interface RetiredObjectUrl {
   promise: Promise<string | null>;
-  settled?: string | null;
 }
 
 /**
@@ -127,7 +130,7 @@ export class ObjectUrlCache<Identity> {
         throw error;
       },
     );
-    this.entries.set(ref, entry);
+    if (!this.closed) this.entries.set(ref, entry);
     return (await entry.promise)?.url ?? null;
   }
 
@@ -137,17 +140,12 @@ export class ObjectUrlCache<Identity> {
       urls = [];
       this.retired.set(ref, urls);
     }
-    const retired = {} as RetiredObjectUrl;
-    retired.promise = entry.promise.then(
-      (resolved) => {
-        const url = resolved?.url ?? null;
-        retired.settled = url;
-        return url;
-      },
-      () => null,
-    );
-    if (entry.settled !== undefined) retired.settled = entry.settled?.url ?? null;
-    urls.push(retired);
+    urls.push({
+      promise: entry.promise.then(
+        (resolved) => resolved?.url ?? null,
+        () => null,
+      ),
+    });
   }
 
   private retire(ref: AssetRef, entry: CachedObjectUrl<Identity>): void {
@@ -169,8 +167,9 @@ export class ObjectUrlCache<Identity> {
   /**
    * Retire a ref's current snapshot without revoking it.
    *
-   * A pending snapshot is parked in the retired set when it settles. Mutation
-   * never revokes a URL that a caller may hold.
+   * A pending snapshot is enrolled in the retired set immediately; its URL is
+   * filled in when it settles. Mutation never revokes a URL that a caller may
+   * hold.
    */
   async invalidate(ref: AssetRef): Promise<void> {
     const entry = this.entries.get(ref);
@@ -192,11 +191,12 @@ export class ObjectUrlCache<Identity> {
       if (entry.settled) URL.revokeObjectURL(entry.settled.url);
     }
     const retired = [...this.retired.values()].flat();
-    for (const url of retired) {
-      if (url.settled) URL.revokeObjectURL(url.settled);
-    }
     this.entries.clear();
     this.retired.clear();
-    await Promise.all([...pending, ...retired.map((url) => url.promise.catch(() => null))]);
+    const retiredUrls = await Promise.all(retired.map((url) => url.promise.catch(() => null)));
+    for (const url of retiredUrls) {
+      if (url) URL.revokeObjectURL(url);
+    }
+    await Promise.all(pending);
   }
 }

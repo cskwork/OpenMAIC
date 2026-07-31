@@ -30,14 +30,14 @@
  *
  * Object URLs are deliberately minted per asset id, not per content hash.
  * Sharing one URL across ids that name identical bytes would let a holder of
- * both ids discover byte equality by comparing the returned strings. The
- * accepted cost is that N such ids can retain N in-memory blobs/object URLs. A
+ * both ids discover byte equality by comparing the returned strings. Retention
+ * is bounded by the number of snapshots resolved: at most one current plus
+ * retired snapshots per ref, reclaimed by `release` for that id or `close`. A
  * returned URL is an immutable snapshot: it pins its full Blob in this
- * instance until `release` for that id or `close`. Mutations affect future
- * resolutions but never revoke an already-issued snapshot. Consequently every
- * distinct content identity this instance resolves stays pinned until explicit
- * reclamation; media-heavy applications should release snapshots they no
- * longer use or close the store.
+ * instance until that explicit reclamation. Mutations affect future
+ * resolutions but never revoke an already-issued snapshot; media-heavy
+ * applications should release snapshots they no longer use or close the
+ * store.
  *
  * Every `resolve` spends one IndexedDB round trip checking the registry entry,
  * and a warm URL is valid only while the entry still names the content hash

@@ -39,13 +39,20 @@ export class BrowserAssetProvider implements BlobStore {
   private readonly dbName: string;
   private dbPromise?: Promise<IDBDatabase>;
   private readonly urls = new ObjectUrlCache<ContentHash>((left, right) => left === right);
+  private closed = false;
+  private closePromise?: Promise<void>;
 
   constructor(options: BrowserAssetProviderOptions = {}) {
     this.idb = options.indexedDB ?? globalThis.indexedDB;
     this.dbName = options.dbName ?? 'maic-assets';
   }
 
+  private assertOpen(): void {
+    if (this.closed) throw new Error('BrowserAssetProvider is closed.');
+  }
+
   private openDb(): Promise<IDBDatabase> {
+    this.assertOpen();
     // Do NOT cache a rejected open: a transient failure (private-mode IDB, a
     // one-off VersionError) would otherwise brick the provider for the whole
     // session. Clear the memo on failure so the next call retries.
@@ -85,18 +92,20 @@ export class BrowserAssetProvider implements BlobStore {
   }
 
   put = async (data: BinaryBlob, meta?: AssetMeta): Promise<ContentHash> => {
+    this.assertOpen();
     const { contentHash, bytes } = await contentHashOf(data);
     const asset: StoredAsset = { bytes, contentType: meta?.contentType ?? data.type ?? '' };
     await this.tx('readwrite', (store) => store.put(asset, contentHash));
     // A re-put with the same bytes but different metadata (e.g. a corrected
     // contentType) overwrites the stored asset; retire the current object URL
     // for this key so future resolve() calls reflect the latest write. The old
-    // URL remains a live snapshot until owner-level cache reclamation.
+    // URL remains a live snapshot until release for this key or provider close.
     await this.urls.invalidate(contentHash);
     return contentHash;
   };
 
   resolve = async (ref: ContentHash): Promise<string | null> => {
+    this.assertOpen();
     return this.urls.resolve(ref, ref, () => this.readAsUrl(ref));
   };
 
@@ -114,7 +123,26 @@ export class BrowserAssetProvider implements BlobStore {
   }
 
   remove = async (ref: ContentHash): Promise<void> => {
+    this.assertOpen();
     await this.tx('readwrite', (store) => store.delete(ref));
     await this.urls.invalidate(ref);
+  };
+
+  release = async (ref: ContentHash): Promise<void> => {
+    this.assertOpen();
+    await this.urls.release(ref);
+  };
+
+  close = (): Promise<void> => {
+    if (this.closePromise) return this.closePromise;
+    this.closed = true;
+    const closeDb = this.dbPromise
+      ? this.dbPromise.then(
+          (db) => db.close(),
+          () => undefined,
+        )
+      : Promise.resolve();
+    this.closePromise = Promise.all([this.urls.close(), closeDb]).then(() => undefined);
+    return this.closePromise;
   };
 }

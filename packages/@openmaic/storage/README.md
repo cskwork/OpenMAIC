@@ -57,12 +57,11 @@ a browser.
   quota errors, storage estimates, and server billing or metering can disclose
   existence, so server deployments must budget them per principal. Object URLs
   are minted per id, not shared per `contentHash`: sharing would let a holder of
-  two ids learn that their bytes match by comparing URL strings. The accepted
-  cost is N in-memory blobs/URLs for N resolved ids over identical bytes. A
-  returned URL is an immutable snapshot: mutations affect future resolutions
-  but never revoke a URL already issued by this or another store instance.
-  Every distinct `(id, content hash, MIME)` snapshot an instance has resolved
-  stays pinned until `release(id)` or `close()`. Application code that
+  two ids learn that their bytes match by comparing URL strings. Retention is
+  bounded by the number of snapshots resolved: at most one current plus retired
+  snapshots per ref, reclaimed by `release(id)` or `close()`. A returned URL is
+  an immutable snapshot: mutations affect future resolutions but never revoke
+  a URL already issued by this or another store instance. Application code that
   constructs a concrete `BrowserAssetStore` owns that lifecycle (the narrower
   DSL `StorageProvider` seam exposes neither method), and media-heavy
   applications should reclaim snapshots explicitly. `release` is an

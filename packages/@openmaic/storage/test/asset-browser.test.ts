@@ -7,7 +7,7 @@ import { expect, test } from 'vitest';
 import type { StorageProvider } from '@openmaic/dsl';
 import { BrowserAssetProvider } from '../src/asset/browser.js';
 import { contentHashOf, type BlobStore } from '../src/asset/blob.js';
-import { blobForObjectUrl } from './setup.js';
+import { blobForObjectUrl, objectUrlCount } from './setup.js';
 import { runBlobStoreContract } from './asset-blob-contract.js';
 
 runBlobStoreContract(
@@ -66,6 +66,43 @@ test('BrowserAssetProvider re-put updates the resolved contentType', async () =>
   await provider.put(new Blob(['pixels'], { type: 'image/png' }));
   const second = await provider.resolve(key);
   expect(blobForObjectUrl(second!)?.type).toBe('image/png');
+});
+
+test('BrowserAssetProvider release reclaims a removed key snapshot', async () => {
+  const provider = new BrowserAssetProvider({
+    indexedDB: new IDBFactory(),
+    dbName: 'remove-release-db',
+  });
+  const key = await provider.put(new Blob(['temporary'], { type: 'text/plain' }));
+  const url = await provider.resolve(key);
+  expect(blobForObjectUrl(url!)).toBeDefined();
+
+  await provider.remove(key);
+  expect(blobForObjectUrl(url!)).toBeDefined();
+  await provider.release(key);
+
+  expect(blobForObjectUrl(url!)).toBeUndefined();
+  expect(objectUrlCount()).toBe(0);
+  await provider.close();
+});
+
+test('BrowserAssetProvider close reclaims re-put snapshot churn', async () => {
+  const provider = new BrowserAssetProvider({
+    indexedDB: new IDBFactory(),
+    dbName: 'churn-close-db',
+  });
+
+  for (let version = 0; version < 20; version += 1) {
+    const key = await provider.put(
+      new Blob(['same bytes'], { type: `application/x-version-${version}` }),
+    );
+    await provider.resolve(key);
+  }
+  expect(objectUrlCount()).toBe(20);
+
+  await provider.close();
+
+  expect(objectUrlCount()).toBe(0);
 });
 
 // A transient failure in resolve() must not be cached: the next resolve(key)
