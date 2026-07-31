@@ -4,8 +4,9 @@
 // Its semantics are still pinned here — the registry above it relies on them.
 import { IDBFactory } from 'fake-indexeddb';
 import { expect, test } from 'vitest';
+import type { StorageProvider } from '@openmaic/dsl';
 import { BrowserAssetProvider } from '../src/asset/browser.js';
-import { contentHashOf } from '../src/asset/blob.js';
+import { contentHashOf, type BlobStore } from '../src/asset/blob.js';
 import { blobForObjectUrl } from './setup.js';
 import { runBlobStoreContract } from './asset-blob-contract.js';
 
@@ -20,6 +21,7 @@ runBlobStoreContract(
 );
 
 test('content hashing fails clearly when crypto.subtle is unavailable', async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
   const crypto = globalThis.crypto;
   Object.defineProperty(globalThis, 'crypto', {
     value: { getRandomValues: crypto.getRandomValues.bind(crypto), subtle: undefined },
@@ -30,8 +32,26 @@ test('content hashing fails clearly when crypto.subtle is unavailable', async ()
       /crypto\.subtle.*secure context/i,
     );
   } finally {
-    Object.defineProperty(globalThis, 'crypto', { value: crypto, configurable: true });
+    if (descriptor) Object.defineProperty(globalThis, 'crypto', descriptor);
+    else Reflect.deleteProperty(globalThis, 'crypto');
   }
+});
+
+test('the internal blob layer is not assignable to the allocated-id DSL contract', () => {
+  const provider = new BrowserAssetProvider({
+    indexedDB: new IDBFactory(),
+    dbName: 'type-separation',
+  });
+  const blobStore: BlobStore = provider;
+  const assignProvider = (): StorageProvider =>
+    // @ts-expect-error content hashes are not allocated asset refs.
+    provider;
+  const assignBlobStore = (): StorageProvider =>
+    // @ts-expect-error the branded, contravariant hash parameter keeps the contracts distinct.
+    blobStore;
+
+  expect(typeof assignProvider).toBe('function');
+  expect(typeof assignBlobStore).toBe('function');
 });
 
 // Re-putting the same bytes with a corrected contentType must not leave a

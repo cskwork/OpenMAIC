@@ -40,11 +40,10 @@ async function commonDigestEncodings(data: Blob): Promise<string[]> {
   const binary = String.fromCharCode(...digest);
   const base64 = btoa(binary);
   return [
-    Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join(''),
     Array.from(digest, (byte) => byte.toString(16).padStart(2, '0'))
       .join('')
       .toUpperCase(),
-    base32(digest, '0123456789abcdefghjkmnpqrstvwxyz'),
+    base32(digest, '0123456789ABCDEFGHJKMNPQRSTVWXYZ'),
     base32(digest, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'),
     base64,
     base64.replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, ''),
@@ -54,8 +53,12 @@ async function commonDigestEncodings(data: Blob): Promise<string[]> {
 async function expectNoDigestSubstring(id: AssetRef, data: Blob): Promise<void> {
   const minimumLeakLength = 12;
   for (const encoding of await commonDigestEncodings(data)) {
-    for (let start = 0; start <= encoding.length - minimumLeakLength; start += 1) {
-      expect(id).not.toContain(encoding.slice(start, start + minimumLeakLength));
+    for (const idForm of new Set([id, id.toLowerCase()])) {
+      for (const encodingForm of new Set([encoding, encoding.toLowerCase()])) {
+        for (let start = 0; start <= encodingForm.length - minimumLeakLength; start += 1) {
+          expect(idForm).not.toContain(encodingForm.slice(start, start + minimumLeakLength));
+        }
+      }
     }
   }
 }

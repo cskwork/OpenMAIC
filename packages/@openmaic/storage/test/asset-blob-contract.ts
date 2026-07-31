@@ -5,7 +5,7 @@
 // allocates ids (see `asset-contract.ts`). Content addressing is safe here
 // precisely because a hash never leaves the package.
 import { describe, expect, test } from 'vitest';
-import type { BlobStore } from '../src/asset/blob.js';
+import type { BlobStore, ContentHash } from '../src/asset/blob.js';
 
 type ReadUrl = (url: string) => Promise<Uint8Array>;
 
@@ -63,7 +63,7 @@ export function runBlobStoreContract(
 
     test('resolve returns null for an unknown key', async () => {
       const p = makeProvider();
-      expect(await p.resolve('sha256-deadbeef')).toBeNull();
+      expect(await p.resolve('sha256-deadbeef' as ContentHash)).toBeNull();
     });
 
     test('resolve returns null after remove', async () => {

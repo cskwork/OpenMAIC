@@ -11,19 +11,23 @@
  */
 import type { AssetMeta, AssetRef, BinaryBlob } from '@openmaic/dsl';
 
+declare const contentHashBrand: unique symbol;
+
+/** `sha256-<hex>` over the stored bytes. Internal to this package. */
+export type ContentHash = string & { readonly [contentHashBrand]: true };
+
 /**
  * Internal content-addressed blob-layer contract. Unlike `StorageProvider`,
  * `put` returns the key derived from the bytes and may return the same key for
- * repeated content.
+ * repeated content. Function-typed properties keep the branded hash parameters
+ * contravariant under `strictFunctionTypes`, so this internal store cannot be
+ * substituted for the allocated-id DSL contract.
  */
 export interface BlobStore {
-  put(data: BinaryBlob, meta?: AssetMeta): Promise<AssetRef>;
-  resolve(key: AssetRef): Promise<string | null>;
-  remove(key: AssetRef): Promise<void>;
+  put: (data: BinaryBlob, meta?: AssetMeta) => Promise<ContentHash>;
+  resolve: (key: ContentHash) => Promise<string | null>;
+  remove: (key: ContentHash) => Promise<void>;
 }
-
-/** `sha256-<hex>` over the stored bytes. Internal to this package. */
-export type ContentHash = string;
 
 function toHex(buffer: ArrayBuffer): string {
   const view = new Uint8Array(buffer);
@@ -44,7 +48,7 @@ export async function contentHashOf(
   }
   const bytes = await data.arrayBuffer();
   const digest = await subtle.digest('SHA-256', bytes);
-  return { contentHash: `sha256-${toHex(digest)}`, bytes };
+  return { contentHash: `sha256-${toHex(digest)}` as ContentHash, bytes };
 }
 
 /**

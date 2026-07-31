@@ -3,14 +3,17 @@
  *
  * An `AssetId` is minted at `put` time and never computed from the bytes it
  * ends up pointing at. That is the whole point of the registry layer: the bytes
- * behind an id may be regenerated or replaced without invalidating a single
- * reference, and one set of bytes may back several ids carrying different
- * metadata. A derived id collapses both.
+ * behind an id may be regenerated or replaced through
+ * `BrowserAssetStore.replace` without invalidating a single reference, and one
+ * set of bytes may back several ids carrying different metadata. A derived id
+ * collapses both.
  *
  * Shape: the literal prefix `ast_` followed by 128 bits of randomness encoded
- * in a 32-character lowercase alphabet. The prefix is load-bearing — it makes
- * an id slotted into the wrong field obvious in a log or a diff — while the
- * encoding is an implementation detail nothing outside this module reads.
+ * in a 32-character lowercase alphabet. The prefix is a documented,
+ * human-visible part of the rendering: it makes an id slotted into the wrong
+ * field obvious in a log or a diff. The prefix constant is deliberately not
+ * exported from the package API, so downstream code cannot grow a validator
+ * from it. The body encoding remains an implementation detail.
  *
  * Random, not time-ordered: nothing sorts or ranges over asset ids (the
  * registry is a point-lookup table and a manifest is a set), so ordering buys
@@ -64,8 +67,14 @@ function encodeBase32(bytes: Uint8Array): string {
 
 /** Allocate a fresh, unguessable asset id. */
 export function newAssetId(): AssetId {
+  const getRandomValues = globalThis.crypto?.getRandomValues;
+  if (!getRandomValues) {
+    throw new Error(
+      'Web Crypto crypto.getRandomValues is unavailable; asset id allocation requires a secure context (HTTPS or localhost).',
+    );
+  }
   const bytes = new Uint8Array(ASSET_ID_ENTROPY_BYTES);
-  crypto.getRandomValues(bytes);
+  getRandomValues.call(globalThis.crypto, bytes);
   return `${ASSET_ID_PREFIX}${encodeBase32(bytes)}` as AssetId;
 }
 

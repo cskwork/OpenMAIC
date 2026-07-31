@@ -10,9 +10,12 @@
  * URLs via its media slots; `@openmaic/exporter` will consume the set of refs a
  * document touches as its asset manifest.
  *
- * The DSL owns only this interface (the contract). Concrete backends —
- * IndexedDB + object URLs in the browser, object storage / CDN on a server —
- * live in `@openmaic/storage`, keeping this package dependency- and DOM-free.
+ * The DSL owns only the minimal `put` / `resolve` / `remove` interface.
+ * Concrete backends — IndexedDB + object URLs in the browser, object storage /
+ * CDN on a server — live in `@openmaic/storage`, keeping this package
+ * dependency- and DOM-free. Richer registry operations such as replacing the
+ * bytes behind a stable id remain on a concrete store until a later part grows
+ * this contract.
  */
 
 /**
@@ -22,10 +25,12 @@
  * `PPTVideoElement.mediaRef`).
  *
  * Allocated, not derived: a ref says nothing about the bytes behind it. That is
- * what lets those bytes be regenerated or replaced without invalidating a
- * single document pointing at the ref, and lets one set of bytes carry several
- * refs with different metadata. A provider may still store identical bytes once
- * internally, but that is a property of its storage layer, not of the ref.
+ * what lets a richer concrete store's replacement operation (currently
+ * `BrowserAssetStore.replace` in `@openmaic/storage`) regenerate or replace
+ * those bytes without invalidating a single document pointing at the ref, and
+ * lets one set of bytes carry several refs with different metadata. A provider
+ * may still store identical bytes once internally, but that is a property of
+ * its storage layer, not of the ref.
  *
  * The ref domain is unconstrained: any string may be handed to `resolve` or
  * `remove`, and a ref the provider never issued is simply one that resolves to
@@ -33,7 +38,12 @@
  */
 export type AssetRef = string;
 
-/** Optional metadata recorded alongside an asset. */
+/**
+ * Optional metadata recorded alongside an asset.
+ *
+ * Every value must be structured-cloneable so browser backends can persist the
+ * object in IndexedDB.
+ */
 export interface AssetMeta {
   /** MIME type, e.g. `image/png`. */
   contentType?: string;
@@ -73,9 +83,9 @@ export interface BinaryBlob {
  */
 export interface StorageProvider {
   /** Store bytes and return a newly allocated ref to them. */
-  put(data: BinaryBlob, meta?: AssetMeta): Promise<AssetRef>;
+  put: (data: BinaryBlob, meta?: AssetMeta) => Promise<AssetRef>;
   /** Resolve a ref to a URL, or `null` if no asset is stored under it. */
-  resolve(ref: AssetRef): Promise<string | null>;
+  resolve: (ref: AssetRef) => Promise<string | null>;
   /** Remove the asset stored under a ref (a no-op if none exists). */
-  remove(ref: AssetRef): Promise<void>;
+  remove: (ref: AssetRef) => Promise<void>;
 }

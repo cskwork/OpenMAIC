@@ -50,6 +50,15 @@ async function entryRow(idb: IDBFactory, dbName: string, id: string): Promise<un
   });
 }
 
+async function rowKeys(idb: IDBFactory, dbName: string, store: string): Promise<IDBValidKey[]> {
+  const db = await openRaw(idb, dbName);
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(store, 'readonly').objectStore(store).getAllKeys();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
 async function dropBlobRows(idb: IDBFactory, dbName: string): Promise<void> {
   const db = await openRaw(idb, dbName);
   await new Promise<void>((resolve, reject) => {
@@ -116,8 +125,25 @@ describe('BrowserAssetStore reclaims bytes at the last reference', () => {
 
     await pool.cold().remove(id);
 
-    expect(await pool.store.resolve(id)).toBeNull();
-    expect(blobForObjectUrl(url!)).toBeUndefined();
+    await vi.waitFor(() => expect(blobForObjectUrl(url!)).toBeUndefined());
+  });
+
+  test('release revokes only this instance URL and leaves the registry untouched', async () => {
+    const pool = makePool('consumer-release');
+    const id = await pool.store.put(blob('displayed bytes'));
+    const url = await pool.store.resolve(id);
+    expect(blobForObjectUrl(url!)).toBeDefined();
+
+    pool.store.release(id);
+    pool.store.release(id);
+    expect(() => pool.store.release('never allocated')).not.toThrow();
+    await vi.waitFor(() => expect(blobForObjectUrl(url!)).toBeUndefined());
+    expect(await pool.assets()).toBe(1);
+    expect(await pool.blobs()).toBe(1);
+
+    const nextUrl = await pool.store.resolve(id);
+    expect(nextUrl).not.toBe(url);
+    expect(await readObjectUrl(nextUrl!)).toEqual(bytes('displayed bytes'));
   });
 
   test('removing one of two ids drops the row but keeps the bytes', async () => {
@@ -188,6 +214,130 @@ describe('BrowserAssetStore reclaims bytes at the last reference', () => {
   });
 });
 
+describe('BrowserAssetStore replaces bytes behind stable ids', () => {
+  test('keeps the id stable, revokes the old URL, and resolves the new bytes', async () => {
+    const pool = makePool('replace-stable');
+    const id = await pool.store.put(blob('before'));
+    const oldUrl = await pool.store.resolve(id);
+
+    await expect(pool.store.replace(id, blob('after'))).resolves.toBeUndefined();
+
+    expect(blobForObjectUrl(oldUrl!)).toBeUndefined();
+    const newUrl = await pool.store.resolve(id);
+    expect(newUrl).not.toBe(oldUrl);
+    expect(await readObjectUrl(newUrl!)).toEqual(bytes('after'));
+  });
+
+  test('broadcasts replacement so another instance revokes its cached URL', async () => {
+    const pool = makePool('replace-cross-instance');
+    const id = await pool.store.put(blob('before'));
+    const reader = pool.cold();
+    const oldUrl = await reader.resolve(id);
+
+    await pool.store.replace(id, blob('after'));
+
+    await vi.waitFor(() => expect(blobForObjectUrl(oldUrl!)).toBeUndefined());
+    const newUrl = await reader.resolve(id);
+    expect(await readObjectUrl(newUrl!)).toEqual(bytes('after'));
+  });
+
+  test('reclaims the old blob when the replaced id was its last reference', async () => {
+    const pool = makePool('replace-reclaim-last');
+    const id = await pool.store.put(blob('old bytes'));
+    const [oldHash] = await rowKeys(pool.idb, pool.dbName, 'blobs');
+
+    await pool.store.replace(id, blob('new bytes'));
+
+    expect(await pool.assets()).toBe(1);
+    expect(await pool.blobs()).toBe(1);
+    expect(await rowKeys(pool.idb, pool.dbName, 'blobs')).not.toContain(oldHash);
+  });
+
+  test('keeps the old blob while a sibling id still references it', async () => {
+    const pool = makePool('replace-reclaim-shared');
+    const replaced = await pool.store.put(blob('shared old bytes'));
+    const sibling = await pool.store.put(blob('shared old bytes'));
+    const [oldHash] = await rowKeys(pool.idb, pool.dbName, 'blobs');
+
+    await pool.store.replace(replaced, blob('new bytes'));
+
+    expect(await pool.blobs()).toBe(2);
+    expect(await rowKeys(pool.idb, pool.dbName, 'blobs')).toContain(oldHash);
+    const siblingUrl = await pool.cold().resolve(sibling);
+    expect(await readObjectUrl(siblingUrl!)).toEqual(bytes('shared old bytes'));
+  });
+
+  test('deduplicates replacement bytes already in the pool without changing its outcome', async () => {
+    const pool = makePool('replace-dedup-hit');
+    const replaced = await pool.store.put(blob('old bytes'));
+    const existing = await pool.store.put(blob('target bytes'));
+
+    const result = await pool.store.replace(replaced, blob('target bytes'));
+
+    expect(result).toBeUndefined();
+    expect(await pool.assets()).toBe(2);
+    expect(await pool.blobs()).toBe(1);
+    for (const id of [replaced, existing]) {
+      const url = await pool.cold().resolve(id);
+      expect(await readObjectUrl(url!)).toEqual(bytes('target bytes'));
+    }
+  });
+
+  test('rejects replacing an unknown id', async () => {
+    const pool = makePool('replace-unknown');
+    await expect(pool.store.replace(toAssetId('not allocated'), blob('bytes'))).rejects.toThrow(
+      /unknown asset id/i,
+    );
+    expect(await pool.assets()).toBe(0);
+    expect(await pool.blobs()).toBe(0);
+  });
+
+  test('keeps metadata when omitted and replaces it when provided', async () => {
+    const pool = makePool('replace-meta');
+    const id = await pool.store.put(blob('one', 'image/png'), {
+      contentType: 'image/png',
+      prompt: 'first prompt',
+      nested: { seed: 1 },
+    });
+
+    await pool.store.replace(id, blob('two', 'image/webp'));
+    let row = (await entryRow(pool.idb, pool.dbName, id)) as {
+      meta: unknown;
+      mime: string;
+    };
+    expect(row.meta).toEqual({
+      contentType: 'image/png',
+      prompt: 'first prompt',
+      nested: { seed: 1 },
+    });
+    expect(row.mime).toBe('image/webp');
+
+    const updated = { contentType: 'image/jpeg', prompt: 'second prompt' };
+    await pool.store.replace(id, blob('three', 'image/webp'), updated);
+    row = (await entryRow(pool.idb, pool.dbName, id)) as { meta: unknown; mime: string };
+    expect(row.meta).toEqual(updated);
+    expect(row.mime).toBe('image/jpeg');
+  });
+
+  test('a concurrent replace and remove leaves no orphan or dangling row', async () => {
+    const pool = makePool('replace-remove-race');
+    const id = await pool.store.put(blob('before race'));
+
+    const [replaceResult, removeResult] = await Promise.allSettled([
+      pool.store.replace(id, blob('after race')),
+      pool.store.remove(id),
+    ]);
+
+    expect(removeResult.status).toBe('fulfilled');
+    if (replaceResult.status === 'rejected') {
+      expect(replaceResult.reason).toMatchObject({ message: expect.stringMatching(/unknown/i) });
+    }
+    expect(await pool.assets()).toBe(0);
+    expect(await pool.blobs()).toBe(0);
+    expect(await pool.cold().resolve(id)).toBeNull();
+  });
+});
+
 describe('BrowserAssetStore registry rows', () => {
   test('carry contentHash, mime and meta, and no principal', async () => {
     const pool = makePool('row-shape');
@@ -220,6 +370,33 @@ describe('BrowserAssetStore registry rows', () => {
     const id = await pool.store.put(blob('bare'));
     const row = (await entryRow(pool.idb, pool.dbName, id)) as { meta: unknown };
     expect(row.meta).toEqual({});
+  });
+
+  test('rejects non-cloneable metadata before put opens a write transaction', async () => {
+    const pool = makePool('meta-clone-put');
+    const seed = await pool.store.put(blob('schema seed'));
+    await pool.store.remove(seed);
+    const meta = { callback: () => undefined };
+    await expect(pool.store.put(blob('never written'), meta)).rejects.toThrow(
+      /metadata values must be structured-cloneable/i,
+    );
+    expect(await pool.assets()).toBe(0);
+    expect(await pool.blobs()).toBe(0);
+  });
+
+  test('rejects non-cloneable replacement metadata without changing stored rows', async () => {
+    const pool = makePool('meta-clone-replace');
+    const id = await pool.store.put(blob('kept'));
+    const meta = { callback: () => undefined };
+
+    await expect(pool.store.replace(id, blob('rejected'), meta)).rejects.toThrow(
+      /metadata values must be structured-cloneable/i,
+    );
+
+    expect(await pool.assets()).toBe(1);
+    expect(await pool.blobs()).toBe(1);
+    const url = await pool.cold().resolve(id);
+    expect(await readObjectUrl(url!)).toEqual(bytes('kept'));
   });
 
   test('take mime from meta.contentType, falling back to the blob type', async () => {
@@ -263,6 +440,47 @@ describe('BrowserAssetStore never surfaces a content hash', () => {
   });
 });
 
+test('BrowserAssetStore mints an object URL only after its read transaction commits', async () => {
+  const pool = makePool('mint-after-commit');
+  const id = await pool.store.put(blob('transaction ordering'));
+  const db = await openRaw(pool.idb, pool.dbName);
+  const proto = Object.getPrototypeOf(db) as IDBDatabase;
+  const originalTransaction = proto.transaction;
+  let activeReadonlyTransactions = 0;
+  const activeCountsAtMint: number[] = [];
+
+  proto.transaction = function patched(
+    this: IDBDatabase,
+    storeNames: string | string[],
+    mode?: IDBTransactionMode,
+    options?: IDBTransactionOptions,
+  ): IDBTransaction {
+    const tx = originalTransaction.call(this, storeNames, mode, options);
+    if ((mode ?? 'readonly') === 'readonly') {
+      activeReadonlyTransactions += 1;
+      const finished = () => {
+        activeReadonlyTransactions -= 1;
+      };
+      tx.addEventListener('complete', finished, { once: true });
+      tx.addEventListener('abort', finished, { once: true });
+    }
+    return tx;
+  } as IDBDatabase['transaction'];
+
+  const originalCreateObjectURL = URL.createObjectURL;
+  const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockImplementation((value) => {
+    activeCountsAtMint.push(activeReadonlyTransactions);
+    return originalCreateObjectURL(value);
+  });
+  try {
+    expect(await pool.store.resolve(id)).not.toBeNull();
+    expect(activeCountsAtMint).toEqual([0]);
+  } finally {
+    createObjectURL.mockRestore();
+    proto.transaction = originalTransaction;
+  }
+});
+
 describe('allocated asset ids', () => {
   test('carry the type prefix and a fixed-width body', async () => {
     const id = newAssetId();
@@ -274,6 +492,21 @@ describe('allocated asset ids', () => {
   test('do not repeat', () => {
     const minted = new Set(Array.from({ length: 2000 }, () => newAssetId()));
     expect(minted.size).toBe(2000);
+  });
+
+  test('fail clearly when crypto.getRandomValues is unavailable', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+    const crypto = globalThis.crypto;
+    Object.defineProperty(globalThis, 'crypto', {
+      value: { subtle: crypto.subtle },
+      configurable: true,
+    });
+    try {
+      expect(() => newAssetId()).toThrow(/crypto\.getRandomValues.*secure context/i);
+    } finally {
+      if (descriptor) Object.defineProperty(globalThis, 'crypto', descriptor);
+      else Reflect.deleteProperty(globalThis, 'crypto');
+    }
   });
 
   test('are the same width regardless of what they end up naming', async () => {

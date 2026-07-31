@@ -44,11 +44,12 @@ a browser.
   bytes. A document embeds only the id and the store resolves it to a URL at
   render time (a raw URL would bake in a provider + expiry and break
   portability). Two levels of indirection buy three things at once: an id
-  survives the bytes behind it being regenerated; identical bytes are stored
-  once however many ids name them; and the content hash never leaves the
-  package, so the "whoever knows the hash can reach the bytes" threat that pure
-  content-addressing must defend against does not arise. Images, audio and
-  video share one id space — the medium is a `mime` column, not a partition.
+  survives the bytes behind it being regenerated through
+  `BrowserAssetStore.replace`; identical bytes are stored once however many ids
+  name them; and the content hash never leaves the package, so the "whoever
+  knows the hash can reach the bytes" threat that pure content-addressing must
+  defend against does not arise. Images, audio and video share one id space —
+  the medium is a `mime` column, not a partition.
   `put` **always allocates a new id**, so its successful return values and
   branches do not reveal whether the bytes were already present; the
   content-addressed blob backend beneath, whose refs would disclose exactly
@@ -57,10 +58,12 @@ a browser.
   existence, so server deployments must budget them per principal. Object URLs
   are minted per id, not shared per `contentHash`: sharing would let a holder of
   two ids learn that their bytes match by comparing URL strings. The accepted
-  cost is N in-memory blobs/URLs for N resolved ids over identical bytes. The id
-  domain is opaque and unvalidated (the KV key-domain lesson, applied forward):
-  an unrecognized id is a miss, never an error. The server backend is still to
-  come.
+  cost is N in-memory blobs/URLs for N resolved ids over identical bytes. A
+  resolved URL pins its Blob in that store instance until `release`, `remove`,
+  `replace`, or a failed liveness check revokes it; media-heavy consumers should
+  call `release` when an asset is no longer displayed. The id domain is opaque
+  and unvalidated (the KV key-domain lesson, applied forward): an unrecognized
+  id is a miss, never an error. The server backend is still to come.
 - **Document normalization.** The DSL `document` is a portable embedded
   aggregate; `DocumentStore` normalizes it into per-entity rows so scene-level
   writes (`putScene`) stay cheap, and reassembles it on read. Each document is
@@ -140,7 +143,9 @@ internal blob layer (identical bytes always share a key).
 - [x] `KVStore` (`account`) HTTP backend + HTTP contract
 - [ ] `KVStore` server-side reference backend and reference-server route
 - [ ] asset server backend — registry (principal column, server-derived) +
-      blob store, over the global resource pool model (#1007)
+      blob store, over the global resource pool model (#1007). It must validate
+      or allowlist content types before serving bytes rather than reflecting
+      cross-principal metadata into response content types
 - [ ] asset manifest: the one enumeration of "which `AssetId`s does this course
       reference?" the export paths converge on (#1007)
 

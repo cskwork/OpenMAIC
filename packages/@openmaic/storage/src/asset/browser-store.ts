@@ -6,9 +6,9 @@
  * pure content-addressing nor pure allocation:
  *
  * - **Stable identity.** A document embeds the allocated `assetId`. Replacing
- *   the bytes behind an entry does not invalidate the references pointing at
- *   it, and one set of bytes may back several entries with different ids and
- *   different metadata.
+ *   the bytes behind an entry with {@link BrowserAssetStore.replace} does not
+ *   invalidate the references pointing at it, and one set of bytes may back
+ *   several entries with different ids and different metadata.
  * - **Byte de-duplication.** Identical bytes occupy one `blobs` row no matter
  *   how many registry entries name them.
  * - **The hash is never a reference.** `contentHash` lives only inside the
@@ -31,7 +31,19 @@
  * Object URLs are deliberately minted per asset id, not per content hash.
  * Sharing one URL across ids that name identical bytes would let a holder of
  * both ids discover byte equality by comparing the returned strings. The
- * accepted cost is that N such ids can retain N in-memory blobs/object URLs.
+ * accepted cost is that N such ids can retain N in-memory blobs/object URLs. A
+ * resolved URL pins its full Blob in this instance until `release`, `remove`,
+ * `replace`, or a failed registry-liveness check revokes it. Media-heavy
+ * consumers should call {@link BrowserAssetStore.release} when they stop
+ * displaying an asset.
+ *
+ * Every `resolve` spends one IndexedDB round trip checking the registry entry,
+ * choosing cross-instance correctness over a zero-cost warm-cache path. The
+ * liveness check is registry-only: after external tampering deletes a blob row
+ * but leaves its entry, a warm instance may keep serving its already-minted
+ * URL while a cold instance reports a miss. Store operations cannot create
+ * that state because `put`, `replace`, and `remove` update both rows
+ * atomically.
  */
 import type { AssetMeta, AssetRef, BinaryBlob, StorageProvider } from '@openmaic/dsl';
 import { contentHashOf, ObjectUrlCache, type ContentHash } from './blob.js';
@@ -64,7 +76,11 @@ const BY_CONTENT_HASH = 'by-content-hash';
  */
 interface AssetEntry {
   contentHash: ContentHash;
-  /** Resolved MIME type, from `meta.contentType` or the blob's own type. */
+  /**
+   * Resolved MIME type, from `meta.contentType` or the blob's own type.
+   * This browser-only Part 1 backend trusts its same-app caller; a server
+   * backend must validate or allowlist content types before serving bytes.
+   */
   mime: string;
   /** Caller-owned provenance (prompt, model, dimensions, filename, …). */
   meta: AssetMeta;
@@ -85,6 +101,14 @@ function reqP<T>(request: IDBRequest<T>): Promise<T> {
   });
 }
 
+function cloneMeta(meta: AssetMeta): AssetMeta {
+  try {
+    return structuredClone(meta);
+  } catch (cause) {
+    throw new TypeError('Asset metadata values must be structured-cloneable.', { cause });
+  }
+}
+
 interface AssetStores {
   assets: IDBObjectStore;
   blobs: IDBObjectStore;
@@ -98,10 +122,34 @@ export class BrowserAssetStore implements StorageProvider {
   private readonly dbName: string;
   private dbPromise?: Promise<IDBDatabase>;
   private readonly urls = new ObjectUrlCache();
+  private readonly invalidations?: BroadcastChannel;
 
   constructor(options: BrowserAssetStoreOptions = {}) {
     this.idb = options.indexedDB ?? globalThis.indexedDB;
     this.dbName = options.dbName ?? 'maic-asset-pool';
+    const BroadcastChannelCtor = globalThis.BroadcastChannel;
+    if (typeof BroadcastChannelCtor === 'function') {
+      try {
+        this.invalidations = new BroadcastChannelCtor(`maic-asset-pool:${this.dbName}`);
+        this.invalidations.onmessage = (event: MessageEvent<unknown>) => {
+          if (typeof event.data === 'string') void this.urls.invalidate(event.data);
+        };
+        // Node exposes `unref`; browsers do not need it. Avoid keeping a test
+        // process alive solely because a store instance owns a channel.
+        (
+          this.invalidations as BroadcastChannel & {
+            unref?: () => void;
+          }
+        ).unref?.();
+      } catch {
+        // Some browser contexts expose the constructor but disallow creating a
+        // channel. Cross-instance invalidation is an optional enhancement.
+      }
+    }
+  }
+
+  private broadcastInvalidation(ref: AssetRef): void {
+    this.invalidations?.postMessage(ref);
   }
 
   private openDb(): Promise<IDBDatabase> {
@@ -192,11 +240,12 @@ export class BrowserAssetStore implements StorageProvider {
    * principal. Wall-clock timing is likewise not claimed to be constant.
    */
   async put(data: BinaryBlob, meta?: AssetMeta): Promise<AssetId> {
+    const storedMeta = meta === undefined ? {} : cloneMeta(meta);
     const { contentHash, bytes } = await contentHashOf(data);
     const entry: AssetEntry = {
       contentHash,
       mime: meta?.contentType ?? data.type ?? '',
-      meta: meta ?? {},
+      meta: storedMeta,
     };
     const id = newAssetId();
     await this.tx('readwrite', async ({ assets, blobs }) => {
@@ -213,6 +262,11 @@ export class BrowserAssetStore implements StorageProvider {
    * an id from another id space, an empty string, a string with a NUL in it —
    * all are misses, none are errors. There is no id validator to disagree with
    * (see `toAssetId`).
+   *
+   * Every call checks that the registry entry is still live. If that check
+   * fails, this method revokes this instance's cached URL before returning
+   * `null`; consequently, one caller's `resolve` can revoke a stale URL
+   * previously handed to another caller.
    */
   async resolve(ref: AssetRef): Promise<string | null> {
     const exists = await this.tx('readonly', async ({ assets }) => {
@@ -224,6 +278,47 @@ export class BrowserAssetStore implements StorageProvider {
       return null;
     }
     return this.urls.resolve(ref, () => this.readAsUrl(ref));
+  }
+
+  /**
+   * Revoke and forget this instance's cached URL for a ref without changing
+   * the registry. Idempotent; an unknown or uncached ref is a no-op.
+   */
+  release(ref: AssetRef): void {
+    void this.urls.invalidate(ref);
+  }
+
+  /**
+   * Replace the bytes behind an allocated id without changing that id.
+   *
+   * The digest is computed before the transaction. The blob write, registry
+   * update, old-hash reference count, and possible old-blob reclamation then
+   * commit in one transaction. Like `put`, the success path unconditionally
+   * writes the new bytes and does not reveal whether they were already pooled.
+   * Replacing an unallocated id is a caller error and rejects loudly.
+   */
+  async replace(ref: AssetId, data: BinaryBlob, meta?: AssetMeta): Promise<void> {
+    const storedMeta = meta === undefined ? undefined : cloneMeta(meta);
+    const { contentHash, bytes } = await contentHashOf(data);
+    await this.tx('readwrite', async ({ assets, blobs }) => {
+      const oldEntry = await reqP<AssetEntry | undefined>(assets.get(ref));
+      if (!oldEntry) throw new Error('Cannot replace an unknown asset id.');
+
+      await reqP(blobs.put(bytes, contentHash));
+      const nextEntry: AssetEntry = {
+        contentHash,
+        mime: meta?.contentType ?? data.type ?? '',
+        meta: storedMeta ?? oldEntry.meta,
+      };
+      await reqP(assets.put(nextEntry, ref));
+
+      const remaining = await reqP<number>(
+        assets.index(BY_CONTENT_HASH).count(oldEntry.contentHash),
+      );
+      if (remaining === 0) await reqP(blobs.delete(oldEntry.contentHash));
+    });
+    await this.urls.invalidate(ref);
+    this.broadcastInvalidation(ref);
   }
 
   private async readAsUrl(ref: AssetRef): Promise<string | null> {
@@ -264,5 +359,6 @@ export class BrowserAssetStore implements StorageProvider {
       if (remaining === 0) await reqP(blobs.delete(entry.contentHash));
     });
     await this.urls.invalidate(ref);
+    this.broadcastInvalidation(ref);
   }
 }

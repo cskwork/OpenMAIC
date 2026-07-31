@@ -17,8 +17,8 @@
  * would replace behind the same interface, with the registry above it
  * unchanged.
  */
-import type { AssetMeta, AssetRef, BinaryBlob } from '@openmaic/dsl';
-import { contentHashOf, ObjectUrlCache, type BlobStore } from './blob.js';
+import type { AssetMeta, BinaryBlob } from '@openmaic/dsl';
+import { contentHashOf, ObjectUrlCache, type BlobStore, type ContentHash } from './blob.js';
 
 export interface BrowserAssetProviderOptions {
   /** IndexedDB factory. Defaults to the ambient `indexedDB`. Injectable for tests. */
@@ -84,7 +84,7 @@ export class BrowserAssetProvider implements BlobStore {
     });
   }
 
-  async put(data: BinaryBlob, meta?: AssetMeta): Promise<AssetRef> {
+  put = async (data: BinaryBlob, meta?: AssetMeta): Promise<ContentHash> => {
     const { contentHash, bytes } = await contentHashOf(data);
     const asset: StoredAsset = { bytes, contentType: meta?.contentType ?? data.type ?? '' };
     await this.tx('readwrite', (store) => store.put(asset, contentHash));
@@ -95,13 +95,13 @@ export class BrowserAssetProvider implements BlobStore {
     // provider would see the new type, this one the old).
     await this.urls.invalidate(contentHash);
     return contentHash;
-  }
+  };
 
-  async resolve(ref: AssetRef): Promise<string | null> {
+  resolve = async (ref: ContentHash): Promise<string | null> => {
     return this.urls.resolve(ref, () => this.readAsUrl(ref));
-  }
+  };
 
-  private async readAsUrl(ref: AssetRef): Promise<string | null> {
+  private async readAsUrl(ref: ContentHash): Promise<string | null> {
     const asset = await this.tx<StoredAsset | undefined>('readonly', (store) => store.get(ref));
     if (!asset) return null;
     // Mint only after the readonly transaction commits, so an aborted read
@@ -109,8 +109,8 @@ export class BrowserAssetProvider implements BlobStore {
     return URL.createObjectURL(new Blob([asset.bytes], { type: asset.contentType }));
   }
 
-  async remove(ref: AssetRef): Promise<void> {
+  remove = async (ref: ContentHash): Promise<void> => {
     await this.tx('readwrite', (store) => store.delete(ref));
     await this.urls.invalidate(ref);
-  }
+  };
 }
