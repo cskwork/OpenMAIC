@@ -11,17 +11,20 @@ import {
   type ClientEffectTerminalStatus,
   whiteboardChartSpecsEqual,
   whiteboardCodeSpecsEqual,
+  whiteboardEditableCodeStatesEqual,
   whiteboardTableSpecsEqual,
 } from '@/lib/agent/runtime/client-effect-contract';
 import { TOOL_EXECUTION_PROTOCOL_VERSION } from '@/lib/agent/runtime/native-child-contract';
 import {
   executeNativeWhiteboardChartEffect,
+  executeNativeWhiteboardCodeEditEffect,
   executeNativeWhiteboardCodeEffect,
   executeNativeWhiteboardLatexEffect,
   executeNativeWhiteboardLineEffect,
   executeNativeWhiteboardShapeEffect,
   executeNativeWhiteboardTableEffect,
   executeNativeWhiteboardTextEffect,
+  prepareNativeExistingWhiteboardTarget,
   prepareNativeWhiteboardTarget,
 } from '@/lib/action/client-effect-whiteboard';
 
@@ -64,13 +67,27 @@ class ClientEffectHardDeadlineError extends Error {
   }
 }
 
-function errorDetails(error: unknown): { code: string; message: string; retryable: boolean } {
+function errorDetails(
+  error: unknown,
+  preserveClientEffectCode = false,
+): { code: string; message: string; retryable: boolean } {
   const message = error instanceof Error ? error.message : String(error);
   const targetChanged = message.includes('CLIENT_EFFECT_TARGET_CHANGED');
+  const explicitCode = /^(CLIENT_EFFECT_[A-Z0-9_]+)/.exec(message)?.[1];
+  const code = targetChanged
+    ? 'CLIENT_EFFECT_TARGET_CHANGED'
+    : preserveClientEffectCode
+      ? (explicitCode ?? 'CLIENT_EFFECT_EXECUTION_FAILED')
+      : 'CLIENT_EFFECT_EXECUTION_FAILED';
   return {
-    code: targetChanged ? 'CLIENT_EFFECT_TARGET_CHANGED' : 'CLIENT_EFFECT_EXECUTION_FAILED',
+    code,
     message,
-    retryable: !targetChanged,
+    retryable:
+      !targetChanged &&
+      (!preserveClientEffectCode ||
+        (code !== 'CLIENT_EFFECT_CODE_EDIT_STALE_BEFORE_STATE' &&
+          !code.endsWith('_INVALID') &&
+          !code.endsWith('_MISMATCH'))),
   };
 }
 
@@ -194,6 +211,15 @@ function postconditionsEqual(
           rotate: right.rotate,
         },
       )
+    );
+  }
+  if (left.kind === 'whiteboard_code_edited' && right.kind === 'whiteboard_code_edited') {
+    return (
+      left.expectedWhiteboardId === right.expectedWhiteboardId &&
+      left.expectedBeforeCodeDigest === right.expectedBeforeCodeDigest &&
+      left.expectedAfterCodeDigest === right.expectedAfterCodeDigest &&
+      left.noOp === right.noOp &&
+      whiteboardEditableCodeStatesEqual(left.expectedAfterCodeState, right.expectedAfterCodeState)
     );
   }
   return false;
@@ -320,7 +346,14 @@ export class BrowserClientEffectRuntime {
         await this.enqueueAck(record, { status: 'presentation_resumed' });
         record.serverPaused = false;
       }
-      const binding = prepareNativeWhiteboardTarget(this.opts.store, request.target);
+      const binding =
+        request.toolName === 'wb_edit_code'
+          ? prepareNativeExistingWhiteboardTarget(
+              this.opts.store,
+              request.target,
+              request.postcondition.expectedWhiteboardId,
+            )
+          : prepareNativeWhiteboardTarget(this.opts.store, request.target);
       record.binding = binding;
       await this.enqueueAck(record, { status: 'accepted', targetBinding: binding });
       record.status = 'accepted';
@@ -526,6 +559,20 @@ export class BrowserClientEffectRuntime {
             signal: executionSignal,
           });
           break;
+        case 'wb_edit_code':
+          result = await executeNativeWhiteboardCodeEditEffect({
+            store: this.opts.store,
+            targetBinding: binding,
+            executionId: request.executionId,
+            stableElementId: request.postcondition.stableElementId,
+            expectedWhiteboardId: request.postcondition.expectedWhiteboardId,
+            expectedBeforeCodeDigest: request.postcondition.expectedBeforeCodeDigest,
+            expectedAfterCodeState: request.postcondition.expectedAfterCodeState,
+            expectedAfterCodeDigest: request.postcondition.expectedAfterCodeDigest,
+            noOp: request.postcondition.noOp,
+            signal: executionSignal,
+          });
+          break;
       }
       await this.enqueueAck(record, {
         status: 'effect_committed',
@@ -556,12 +603,18 @@ export class BrowserClientEffectRuntime {
               message: 'Client effect was cancelled.',
               retryable: false,
             }
-          : errorDetails(error);
-      const localFailureStatus: 'cancelled' | 'effect_failed' =
-        hardDeadlineExceeded ||
-        aborted ||
-        details.code === 'CLIENT_EFFECT_TARGET_CHANGED' ||
-        !record.binding
+          : errorDetails(error, request.toolName === 'wb_edit_code');
+      const editPreparationFailure =
+        request.toolName === 'wb_edit_code' &&
+        !hardDeadlineExceeded &&
+        !aborted &&
+        details.code !== 'CLIENT_EFFECT_TARGET_CHANGED';
+      const localFailureStatus: 'cancelled' | 'effect_failed' = editPreparationFailure
+        ? 'effect_failed'
+        : hardDeadlineExceeded ||
+            aborted ||
+            details.code === 'CLIENT_EFFECT_TARGET_CHANGED' ||
+            !record.binding
           ? 'cancelled'
           : 'effect_failed';
       const status = authoritativeStatus ?? localFailureStatus;

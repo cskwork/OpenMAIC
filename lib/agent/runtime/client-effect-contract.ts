@@ -16,6 +16,8 @@ export const CLIENT_EFFECT_LATEX_RENDER_VERSION = 'maic.katex-html.v1' as const;
 export const CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION = 'maic.whiteboard-table.v1' as const;
 export const CLIENT_EFFECT_CHART_NORMALIZATION_VERSION = 'maic.whiteboard-chart.v1' as const;
 export const CLIENT_EFFECT_CODE_NORMALIZATION_VERSION = 'maic.whiteboard-code.v1' as const;
+export const CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION =
+  'maic.whiteboard-code-edit.v1' as const;
 export const CLIENT_EFFECT_ACK_HEADER = 'x-maic-effect-token';
 export const CLIENT_EFFECT_ACK_MAX_BYTES = 8 * 1024;
 
@@ -205,6 +207,47 @@ export interface WhiteboardCodePostcondition extends WhiteboardCodeSpec {
   expectedCodeDigest: string;
 }
 
+export interface WhiteboardEditableCodeState {
+  language: string;
+  lines: CodeLine[];
+  fileName?: string;
+  bounds: WhiteboardCodeBounds;
+  showLineNumbers: boolean;
+  fontSize: number;
+  rotate: number;
+}
+
+export type WhiteboardCodeEditIntent =
+  | {
+      elementId: string;
+      operation: 'insert_after' | 'insert_before';
+      lineId: string;
+      content: string;
+    }
+  | {
+      elementId: string;
+      operation: 'delete_lines';
+      lineIds: string[];
+    }
+  | {
+      elementId: string;
+      operation: 'replace_lines';
+      lineIds: string[];
+      content: string;
+    };
+
+export interface WhiteboardCodeEditPostcondition {
+  kind: 'whiteboard_code_edited';
+  stableElementId: string;
+  elementType: 'code';
+  normalizationVersion: typeof CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION;
+  expectedWhiteboardId: string;
+  expectedBeforeCodeDigest: string;
+  expectedAfterCodeDigest: string;
+  expectedAfterCodeState: WhiteboardEditableCodeState;
+  noOp: boolean;
+}
+
 interface ClientEffectRequestBase extends ToolExecutionEnvelope {
   kind: 'client_effect';
   target: ClientEffectTarget;
@@ -246,6 +289,11 @@ export type WhiteboardCodeClientEffectRequest = ClientEffectRequestBase & {
   postcondition: WhiteboardCodePostcondition;
 };
 
+export type WhiteboardCodeEditClientEffectRequest = ClientEffectRequestBase & {
+  toolName: 'wb_edit_code';
+  postcondition: WhiteboardCodeEditPostcondition;
+};
+
 export type ClientEffectRequest =
   | WhiteboardTextClientEffectRequest
   | WhiteboardShapeClientEffectRequest
@@ -253,7 +301,8 @@ export type ClientEffectRequest =
   | WhiteboardLatexClientEffectRequest
   | WhiteboardTableClientEffectRequest
   | WhiteboardChartClientEffectRequest
-  | WhiteboardCodeClientEffectRequest;
+  | WhiteboardCodeClientEffectRequest
+  | WhiteboardCodeEditClientEffectRequest;
 
 export interface ClientEffectDelivery {
   request: ClientEffectRequest;
@@ -338,6 +387,16 @@ export type ClientEffectAck =
             normalizationVersion: typeof CLIENT_EFFECT_CODE_NORMALIZATION_VERSION;
             observedCodeDigest: string;
             matchingElementCount: 1;
+          }
+        | {
+            stableElementId: string;
+            elementType: 'code';
+            normalizationVersion: typeof CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION;
+            expectedWhiteboardId: string;
+            observedBeforeCodeDigest: string;
+            observedAfterCodeDigest: string;
+            matchingElementCount: 1;
+            noOp: boolean;
           };
     })
   | (ClientEffectAckBase & {
@@ -1352,6 +1411,270 @@ export function whiteboardCodeSpecsEqual(
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+const WHITEBOARD_CODE_MAX_LINE_ID_CHARACTERS = 256;
+const WHITEBOARD_CODE_STATE_MAX_RAW_BYTES = 24 * 1024;
+const WHITEBOARD_CODE_METADATA_DISALLOWED_CONTROL = /[\u0000-\u001f\u007f\u2028\u2029]/;
+const WHITEBOARD_CODE_LINE_DISALLOWED_CONTROL = /[\u0000-\u0008\u000a-\u001f\u007f\u2028\u2029]/;
+const WHITEBOARD_CODE_EDIT_CONTENT_DISALLOWED_CONTROL =
+  /[\u0000-\u0008\u000b-\u001f\u007f\u2028\u2029]/;
+
+function assertEditableCodeMetadataString(
+  value: unknown,
+  maxLength: number,
+  code: string,
+  options: { allowEmpty?: boolean } = {},
+): string {
+  if (
+    typeof value !== 'string' ||
+    (!options.allowEmpty && value.length === 0) ||
+    value.length > maxLength ||
+    WHITEBOARD_CODE_METADATA_DISALLOWED_CONTROL.test(value)
+  ) {
+    throw new Error(code);
+  }
+  return value;
+}
+
+function assertEditableCodeLineContent(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    value.length > WHITEBOARD_CODE_MAX_LINE_CHARACTERS ||
+    WHITEBOARD_CODE_LINE_DISALLOWED_CONTROL.test(value)
+  ) {
+    throw new Error('CLIENT_EFFECT_CODE_EDIT_CONTENT_INVALID');
+  }
+  return value;
+}
+
+export function assertWhiteboardEditableCodeStateV1(
+  input: WhiteboardEditableCodeState,
+): WhiteboardEditableCodeState {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('CLIENT_EFFECT_CODE_EDIT_STATE_INVALID');
+  }
+  const language = assertEditableCodeMetadataString(
+    input.language,
+    WHITEBOARD_CODE_MAX_LANGUAGE_CHARACTERS,
+    'CLIENT_EFFECT_CODE_EDIT_LANGUAGE_INVALID',
+  );
+  const fileName =
+    input.fileName === undefined
+      ? undefined
+      : assertEditableCodeMetadataString(
+          input.fileName,
+          WHITEBOARD_CODE_MAX_FILE_NAME_CHARACTERS,
+          'CLIENT_EFFECT_CODE_EDIT_FILE_NAME_INVALID',
+          { allowEmpty: true },
+        );
+  if (
+    !Array.isArray(input.lines) ||
+    input.lines.length > WHITEBOARD_CODE_MAX_LINES ||
+    !input.bounds ||
+    typeof input.bounds !== 'object' ||
+    input.showLineNumbers !== Boolean(input.showLineNumbers) ||
+    typeof input.fontSize !== 'number' ||
+    !Number.isFinite(input.fontSize) ||
+    input.fontSize <= 0 ||
+    input.fontSize > 256 ||
+    typeof input.rotate !== 'number' ||
+    !Number.isFinite(input.rotate)
+  ) {
+    throw new Error('CLIENT_EFFECT_CODE_EDIT_STATE_INVALID');
+  }
+
+  const lineIds = new Set<string>();
+  const lines = input.lines.map((line) => {
+    if (!line || typeof line !== 'object') {
+      throw new Error('CLIENT_EFFECT_CODE_EDIT_LINE_INVALID');
+    }
+    const id = assertEditableCodeMetadataString(
+      line.id,
+      WHITEBOARD_CODE_MAX_LINE_ID_CHARACTERS,
+      'CLIENT_EFFECT_CODE_EDIT_LINE_ID_INVALID',
+    );
+    if (lineIds.has(id)) throw new Error('CLIENT_EFFECT_CODE_EDIT_LINE_ID_DUPLICATE');
+    lineIds.add(id);
+    const content = assertEditableCodeLineContent(line.content);
+    return { id, content };
+  });
+
+  const bounds = {
+    x: canonicalNumber(input.bounds.x),
+    y: canonicalNumber(input.bounds.y),
+    width: canonicalNumber(input.bounds.width),
+    height: canonicalNumber(input.bounds.height),
+  };
+  if (!Object.values(bounds).every(Number.isFinite) || bounds.width <= 0 || bounds.height <= 0) {
+    throw new Error('CLIENT_EFFECT_CODE_EDIT_BOUNDS_INVALID');
+  }
+
+  const canonical: WhiteboardEditableCodeState = {
+    language,
+    lines,
+    ...(fileName !== undefined ? { fileName } : {}),
+    bounds,
+    showLineNumbers: input.showLineNumbers,
+    fontSize: canonicalNumber(input.fontSize),
+    rotate: canonicalNumber(input.rotate),
+  };
+  if (
+    new TextEncoder().encode(JSON.stringify(canonical)).byteLength >
+    WHITEBOARD_CODE_STATE_MAX_RAW_BYTES
+  ) {
+    throw new Error('CLIENT_EFFECT_CODE_EDIT_STATE_TOO_LARGE');
+  }
+  return canonical;
+}
+
+export async function digestWhiteboardEditableCodeStateV1(
+  input: WhiteboardEditableCodeState,
+): Promise<string> {
+  const canonical = assertWhiteboardEditableCodeStateV1(input);
+  const bytes = new TextEncoder().encode(
+    `${CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION}\n${JSON.stringify(canonical)}`,
+  );
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  return `sha256:${Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('')}`;
+}
+
+export function whiteboardEditableCodeStatesEqual(
+  left: WhiteboardEditableCodeState,
+  right: WhiteboardEditableCodeState,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function normalizeEditContent(value: string): string[] {
+  if (
+    typeof value !== 'string' ||
+    new TextEncoder().encode(value).byteLength > WHITEBOARD_CODE_MAX_RAW_BYTES
+  ) {
+    throw new Error('CLIENT_EFFECT_CODE_EDIT_CONTENT_INVALID');
+  }
+  const normalized = value.replace(/\r\n?/g, '\n');
+  if (WHITEBOARD_CODE_EDIT_CONTENT_DISALLOWED_CONTROL.test(normalized)) {
+    throw new Error('CLIENT_EFFECT_CODE_EDIT_CONTENT_INVALID');
+  }
+  const lines = normalized.split('\n');
+  if (
+    lines.length > WHITEBOARD_CODE_MAX_LINES ||
+    lines.some((line) => line.length > WHITEBOARD_CODE_MAX_LINE_CHARACTERS)
+  ) {
+    throw new Error('CLIENT_EFFECT_CODE_EDIT_CONTENT_INVALID');
+  }
+  return lines;
+}
+
+function assertUniqueTargetLineIds(value: unknown, beforeLineIds: ReadonlySet<string>): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error('CLIENT_EFFECT_CODE_EDIT_TARGET_INVALID');
+  }
+  const seen = new Set<string>();
+  return value.map((candidate) => {
+    const id = assertEditableCodeMetadataString(
+      candidate,
+      WHITEBOARD_CODE_MAX_LINE_ID_CHARACTERS,
+      'CLIENT_EFFECT_CODE_EDIT_TARGET_INVALID',
+    );
+    if (seen.has(id)) throw new Error('CLIENT_EFFECT_CODE_EDIT_TARGET_DUPLICATE');
+    if (!beforeLineIds.has(id)) throw new Error('CLIENT_EFFECT_CODE_EDIT_LINE_NOT_FOUND');
+    seen.add(id);
+    return id;
+  });
+}
+
+function generatedEditLineId(executionId: string, outputOrdinal: number): string {
+  const id = `CE_${executionId}_${outputOrdinal}`;
+  return assertEditableCodeMetadataString(
+    id,
+    WHITEBOARD_CODE_MAX_LINE_ID_CHARACTERS,
+    'CLIENT_EFFECT_CODE_EDIT_GENERATED_LINE_ID_INVALID',
+  );
+}
+
+export function applyWhiteboardCodeEditV1(opts: {
+  before: WhiteboardEditableCodeState;
+  intent: WhiteboardCodeEditIntent;
+  executionId: string;
+}): {
+  after: WhiteboardEditableCodeState;
+  newLineIds: string[];
+  noOp: boolean;
+} {
+  const before = assertWhiteboardEditableCodeStateV1(opts.before);
+  const elementId = assertEditableCodeMetadataString(
+    opts.intent.elementId,
+    512,
+    'CLIENT_EFFECT_CODE_EDIT_ELEMENT_ID_INVALID',
+  );
+  void elementId;
+  const executionId = assertEditableCodeMetadataString(
+    opts.executionId,
+    512,
+    'CLIENT_EFFECT_CODE_EDIT_EXECUTION_ID_INVALID',
+  );
+  const beforeLineIds = new Set(before.lines.map((line) => line.id));
+  let nextLines = before.lines.map((line) => ({ ...line }));
+  const newLineIds: string[] = [];
+
+  if (opts.intent.operation === 'insert_after' || opts.intent.operation === 'insert_before') {
+    const lineId = assertEditableCodeMetadataString(
+      opts.intent.lineId,
+      WHITEBOARD_CODE_MAX_LINE_ID_CHARACTERS,
+      'CLIENT_EFFECT_CODE_EDIT_TARGET_INVALID',
+    );
+    const targetIndex = nextLines.findIndex((line) => line.id === lineId);
+    if (targetIndex < 0) throw new Error('CLIENT_EFFECT_CODE_EDIT_LINE_NOT_FOUND');
+    const contentLines = normalizeEditContent(opts.intent.content);
+    const insertionIndex = opts.intent.operation === 'insert_after' ? targetIndex + 1 : targetIndex;
+    const insertedLines = contentLines.map((content, offset) => {
+      const id = generatedEditLineId(executionId, insertionIndex + offset + 1);
+      if (beforeLineIds.has(id) || newLineIds.includes(id)) {
+        throw new Error('CLIENT_EFFECT_CODE_EDIT_GENERATED_LINE_ID_CONFLICT');
+      }
+      newLineIds.push(id);
+      return { id, content };
+    });
+    nextLines.splice(insertionIndex, 0, ...insertedLines);
+  } else if (opts.intent.operation === 'delete_lines') {
+    const targetIds = assertUniqueTargetLineIds(opts.intent.lineIds, beforeLineIds);
+    const deleteIds = new Set(targetIds);
+    nextLines = nextLines.filter((line) => !deleteIds.has(line.id));
+  } else if (opts.intent.operation === 'replace_lines') {
+    const targetIds = assertUniqueTargetLineIds(opts.intent.lineIds, beforeLineIds);
+    const anchorIndex = before.lines.findIndex((line) => line.id === targetIds[0]);
+    const targetIdSet = new Set(targetIds);
+    const insertionIndex = before.lines
+      .slice(0, anchorIndex)
+      .filter((line) => !targetIdSet.has(line.id)).length;
+    const retained = nextLines.filter((line) => !targetIdSet.has(line.id));
+    const contentLines = normalizeEditContent(opts.intent.content);
+    const replacement = contentLines.map((content, offset) => {
+      const reusableId = targetIds[offset];
+      if (reusableId) return { id: reusableId, content };
+      const id = generatedEditLineId(executionId, insertionIndex + offset + 1);
+      if (beforeLineIds.has(id) || newLineIds.includes(id)) {
+        throw new Error('CLIENT_EFFECT_CODE_EDIT_GENERATED_LINE_ID_CONFLICT');
+      }
+      newLineIds.push(id);
+      return { id, content };
+    });
+    retained.splice(insertionIndex, 0, ...replacement);
+    nextLines = retained;
+  } else {
+    throw new Error('CLIENT_EFFECT_CODE_EDIT_OPERATION_INVALID');
+  }
+
+  const after = assertWhiteboardEditableCodeStateV1({ ...before, lines: nextLines });
+  return {
+    after,
+    newLineIds,
+    noOp: whiteboardEditableCodeStatesEqual(before, after),
+  };
+}
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
@@ -1581,6 +1904,29 @@ export function isClientEffectAck(value: unknown): value is ClientEffectAck {
           postcondition.normalizationVersion === CLIENT_EFFECT_CHART_NORMALIZATION_VERSION &&
           isNonEmptyString(postcondition.observedChartDigest) &&
           postcondition.matchingElementCount === 1
+        );
+      }
+      if (
+        postcondition.elementType === 'code' &&
+        postcondition.normalizationVersion === CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION &&
+        hasExactKeys(postcondition, [
+          'stableElementId',
+          'elementType',
+          'normalizationVersion',
+          'expectedWhiteboardId',
+          'observedBeforeCodeDigest',
+          'observedAfterCodeDigest',
+          'matchingElementCount',
+          'noOp',
+        ])
+      ) {
+        return (
+          isNonEmptyString(postcondition.stableElementId) &&
+          isNonEmptyString(postcondition.expectedWhiteboardId) &&
+          isNonEmptyString(postcondition.observedBeforeCodeDigest) &&
+          isNonEmptyString(postcondition.observedAfterCodeDigest) &&
+          postcondition.matchingElementCount === 1 &&
+          typeof postcondition.noOp === 'boolean'
         );
       }
       if (

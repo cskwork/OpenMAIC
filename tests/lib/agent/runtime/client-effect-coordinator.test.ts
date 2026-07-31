@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
   CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
@@ -9,6 +10,7 @@ import {
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
   digestWhiteboardChartV1,
   digestWhiteboardCodeV1,
+  digestWhiteboardEditableCodeStateV1,
   digestWhiteboardLatexHtmlV1,
   digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
@@ -35,6 +37,8 @@ import {
   type WhiteboardTextClientEffectRequest,
   type WhiteboardChartClientEffectRequest,
   type WhiteboardCodeClientEffectRequest,
+  type WhiteboardCodeEditClientEffectRequest,
+  type WhiteboardEditableCodeState,
   type WhiteboardTableClientEffectRequest,
 } from '@/lib/agent/runtime/client-effect-contract';
 import { renderNativeWhiteboardLatexHtmlV1 } from '@/lib/action/whiteboard-latex';
@@ -456,6 +460,86 @@ function codeCommitted(
   };
 }
 
+async function codeEditRequest(
+  overrides: Partial<WhiteboardCodeEditClientEffectRequest> = {},
+): Promise<WhiteboardCodeEditClientEffectRequest> {
+  const before: WhiteboardEditableCodeState = {
+    language: 'python',
+    lines: [{ id: 'L1', content: 'x = 1' }],
+    bounds: { x: 80, y: 60, width: 500, height: 300 },
+    showLineNumbers: true,
+    fontSize: 14,
+    rotate: 0,
+  };
+  const after: WhiteboardEditableCodeState = {
+    ...before,
+    lines: [{ id: 'L1', content: 'x = 2' }],
+  };
+  return {
+    ...(await request()),
+    executionId: 'execution-edit-1',
+    idempotencyKey: 'run-1:invocation-1:tool-edit-1',
+    toolCallId: 'tool-edit-1',
+    toolName: 'wb_edit_code',
+    args: {
+      elementId: 'code-1',
+      operation: 'replace_lines',
+      lineIds: ['L1'],
+      content: 'x = 2',
+    },
+    postcondition: {
+      kind: 'whiteboard_code_edited',
+      stableElementId: 'code-1',
+      elementType: 'code',
+      normalizationVersion: CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
+      expectedWhiteboardId: 'whiteboard-1',
+      expectedBeforeCodeDigest: await digestWhiteboardEditableCodeStateV1(before),
+      expectedAfterCodeDigest: await digestWhiteboardEditableCodeStateV1(after),
+      expectedAfterCodeState: after,
+      noOp: false,
+    },
+    ...overrides,
+  };
+}
+
+function codeEditCommitted(
+  effect: WhiteboardCodeEditClientEffectRequest,
+  overrides: Partial<
+    Extract<
+      Extract<ClientEffectAck, { status: 'effect_committed' }>['postcondition'],
+      { normalizationVersion: typeof CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION }
+    >
+  > = {},
+): Extract<ClientEffectAck, { status: 'effect_committed' }> {
+  return {
+    protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
+    executionId: effect.executionId,
+    idempotencyKey: effect.idempotencyKey,
+    clientEventId: `event-${effect.executionId}-committed`,
+    status: 'effect_committed',
+    observedAt: Date.now(),
+    targetBinding: {
+      ...targetBinding,
+      requestId: effect.target.requestId,
+      sessionId: effect.target.sessionId,
+      stageId: effect.target.stageId,
+      sceneId: effect.target.sceneId,
+      whiteboardId: effect.postcondition.expectedWhiteboardId,
+    },
+    postcondition: {
+      stableElementId: effect.postcondition.stableElementId,
+      elementType: 'code',
+      normalizationVersion: CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
+      expectedWhiteboardId: effect.postcondition.expectedWhiteboardId,
+      observedBeforeCodeDigest: effect.postcondition.expectedBeforeCodeDigest,
+      observedAfterCodeDigest: effect.postcondition.expectedAfterCodeDigest,
+      matchingElementCount: 1,
+      noOp: effect.postcondition.noOp,
+      ...overrides,
+    },
+  };
+}
+
 describe('ClientEffectCoordinator', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -613,6 +697,156 @@ describe('ClientEffectCoordinator', () => {
       reason: 'Committed postcondition does not match the requested effect.',
       snapshot: { status: 'accepted' },
     });
+  });
+
+  it('settles a code edit only after exact whiteboard and before/after digests are verified', async () => {
+    const coordinator = new ClientEffectCoordinator();
+    const effect = await codeEditRequest();
+    const registered = coordinator.register(effect);
+    const editBinding = {
+      ...targetBinding,
+      whiteboardId: effect.postcondition.expectedWhiteboardId,
+    };
+    expect(
+      coordinator.acknowledge(effect.executionId, registered.delivery.acknowledgementToken, {
+        ...accepted(effect),
+        targetBinding: editBinding,
+      }),
+    ).toMatchObject({ kind: 'applied', snapshot: { status: 'accepted' } });
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        codeEditCommitted(effect),
+      ),
+    ).toMatchObject({ kind: 'applied', snapshot: { status: 'effect_committed' } });
+    await expect(registered.result).resolves.toMatchObject({
+      status: 'effect_committed',
+      isError: false,
+    });
+  });
+
+  it('rejects an edit accepted on another whiteboard or committed with a different before digest', async () => {
+    const coordinator = new ClientEffectCoordinator();
+    const effect = await codeEditRequest();
+    const registered = coordinator.register(effect);
+    expect(
+      coordinator.acknowledge(effect.executionId, registered.delivery.acknowledgementToken, {
+        ...accepted(effect),
+        targetBinding: { ...targetBinding, whiteboardId: 'whiteboard-other' },
+      }),
+    ).toMatchObject({
+      kind: 'invalid',
+      reason: 'Accepted whiteboard does not match the requested edit target.',
+    });
+
+    const validBinding = {
+      ...targetBinding,
+      whiteboardId: effect.postcondition.expectedWhiteboardId,
+    };
+    coordinator.acknowledge(effect.executionId, registered.delivery.acknowledgementToken, {
+      ...accepted(effect, 'event-edit-accepted'),
+      targetBinding: validBinding,
+    });
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        codeEditCommitted(effect, {
+          observedBeforeCodeDigest: 'sha256:different-before',
+        }),
+      ),
+    ).toMatchObject({
+      kind: 'invalid',
+      reason: 'Committed postcondition does not match the requested effect.',
+      snapshot: { status: 'accepted' },
+    });
+  });
+
+  it('scopes edit ownership by session and whiteboard while locking the same target across requests', async () => {
+    const coordinator = new ClientEffectCoordinator();
+    const first = await codeEditRequest();
+    coordinator.register(first);
+
+    const otherSession = await codeEditRequest({
+      executionId: 'execution-edit-other-session',
+      idempotencyKey: 'other-session-key',
+      target: { ...first.target, requestId: 'request-2', sessionId: 'session-2' },
+    });
+    expect(() => coordinator.register(otherSession)).not.toThrow();
+
+    const otherWhiteboard = await codeEditRequest({
+      executionId: 'execution-edit-other-whiteboard',
+      idempotencyKey: 'other-whiteboard-key',
+      postcondition: {
+        ...first.postcondition,
+        expectedWhiteboardId: 'whiteboard-2',
+      },
+    });
+    expect(() => coordinator.register(otherWhiteboard)).not.toThrow();
+
+    const sameTargetOtherRequest = await codeEditRequest({
+      executionId: 'execution-edit-conflict',
+      idempotencyKey: 'conflict-key',
+      target: { ...first.target, requestId: 'request-concurrent' },
+    });
+    expect(() => coordinator.register(sameTargetOtherRequest)).toThrow(
+      'belongs to another execution in this whiteboard scope',
+    );
+  });
+
+  it('accepts an edit preparation failure before accepted state', async () => {
+    const coordinator = new ClientEffectCoordinator();
+    const effect = await codeEditRequest();
+    const registered = coordinator.register(effect);
+    const failure: ClientEffectAck = {
+      protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
+      executionId: effect.executionId,
+      idempotencyKey: effect.idempotencyKey,
+      clientEventId: 'event-edit-prepare-failed',
+      observedAt: Date.now(),
+      status: 'effect_failed',
+      error: {
+        code: 'CLIENT_EFFECT_CODE_EDIT_WHITEBOARD_MISMATCH',
+        message: 'CLIENT_EFFECT_CODE_EDIT_WHITEBOARD_MISMATCH',
+        retryable: false,
+      },
+    };
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        failure,
+      ),
+    ).toMatchObject({ kind: 'applied', snapshot: { status: 'effect_failed' } });
+    await expect(registered.result).resolves.toMatchObject({
+      status: 'effect_failed',
+      isError: true,
+    });
+  });
+
+  it('accepts only the exact code-edit commit ACK shape', async () => {
+    const effect = await codeEditRequest();
+    const valid = codeEditCommitted(effect);
+    expect(isClientEffectAck(valid)).toBe(true);
+    expect(
+      isClientEffectAck({
+        ...valid,
+        postcondition: {
+          ...valid.postcondition,
+          observedBeforeCodeDigest: '',
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isClientEffectAck({
+        ...valid,
+        postcondition: {
+          ...valid.postcondition,
+          expectedAfterCodeState: effect.postcondition.expectedAfterCodeState,
+        },
+      }),
+    ).toBe(false);
   });
 
   it('rejects a committed line with reversed endpoint semantics or different markers', async () => {

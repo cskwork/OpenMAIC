@@ -37,6 +37,7 @@ import type { SendEvent } from '../types';
 import { buildChildActionTools, createPiWhiteboardRuntimeState } from './classroom-actions';
 import {
   buildNativeWhiteboardChartTool,
+  buildNativeWhiteboardCodeEditTool,
   buildNativeWhiteboardCodeTool,
   buildNativeWhiteboardLatexTool,
   buildNativeWhiteboardLineTool,
@@ -44,6 +45,7 @@ import {
   buildNativeWhiteboardTableTool,
   buildNativeWhiteboardTextTool,
 } from './native-whiteboard';
+import { NativeWhiteboardCodeState } from './native-whiteboard-code-state';
 
 const CallAgentParams = Type.Object({
   agentId: Type.String({
@@ -77,6 +79,7 @@ export function resolveNativeChildCapabilities(opts: {
     | 'wb_draw_table'
     | 'wb_draw_chart'
     | 'wb_draw_code'
+    | 'wb_edit_code'
   >;
   childWebSearchEnabled: boolean;
 } {
@@ -95,6 +98,7 @@ export function resolveNativeChildCapabilities(opts: {
           'wb_draw_table',
           'wb_draw_chart',
           'wb_draw_code',
+          'wb_edit_code',
         ] as const
       ).filter((toolName) => opts.agent.allowedActions.includes(toolName))
     : [];
@@ -611,6 +615,7 @@ export function buildCallAgentTool(opts: {
   let totalAgentAttempts = 0;
   const requestTraceId = nanoid();
   const whiteboardState = createPiWhiteboardRuntimeState(opts.body);
+  const nativeWhiteboardCodeState = new NativeWhiteboardCodeState(opts.body);
   const childRuntimeMode: ChildRuntimeMode = opts.childRuntimeMode ?? 'legacy';
   return {
     name: 'call_agent',
@@ -912,13 +917,42 @@ export function buildCallAgentTool(opts: {
             messageId,
             send: opts.send,
             canExecute: () => actionCount < opts.maxActionsPerAgent,
-            onCommitted: (params) => {
+            onCommittedWithTerminal: (params, terminal) => {
               actionCount += 1;
+              const committedWhiteboardId = terminal.targetBinding?.whiteboardId;
+              if (!committedWhiteboardId) {
+                throw new Error('CLIENT_EFFECT_CODE_COMMIT_BINDING_MISSING');
+              }
+              nativeWhiteboardCodeState.commitDraw(committedWhiteboardId, params);
               const record: WhiteboardActionRecord = {
                 actionName: 'wb_draw_code',
                 agentId: agent.id,
                 agentName: agent.name,
                 params,
+              };
+              whiteboardActions.push(record);
+              opts.onActionDone(record);
+            },
+            onCancelled: abortChild,
+          });
+          nativeTools.push(nativeWhiteboard.tool);
+          clientEffectHandlers.set(nativeWhiteboard.tool.name, nativeWhiteboard.handler);
+        }
+        if (nativeWhiteboardToolNames.includes('wb_edit_code')) {
+          const nativeWhiteboard = buildNativeWhiteboardCodeEditTool({
+            body: opts.body,
+            messageId,
+            send: opts.send,
+            codeState: nativeWhiteboardCodeState,
+            canExecute: () => actionCount < opts.maxActionsPerAgent,
+            onCommitted: (params) => {
+              actionCount += 1;
+              const { afterState: _afterState, noOp: _noOp, ...recordParams } = params;
+              const record: WhiteboardActionRecord = {
+                actionName: 'wb_edit_code',
+                agentId: agent.id,
+                agentName: agent.name,
+                params: recordParams,
               };
               whiteboardActions.push(record);
               opts.onActionDone(record);
@@ -962,6 +996,8 @@ export function buildCallAgentTool(opts: {
               enableWhiteboardTable: nativeWhiteboardToolNames.includes('wb_draw_table'),
               enableWhiteboardChart: nativeWhiteboardToolNames.includes('wb_draw_chart'),
               enableWhiteboardCode: nativeWhiteboardToolNames.includes('wb_draw_code'),
+              enableWhiteboardCodeEdit: nativeWhiteboardToolNames.includes('wb_edit_code'),
+              whiteboardCodeContext: nativeWhiteboardCodeState.buildPromptProjection(),
             }),
             prompt: buildNativeWebChildTurnPrompt(
               params.instruction,
@@ -979,6 +1015,7 @@ export function buildCallAgentTool(opts: {
                 enableWhiteboardTable: nativeWhiteboardToolNames.includes('wb_draw_table'),
                 enableWhiteboardChart: nativeWhiteboardToolNames.includes('wb_draw_chart'),
                 enableWhiteboardCode: nativeWhiteboardToolNames.includes('wb_draw_code'),
+                enableWhiteboardCodeEdit: nativeWhiteboardToolNames.includes('wb_edit_code'),
               },
             ),
             tools: nativeTools,

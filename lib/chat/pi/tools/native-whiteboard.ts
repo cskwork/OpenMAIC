@@ -2,13 +2,16 @@ import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type, type Static } from 'typebox';
 import {
   CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
   CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
+  applyWhiteboardCodeEditV1,
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   digestWhiteboardChartV1,
   digestWhiteboardCodeV1,
+  digestWhiteboardEditableCodeStateV1,
   digestWhiteboardLatexHtmlV1,
   digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
@@ -23,7 +26,10 @@ import {
   normalizeWhiteboardTableV1,
   resolveActiveEffectBudget,
   type ClientEffectRequest,
+  type ClientEffectTerminalResult,
   type ClientEffectTarget,
+  type WhiteboardCodeEditIntent,
+  type WhiteboardEditableCodeState,
 } from '@/lib/agent/runtime/client-effect-contract';
 import { renderNativeWhiteboardLatexHtmlV1 } from '@/lib/action/whiteboard-latex';
 import { piClientEffectCoordinator } from '@/lib/agent/runtime/client-effect-coordinator';
@@ -34,6 +40,7 @@ import type {
 import { WB_OPEN_MS } from '@/lib/choreography/timing';
 import type { StatelessChatRequest } from '@/lib/types/chat';
 import type { SendEvent } from '../types';
+import type { NativeWhiteboardCodeState } from './native-whiteboard-code-state';
 
 const NativeWhiteboardTextParams = Type.Object({
   content: Type.String({
@@ -346,6 +353,45 @@ type NativeWhiteboardCodeCommittedParams = NativeWhiteboardCodeParams & {
   elementId: string;
   lineIds: string[];
 };
+
+const NativeWhiteboardCodeEditParams = Type.Union([
+  Type.Object({
+    elementId: Type.String({ minLength: 1, maxLength: 512 }),
+    operation: Type.Literal('insert_after'),
+    lineId: Type.String({ minLength: 1, maxLength: 256 }),
+    content: Type.String({ maxLength: 16_384 }),
+  }),
+  Type.Object({
+    elementId: Type.String({ minLength: 1, maxLength: 512 }),
+    operation: Type.Literal('insert_before'),
+    lineId: Type.String({ minLength: 1, maxLength: 256 }),
+    content: Type.String({ maxLength: 16_384 }),
+  }),
+  Type.Object({
+    elementId: Type.String({ minLength: 1, maxLength: 512 }),
+    operation: Type.Literal('delete_lines'),
+    lineIds: Type.Array(Type.String({ minLength: 1, maxLength: 256 }), {
+      minItems: 1,
+      maxItems: 200,
+    }),
+  }),
+  Type.Object({
+    elementId: Type.String({ minLength: 1, maxLength: 512 }),
+    operation: Type.Literal('replace_lines'),
+    lineIds: Type.Array(Type.String({ minLength: 1, maxLength: 256 }), {
+      minItems: 1,
+      maxItems: 200,
+    }),
+    content: Type.String({ maxLength: 16_384 }),
+  }),
+]);
+
+type NativeWhiteboardCodeEditParams = Static<typeof NativeWhiteboardCodeEditParams>;
+type NativeWhiteboardCodeEditCommittedParams = NativeWhiteboardCodeEditParams & {
+  newLineIds: string[];
+  afterState: WhiteboardEditableCodeState;
+  noOp: boolean;
+};
 const WHITEBOARD_OPEN_SETTLEMENT_MARGIN_MS = 500;
 
 interface NativeWhiteboardBaseOptions {
@@ -359,6 +405,7 @@ interface NativeWhiteboardBaseOptions {
 
 interface NativeWhiteboardToolOptions<TParams> extends NativeWhiteboardBaseOptions {
   onCommitted?: (params: TParams) => void;
+  onCommittedWithTerminal?: (params: TParams, terminal: ClientEffectTerminalResult) => void;
 }
 
 function prepareClientEffect(
@@ -433,6 +480,7 @@ async function deliverClientEffect<TParams>(opts: {
     const terminal = await registered.result;
     if (terminal.status === 'effect_committed') {
       opts.toolOptions.onCommitted?.(opts.params);
+      opts.toolOptions.onCommittedWithTerminal?.(opts.params, terminal);
       return {
         content: [{ type: 'text', text: opts.successMessage }],
         details: {
@@ -950,6 +998,129 @@ export function buildNativeWhiteboardCodeTool(
       successMessage: `Whiteboard code block ${stableElementId} was committed and verified. Its stable line IDs are ${lineIdentity}.`,
       successDetails: { lineIds },
       failureLabel: 'Whiteboard code block',
+    });
+  };
+
+  return { tool, handler };
+}
+
+export function buildNativeWhiteboardCodeEditTool(
+  opts: NativeWhiteboardToolOptions<NativeWhiteboardCodeEditCommittedParams> & {
+    codeState: NativeWhiteboardCodeState;
+  },
+): {
+  tool: AgentTool<typeof NativeWhiteboardCodeEditParams>;
+  handler: NativeClientEffectHandler;
+} {
+  const tool: AgentTool<typeof NativeWhiteboardCodeEditParams> = {
+    name: 'wb_edit_code',
+    label: 'Edit whiteboard code',
+    description:
+      'Edit one existing code block using its exact Runtime-provided element and line IDs. Supports insert_before, insert_after, delete_lines, and replace_lines. Empty insert/replace content means one blank line. Continue teaching only after the browser commits and verifies the edit.',
+    parameters: NativeWhiteboardCodeEditParams,
+    executionMode: 'sequential',
+    execute: async (): Promise<RuntimeAgentToolResult> => {
+      throw new Error('wb_edit_code requires the browser client-effect executor.');
+    },
+  };
+
+  const handler: NativeClientEffectHandler = async ({ request, params, signal }) => {
+    if (opts.canExecute?.() === false) return actionBudgetFailure();
+    const input = params as NativeWhiteboardCodeEditParams;
+    const expectedWhiteboardId = opts.codeState.getWhiteboardId();
+    const before = opts.codeState.get(input.elementId);
+    if (!expectedWhiteboardId || !before) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Whiteboard code edit was rejected because code element "${input.elementId}" is not present in the request-scoped verified state.`,
+          },
+        ],
+        details: { code: 'CLIENT_EFFECT_CODE_EDIT_ELEMENT_NOT_FOUND' },
+        isError: true,
+      };
+    }
+
+    let transition;
+    try {
+      transition = applyWhiteboardCodeEditV1({
+        before,
+        intent: input as WhiteboardCodeEditIntent,
+        executionId: request.executionId,
+      });
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Whiteboard code edit input was rejected: ${
+              error instanceof Error ? error.message : 'invalid input'
+            }.`,
+          },
+        ],
+        details: {
+          code: error instanceof Error ? error.message : 'CLIENT_EFFECT_CODE_EDIT_INPUT_INVALID',
+        },
+        isError: true,
+      };
+    }
+
+    const prepared = prepareClientEffect(opts, request);
+    if ('isError' in prepared) return prepared;
+    const expectedBeforeCodeDigest = await digestWhiteboardEditableCodeStateV1(before);
+    const expectedAfterCodeDigest = await digestWhiteboardEditableCodeStateV1(transition.after);
+    const committedParams: NativeWhiteboardCodeEditCommittedParams = {
+      ...input,
+      newLineIds: transition.newLineIds,
+      afterState: transition.after,
+      noOp: transition.noOp,
+    };
+    const newLineIdentity =
+      transition.newLineIds.length > 0
+        ? ` New stable line IDs in output order: ${transition.newLineIds.join(', ')}.`
+        : ' No new line IDs were created.';
+    const effectRequest: ClientEffectRequest = {
+      ...request,
+      toolName: 'wb_edit_code',
+      target: prepared.target,
+      activeEffectBudgetMs: prepared.activeEffectBudgetMs,
+      postcondition: {
+        kind: 'whiteboard_code_edited',
+        stableElementId: input.elementId,
+        elementType: 'code',
+        normalizationVersion: CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
+        expectedWhiteboardId,
+        expectedBeforeCodeDigest,
+        expectedAfterCodeDigest,
+        expectedAfterCodeState: transition.after,
+        noOp: transition.noOp,
+      },
+    };
+    return deliverClientEffect({
+      request: effectRequest,
+      params: committedParams,
+      signal,
+      toolOptions: {
+        ...opts,
+        onCommitted: undefined,
+        onCommittedWithTerminal: (committed, terminal) => {
+          const committedWhiteboardId = terminal.targetBinding?.whiteboardId;
+          if (!committedWhiteboardId) {
+            throw new Error('CLIENT_EFFECT_CODE_EDIT_COMMIT_BINDING_MISSING');
+          }
+          opts.codeState.commit(committedWhiteboardId, committed.elementId, committed.afterState);
+          opts.onCommitted?.(committed);
+          opts.onCommittedWithTerminal?.(committed, terminal);
+        },
+      },
+      successMessage: `Whiteboard code block ${input.elementId} was edited and its before/after postconditions were verified.${newLineIdentity}`,
+      successDetails: {
+        lineIds: transition.after.lines.map((line) => line.id),
+        newLineIds: transition.newLineIds,
+        noOp: transition.noOp,
+      },
+      failureLabel: 'Whiteboard code edit',
     });
   };
 

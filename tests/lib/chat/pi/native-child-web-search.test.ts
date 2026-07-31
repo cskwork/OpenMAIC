@@ -325,8 +325,22 @@ describe('Phase 1 Child native web_search', () => {
       }),
     ).toMatchObject({
       nativeWhiteboardEnabled: true,
-      nativeWhiteboardToolNames: ['wb_draw_code'],
+      nativeWhiteboardToolNames: ['wb_draw_code', 'wb_edit_code'],
       childWebSearchEnabled: false,
+    });
+    expect(
+      resolveNativeChildCapabilities({
+        ...base,
+        enableNativeChildWebSearch: true,
+        agent: {
+          role: base.role,
+          allowedActions: ['wb_edit_code'],
+        },
+      }),
+    ).toMatchObject({
+      nativeWhiteboardEnabled: true,
+      nativeWhiteboardToolNames: ['wb_edit_code'],
+      childWebSearchEnabled: true,
     });
     expect(
       resolveNativeChildCapabilities({
@@ -338,7 +352,7 @@ describe('Phase 1 Child native web_search', () => {
       }),
     ).toMatchObject({
       nativeWhiteboardEnabled: true,
-      nativeWhiteboardToolNames: ['wb_draw_shape'],
+      nativeWhiteboardToolNames: ['wb_draw_shape', 'wb_edit_code'],
       childWebSearchEnabled: false,
     });
   });

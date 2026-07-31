@@ -98,7 +98,7 @@ function bindingsEqual(left: AcceptedTargetBinding, right: AcceptedTargetBinding
 
 export class ClientEffectCoordinator {
   private readonly entries = new Map<string, CoordinatorEntry>();
-  private readonly stableElementOwners = new Map<string, string>();
+  private readonly elementOwners = new Map<string, string>();
   private readonly tombstones = new Map<string, CoordinatorTombstone>();
 
   constructor(
@@ -137,10 +137,14 @@ export class ClientEffectCoordinator {
     ) {
       throw new Error('Client effect requires positive active and hard timing bounds.');
     }
-    const stableElementId = request.postcondition.stableElementId;
-    const owner = this.stableElementOwners.get(stableElementId);
+    const elementOwnerKey = this.elementOwnerKey(request);
+    const owner = this.elementOwners.get(elementOwnerKey);
     if (owner && owner !== request.executionId) {
-      throw new Error(`Stable element "${stableElementId}" belongs to another execution.`);
+      const scopeLabel =
+        request.postcondition.kind === 'whiteboard_code_edited' ? ' in this whiteboard scope' : '';
+      throw new Error(
+        `Stable element "${request.postcondition.stableElementId}" belongs to another execution${scopeLabel}.`,
+      );
     }
 
     let resolveResult!: (result: ClientEffectTerminalResult) => void;
@@ -162,7 +166,7 @@ export class ClientEffectCoordinator {
       resolveResult,
     };
     this.entries.set(request.executionId, entry);
-    this.stableElementOwners.set(stableElementId, request.executionId);
+    this.elementOwners.set(elementOwnerKey, request.executionId);
     this.trace(entry, { type: 'registered' });
     this.armTimers(entry);
 
@@ -288,7 +292,7 @@ export class ClientEffectCoordinator {
     this.clearTimers(entry);
     const snapshot = this.snapshot(entry);
     this.entries.delete(executionId);
-    this.stableElementOwners.delete(entry.request.postcondition.stableElementId);
+    this.elementOwners.delete(this.elementOwnerKey(entry.request));
     this.tombstones.set(executionId, {
       acknowledgementTokenDigest: tokenDigest(entry.acknowledgementToken),
       idempotencyKey: entry.request.idempotencyKey,
@@ -305,7 +309,7 @@ export class ClientEffectCoordinator {
   clearForTests(): void {
     for (const entry of this.entries.values()) this.clearTimers(entry);
     this.entries.clear();
-    this.stableElementOwners.clear();
+    this.elementOwners.clear();
     this.tombstones.clear();
   }
 
@@ -327,6 +331,12 @@ export class ClientEffectCoordinator {
           ack.targetBinding.sceneId !== target.sceneId
         ) {
           return 'Accepted target does not match the requested stage and scene.';
+        }
+        if (
+          entry.request.postcondition.kind === 'whiteboard_code_edited' &&
+          ack.targetBinding.whiteboardId !== entry.request.postcondition.expectedWhiteboardId
+        ) {
+          return 'Accepted whiteboard does not match the requested edit target.';
         }
         entry.targetBinding = ack.targetBinding;
         entry.status = 'accepted';
@@ -391,7 +401,17 @@ export class ClientEffectCoordinator {
               observed.observedChartDigest === expected.expectedChartDigest) ||
             (expected.kind === 'whiteboard_code_exists' &&
               observed.elementType === 'code' &&
-              observed.observedCodeDigest === expected.expectedCodeDigest));
+              observed.normalizationVersion === expected.normalizationVersion &&
+              'observedCodeDigest' in observed &&
+              observed.observedCodeDigest === expected.expectedCodeDigest) ||
+            (expected.kind === 'whiteboard_code_edited' &&
+              observed.elementType === 'code' &&
+              observed.normalizationVersion === expected.normalizationVersion &&
+              'expectedWhiteboardId' in observed &&
+              observed.expectedWhiteboardId === expected.expectedWhiteboardId &&
+              observed.observedBeforeCodeDigest === expected.expectedBeforeCodeDigest &&
+              observed.observedAfterCodeDigest === expected.expectedAfterCodeDigest &&
+              observed.noOp === expected.noOp));
         if (!postconditionMatches) {
           return 'Committed postcondition does not match the requested effect.';
         }
@@ -399,13 +419,34 @@ export class ClientEffectCoordinator {
         return null;
       }
       case 'effect_failed':
-        if (entry.status !== 'accepted') return 'effect_failed requires accepted state.';
+        if (
+          entry.status !== 'accepted' &&
+          !(
+            entry.status === 'pending' &&
+            entry.request.postcondition.kind === 'whiteboard_code_edited'
+          )
+        ) {
+          return 'effect_failed requires accepted state, except for code-edit preparation failure.';
+        }
         this.settle(entry, 'effect_failed', ack.error);
         return null;
       case 'cancelled':
         this.settle(entry, 'cancelled', ack.error);
         return null;
     }
+  }
+
+  private elementOwnerKey(request: ClientEffectRequest): string {
+    if (request.postcondition.kind !== 'whiteboard_code_edited') {
+      return request.postcondition.stableElementId;
+    }
+    const whiteboardScope = request.postcondition.expectedWhiteboardId;
+    return [
+      request.target.sessionId,
+      request.target.stageId,
+      whiteboardScope,
+      request.postcondition.stableElementId,
+    ].join('\u0000');
   }
 
   private armTimers(entry: CoordinatorEntry): void {

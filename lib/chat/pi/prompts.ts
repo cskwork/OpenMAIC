@@ -49,12 +49,26 @@ function buildDirectorCourseOutline(body: StatelessChatRequest): string {
     .join('\n');
 }
 
-function buildThinChildContext(body: StatelessChatRequest): string {
+function buildThinChildContext(
+  body: StatelessChatRequest,
+  options: { excludeWhiteboardCode?: boolean } = {},
+): string {
   const currentScene = body.storeState.currentSceneId
     ? body.storeState.scenes.find((scene) => scene.id === body.storeState.currentSceneId)
     : null;
+  const stage =
+    options.excludeWhiteboardCode && body.storeState.stage
+      ? {
+          ...body.storeState.stage,
+          whiteboard: body.storeState.stage.whiteboard?.map((whiteboard) => ({
+            ...whiteboard,
+            elements: whiteboard.elements.filter((element) => element.type !== 'code'),
+          })),
+        }
+      : body.storeState.stage;
   const whiteboardRuntimeContext = buildStateContext({
     ...body.storeState,
+    stage,
     scenes: [],
     outlines: [],
     currentSceneId: null,
@@ -259,6 +273,8 @@ export function buildNativeWebChildPrompt(
     enableWhiteboardTable?: boolean;
     enableWhiteboardChart?: boolean;
     enableWhiteboardCode?: boolean;
+    enableWhiteboardCodeEdit?: boolean;
+    whiteboardCodeContext?: string;
   } = {
     enableWebSearch: true,
   },
@@ -289,7 +305,8 @@ export function buildNativeWebChildPrompt(
     options.enableWhiteboardLatex ||
     options.enableWhiteboardTable ||
     options.enableWhiteboardChart ||
-    options.enableWhiteboardCode
+    options.enableWhiteboardCode ||
+    options.enableWhiteboardCodeEdit
       ? [
           '# Native Whiteboard',
           options.enableWhiteboardText
@@ -313,6 +330,9 @@ export function buildNativeWebChildPrompt(
           options.enableWhiteboardCode
             ? 'You may call `wb_draw_code` to place one bounded code block with stable Runtime-generated line IDs. Preserve indentation and line breaks.'
             : '',
+          options.enableWhiteboardCodeEdit
+            ? 'You may call `wb_edit_code` to edit one existing code block. Use only exact Runtime-provided element and line IDs, wait for the verified result, and never redraw the block as a substitute for an edit.'
+            : '',
           'The board uses a 1000 × 563 coordinate system. Keep every complete element within the visible board.',
           'Before calling it, say briefly what you are about to show. Wait for the tool result, then continue explaining in this same turn.',
           'A successful result means the browser verified the element. A failed result must not be described as successful.',
@@ -330,7 +350,10 @@ export function buildNativeWebChildPrompt(
     '- Do not impersonate another classroom agent.',
     '',
     '# Current State',
-    buildThinChildContext(body),
+    buildThinChildContext(body, {
+      excludeWhiteboardCode: options.enableWhiteboardCodeEdit === true,
+    }),
+    options.whiteboardCodeContext ?? '',
   ]
     .filter(Boolean)
     .join('\n');
@@ -349,6 +372,7 @@ export function buildNativeWebChildTurnPrompt(
     enableWhiteboardTable?: boolean;
     enableWhiteboardChart?: boolean;
     enableWhiteboardCode?: boolean;
+    enableWhiteboardCodeEdit?: boolean;
   } = {
     enableWebSearch: true,
   },
@@ -393,6 +417,9 @@ export function buildNativeWebChildTurnPrompt(
       : '',
     options.enableWhiteboardCode
       ? 'Use `wb_draw_code` only when a code example genuinely helps. Preserve indentation, speak before the tool call, and continue after its tool result. Treat the returned element and line IDs as authoritative references; do not invent replacements.'
+      : '',
+    options.enableWhiteboardCodeEdit
+      ? 'Use `wb_edit_code` only for an existing code block whose exact element and line IDs are present in Runtime-verified state or a prior tool result. Speak before the edit and continue only after the committed result. On failure, correct the target or explain without claiming the edit happened.'
       : '',
     'After the tool result, provide the final classroom response in this same Child run.',
   ].join('\n');

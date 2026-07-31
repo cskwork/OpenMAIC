@@ -1,6 +1,7 @@
 import { createStageAPI, type StageStore } from '@/lib/api/stage-api';
 import {
   CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
   CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
@@ -10,9 +11,11 @@ import {
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
   assertWhiteboardChartSpecV1,
   assertWhiteboardCodeSpecV1,
+  assertWhiteboardEditableCodeStateV1,
   assertWhiteboardTableSpecV1,
   digestWhiteboardChartV1,
   digestWhiteboardCodeV1,
+  digestWhiteboardEditableCodeStateV1,
   digestWhiteboardLatexHtmlV1,
   digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
@@ -28,12 +31,14 @@ import {
   normalizeVisibleTextV1,
   whiteboardChartSpecsEqual,
   whiteboardCodeSpecsEqual,
+  whiteboardEditableCodeStatesEqual,
   whiteboardTableSpecsEqual,
   type AcceptedTargetBinding,
   type ClientEffectTarget,
   type WhiteboardLatexSpec,
   type WhiteboardChartSpec,
   type WhiteboardCodeSpec,
+  type WhiteboardEditableCodeState,
   type WhiteboardLineMarker,
   type WhiteboardLineSpec,
   type WhiteboardLineStyle,
@@ -160,6 +165,10 @@ type NativeCodeElement = PPTCodeElement & {
   clientEffectExecutionId?: string;
   clientEffectCodeDigest?: string;
   clientEffectNormalizationVersion?: string;
+  clientEffectLastEditExecutionId?: string;
+  clientEffectLastEditBeforeDigest?: string;
+  clientEffectLastEditAfterDigest?: string;
+  clientEffectEditNormalizationVersion?: string;
 };
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -225,6 +234,31 @@ export function prepareNativeWhiteboardTarget(
     stageId: target.stageId,
     sceneId: target.sceneId,
     whiteboardId: whiteboard.data.id,
+    bindingVersion,
+  };
+}
+
+export function prepareNativeExistingWhiteboardTarget(
+  store: StageStore,
+  target: ClientEffectTarget,
+  expectedWhiteboardId: string,
+  bindingVersion = 1,
+): AcceptedTargetBinding {
+  assertStageAndScene(store, target);
+  if (typeof expectedWhiteboardId !== 'string' || !expectedWhiteboardId) {
+    throw new Error('CLIENT_EFFECT_CODE_EDIT_WHITEBOARD_ID_INVALID');
+  }
+  const whiteboards = store.getState().stage?.whiteboard;
+  const latestWhiteboard = whiteboards?.at(-1);
+  if (!latestWhiteboard || latestWhiteboard.id !== expectedWhiteboardId) {
+    throw new Error('CLIENT_EFFECT_CODE_EDIT_WHITEBOARD_MISMATCH');
+  }
+  return {
+    requestId: target.requestId,
+    sessionId: target.sessionId,
+    stageId: target.stageId,
+    sceneId: target.sceneId,
+    whiteboardId: expectedWhiteboardId,
     bindingVersion,
   };
 }
@@ -1680,4 +1714,201 @@ export async function executeNativeWhiteboardCodeEffect(opts: {
   });
   throwIfAborted(opts.signal);
   return { replayed: false, postcondition };
+}
+
+export interface NativeWhiteboardCodeEditPostconditionResult {
+  stableElementId: string;
+  elementType: 'code';
+  normalizationVersion: typeof CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION;
+  expectedWhiteboardId: string;
+  observedBeforeCodeDigest: string;
+  observedAfterCodeDigest: string;
+  matchingElementCount: 1;
+  noOp: boolean;
+}
+
+function editableCodeStateFromElement(element: NativeCodeElement): WhiteboardEditableCodeState {
+  if (
+    element.type !== 'code' ||
+    typeof element.left !== 'number' ||
+    typeof element.top !== 'number' ||
+    typeof element.width !== 'number' ||
+    typeof element.height !== 'number' ||
+    !Array.isArray(element.lines)
+  ) {
+    throw new Error('CLIENT_EFFECT_CODE_EDIT_ELEMENT_MISMATCH');
+  }
+  return assertWhiteboardEditableCodeStateV1({
+    language: element.language,
+    lines: element.lines,
+    ...(element.fileName !== undefined ? { fileName: element.fileName } : {}),
+    bounds: {
+      x: element.left,
+      y: element.top,
+      width: element.width,
+      height: element.height,
+    },
+    showLineNumbers: element.showLineNumbers ?? true,
+    fontSize: element.fontSize ?? 14,
+    rotate: element.rotate,
+  });
+}
+
+function readEditableCodeElement(opts: {
+  store: StageStore;
+  targetBinding: AcceptedTargetBinding;
+  stableElementId: string;
+  expectedWhiteboardId: string;
+  signal?: AbortSignal;
+}): { element: NativeCodeElement; state: WhiteboardEditableCodeState } {
+  throwIfAborted(opts.signal);
+  assertStageAndScene(opts.store, opts.targetBinding);
+  if (opts.targetBinding.whiteboardId !== opts.expectedWhiteboardId) {
+    throw new Error('CLIENT_EFFECT_CODE_EDIT_WHITEBOARD_MISMATCH');
+  }
+  const latestWhiteboard = opts.store.getState().stage?.whiteboard?.at(-1);
+  if (!latestWhiteboard || latestWhiteboard.id !== opts.expectedWhiteboardId) {
+    throw new Error('CLIENT_EFFECT_CODE_EDIT_WHITEBOARD_MISMATCH');
+  }
+  const elementsResult = createStageAPI(opts.store).whiteboard.listElements(
+    opts.expectedWhiteboardId,
+  );
+  if (!elementsResult.success || !elementsResult.data) {
+    throw new Error(elementsResult.error || 'CLIENT_EFFECT_CODE_EDIT_WHITEBOARD_NOT_FOUND');
+  }
+  const matches = elementsResult.data.filter((element) => element.id === opts.stableElementId);
+  if (matches.length !== 1) {
+    throw new Error(
+      matches.length === 0
+        ? 'CLIENT_EFFECT_CODE_EDIT_ELEMENT_NOT_FOUND'
+        : 'CLIENT_EFFECT_CODE_EDIT_DUPLICATE_ELEMENT_ID',
+    );
+  }
+  const element = matches[0] as NativeCodeElement;
+  if (element.type !== 'code') throw new Error('CLIENT_EFFECT_CODE_EDIT_ELEMENT_TYPE_MISMATCH');
+  return { element, state: editableCodeStateFromElement(element) };
+}
+
+export async function executeNativeWhiteboardCodeEditEffect(opts: {
+  store: StageStore;
+  targetBinding: AcceptedTargetBinding;
+  executionId: string;
+  stableElementId: string;
+  expectedWhiteboardId: string;
+  expectedBeforeCodeDigest: string;
+  expectedAfterCodeState: WhiteboardEditableCodeState;
+  expectedAfterCodeDigest: string;
+  noOp: boolean;
+  signal?: AbortSignal;
+}): Promise<NativeWhiteboardExecutionResult<NativeWhiteboardCodeEditPostconditionResult>> {
+  throwIfAborted(opts.signal);
+  if (
+    typeof opts.executionId !== 'string' ||
+    !opts.executionId ||
+    typeof opts.stableElementId !== 'string' ||
+    !opts.stableElementId ||
+    typeof opts.expectedWhiteboardId !== 'string' ||
+    !opts.expectedWhiteboardId ||
+    typeof opts.expectedBeforeCodeDigest !== 'string' ||
+    !opts.expectedBeforeCodeDigest ||
+    typeof opts.expectedAfterCodeDigest !== 'string' ||
+    !opts.expectedAfterCodeDigest
+  ) {
+    throw new Error('CLIENT_EFFECT_CODE_EDIT_INPUT_INVALID');
+  }
+  const expectedAfter = assertWhiteboardEditableCodeStateV1(opts.expectedAfterCodeState);
+  if (
+    (await digestWhiteboardEditableCodeStateV1(expectedAfter)) !== opts.expectedAfterCodeDigest ||
+    opts.noOp !== (opts.expectedBeforeCodeDigest === opts.expectedAfterCodeDigest)
+  ) {
+    throw new Error('CLIENT_EFFECT_CODE_EDIT_AFTER_STATE_MISMATCH');
+  }
+
+  const first = readEditableCodeElement(opts);
+  const firstDigest = await digestWhiteboardEditableCodeStateV1(first.state);
+  throwIfAborted(opts.signal);
+  const second = readEditableCodeElement(opts);
+  if (!whiteboardEditableCodeStatesEqual(first.state, second.state)) {
+    throw new Error('CLIENT_EFFECT_CODE_EDIT_CONCURRENT_CHANGE');
+  }
+
+  const replayed =
+    firstDigest === opts.expectedAfterCodeDigest &&
+    second.element.clientEffectLastEditExecutionId === opts.executionId &&
+    second.element.clientEffectLastEditBeforeDigest === opts.expectedBeforeCodeDigest &&
+    second.element.clientEffectLastEditAfterDigest === opts.expectedAfterCodeDigest &&
+    second.element.clientEffectEditNormalizationVersion ===
+      CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION;
+
+  if (!replayed) {
+    if (
+      firstDigest === opts.expectedAfterCodeDigest &&
+      second.element.clientEffectLastEditExecutionId &&
+      second.element.clientEffectLastEditExecutionId !== opts.executionId
+    ) {
+      throw new Error('CLIENT_EFFECT_CODE_EDIT_STALE_BEFORE_STATE');
+    }
+    if (firstDigest !== opts.expectedBeforeCodeDigest) {
+      throw new Error('CLIENT_EFFECT_CODE_EDIT_STALE_BEFORE_STATE');
+    }
+    throwIfAborted(opts.signal);
+    const updatedElement: NativeCodeElement = {
+      ...second.element,
+      language: expectedAfter.language,
+      lines: expectedAfter.lines.map((line) => ({ ...line })),
+      ...(expectedAfter.fileName !== undefined
+        ? { fileName: expectedAfter.fileName }
+        : { fileName: undefined }),
+      left: expectedAfter.bounds.x,
+      top: expectedAfter.bounds.y,
+      width: expectedAfter.bounds.width,
+      height: expectedAfter.bounds.height,
+      showLineNumbers: expectedAfter.showLineNumbers,
+      fontSize: expectedAfter.fontSize,
+      rotate: expectedAfter.rotate,
+      clientEffectLastEditExecutionId: opts.executionId,
+      clientEffectLastEditBeforeDigest: opts.expectedBeforeCodeDigest,
+      clientEffectLastEditAfterDigest: opts.expectedAfterCodeDigest,
+      clientEffectEditNormalizationVersion: CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
+    };
+    const updateResult = createStageAPI(opts.store).whiteboard.updateElement(
+      updatedElement,
+      opts.expectedWhiteboardId,
+    );
+    if (!updateResult.success) {
+      throw new Error(updateResult.error || 'CLIENT_EFFECT_CODE_EDIT_MUTATION_FAILED');
+    }
+  }
+
+  throwIfAborted(opts.signal);
+  const afterFirst = readEditableCodeElement(opts);
+  const observedAfterCodeDigest = await digestWhiteboardEditableCodeStateV1(afterFirst.state);
+  throwIfAborted(opts.signal);
+  const afterSecond = readEditableCodeElement(opts);
+  if (
+    !whiteboardEditableCodeStatesEqual(afterFirst.state, afterSecond.state) ||
+    !whiteboardEditableCodeStatesEqual(afterFirst.state, expectedAfter) ||
+    observedAfterCodeDigest !== opts.expectedAfterCodeDigest ||
+    afterSecond.element.clientEffectLastEditExecutionId !== opts.executionId ||
+    afterSecond.element.clientEffectLastEditBeforeDigest !== opts.expectedBeforeCodeDigest ||
+    afterSecond.element.clientEffectLastEditAfterDigest !== opts.expectedAfterCodeDigest ||
+    afterSecond.element.clientEffectEditNormalizationVersion !==
+      CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION
+  ) {
+    throw new Error('CLIENT_EFFECT_CODE_EDIT_POSTCONDITION_MISMATCH');
+  }
+
+  return {
+    replayed,
+    postcondition: {
+      stableElementId: opts.stableElementId,
+      elementType: 'code',
+      normalizationVersion: CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
+      expectedWhiteboardId: opts.expectedWhiteboardId,
+      observedBeforeCodeDigest: opts.expectedBeforeCodeDigest,
+      observedAfterCodeDigest,
+      matchingElementCount: 1,
+      noOp: opts.noOp,
+    },
+  };
 }

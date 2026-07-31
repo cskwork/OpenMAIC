@@ -3,14 +3,17 @@ import type { StageStore } from '@/lib/api/stage-api';
 import { BrowserClientEffectRuntime } from '@/lib/agent/client/client-effect-runtime';
 import {
   CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
   CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  applyWhiteboardCodeEditV1,
   digestWhiteboardChartV1,
   digestWhiteboardCodeV1,
+  digestWhiteboardEditableCodeStateV1,
   digestWhiteboardLatexHtmlV1,
   digestWhiteboardLatexV1,
   digestWhiteboardLineV1,
@@ -25,6 +28,7 @@ import {
   normalizeWhiteboardTableV1,
   type ClientEffectAck,
   type ClientEffectDelivery,
+  type WhiteboardEditableCodeState,
 } from '@/lib/agent/runtime/client-effect-contract';
 import { renderNativeWhiteboardLatexHtmlV1 } from '@/lib/action/whiteboard-latex';
 import { TOOL_EXECUTION_PROTOCOL_VERSION } from '@/lib/agent/runtime/native-child-contract';
@@ -417,6 +421,83 @@ async function codeDelivery(): Promise<ClientEffectDelivery> {
         normalizationVersion: CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
         expectedCodeDigest: await digestWhiteboardCodeV1(code),
         ...code,
+      },
+    },
+  };
+}
+
+async function codeEditDelivery(
+  store: StageStore,
+  overrides: {
+    expectedWhiteboardId?: string;
+    executionId?: string;
+  } = {},
+): Promise<ClientEffectDelivery> {
+  const whiteboard = store.getState().stage?.whiteboard?.at(-1);
+  const element = whiteboard?.elements.find((candidate) => candidate.id === 'code-element-1');
+  if (!whiteboard || !element || element.type !== 'code') {
+    throw new Error('Expected an existing code element.');
+  }
+  const before: WhiteboardEditableCodeState = {
+    language: element.language,
+    lines: element.lines,
+    ...(element.fileName !== undefined ? { fileName: element.fileName } : {}),
+    bounds: {
+      x: element.left,
+      y: element.top,
+      width: element.width,
+      height: element.height,
+    },
+    showLineNumbers: element.showLineNumbers ?? true,
+    fontSize: element.fontSize ?? 14,
+    rotate: element.rotate,
+  };
+  const executionId = overrides.executionId ?? 'execution-code-edit-1';
+  const intent = {
+    elementId: element.id,
+    operation: 'replace_lines' as const,
+    lineIds: ['L1'],
+    content: 'const slope = 3;',
+  };
+  const transition = applyWhiteboardCodeEditV1({ before, intent, executionId });
+  return {
+    acknowledgementToken: `code-edit-capability-${executionId}`,
+    request: {
+      protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
+      kind: 'client_effect',
+      traceId: 'trace-code-edit-1',
+      runId: 'run-code-edit-1',
+      agentInvocationId: 'message-code-edit-1',
+      agentId: 'teacher-1',
+      depth: 1,
+      sequence: 1,
+      toolCallId: `tool-call-${executionId}`,
+      executionId,
+      idempotencyKey: `run-code-edit-1:message-code-edit-1:${executionId}`,
+      toolName: 'wb_edit_code',
+      args: intent,
+      argsDigest: 'sha256:code-edit-args',
+      issuedAt: 1,
+      deadlineAt: Date.now() + 10_000,
+      attempt: 1,
+      target: {
+        requestId: 'request-1',
+        sessionId: 'session-1',
+        stageId: 'stage-1',
+        sceneId: 'scene-1',
+        messageId: 'message-code-edit-1',
+      },
+      activeEffectBudgetMs: 2_000,
+      postcondition: {
+        kind: 'whiteboard_code_edited',
+        stableElementId: element.id,
+        elementType: 'code',
+        normalizationVersion: CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
+        expectedWhiteboardId: overrides.expectedWhiteboardId ?? whiteboard.id,
+        expectedBeforeCodeDigest: await digestWhiteboardEditableCodeStateV1(before),
+        expectedAfterCodeDigest: await digestWhiteboardEditableCodeStateV1(transition.after),
+        expectedAfterCodeState: transition.after,
+        noOp: transition.noOp,
       },
     },
   };
@@ -831,6 +912,122 @@ describe('BrowserClientEffectRuntime', () => {
         { id: 'L4', content: '' },
       ],
     });
+  });
+
+  it('edits one existing code block with exact before/after ACKs and duplicate delivery safety', async () => {
+    const store = createStore();
+    const acknowledgements: ClientEffectAck[] = [];
+    const runtime = new BrowserClientEffectRuntime({
+      sessionId: 'session-1',
+      requestId: 'request-1',
+      store,
+      fetchAck: async (_url, init) => {
+        const ack = JSON.parse(String(init?.body)) as ClientEffectAck;
+        acknowledgements.push(ack);
+        return new Response(JSON.stringify({ success: true, state: { status: ack.status } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+      waitForPresentation: async () => {},
+      ensureWhiteboardVisible: async () => {},
+    });
+    await expect(runtime.execute(await codeDelivery(), new AbortController().signal)).resolves.toBe(
+      'effect_committed',
+    );
+    acknowledgements.length = 0;
+    const effect = await codeEditDelivery(store);
+
+    const first = runtime.execute(effect, new AbortController().signal);
+    const duplicate = runtime.execute(effect, new AbortController().signal);
+    await expect(first).resolves.toBe('effect_committed');
+    await expect(duplicate).resolves.toBe('effect_committed');
+    if (effect.request.postcondition.kind !== 'whiteboard_code_edited') {
+      throw new Error('Expected a code edit delivery.');
+    }
+    expect(acknowledgements.map((ack) => ack.status)).toEqual([
+      'presentation_paused',
+      'presentation_resumed',
+      'accepted',
+      'effect_committed',
+    ]);
+    expect(acknowledgements.at(-1)).toMatchObject({
+      status: 'effect_committed',
+      targetBinding: { whiteboardId: effect.request.postcondition.expectedWhiteboardId },
+      postcondition: {
+        stableElementId: 'code-element-1',
+        elementType: 'code',
+        normalizationVersion: CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
+        expectedWhiteboardId: effect.request.postcondition.expectedWhiteboardId,
+        observedBeforeCodeDigest: effect.request.postcondition.expectedBeforeCodeDigest,
+        observedAfterCodeDigest: effect.request.postcondition.expectedAfterCodeDigest,
+        matchingElementCount: 1,
+        noOp: false,
+      },
+    });
+    const elements = store
+      .getState()
+      .stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements);
+    expect(elements).toHaveLength(1);
+    expect(elements?.[0]).toMatchObject({
+      id: 'code-element-1',
+      lines: [
+        { id: 'L1', content: 'const slope = 3;' },
+        { id: 'L2', content: '' },
+        { id: 'L3', content: '  return slope;' },
+        { id: 'L4', content: '' },
+      ],
+      clientEffectLastEditExecutionId: effect.request.executionId,
+    });
+  });
+
+  it('fails an edit bound to another whiteboard before accepted without creating or switching boards', async () => {
+    const store = createStore();
+    const acknowledgements: ClientEffectAck[] = [];
+    const runtime = new BrowserClientEffectRuntime({
+      sessionId: 'session-1',
+      requestId: 'request-1',
+      store,
+      fetchAck: async (_url, init) => {
+        const ack = JSON.parse(String(init?.body)) as ClientEffectAck;
+        acknowledgements.push(ack);
+        return new Response(JSON.stringify({ success: true, state: { status: ack.status } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+      waitForPresentation: async () => {},
+      ensureWhiteboardVisible: async () => {},
+    });
+    await expect(runtime.execute(await codeDelivery(), new AbortController().signal)).resolves.toBe(
+      'effect_committed',
+    );
+    const originalWhiteboardId = store.getState().stage?.whiteboard?.at(-1)?.id;
+    acknowledgements.length = 0;
+
+    await expect(
+      runtime.execute(
+        await codeEditDelivery(store, {
+          expectedWhiteboardId: 'whiteboard-not-current',
+          executionId: 'execution-code-edit-mismatch',
+        }),
+        new AbortController().signal,
+      ),
+    ).resolves.toBe('effect_failed');
+    expect(acknowledgements.map((ack) => ack.status)).toEqual([
+      'presentation_paused',
+      'presentation_resumed',
+      'effect_failed',
+    ]);
+    expect(acknowledgements.at(-1)).toMatchObject({
+      status: 'effect_failed',
+      error: {
+        code: 'CLIENT_EFFECT_CODE_EDIT_WHITEBOARD_MISMATCH',
+        retryable: false,
+      },
+    });
+    expect(store.getState().stage?.whiteboard).toHaveLength(1);
+    expect(store.getState().stage?.whiteboard?.at(-1)?.id).toBe(originalWhiteboardId);
   });
 
   it('rejects a duplicate line reservation whose direction or markers changed', async () => {
