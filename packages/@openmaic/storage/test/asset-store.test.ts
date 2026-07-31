@@ -95,37 +95,30 @@ function makePool(dbName: string): Pool {
 const blob = (s: string, type = 'text/plain'): Blob => new Blob([s], { type });
 const bytes = (s: string): Uint8Array => new TextEncoder().encode(s);
 
-function replaceGlobal(key: 'BroadcastChannel' | 'indexedDB', value: unknown): () => void {
-  const descriptor = Object.getOwnPropertyDescriptor(globalThis, key);
-  Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
-  return () => {
-    if (descriptor) Object.defineProperty(globalThis, key, descriptor);
-    else Reflect.deleteProperty(globalThis, key);
-  };
-}
-
 function cacheBookkeeping(store: BrowserAssetStore): {
-  epochs: number;
-  pending: number;
-  orphans: number;
-  urls: number;
+  entries: number;
+  retiredRefs: number;
+  retiredUrls: number;
 } {
   const cache = (
     store as unknown as {
       urls: {
-        epochs: Map<string, number>;
-        pending: Map<string, Set<unknown>>;
-        orphans: Map<string, Set<string>>;
-        urls: Map<string, unknown>;
+        entries: Map<string, unknown>;
+        retired: Map<string, unknown[]>;
       };
     }
   ).urls;
   return {
-    epochs: cache.epochs.size,
-    pending: cache.pending.size,
-    orphans: cache.orphans.size,
-    urls: cache.urls.size,
+    entries: cache.entries.size,
+    retiredRefs: cache.retired.size,
+    retiredUrls: [...cache.retired.values()].reduce((total, urls) => total + urls.length, 0),
   };
+}
+
+async function macrotaskHops(count = 3): Promise<void> {
+  for (let hop = 0; hop < count; hop += 1) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
 }
 
 interface ReadGate {
@@ -219,16 +212,18 @@ describe('BrowserAssetStore de-duplicates bytes beneath allocated ids', () => {
 });
 
 describe('BrowserAssetStore reclaims bytes at the last reference', () => {
-  test('a cached URL is revoked when another instance removes its registry entry', async () => {
-    const pool = makePool('cross-instance-cache');
+  test('remove keeps an issued snapshot alive while the next resolve is a miss', async () => {
+    const pool = makePool('remove-snapshot');
     const id = await pool.store.put(blob('shared database'));
     const url = await pool.store.resolve(id);
     expect(url).not.toBeNull();
     expect(blobForObjectUrl(url!)).toBeDefined();
 
-    await pool.cold().remove(id);
+    await pool.store.remove(id);
 
-    await vi.waitFor(() => expect(blobForObjectUrl(url!)).toBeUndefined());
+    expect(await pool.store.resolve(id)).toBeNull();
+    await macrotaskHops();
+    expect(await readObjectUrl(url!)).toEqual(bytes('shared database'));
   });
 
   test('release revokes only this instance URL and leaves the registry untouched', async () => {
@@ -318,30 +313,19 @@ describe('BrowserAssetStore reclaims bytes at the last reference', () => {
 });
 
 describe('BrowserAssetStore replaces bytes behind stable ids', () => {
-  test('keeps the id stable, revokes the old URL, and resolves the new bytes', async () => {
+  test('keeps the id stable and old snapshot alive while resolving the new bytes', async () => {
     const pool = makePool('replace-stable');
     const id = await pool.store.put(blob('before'));
     const oldUrl = await pool.store.resolve(id);
 
     await expect(pool.store.replace(id, blob('after'))).resolves.toBeUndefined();
 
-    expect(blobForObjectUrl(oldUrl!)).toBeUndefined();
+    expect(await readObjectUrl(oldUrl!)).toEqual(bytes('before'));
     const newUrl = await pool.store.resolve(id);
     expect(newUrl).not.toBe(oldUrl);
     expect(await readObjectUrl(newUrl!)).toEqual(bytes('after'));
-  });
-
-  test('broadcasts replacement so another instance revokes its cached URL', async () => {
-    const pool = makePool('replace-cross-instance');
-    const id = await pool.store.put(blob('before'));
-    const reader = pool.cold();
-    const oldUrl = await reader.resolve(id);
-
-    await pool.store.replace(id, blob('after'));
-
-    await vi.waitFor(() => expect(blobForObjectUrl(oldUrl!)).toBeUndefined());
-    const newUrl = await reader.resolve(id);
-    expect(await readObjectUrl(newUrl!)).toEqual(bytes('after'));
+    await macrotaskHops();
+    expect(await readObjectUrl(oldUrl!)).toEqual(bytes('before'));
   });
 
   test('reclaims the old blob when the replaced id was its last reference', async () => {
@@ -699,14 +683,12 @@ describe('BrowserAssetStore never surfaces a content hash', () => {
   });
 });
 
-describe('BrowserAssetStore cache coherence without BroadcastChannel', () => {
+describe('BrowserAssetStore cross-instance cache coherence', () => {
   test('a hot instance observes another instance removing an entry', async () => {
-    const restoreBroadcastChannel = replaceGlobal('BroadcastChannel', undefined);
     const idb = new IDBFactory();
-    const dbName = 'no-channel-remove';
+    const dbName = 'cross-instance-remove';
     const writer = new BrowserAssetStore({ indexedDB: idb, dbName });
     const reader = new BrowserAssetStore({ indexedDB: idb, dbName });
-    restoreBroadcastChannel();
 
     const id = await writer.put(blob('removed elsewhere'));
     const oldUrl = await reader.resolve(id);
@@ -715,17 +697,15 @@ describe('BrowserAssetStore cache coherence without BroadcastChannel', () => {
     await writer.remove(id);
 
     expect(await reader.resolve(id)).toBeNull();
-    expect(blobForObjectUrl(oldUrl!)).toBeUndefined();
+    expect(await readObjectUrl(oldUrl!)).toEqual(bytes('removed elsewhere'));
     await Promise.all([reader.close(), writer.close()]);
   });
 
   test('a hot instance observes replacement bytes by content hash', async () => {
-    const restoreBroadcastChannel = replaceGlobal('BroadcastChannel', undefined);
     const idb = new IDBFactory();
-    const dbName = 'no-channel-replace';
+    const dbName = 'cross-instance-replace';
     const writer = new BrowserAssetStore({ indexedDB: idb, dbName });
     const reader = new BrowserAssetStore({ indexedDB: idb, dbName });
-    restoreBroadcastChannel();
 
     const id = await writer.put(blob('before'));
     const oldUrl = await reader.resolve(id);
@@ -734,17 +714,15 @@ describe('BrowserAssetStore cache coherence without BroadcastChannel', () => {
     const newUrl = await reader.resolve(id);
     expect(newUrl).not.toBe(oldUrl);
     expect(await readObjectUrl(newUrl!)).toEqual(bytes('after'));
-    expect(blobForObjectUrl(oldUrl!)).toBeUndefined();
+    expect(await readObjectUrl(oldUrl!)).toEqual(bytes('before'));
     await Promise.all([reader.close(), writer.close()]);
   });
 
   test('a hot instance observes same-byte replacement MIME changes', async () => {
-    const restoreBroadcastChannel = replaceGlobal('BroadcastChannel', undefined);
     const idb = new IDBFactory();
-    const dbName = 'no-channel-replace-mime';
+    const dbName = 'cross-instance-replace-mime';
     const writer = new BrowserAssetStore({ indexedDB: idb, dbName });
     const reader = new BrowserAssetStore({ indexedDB: idb, dbName });
-    restoreBroadcastChannel();
 
     const id = await writer.put(blob('same bytes', 'image/png'));
     const oldUrl = await reader.resolve(id);
@@ -754,38 +732,14 @@ describe('BrowserAssetStore cache coherence without BroadcastChannel', () => {
 
     const newUrl = await reader.resolve(id);
     expect(newUrl).not.toBe(oldUrl);
-    expect(blobForObjectUrl(oldUrl!)).toBeUndefined();
+    expect(blobForObjectUrl(oldUrl!)?.type).toBe('image/png');
     expect(blobForObjectUrl(newUrl!)?.type).toBe('image/webp');
     await Promise.all([reader.close(), writer.close()]);
   });
-
-  test('a throwing BroadcastChannel constructor is ignored', async () => {
-    let constructions = 0;
-    class ThrowingBroadcastChannel {
-      constructor() {
-        constructions += 1;
-        throw new Error('channel unavailable');
-      }
-    }
-    const restoreBroadcastChannel = replaceGlobal(
-      'BroadcastChannel',
-      ThrowingBroadcastChannel as unknown as typeof BroadcastChannel,
-    );
-    const store = new BrowserAssetStore({
-      indexedDB: new IDBFactory(),
-      dbName: 'throwing-channel',
-    });
-    restoreBroadcastChannel();
-
-    const id = await store.put(blob('still works'));
-    expect(await readObjectUrl((await store.resolve(id))!)).toEqual(bytes('still works'));
-    expect(constructions).toBe(1);
-    await store.close();
-  });
 });
 
-test('concurrent resolve and replace returns a live consistent snapshot without orphan growth', async () => {
-  const pool = makePool('resolve-replace-epoch');
+test('resolve racing replace returns a snapshot that stays alive across macrotasks', async () => {
+  const pool = makePool('resolve-replace-snapshot');
   const id = await pool.store.put(blob('version-0'));
   let previous = 'version-0';
 
@@ -796,7 +750,8 @@ test('concurrent resolve and replace returns a live consistent snapshot without 
     expect(blobForObjectUrl(url!)).toBeDefined();
     const observed = new TextDecoder().decode(await readObjectUrl(url!));
     expect([previous, next]).toContain(observed);
-    expect(objectUrlCount()).toBeLessThanOrEqual(2);
+    await macrotaskHops();
+    expect(blobForObjectUrl(url!)).toBeDefined();
     previous = next;
   }
 
@@ -805,147 +760,64 @@ test('concurrent resolve and replace returns a live consistent snapshot without 
   await pool.store.close();
 });
 
+test('double replace during an in-flight resolve cannot revoke its returned snapshot', async () => {
+  const idb = new IDBFactory();
+  const dbName = 'double-replace-snapshot';
+  const writer = new BrowserAssetStore({ indexedDB: idb, dbName });
+  const reader = new BrowserAssetStore({ indexedDB: idb, dbName });
+  const id = await writer.put(blob('version-0'));
+  const reads = await interceptBlobReads(idb, dbName);
+  const gate = reads.next();
+
+  try {
+    const resolving = reader.resolve(id);
+    await gate.started;
+    await writer.replace(id, blob('version-1'));
+    await writer.replace(id, blob('version-2'));
+    gate.release();
+
+    const url = await resolving;
+    expect(url).not.toBeNull();
+    await macrotaskHops();
+    expect(await readObjectUrl(url!)).toEqual(bytes('version-0'));
+    await Promise.all([reader.close(), writer.close()]);
+  } finally {
+    gate.release();
+    reads.restore();
+  }
+});
+
 describe('BrowserAssetStore lifecycle', () => {
-  test('close reclaims a superseded mint that settles after shutdown starts', async () => {
-    const instances: FakeBroadcastChannel[] = [];
-    class FakeBroadcastChannel {
-      readonly name: string;
-      closed = false;
-      onmessage: ((event: MessageEvent<unknown>) => unknown) | null = null;
-
-      constructor(name: string) {
-        this.name = name;
-        instances.push(this);
-      }
-
-      postMessage(data: unknown): void {
-        for (const peer of instances) {
-          if (peer !== this && !peer.closed && peer.name === this.name) {
-            queueMicrotask(() => peer.onmessage?.({ data } as MessageEvent<unknown>));
-          }
-        }
-      }
-
-      close(): void {
-        this.closed = true;
-      }
-
-      unref(): void {}
-    }
-    const restoreBroadcastChannel = replaceGlobal(
-      'BroadcastChannel',
-      FakeBroadcastChannel as unknown as typeof BroadcastChannel,
-    );
+  test('close revokes current, retired, and late-settling snapshots', async () => {
     const idb = new IDBFactory();
     const dbName = 'close-pending-mint';
-    const writer = new BrowserAssetStore({ indexedDB: idb, dbName });
-    const reader = new BrowserAssetStore({ indexedDB: idb, dbName });
-    const id = await writer.put(blob('before'));
+    const store = new BrowserAssetStore({ indexedDB: idb, dbName });
+    const retiredId = await store.put(blob('retired-before'));
+    const retiredUrl = await store.resolve(retiredId);
+    await store.replace(retiredId, blob('retired-after'));
+    const currentUrl = await store.resolve(retiredId);
+    const pendingId = await store.put(blob('pending'));
     const reads = await interceptBlobReads(idb, dbName);
     const gate = reads.next();
 
     try {
-      const resolving = reader.resolve(id);
+      const resolving = store.resolve(pendingId);
       await gate.started;
 
-      await writer.replace(id, blob('after'));
-      await Promise.resolve();
-      const closing = reader.close();
+      const closing = store.close();
       gate.release();
 
-      await expect(resolving).resolves.not.toBeNull();
-      await Promise.all([closing, writer.close()]);
+      const lateUrl = await resolving;
+      expect(lateUrl).not.toBeNull();
+      await closing;
+      expect(blobForObjectUrl(retiredUrl!)).toBeUndefined();
+      expect(blobForObjectUrl(currentUrl!)).toBeUndefined();
+      expect(blobForObjectUrl(lateUrl!)).toBeUndefined();
       expect(objectUrlCount()).toBe(0);
     } finally {
       gate.release();
       reads.restore();
-      restoreBroadcastChannel();
     }
-  });
-
-  test('durable remove succeeds when close makes the invalidation channel unusable', async () => {
-    class ClosingBroadcastChannel {
-      closed = false;
-      onmessage: ((event: MessageEvent<unknown>) => unknown) | null = null;
-
-      postMessage(): void {
-        if (this.closed) throw new DOMException('Channel is closed', 'InvalidStateError');
-      }
-
-      close(): void {
-        this.closed = true;
-      }
-
-      unref(): void {}
-    }
-    const restoreBroadcastChannel = replaceGlobal(
-      'BroadcastChannel',
-      ClosingBroadcastChannel as unknown as typeof BroadcastChannel,
-    );
-    const idb = new IDBFactory();
-    const dbName = 'close-during-remove';
-    const store = new BrowserAssetStore({ indexedDB: idb, dbName });
-
-    try {
-      const id = await store.put(blob('remove me'));
-      const removing = store.remove(id);
-      const closing = store.close();
-
-      await expect(removing).resolves.toBeUndefined();
-      await expect(closing).resolves.toBeUndefined();
-      expect(await entryRow(idb, dbName, id)).toBeUndefined();
-    } finally {
-      restoreBroadcastChannel();
-    }
-  });
-
-  test('close revokes URLs, closes the channel, and ignores later broadcasts', async () => {
-    const instances: FakeBroadcastChannel[] = [];
-    class FakeBroadcastChannel {
-      readonly name: string;
-      closed = false;
-      onmessage: ((event: MessageEvent<unknown>) => unknown) | null = null;
-
-      constructor(name: string) {
-        this.name = name;
-        instances.push(this);
-      }
-
-      postMessage(data: unknown): void {
-        for (const peer of instances) {
-          if (peer !== this && !peer.closed && peer.name === this.name) {
-            queueMicrotask(() => peer.onmessage?.({ data } as MessageEvent<unknown>));
-          }
-        }
-      }
-
-      close(): void {
-        this.closed = true;
-      }
-
-      unref(): void {}
-    }
-    const restoreBroadcastChannel = replaceGlobal(
-      'BroadcastChannel',
-      FakeBroadcastChannel as unknown as typeof BroadcastChannel,
-    );
-    const idb = new IDBFactory();
-    const dbName = 'close-channel';
-    const writer = new BrowserAssetStore({ indexedDB: idb, dbName });
-    const reader = new BrowserAssetStore({ indexedDB: idb, dbName });
-
-    const id = await writer.put(blob('before close'));
-    const url = await reader.resolve(id);
-    await reader.close();
-    expect(blobForObjectUrl(url!)).toBeUndefined();
-    expect(instances[1]?.closed).toBe(true);
-
-    await writer.replace(id, blob('after close'));
-    await Promise.resolve();
-    expect(objectUrlCount()).toBe(0);
-
-    await writer.close();
-    restoreBroadcastChannel();
   });
 
   test('double-close is safe and every later operation fails loudly', async () => {
@@ -979,29 +851,29 @@ describe('BrowserAssetStore lifecycle', () => {
       probe.close();
     }
   });
-
-  test('SSR-shaped construction does not create a BroadcastChannel', async () => {
-    let constructions = 0;
-    class CountingBroadcastChannel {
-      constructor() {
-        constructions += 1;
-      }
-    }
-    const restoreIndexedDB = replaceGlobal('indexedDB', undefined);
-    const restoreBroadcastChannel = replaceGlobal(
-      'BroadcastChannel',
-      CountingBroadcastChannel as unknown as typeof BroadcastChannel,
-    );
-    const store = new BrowserAssetStore({ dbName: 'ssr-no-idb' });
-
-    expect(constructions).toBe(0);
-    await store.close();
-    restoreBroadcastChannel();
-    restoreIndexedDB();
-  });
 });
 
-describe('BrowserAssetStore cache bookkeeping', () => {
+describe('BrowserAssetStore snapshot retention', () => {
+  test('release revokes current and retired snapshots for one ref only', async () => {
+    const pool = makePool('release-all-snapshots');
+    const released = await pool.store.put(blob('released-0'));
+    const untouched = await pool.store.put(blob('untouched'));
+    const releasedUrls = [(await pool.store.resolve(released))!];
+    const untouchedUrl = await pool.store.resolve(untouched);
+
+    for (let version = 1; version <= 2; version += 1) {
+      await pool.store.replace(released, blob(`released-${version}`));
+      releasedUrls.push((await pool.store.resolve(released))!);
+    }
+
+    expect(objectUrlCount()).toBe(4);
+    await pool.store.release(released);
+    for (const url of releasedUrls) expect(blobForObjectUrl(url)).toBeUndefined();
+    expect(await readObjectUrl(untouchedUrl!)).toEqual(bytes('untouched'));
+    expect(objectUrlCount()).toBe(1);
+    await pool.store.close();
+  });
+
   test('no-op releases do not retain caller-controlled refs', async () => {
     const store = new BrowserAssetStore({
       indexedDB: new IDBFactory(),
@@ -1013,98 +885,41 @@ describe('BrowserAssetStore cache bookkeeping', () => {
     );
 
     expect(cacheBookkeeping(store)).toEqual({
-      epochs: 0,
-      pending: 0,
-      orphans: 0,
-      urls: 0,
+      entries: 0,
+      retiredRefs: 0,
+      retiredUrls: 0,
     });
     await store.close();
   });
 
-  test('put, resolve, and remove leave no residual cache generation', async () => {
+  test('N replaces and resolves retain N snapshots until release', async () => {
     const store = new BrowserAssetStore({
       indexedDB: new IDBFactory(),
-      dbName: 'cycle-bookkeeping',
+      dbName: 'snapshot-retention-bound',
     });
-    const id = await store.put(blob('one cycle'));
+    const id = await store.put(blob('version-0'));
     await store.resolve(id);
-    await store.remove(id);
+    const replacements = 8;
+    for (let version = 1; version <= replacements; version += 1) {
+      await store.replace(id, blob(`version-${version}`));
+      await store.resolve(id);
+    }
 
     expect(cacheBookkeeping(store)).toEqual({
-      epochs: 0,
-      pending: 0,
-      orphans: 0,
-      urls: 0,
+      entries: 1,
+      retiredRefs: 1,
+      retiredUrls: replacements,
     });
+    expect(objectUrlCount()).toBe(replacements + 1);
+
+    await store.release(id);
+    expect(cacheBookkeeping(store)).toEqual({
+      entries: 0,
+      retiredRefs: 0,
+      retiredUrls: 0,
+    });
+    expect(objectUrlCount()).toBe(0);
     await store.close();
-  });
-
-  test('a later supersede reclaims each pending mint across repeated cycles', async () => {
-    const instances: FakeBroadcastChannel[] = [];
-    class FakeBroadcastChannel {
-      readonly name: string;
-      closed = false;
-      onmessage: ((event: MessageEvent<unknown>) => unknown) | null = null;
-
-      constructor(name: string) {
-        this.name = name;
-        instances.push(this);
-      }
-
-      postMessage(data: unknown): void {
-        for (const peer of instances) {
-          if (peer !== this && !peer.closed && peer.name === this.name) {
-            queueMicrotask(() => peer.onmessage?.({ data } as MessageEvent<unknown>));
-          }
-        }
-      }
-
-      close(): void {
-        this.closed = true;
-      }
-
-      unref(): void {}
-    }
-    const restoreBroadcastChannel = replaceGlobal(
-      'BroadcastChannel',
-      FakeBroadcastChannel as unknown as typeof BroadcastChannel,
-    );
-    const idb = new IDBFactory();
-    const dbName = 'pending-mint-reclamation';
-    const writer = new BrowserAssetStore({ indexedDB: idb, dbName });
-    const reader = new BrowserAssetStore({ indexedDB: idb, dbName });
-    const id = await writer.put(blob('version-0'));
-    const reads = await interceptBlobReads(idb, dbName);
-    let activeGate: ReadGate | undefined;
-
-    try {
-      for (let iteration = 1; iteration <= 25; iteration += 1) {
-        activeGate = reads.next();
-        const resolving = reader.resolve(id);
-        await activeGate.started;
-
-        await writer.replace(id, blob(`version-${iteration}-a`));
-        await writer.replace(id, blob(`version-${iteration}-b`));
-        expect(cacheBookkeeping(reader).epochs).toBe(1);
-
-        activeGate.release();
-        await expect(resolving).resolves.not.toBeNull();
-        expect(objectUrlCount()).toBeLessThanOrEqual(2);
-        await vi.waitFor(() => expect(objectUrlCount()).toBe(0));
-        expect(cacheBookkeeping(reader)).toEqual({
-          epochs: 0,
-          pending: 0,
-          orphans: 0,
-          urls: 0,
-        });
-        activeGate = undefined;
-      }
-      await Promise.all([reader.close(), writer.close()]);
-    } finally {
-      activeGate?.release();
-      reads.restore();
-      restoreBroadcastChannel();
-    }
   });
 });
 

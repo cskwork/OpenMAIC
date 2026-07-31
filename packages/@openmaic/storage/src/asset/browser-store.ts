@@ -32,23 +32,24 @@
  * Sharing one URL across ids that name identical bytes would let a holder of
  * both ids discover byte equality by comparing the returned strings. The
  * accepted cost is that N such ids can retain N in-memory blobs/object URLs. A
- * resolved URL pins its full Blob in this instance until `close`, `remove`,
- * `replace`, or a failed registry-content check revokes it. `release` is a
- * narrower owner-level escape hatch and is safe only for callers that own
- * every consumer of that URL in this instance.
+ * returned URL is an immutable snapshot: it pins its full Blob in this
+ * instance until `release` for that id or `close`. Mutations affect future
+ * resolutions but never revoke an already-issued snapshot. Consequently every
+ * distinct content identity this instance resolves stays pinned until explicit
+ * reclamation; media-heavy applications should release snapshots they no
+ * longer use or close the store.
  *
  * Every `resolve` spends one IndexedDB round trip checking the registry entry,
  * and a warm URL is valid only while the entry still names the content hash
- * from which that URL was minted. Cross-instance correctness therefore never
- * depends on the invalidation channel. The channel is only a proactive
- * memory-release optimization that lets idle instances drop pinned Blobs
- * sooner. After external tampering deletes a blob row but leaves its entry, a
- * warm instance may keep serving its already-minted URL while a cold instance
- * reports a miss. Store operations cannot create that state because `put`,
- * `replace`, and `remove` update both rows atomically.
+ * from which that URL was minted. This per-resolve identity check is the whole
+ * cross-instance correctness mechanism. After external tampering deletes a
+ * blob row but leaves its entry, a warm instance may keep serving its
+ * already-minted URL while a cold instance reports a miss. Store operations
+ * cannot create that state because `put`, `replace`, and `remove` update both
+ * rows atomically.
  */
 import type { AssetMeta, AssetRef, BinaryBlob, StorageProvider } from '@openmaic/dsl';
-import { contentHashOf, ObjectUrlCache, type ContentHash, type ObjectUrlIdentity } from './blob.js';
+import { contentHashOf, ObjectUrlCache, type ContentHash } from './blob.js';
 import { newAssetId, type AssetId } from './id.js';
 
 export interface BrowserAssetStoreOptions {
@@ -88,6 +89,11 @@ interface AssetEntry {
   meta: AssetMeta;
 }
 
+interface RegistryObjectUrlIdentity {
+  contentHash: ContentHash;
+  mime: string;
+}
+
 /**
  * Promisify a single IndexedDB request.
  *
@@ -123,52 +129,15 @@ export class BrowserAssetStore implements StorageProvider {
   private readonly idb?: IDBFactory;
   private readonly dbName: string;
   private dbPromise?: Promise<IDBDatabase>;
-  private readonly urls = new ObjectUrlCache();
-  private readonly invalidations?: BroadcastChannel;
+  private readonly urls = new ObjectUrlCache<RegistryObjectUrlIdentity>(
+    (left, right) => left.contentHash === right.contentHash && left.mime === right.mime,
+  );
   private closed = false;
   private closePromise?: Promise<void>;
 
   constructor(options: BrowserAssetStoreOptions = {}) {
     this.idb = options.indexedDB ?? globalThis.indexedDB;
     this.dbName = options.dbName ?? 'maic-asset-pool';
-    const BroadcastChannelCtor = globalThis.BroadcastChannel;
-    // Channel identity deliberately follows the production 1:1 mapping from
-    // database name to ambient IDBFactory. Injected test factories are not
-    // encoded, so tests that require isolation must use distinct dbNames.
-    if (this.idb && typeof BroadcastChannelCtor === 'function') {
-      try {
-        this.invalidations = new BroadcastChannelCtor(`maic-asset-pool:${this.dbName}`);
-        this.invalidations.onmessage = (event: MessageEvent<unknown>) => {
-          if (typeof event.data === 'string') void this.urls.invalidate(event.data);
-        };
-        // Node exposes `unref`; browsers do not need it. Avoid keeping a test
-        // process alive solely because a store instance owns a channel.
-        (
-          this.invalidations as BroadcastChannel & {
-            unref?: () => void;
-          }
-        ).unref?.();
-      } catch {
-        // Some browser contexts expose the constructor but disallow creating a
-        // channel. Correctness comes from resolve's content-identity check; the
-        // channel merely releases stale in-memory URLs sooner.
-      }
-    }
-  }
-
-  /**
-   * Broadcast invalidations are same-origin-readable: any same-origin script
-   * can observe replaced/removed ids and spoof invalidations. Spoofing causes
-   * cache churn only; it cannot mutate the registry and grants no privilege
-   * beyond the same origin's existing IndexedDB access.
-   */
-  private broadcastInvalidation(ref: AssetRef): void {
-    try {
-      this.invalidations?.postMessage(ref);
-    } catch {
-      // The registry mutation is already durable. A closed or failed
-      // best-effort channel must not turn that success into a rejection.
-    }
   }
 
   private assertOpen(): void {
@@ -296,16 +265,17 @@ export class BrowserAssetStore implements StorageProvider {
    * (see `toAssetId`).
    *
    * Every call reads the registry entry and compares its content hash and MIME
-   * with the identity recorded alongside this instance's cached URL. A missing
-   * entry invalidates the cache and returns `null`; a changed identity
-   * invalidates the stale URL and mints from the current row. Thus correctness
-   * is independent of BroadcastChannel availability.
+   * with the identity recorded alongside this instance's current URL. A
+   * missing entry retires that snapshot and returns `null`; a changed identity
+   * retires it and mints from the current row. Retired snapshots remain alive,
+   * so a URL already returned to a caller is immutable and mutations affect
+   * future resolutions only.
    *
    * A cold resolution reads the registry a second time in the same transaction
-   * as its blob bytes. Keeping that mint snapshot atomic preserves a live,
-   * consistent result when `replace` races the resolve; folding the first row
-   * into a later blob-only read would let reclamation remove those bytes
-   * between transactions.
+   * as its blob bytes. The returned URL is therefore a snapshot of either the
+   * old or new committed entry when `replace` races the resolve; folding the
+   * first row into a later blob-only read would let reclamation remove those
+   * bytes between transactions.
    */
   async resolve(ref: AssetRef): Promise<string | null> {
     this.assertOpen();
@@ -317,7 +287,7 @@ export class BrowserAssetStore implements StorageProvider {
       return null;
     }
     this.assertOpen();
-    const identity: ObjectUrlIdentity = {
+    const identity: RegistryObjectUrlIdentity = {
       contentHash: entry.contentHash,
       mime: entry.mime,
     };
@@ -325,12 +295,14 @@ export class BrowserAssetStore implements StorageProvider {
   }
 
   /**
-   * Drop this instance's cached URL for `ref` without changing the registry.
+   * Revoke this instance's current and retired snapshots for `ref` without
+   * changing the registry.
    *
    * This is an owner-level operation: it is safe only when the caller owns
-   * every consumer of that URL in this instance. Concurrent resolves
-   * deliberately share one URL, so releasing it revokes that shared URL.
-   * Idempotent; an unknown or uncached ref is a no-op.
+   * every consumer of every URL returned for that ref in this instance.
+   * Concurrent resolves deliberately share the current URL, and replaced
+   * identities remain pinned as retired snapshots until this call. Idempotent;
+   * an unknown or uncached ref is a no-op.
    */
   async release(ref: AssetRef): Promise<void> {
     this.assertOpen();
@@ -377,12 +349,11 @@ export class BrowserAssetStore implements StorageProvider {
       if (remaining === 0) await reqP(blobs.delete(oldEntry.contentHash));
     });
     await this.urls.invalidate(ref);
-    this.broadcastInvalidation(ref);
   }
 
   private async readAsUrl(
     ref: AssetRef,
-  ): Promise<{ identity: ObjectUrlIdentity; url: string } | null> {
+  ): Promise<{ identity: RegistryObjectUrlIdentity; url: string } | null> {
     const asset = await this.tx('readonly', async ({ assets, blobs }) => {
       const entry = await reqP<AssetEntry | undefined>(assets.get(ref));
       if (!entry) return null;
@@ -427,23 +398,19 @@ export class BrowserAssetStore implements StorageProvider {
       if (remaining === 0) await reqP(blobs.delete(entry.contentHash));
     });
     await this.urls.invalidate(ref);
-    this.broadcastInvalidation(ref);
   }
 
   /**
    * Close this store instance.
    *
-   * Closing is idempotent. It closes the invalidation channel and any opened
-   * IndexedDB connection, and revokes every cached or orphaned object URL.
-   * Every later operation fails loudly with a "store is closed" error.
+   * Closing is idempotent. It closes any opened IndexedDB connection and
+   * revokes every current, in-flight, and retired object-URL snapshot. A mint
+   * that settles after shutdown begins is revoked immediately. Every later
+   * operation fails loudly with a "store is closed" error.
    */
   close(): Promise<void> {
     if (this.closePromise) return this.closePromise;
     this.closed = true;
-    if (this.invalidations) {
-      this.invalidations.onmessage = null;
-      this.invalidations.close();
-    }
     const closeDb = this.dbPromise
       ? this.dbPromise.then(
           (db) => db.close(),

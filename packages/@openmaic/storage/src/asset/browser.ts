@@ -38,7 +38,7 @@ export class BrowserAssetProvider implements BlobStore {
   private readonly idb: IDBFactory;
   private readonly dbName: string;
   private dbPromise?: Promise<IDBDatabase>;
-  private readonly urls = new ObjectUrlCache();
+  private readonly urls = new ObjectUrlCache<ContentHash>((left, right) => left === right);
 
   constructor(options: BrowserAssetProviderOptions = {}) {
     this.idb = options.indexedDB ?? globalThis.indexedDB;
@@ -89,10 +89,9 @@ export class BrowserAssetProvider implements BlobStore {
     const asset: StoredAsset = { bytes, contentType: meta?.contentType ?? data.type ?? '' };
     await this.tx('readwrite', (store) => store.put(asset, contentHash));
     // A re-put with the same bytes but different metadata (e.g. a corrected
-    // contentType) overwrites the stored asset; drop any cached object URL for
-    // this key so resolve() reflects the latest write instead of a stale one.
-    // Without this, resolved MIME would depend on cache warmth (a fresh
-    // provider would see the new type, this one the old).
+    // contentType) overwrites the stored asset; retire the current object URL
+    // for this key so future resolve() calls reflect the latest write. The old
+    // URL remains a live snapshot until owner-level cache reclamation.
     await this.urls.invalidate(contentHash);
     return contentHash;
   };

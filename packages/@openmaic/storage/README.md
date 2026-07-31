@@ -59,15 +59,18 @@ a browser.
   are minted per id, not shared per `contentHash`: sharing would let a holder of
   two ids learn that their bytes match by comparing URL strings. The accepted
   cost is N in-memory blobs/URLs for N resolved ids over identical bytes. A
-  resolved URL pins its Blob in that store instance until `close`, `remove`,
-  `replace`, or a failed content-identity check revokes it. Application
-  code that constructs a concrete `BrowserAssetStore` owns its `close`
-  lifecycle (the narrower DSL `StorageProvider` seam does not expose `close`).
-  Removing an asset proactively releases cached URLs in reachable same-origin
-  instances when the optional invalidation channel is available; channel-less
-  instances release a stale URL on their next `resolve`. `release` is an
-  owner-level escape hatch for a sole-consumer caller that owns every use of
-  the shared URL in that instance.
+  returned URL is an immutable snapshot: mutations affect future resolutions
+  but never revoke a URL already issued by this or another store instance.
+  Every distinct `(id, content hash, MIME)` snapshot an instance has resolved
+  stays pinned until `release(id)` or `close()`. Application code that
+  constructs a concrete `BrowserAssetStore` owns that lifecycle (the narrower
+  DSL `StorageProvider` seam exposes neither method), and media-heavy
+  applications should reclaim snapshots explicitly. `release` is an
+  owner-level escape hatch for a caller that owns every use of every URL
+  returned for that id in the instance; `close` reclaims the whole instance.
+  Cross-instance correctness comes from comparing the registry identity on
+  every resolve, so a remove yields `null` and a replacement yields a fresh
+  URL on the next call without reclaiming older snapshots.
   The id domain is opaque and unvalidated (the KV key-domain lesson, applied
   forward): an unrecognized id is a miss, never an error. The server backend is
   still to come.
