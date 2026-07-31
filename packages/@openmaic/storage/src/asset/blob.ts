@@ -183,7 +183,12 @@ export class ObjectUrlCache<Identity> {
     await this.revokeRetired(ref);
   }
 
-  /** Revoke every current, in-flight, and retired snapshot. */
+  /**
+   * Revoke every current, in-flight, and retired snapshot.
+   *
+   * If an unawaited `release` is already in flight, its last URL may be
+   * revoked, at the latest, one microtask after this call resolves.
+   */
   async close(): Promise<void> {
     this.closed = true;
     const pending = [...this.entries.values()].map((entry) => entry.promise.catch(() => null));

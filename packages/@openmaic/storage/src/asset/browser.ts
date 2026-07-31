@@ -104,6 +104,13 @@ export class BrowserAssetProvider implements BlobStore {
     return contentHash;
   };
 
+  /**
+   * Resolve a content hash to a `blob:` URL, or `null` when it is absent.
+   *
+   * A resolve that passes the open check but races `close` may return a
+   * non-null URL that `close` has already revoked; callers tearing down should
+   * not race resolve against close.
+   */
   resolve = async (ref: ContentHash): Promise<string | null> => {
     this.assertOpen();
     return this.urls.resolve(ref, ref, () => this.readAsUrl(ref));
@@ -128,11 +135,25 @@ export class BrowserAssetProvider implements BlobStore {
     await this.urls.invalidate(ref);
   };
 
+  /**
+   * Revoke this provider's current and retired snapshots for `ref`.
+   *
+   * This is an owner-level operation: it is safe only when the caller owns
+   * every consumer of every URL returned for that ref by this provider.
+   */
   release = async (ref: ContentHash): Promise<void> => {
     this.assertOpen();
     await this.urls.release(ref);
   };
 
+  /**
+   * Close this provider and reclaim all of its snapshots.
+   *
+   * This is an owner-level operation: it is safe only when the caller owns
+   * every consumer of every URL returned by this provider. If an unawaited
+   * `release` is already in flight, its last URL may be revoked one microtask
+   * after this call resolves.
+   */
   close = (): Promise<void> => {
     if (this.closePromise) return this.closePromise;
     this.closed = true;

@@ -30,14 +30,14 @@
  *
  * Object URLs are deliberately minted per asset id, not per content hash.
  * Sharing one URL across ids that name identical bytes would let a holder of
- * both ids discover byte equality by comparing the returned strings. Retention
- * is bounded by the number of snapshots resolved: at most one current plus
- * retired snapshots per ref, reclaimed by `release` for that id or `close`. A
- * returned URL is an immutable snapshot: it pins its full Blob in this
- * instance until that explicit reclamation. Mutations affect future
- * resolutions but never revoke an already-issued snapshot; media-heavy
- * applications should release snapshots they no longer use or close the
- * store.
+ * both ids discover byte equality by comparing the returned strings. Each
+ * `replace` followed by `resolve` adds one retired snapshot that only `release`
+ * for that id or `close` reclaims. Each ref retains at most one current
+ * snapshot plus that retired history. A returned URL is an immutable snapshot:
+ * it pins its full Blob in this instance until that explicit reclamation.
+ * Mutations affect future resolutions but never revoke an already-issued
+ * snapshot; media-heavy applications should release snapshots they no longer
+ * use or close the store.
  *
  * Every `resolve` spends one IndexedDB round trip checking the registry entry,
  * and a warm URL is valid only while the entry still names the content hash
@@ -276,6 +276,10 @@ export class BrowserAssetStore implements StorageProvider {
    * old or new committed entry when `replace` races the resolve; folding the
    * first row into a later blob-only read would let reclamation remove those
    * bytes between transactions.
+   *
+   * A resolve that passes the open check but races `close` may return a
+   * non-null URL that `close` has already revoked; callers tearing down should
+   * not race resolve against close.
    */
   async resolve(ref: AssetRef): Promise<string | null> {
     this.assertOpen();
@@ -406,7 +410,9 @@ export class BrowserAssetStore implements StorageProvider {
    * Closing is idempotent. It closes any opened IndexedDB connection and
    * revokes every current, in-flight, and retired object-URL snapshot. A mint
    * that settles after shutdown begins is revoked immediately. Every later
-   * operation fails loudly with a "store is closed" error.
+   * operation fails loudly with a "store is closed" error. If an unawaited
+   * `release` is already in flight, its last URL may be revoked one microtask
+   * after this call resolves.
    */
   close(): Promise<void> {
     if (this.closePromise) return this.closePromise;

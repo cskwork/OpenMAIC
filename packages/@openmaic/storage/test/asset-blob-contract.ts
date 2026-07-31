@@ -4,7 +4,7 @@
 // are deliberately *not* the semantics of the outward asset store, which
 // allocates ids (see `asset-contract.ts`). Content addressing is safe here
 // precisely because a hash never leaves the package.
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import type { BlobStore, ContentHash } from '../src/asset/blob.js';
 
 type ReadUrl = (url: string) => Promise<Uint8Array>;
@@ -99,6 +99,21 @@ export function runBlobStoreContract(
       await expect(p.resolve(key)).rejects.toThrow(/closed/i);
       await expect(p.remove(key)).rejects.toThrow(/closed/i);
       await expect(p.release(key)).rejects.toThrow(/closed/i);
+    });
+
+    test('close closes an opened IndexedDB connection', async () => {
+      const p = makeProvider();
+      await p.put(blob('open the database'));
+      const connection = await (p as unknown as { dbPromise?: Promise<IDBDatabase> }).dbPromise;
+      if (!connection) throw new Error('expected an opened IndexedDB connection');
+      const prototype = Object.getPrototypeOf(connection) as IDBDatabase;
+      const close = vi.spyOn(prototype, 'close');
+      try {
+        await p.close();
+        expect(close).toHaveBeenCalledTimes(1);
+      } finally {
+        close.mockRestore();
+      }
     });
   });
 }

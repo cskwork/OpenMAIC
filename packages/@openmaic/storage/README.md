@@ -57,16 +57,17 @@ a browser.
   quota errors, storage estimates, and server billing or metering can disclose
   existence, so server deployments must budget them per principal. Object URLs
   are minted per id, not shared per `contentHash`: sharing would let a holder of
-  two ids learn that their bytes match by comparing URL strings. Retention is
-  bounded by the number of snapshots resolved: at most one current plus retired
-  snapshots per ref, reclaimed by `release(id)` or `close()`. A returned URL is
-  an immutable snapshot: mutations affect future resolutions but never revoke
-  a URL already issued by this or another store instance. Application code that
-  constructs a concrete `BrowserAssetStore` owns that lifecycle (the narrower
-  DSL `StorageProvider` seam exposes neither method), and media-heavy
-  applications should reclaim snapshots explicitly. `release` is an
-  owner-level escape hatch for a caller that owns every use of every URL
-  returned for that id in the instance; `close` reclaims the whole instance.
+  two ids learn that their bytes match by comparing URL strings. Each
+  `replace(id, ...)` followed by `resolve(id)` adds one retired snapshot that
+  only `release(id)` or `close()` reclaims; each ref retains at most one current
+  snapshot plus that retired history. A returned URL is an immutable snapshot:
+  mutations affect future resolutions but never revoke a URL already issued by
+  this or another store instance. Application code that constructs a concrete
+  `BrowserAssetStore` owns that lifecycle (the narrower DSL `StorageProvider`
+  seam exposes neither method), and media-heavy applications should reclaim
+  snapshots explicitly. `release` is an owner-level escape hatch for a caller
+  that owns every use of every URL returned for that id in the instance;
+  `close` reclaims the whole instance.
   Cross-instance correctness comes from comparing the registry identity on
   every resolve, so a remove yields `null` and a replacement yields a fresh
   URL on the next call without reclaiming older snapshots.

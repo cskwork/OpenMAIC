@@ -43,7 +43,8 @@ describe('ObjectUrlCache lifecycle', () => {
 
       // Register shutdown before retirement adds its own promise reaction. At
       // depth zero, close starts after the entry records its settled value but
-      // before the retired wrapper records the URL.
+      // before the retired wrapper records the URL. The zero-hop path must stay
+      // await-free: any extra await before close() defangs that regression case.
       const closing = entry.promise.then(async () => {
         for (let hop = 0; hop < depth; hop += 1) await Promise.resolve();
         await cache.close();
@@ -55,6 +56,28 @@ describe('ObjectUrlCache lifecycle', () => {
       expect(objectUrlCount()).toBe(0);
     },
   );
+
+  test('close revokes several pending generations after two microtask hops', async () => {
+    const cache = new ObjectUrlCache<string>((left, right) => left === right);
+    const mints = [deferred(), deferred(), deferred(), deferred()];
+    const resolving = mints.map((mint, generation) =>
+      cache.resolve('asset', `version-${generation}`, async () => {
+        await mint.promise;
+        return {
+          identity: `version-${generation}`,
+          url: URL.createObjectURL(new Blob([String(generation)])),
+        };
+      }),
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    const closing = cache.close();
+    for (const mint of mints) mint.resolve();
+
+    await Promise.all([...resolving, closing]);
+    expect(objectUrlCount()).toBe(0);
+  });
 
   test('resolve after close never repopulates cache entries', async () => {
     const cache = new ObjectUrlCache<string>((left, right) => left === right);
