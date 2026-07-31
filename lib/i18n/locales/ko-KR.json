@@ -489,7 +489,7 @@
       "moveUp": "위로 이동",
       "moveDown": "아래로 이동",
       "removeFromClass": "수업에서 제거",
-      "aiClassmates": "AI classmates · {{count}}",
+      "aiClassmates": "AI 반 친구 · {{count}}",
       "addRole": "역할 추가"
     }
   },
