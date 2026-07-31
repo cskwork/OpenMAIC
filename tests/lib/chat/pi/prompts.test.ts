@@ -256,6 +256,10 @@ describe('Pi director prompt closure routing', () => {
   });
 
   it('lists only the migrated native whiteboard capability for the current Child', () => {
+    const openOnly = buildNativeWebChildPrompt(makeBody(), agents[0], [], {
+      enableWebSearch: false,
+      enableWhiteboardOpen: true,
+    });
     const shapeOnly = buildNativeWebChildPrompt(makeBody(), agents[0], [], {
       enableWebSearch: false,
       enableWhiteboardShape: true,
@@ -301,6 +305,15 @@ describe('Pi director prompt closure routing', () => {
       {
         enableWebSearch: false,
         enableWhiteboardShape: true,
+      },
+    );
+    const openTurn = buildNativeWebChildTurnPrompt(
+      'Reveal the existing board without drawing.',
+      'teacher',
+      {},
+      {
+        enableWebSearch: false,
+        enableWhiteboardOpen: true,
       },
     );
     const lineTurn = buildNativeWebChildTurnPrompt(
@@ -358,6 +371,11 @@ describe('Pi director prompt closure routing', () => {
       },
     );
 
+    expect(openOnly).toContain('call `wb_open`');
+    expect(openOnly).toContain('drawing tool opens the board automatically');
+    expect(openOnly).toContain('Do not call `wb_open` before drawing');
+    expect(openOnly).not.toContain('call `wb_draw_text`');
+    expect(openTurn).toContain('Drawing tools already open it automatically');
     expect(shapeOnly).toContain('call `wb_draw_shape`');
     expect(shapeOnly).not.toContain('call `wb_draw_text`');
     expect(shapeOnly).not.toContain('call `wb_draw_line`');

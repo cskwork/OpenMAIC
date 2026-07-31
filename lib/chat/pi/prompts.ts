@@ -266,6 +266,7 @@ export function buildNativeWebChildPrompt(
   agentResponses: AgentTurnSummary[],
   options: {
     enableWebSearch?: boolean;
+    enableWhiteboardOpen?: boolean;
     enableWhiteboardText?: boolean;
     enableWhiteboardShape?: boolean;
     enableWhiteboardLine?: boolean;
@@ -299,6 +300,7 @@ export function buildNativeWebChildPrompt(
           'If search fails, times out, or has no legal source URL, state the limitation and do not reuse or invent evidence.',
         ].join('\n')
       : '',
+    options.enableWhiteboardOpen ||
     options.enableWhiteboardText ||
     options.enableWhiteboardShape ||
     options.enableWhiteboardLine ||
@@ -309,6 +311,9 @@ export function buildNativeWebChildPrompt(
     options.enableWhiteboardCodeEdit
       ? [
           '# Native Whiteboard',
+          options.enableWhiteboardOpen
+            ? 'You may call `wb_open` to reveal the whiteboard without immediately drawing an element.'
+            : '',
           options.enableWhiteboardText
             ? 'You may call `wb_draw_text` to place concise teaching text on the whiteboard.'
             : '',
@@ -334,8 +339,9 @@ export function buildNativeWebChildPrompt(
             ? 'You may call `wb_edit_code` to edit one existing code block. Use only exact Runtime-provided element and line IDs, wait for the verified result, and never redraw the block as a substitute for an edit.'
             : '',
           'The board uses a 1000 × 563 coordinate system. Keep every complete element within the visible board.',
+          'Every Native whiteboard drawing tool opens the board automatically. Do not call `wb_open` before drawing; use it only when revealing the board without an immediate drawing is itself useful.',
           'Before calling it, say briefly what you are about to show. Wait for the tool result, then continue explaining in this same turn.',
-          'A successful result means the browser verified the element. A failed result must not be described as successful.',
+          'A successful result means the browser verified the requested whiteboard state or element. A failed result must not be described as successful.',
           'Only the Native whiteboard tools listed above are available in this invocation. Do not request or imitate an unavailable whiteboard action.',
           'Do not emit JSON actions and do not attempt to close the whiteboard.',
         ]
@@ -365,6 +371,7 @@ export function buildNativeWebChildTurnPrompt(
   evidence: { scene?: string; web?: string } = {},
   options: {
     enableWebSearch?: boolean;
+    enableWhiteboardOpen?: boolean;
     enableWhiteboardText?: boolean;
     enableWhiteboardShape?: boolean;
     enableWhiteboardLine?: boolean;
@@ -396,6 +403,9 @@ export function buildNativeWebChildTurnPrompt(
     getChildHardCap(role),
     options.enableWebSearch
       ? 'Use `web_search` only when the instruction requires external or current evidence.'
+      : '',
+    options.enableWhiteboardOpen
+      ? 'Use `wb_open` only to reveal the whiteboard without immediately drawing. Drawing tools already open it automatically, so never call `wb_open` as their prerequisite.'
       : '',
     options.enableWhiteboardText
       ? 'Use `wb_draw_text` only when a concise visual genuinely helps. Speak before the tool call and continue after its tool result.'

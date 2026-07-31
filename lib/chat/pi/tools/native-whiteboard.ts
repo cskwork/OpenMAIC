@@ -9,6 +9,7 @@ import {
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION,
   digestWhiteboardChartV1,
   digestWhiteboardCodeV1,
   digestWhiteboardEditableCodeStateV1,
@@ -41,6 +42,11 @@ import { WB_OPEN_MS } from '@/lib/choreography/timing';
 import type { StatelessChatRequest } from '@/lib/types/chat';
 import type { SendEvent } from '../types';
 import type { NativeWhiteboardCodeState } from './native-whiteboard-code-state';
+import type { NativeWhiteboardViewState } from './native-whiteboard-view-state';
+
+const NativeWhiteboardOpenParams = Type.Object({}, { additionalProperties: false });
+
+type NativeWhiteboardOpenParams = Static<typeof NativeWhiteboardOpenParams>;
 
 const NativeWhiteboardTextParams = Type.Object({
   content: Type.String({
@@ -401,6 +407,7 @@ interface NativeWhiteboardBaseOptions {
   onCancelled?: () => void;
   canExecute?: () => boolean;
   now?: () => number;
+  viewState: NativeWhiteboardViewState;
 }
 
 interface NativeWhiteboardToolOptions<TParams> extends NativeWhiteboardBaseOptions {
@@ -437,7 +444,7 @@ function prepareClientEffect(
   });
   if (
     !activeEffectBudgetMs ||
-    (!opts.body.storeState.whiteboardOpen &&
+    (!opts.viewState.isOpen() &&
       activeEffectBudgetMs <= WB_OPEN_MS + WHITEBOARD_OPEN_SETTLEMENT_MARGIN_MS)
   ) {
     return {
@@ -458,7 +465,24 @@ async function deliverClientEffect<TParams>(opts: {
   successDetails?: Record<string, unknown>;
   failureLabel: string;
 }): Promise<RuntimeAgentToolResult> {
-  const registered = piClientEffectCoordinator.register(opts.request);
+  let registered;
+  try {
+    registered = piClientEffectCoordinator.register(opts.request);
+  } catch (error) {
+    if (error instanceof Error && error.message === 'CLIENT_EFFECT_RESOURCE_BUSY') {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: 'Whiteboard visibility is already being changed by another active request.',
+          },
+        ],
+        details: { code: 'CLIENT_EFFECT_RESOURCE_BUSY', retryable: true },
+        isError: true,
+      };
+    }
+    throw error;
+  }
   const cancel = () => {
     piClientEffectCoordinator.cancel(
       opts.request.executionId,
@@ -479,15 +503,35 @@ async function deliverClientEffect<TParams>(opts: {
     }
     const terminal = await registered.result;
     if (terminal.status === 'effect_committed') {
+      if (!terminal.targetBinding) {
+        throw new Error('CLIENT_EFFECT_COMMIT_BINDING_MISSING');
+      }
+      opts.toolOptions.viewState.commitVisible(terminal.targetBinding);
       opts.toolOptions.onCommitted?.(opts.params);
       opts.toolOptions.onCommittedWithTerminal?.(opts.params, terminal);
+      const stableElementId =
+        'stableElementId' in opts.request.postcondition
+          ? opts.request.postcondition.stableElementId
+          : undefined;
       return {
         content: [{ type: 'text', text: opts.successMessage }],
         details: {
           status: terminal.status,
           executionId: opts.request.executionId,
-          stableElementId: opts.request.postcondition.stableElementId,
+          ...(stableElementId ? { stableElementId } : {}),
           targetBinding: terminal.targetBinding,
+          ...(terminal.committedObservation
+            ? {
+                whiteboardId: terminal.committedObservation.whiteboardId,
+                observedOpen: terminal.committedObservation.observedOpen,
+                created: terminal.committedObservation.created,
+                visibilityChanged: terminal.committedObservation.visibilityChanged,
+                committedObservation: terminal.committedObservation,
+                actionChanged:
+                  terminal.committedObservation.created ||
+                  terminal.committedObservation.visibilityChanged,
+              }
+            : {}),
           ...opts.successDetails,
         },
         isError: false,
@@ -519,6 +563,49 @@ async function deliverClientEffect<TParams>(opts: {
     opts.signal?.removeEventListener('abort', cancel);
     piClientEffectCoordinator.cleanup(opts.request.executionId);
   }
+}
+
+export function buildNativeWhiteboardOpenTool(
+  opts: NativeWhiteboardToolOptions<NativeWhiteboardOpenParams>,
+): { tool: AgentTool<typeof NativeWhiteboardOpenParams>; handler: NativeClientEffectHandler } {
+  const tool: AgentTool<typeof NativeWhiteboardOpenParams> = {
+    name: 'wb_open',
+    label: 'Open whiteboard',
+    description:
+      'Reveal the classroom whiteboard without drawing an element. Drawing tools already reveal the board automatically, so use this only when showing the existing board is itself the intended action.',
+    parameters: NativeWhiteboardOpenParams,
+    executionMode: 'sequential',
+    execute: async (): Promise<RuntimeAgentToolResult> => {
+      throw new Error('wb_open requires the browser client-effect executor.');
+    },
+  };
+
+  const handler: NativeClientEffectHandler = async ({ request, params, signal }) => {
+    if (opts.canExecute?.() === false) return actionBudgetFailure();
+    const prepared = prepareClientEffect(opts, request);
+    if ('isError' in prepared) return prepared;
+    const effectRequest: ClientEffectRequest = {
+      ...request,
+      toolName: 'wb_open',
+      target: prepared.target,
+      activeEffectBudgetMs: prepared.activeEffectBudgetMs,
+      postcondition: {
+        kind: 'whiteboard_open',
+        normalizationVersion: CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION,
+        desiredOpen: true,
+      },
+    };
+    return deliverClientEffect({
+      request: effectRequest,
+      params: params as NativeWhiteboardOpenParams,
+      signal,
+      toolOptions: opts,
+      successMessage: 'Whiteboard visibility was verified.',
+      failureLabel: 'Whiteboard open',
+    });
+  };
+
+  return { tool, handler };
 }
 
 function actionBudgetFailure(): RuntimeAgentToolResult {

@@ -7,6 +7,7 @@ import {
   type ClientEffectRequest,
   type ClientEffectTraceEvent,
   type ClientEffectTerminalResult,
+  type WhiteboardOpenCommittedObservation,
 } from './client-effect-contract';
 
 type TimerHandle = ReturnType<typeof setTimeout>;
@@ -98,7 +99,7 @@ function bindingsEqual(left: AcceptedTargetBinding, right: AcceptedTargetBinding
 
 export class ClientEffectCoordinator {
   private readonly entries = new Map<string, CoordinatorEntry>();
-  private readonly elementOwners = new Map<string, string>();
+  private readonly effectOwners = new Map<string, string>();
   private readonly tombstones = new Map<string, CoordinatorTombstone>();
 
   constructor(
@@ -137,9 +138,12 @@ export class ClientEffectCoordinator {
     ) {
       throw new Error('Client effect requires positive active and hard timing bounds.');
     }
-    const elementOwnerKey = this.elementOwnerKey(request);
-    const owner = this.elementOwners.get(elementOwnerKey);
+    const ownershipKey = this.ownershipKey(request);
+    const owner = this.effectOwners.get(ownershipKey);
     if (owner && owner !== request.executionId) {
+      if (request.postcondition.kind === 'whiteboard_open') {
+        throw new Error('CLIENT_EFFECT_RESOURCE_BUSY');
+      }
       const scopeLabel =
         request.postcondition.kind === 'whiteboard_code_edited' ? ' in this whiteboard scope' : '';
       throw new Error(
@@ -166,7 +170,7 @@ export class ClientEffectCoordinator {
       resolveResult,
     };
     this.entries.set(request.executionId, entry);
-    this.elementOwners.set(elementOwnerKey, request.executionId);
+    this.effectOwners.set(ownershipKey, request.executionId);
     this.trace(entry, { type: 'registered' });
     this.armTimers(entry);
 
@@ -292,7 +296,7 @@ export class ClientEffectCoordinator {
     this.clearTimers(entry);
     const snapshot = this.snapshot(entry);
     this.entries.delete(executionId);
-    this.elementOwners.delete(this.elementOwnerKey(entry.request));
+    this.effectOwners.delete(this.ownershipKey(entry.request));
     this.tombstones.set(executionId, {
       acknowledgementTokenDigest: tokenDigest(entry.acknowledgementToken),
       idempotencyKey: entry.request.idempotencyKey,
@@ -309,7 +313,7 @@ export class ClientEffectCoordinator {
   clearForTests(): void {
     for (const entry of this.entries.values()) this.clearTimers(entry);
     this.entries.clear();
-    this.elementOwners.clear();
+    this.effectOwners.clear();
     this.tombstones.clear();
   }
 
@@ -351,6 +355,23 @@ export class ClientEffectCoordinator {
         }
         const expected = entry.request.postcondition;
         const observed = ack.postcondition;
+        if (expected.kind === 'whiteboard_open') {
+          if (
+            !('kind' in observed) ||
+            observed.kind !== 'whiteboard_open' ||
+            observed.normalizationVersion !== expected.normalizationVersion ||
+            observed.whiteboardId !== entry.targetBinding.whiteboardId ||
+            observed.desiredOpen !== true ||
+            observed.observedOpen !== true
+          ) {
+            return 'Committed postcondition does not match the requested whiteboard open effect.';
+          }
+          this.settle(entry, 'effect_committed', undefined, observed);
+          return null;
+        }
+        if ('kind' in observed) {
+          return 'Committed lifecycle postcondition does not match the requested element effect.';
+        }
         const baseMatches =
           observed.stableElementId === expected.stableElementId &&
           observed.elementType === expected.elementType &&
@@ -436,7 +457,12 @@ export class ClientEffectCoordinator {
     }
   }
 
-  private elementOwnerKey(request: ClientEffectRequest): string {
+  private ownershipKey(request: ClientEffectRequest): string {
+    if (request.postcondition.kind === 'whiteboard_open') {
+      return [request.target.sessionId, request.target.stageId, 'whiteboard_visibility'].join(
+        '\u0000',
+      );
+    }
     if (request.postcondition.kind !== 'whiteboard_code_edited') {
       return request.postcondition.stableElementId;
     }
@@ -509,8 +535,16 @@ export class ClientEffectCoordinator {
     entry: CoordinatorEntry,
     status: ClientEffectTerminalResult['status'],
     error?: ClientEffectTerminalResult['error'],
+    committedObservation?: WhiteboardOpenCommittedObservation,
   ): void {
     if (entry.terminalResult) return;
+    if (
+      status === 'effect_committed' &&
+      entry.request.postcondition.kind === 'whiteboard_open' &&
+      !committedObservation
+    ) {
+      throw new Error('CLIENT_EFFECT_OPEN_COMMITTED_OBSERVATION_MISSING');
+    }
     if (entry.activeStartedAt !== null) {
       entry.activeRemainingMs = Math.max(
         0,
@@ -525,6 +559,7 @@ export class ClientEffectCoordinator {
       isError: status !== 'effect_committed',
       completedAt: this.now(),
       ...(entry.targetBinding ? { targetBinding: entry.targetBinding } : {}),
+      ...(committedObservation ? { committedObservation } : {}),
       ...(error ? { error } : {}),
     };
     this.trace(entry, {

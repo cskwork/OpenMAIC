@@ -10,6 +10,7 @@ import {
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION,
   applyWhiteboardCodeEditV1,
   digestWhiteboardChartV1,
   digestWhiteboardCodeV1,
@@ -84,6 +85,44 @@ async function delivery(): Promise<ClientEffectDelivery> {
         elementType: 'text',
         normalizationVersion: CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
         expectedContentDigest: await digestVisibleTextV1('k 决定方向'),
+      },
+    },
+  };
+}
+
+function openDelivery(executionId = 'execution-open-1'): ClientEffectDelivery {
+  return {
+    acknowledgementToken: `capability-${executionId}`,
+    request: {
+      protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
+      kind: 'client_effect',
+      traceId: 'trace-open-1',
+      runId: 'run-open-1',
+      agentInvocationId: 'message-open-1',
+      agentId: 'teacher-1',
+      depth: 1,
+      sequence: 1,
+      toolCallId: `tool-call-${executionId}`,
+      executionId,
+      idempotencyKey: `run-open-1:message-open-1:${executionId}`,
+      toolName: 'wb_open',
+      args: {},
+      argsDigest: 'sha256:open-args',
+      issuedAt: 1,
+      deadlineAt: Date.now() + 10_000,
+      attempt: 1,
+      target: {
+        requestId: 'request-1',
+        sessionId: 'session-1',
+        stageId: 'stage-1',
+        sceneId: 'scene-1',
+        messageId: 'message-open-1',
+      },
+      activeEffectBudgetMs: 2_000,
+      postcondition: {
+        kind: 'whiteboard_open',
+        normalizationVersion: CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION,
+        desiredOpen: true,
       },
     },
   };
@@ -1185,5 +1224,165 @@ describe('BrowserClientEffectRuntime', () => {
     await expect(runtime.execute(await delivery(), new AbortController().signal)).resolves.toBe(
       'timed_out',
     );
+  });
+
+  it('reports exact wb_open creation and visibility observations on the wire', async () => {
+    const acknowledgements: ClientEffectAck[] = [];
+    let whiteboardOpen = false;
+    const runtime = new BrowserClientEffectRuntime({
+      sessionId: 'session-1',
+      requestId: 'request-1',
+      store: createStore(),
+      fetchAck: async (_url, init) => {
+        const ack = JSON.parse(String(init?.body)) as ClientEffectAck;
+        acknowledgements.push(ack);
+        return new Response(JSON.stringify({ success: true, state: { status: ack.status } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+      waitForPresentation: async () => {},
+      observeWhiteboardOpen: () => whiteboardOpen,
+      ensureWhiteboardVisible: async () => {
+        if (!whiteboardOpen) whiteboardOpen = true;
+      },
+    });
+
+    await expect(runtime.execute(openDelivery(), new AbortController().signal)).resolves.toBe(
+      'effect_committed',
+    );
+    const committed = acknowledgements.find(
+      (ack): ack is Extract<ClientEffectAck, { status: 'effect_committed' }> =>
+        ack.status === 'effect_committed',
+    );
+    expect(committed?.postcondition).toMatchObject({
+      kind: 'whiteboard_open',
+      normalizationVersion: CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION,
+      desiredOpen: true,
+      observedOpen: true,
+      created: true,
+      visibilityChanged: true,
+    });
+  });
+
+  it('fails closed before binding when the wb_open visibility observer is unavailable', async () => {
+    const acknowledgements: ClientEffectAck[] = [];
+    const store = createStore();
+    const ensureWhiteboardVisible = vi.fn(async () => {});
+    const runtime = new BrowserClientEffectRuntime({
+      sessionId: 'session-1',
+      requestId: 'request-1',
+      store,
+      fetchAck: async (_url, init) => {
+        const ack = JSON.parse(String(init?.body)) as ClientEffectAck;
+        acknowledgements.push(ack);
+        return new Response(JSON.stringify({ success: true, state: { status: ack.status } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+      waitForPresentation: async () => {},
+      ensureWhiteboardVisible,
+    });
+
+    await expect(runtime.execute(openDelivery(), new AbortController().signal)).resolves.toBe(
+      'cancelled',
+    );
+    expect(acknowledgements.map((ack) => ack.status)).toEqual([
+      'presentation_paused',
+      'presentation_resumed',
+      'cancelled',
+    ]);
+    expect(ensureWhiteboardVisible).not.toHaveBeenCalled();
+    expect(store.getState().stage?.whiteboard).toHaveLength(0);
+  });
+
+  it('resamples visibility after accepted so a concurrent opener is not attributed to wb_open', async () => {
+    const acknowledgements: ClientEffectAck[] = [];
+    let whiteboardOpen = false;
+    let ensureCalls = 0;
+    const store = createStore();
+    store.getState().stage?.whiteboard?.push({
+      id: 'existing-whiteboard',
+      viewportSize: 1000,
+      viewportRatio: 16 / 9,
+      elements: [],
+      background: { type: 'solid', color: '#fff' },
+      animations: [],
+    });
+    const runtime = new BrowserClientEffectRuntime({
+      sessionId: 'session-1',
+      requestId: 'request-1',
+      store,
+      fetchAck: async (_url, init) => {
+        const ack = JSON.parse(String(init?.body)) as ClientEffectAck;
+        acknowledgements.push(ack);
+        if (ack.status === 'accepted') whiteboardOpen = true;
+        return new Response(JSON.stringify({ success: true, state: { status: ack.status } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+      waitForPresentation: async () => {},
+      observeWhiteboardOpen: () => whiteboardOpen,
+      ensureWhiteboardVisible: async () => {
+        ensureCalls += 1;
+        if (!whiteboardOpen) whiteboardOpen = true;
+      },
+    });
+
+    await expect(runtime.execute(openDelivery(), new AbortController().signal)).resolves.toBe(
+      'effect_committed',
+    );
+    const committed = acknowledgements.find(
+      (ack): ack is Extract<ClientEffectAck, { status: 'effect_committed' }> =>
+        ack.status === 'effect_committed',
+    );
+    expect(ensureCalls).toBe(1);
+    expect(committed?.postcondition).toMatchObject({
+      kind: 'whiteboard_open',
+      created: false,
+      visibilityChanged: false,
+    });
+  });
+
+  it('reports a true no-op when the latest whiteboard already exists and is visible', async () => {
+    const acknowledgements: ClientEffectAck[] = [];
+    let whiteboardOpen = true;
+    const store = createStore();
+    const runtime = new BrowserClientEffectRuntime({
+      sessionId: 'session-1',
+      requestId: 'request-1',
+      store,
+      fetchAck: async (_url, init) => {
+        const ack = JSON.parse(String(init?.body)) as ClientEffectAck;
+        acknowledgements.push(ack);
+        return new Response(JSON.stringify({ success: true, state: { status: ack.status } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+      waitForPresentation: async () => {},
+      observeWhiteboardOpen: () => whiteboardOpen,
+      ensureWhiteboardVisible: async () => {
+        whiteboardOpen = true;
+      },
+    });
+
+    await runtime.execute(openDelivery('execution-open-create'), new AbortController().signal);
+    acknowledgements.length = 0;
+    await expect(
+      runtime.execute(openDelivery('execution-open-no-op'), new AbortController().signal),
+    ).resolves.toBe('effect_committed');
+
+    const committed = acknowledgements.find(
+      (ack): ack is Extract<ClientEffectAck, { status: 'effect_committed' }> =>
+        ack.status === 'effect_committed',
+    );
+    expect(committed?.postcondition).toMatchObject({
+      kind: 'whiteboard_open',
+      created: false,
+      visibilityChanged: false,
+    });
   });
 });

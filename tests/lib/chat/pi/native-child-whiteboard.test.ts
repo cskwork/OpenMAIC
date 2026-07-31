@@ -6,19 +6,28 @@ import {
 } from '@earendil-works/pi-ai';
 import type { StreamFn } from '@earendil-works/pi-agent-core';
 import type { LanguageModel } from 'ai';
-import type {
-  ClientEffectAck,
-  ClientEffectDelivery,
-  WhiteboardTextPostcondition,
+import type { StageStore } from '@/lib/api/stage-api';
+import { BrowserClientEffectRuntime } from '@/lib/agent/client/client-effect-runtime';
+import {
+  CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION,
+  isClientEffectAck,
+  type ClientEffectAck,
+  type ClientEffectDelivery,
+  type WhiteboardTextPostcondition,
 } from '@/lib/agent/runtime/client-effect-contract';
 import { piClientEffectCoordinator } from '@/lib/agent/runtime/client-effect-coordinator';
 import {
   TOOL_EXECUTION_PROTOCOL_VERSION,
   type ClientEffectExecutionRequest,
 } from '@/lib/agent/runtime/native-child-contract';
-import { buildNativeWhiteboardTextTool } from '@/lib/chat/pi/tools/native-whiteboard';
+import {
+  buildNativeWhiteboardOpenTool,
+  buildNativeWhiteboardTextTool,
+} from '@/lib/chat/pi/tools/native-whiteboard';
+import { NativeWhiteboardViewState } from '@/lib/chat/pi/tools/native-whiteboard-view-state';
 import { buildCallAgentTool } from '@/lib/chat/pi/tools/call-agent';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
+import type { AgentTurnSummary, WhiteboardActionRecord } from '@/lib/orchestration/types';
 import type { StatelessChatRequest, StatelessEvent } from '@/lib/types/chat';
 
 const body = {
@@ -70,6 +79,38 @@ const teacher: AgentConfig = {
   updatedAt: new Date(0),
   isDefault: true,
 };
+
+const openTeacher: AgentConfig = {
+  ...teacher,
+  allowedActions: ['wb_open'],
+};
+
+const openAndTextTeacher: AgentConfig = {
+  ...teacher,
+  allowedActions: ['wb_open', 'wb_draw_text'],
+};
+
+function createBrowserStore(): StageStore {
+  let state = {
+    stage: {
+      id: 'stage-1',
+      name: 'Course',
+      createdAt: 1,
+      updatedAt: 1,
+      whiteboard: [],
+    },
+    scenes: [{ id: 'scene-1' }],
+    currentSceneId: 'scene-1',
+    mode: 'playback' as const,
+  };
+  return {
+    getState: () => state,
+    setState: (partial: Partial<typeof state>) => {
+      state = { ...state, ...partial };
+    },
+    subscribe: () => () => undefined,
+  } as unknown as StageStore;
+}
 
 const usage = {
   input: 1,
@@ -188,6 +229,7 @@ describe('Teacher native wb_draw_text server bridge', () => {
     const onCancelled = vi.fn();
     const { handler } = buildNativeWhiteboardTextTool({
       body,
+      viewState: new NativeWhiteboardViewState(body),
       messageId: 'message-1',
       onCancelled,
       send: async (event) => {
@@ -216,6 +258,7 @@ describe('Teacher native wb_draw_text server bridge', () => {
     const send = vi.fn();
     const { handler } = buildNativeWhiteboardTextTool({
       body,
+      viewState: new NativeWhiteboardViewState(body),
       messageId: 'message-1',
       send,
       now: () => now,
@@ -237,8 +280,10 @@ describe('Teacher native wb_draw_text server bridge', () => {
   it('does not return tool success at accepted and settles only after effect_committed', async () => {
     let delivery!: ClientEffectDelivery;
     let settled = false;
+    const viewState = new NativeWhiteboardViewState(body);
     const { handler } = buildNativeWhiteboardTextTool({
       body,
+      viewState,
       messageId: 'message-1',
       send: async (event) => {
         if (event.type !== 'client_effect') return;
@@ -305,6 +350,81 @@ describe('Teacher native wb_draw_text server bridge', () => {
       isError: false,
       details: { status: 'effect_committed', executionId: 'execution-1' },
     });
+    expect(viewState.isOpen()).toBe(true);
+  });
+
+  it('uses a committed first draw to avoid the stale closed snapshot on a second draw', async () => {
+    const now = Date.now();
+    const viewState = new NativeWhiteboardViewState(body);
+    const deliveries: ClientEffectDelivery[] = [];
+    const runDraw = async (executionId: string, deadlineAt: number) => {
+      const { handler } = buildNativeWhiteboardTextTool({
+        body,
+        viewState,
+        messageId: 'message-shared-draw',
+        now: () => now,
+        send: async (event) => {
+          if (event.type !== 'client_effect') return;
+          deliveries.push(event.data);
+          const { requestId, sessionId, stageId, sceneId } = event.data.request.target;
+          const targetBinding = {
+            requestId,
+            sessionId,
+            stageId,
+            sceneId,
+            whiteboardId: 'whiteboard-shared-draw',
+            bindingVersion: 1,
+          };
+          const expected = textPostcondition(event.data);
+          piClientEffectCoordinator.acknowledge(
+            event.data.request.executionId,
+            event.data.acknowledgementToken,
+            {
+              ...ackBase(event.data),
+              clientEventId: `${executionId}-accepted`,
+              status: 'accepted',
+              targetBinding,
+            },
+          );
+          piClientEffectCoordinator.acknowledge(
+            event.data.request.executionId,
+            event.data.acknowledgementToken,
+            {
+              ...ackBase(event.data),
+              clientEventId: `${executionId}-committed`,
+              status: 'effect_committed',
+              targetBinding,
+              postcondition: {
+                stableElementId: expected.stableElementId,
+                elementType: 'text',
+                normalizationVersion: expected.normalizationVersion,
+                observedContentDigest: expected.expectedContentDigest,
+                matchingElementCount: 1,
+              },
+            },
+          );
+        },
+      });
+      return handler({
+        request: {
+          ...envelope,
+          toolCallId: `call-${executionId}`,
+          executionId,
+          idempotencyKey: `run-1:message-1:call-${executionId}`,
+          issuedAt: now,
+          deadlineAt,
+        },
+        params: envelope.args,
+      });
+    };
+
+    await expect(runDraw('draw-first', now + 30_000)).resolves.toMatchObject({ isError: false });
+    expect(viewState.isOpen()).toBe(true);
+    await expect(runDraw('draw-second', now + 2_000)).resolves.toMatchObject({ isError: false });
+    expect(deliveries.map((delivery) => delivery.request.executionId)).toEqual([
+      'draw-first',
+      'draw-second',
+    ]);
   });
 
   it.each([
@@ -710,4 +830,447 @@ describe('Teacher native wb_draw_text server bridge', () => {
       },
     });
   });
+});
+
+describe('Teacher native wb_open lifecycle bridge', () => {
+  afterEach(() => piClientEffectCoordinator.clearForTests());
+
+  it('exposes a strict empty-object schema', () => {
+    const { tool } = buildNativeWhiteboardOpenTool({
+      body,
+      viewState: new NativeWhiteboardViewState(body),
+      messageId: 'message-open-schema',
+      send: vi.fn(),
+    });
+    expect(tool.parameters).toMatchObject({
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    });
+  });
+
+  it('rejects an exhausted action budget before registering or dispatching wb_open', async () => {
+    const send = vi.fn();
+    const { handler } = buildNativeWhiteboardOpenTool({
+      body,
+      viewState: new NativeWhiteboardViewState(body),
+      messageId: 'message-open-budget',
+      canExecute: () => false,
+      send,
+    });
+
+    await expect(
+      handler({
+        request: { ...envelope, toolName: 'wb_open', args: {}, executionId: 'open-budget' },
+        params: {},
+      }),
+    ).resolves.toMatchObject({
+      isError: true,
+      details: { code: 'ACTION_BUDGET_EXHAUSTED' },
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(piClientEffectCoordinator.getSnapshot('open-budget')).toBeNull();
+  });
+
+  it('uses real Pi validation to reject extra wb_open arguments before client delivery', async () => {
+    const contexts: Context[] = [];
+    const events: StatelessEvent[] = [];
+    const streamFn = ((_model, context) => {
+      contexts.push(context);
+      return contexts.length === 1
+        ? streamMessage(assistantToolCall('open-invalid-call', 'wb_open', { unexpected: true }))
+        : streamMessage({
+            role: 'assistant',
+            content: [{ type: 'text', text: '白板参数不合法，我不会声称已经打开。' }],
+            api: 'test',
+            provider: 'test',
+            model: 'deterministic',
+            usage,
+            stopReason: 'stop',
+            timestamp: 1,
+          });
+    }) as StreamFn;
+    const callAgent = buildCallAgentTool({
+      body,
+      agentConfigs: [openTeacher],
+      send: async (event) => {
+        events.push(event);
+      },
+      languageModel: {} as LanguageModel,
+      onAgentDone: vi.fn(),
+      onActionDone: vi.fn(),
+      thinkingConfig: { mode: 'disabled', enabled: false },
+      abortSignal: new AbortController().signal,
+      maxAgentTurns: 2,
+      getAgentTurnCount: () => 0,
+      getAgentResponses: () => [],
+      getWhiteboardLedger: () => [],
+      maxActionsPerAgent: 1,
+      enableWhiteboardTools: true,
+      childRuntimeMode: 'native',
+      enableNativeChildWhiteboard: true,
+      nativeChildStreamFn: streamFn,
+      nativeChildTimeoutMs: 5_000,
+    });
+
+    const result = await callAgent.execute('director-open-invalid', {
+      agentId: openTeacher.id,
+      instruction: 'Reveal the board.',
+    });
+
+    expect(contexts).toHaveLength(2);
+    expect(JSON.stringify(contexts[1])).toContain('unexpected');
+    expect(events.some((event) => event.type === 'client_effect')).toBe(false);
+    expect(result.details).toMatchObject({
+      text: '白板参数不合法，我不会声称已经打开。',
+      nativeChildRun: { status: 'completed' },
+    });
+  });
+
+  it('runs wb_open then wb_draw_text through Browser ACK and continues the same Child', async () => {
+    const contexts: Context[] = [];
+    const events: StatelessEvent[] = [];
+    const acknowledgements: ClientEffectAck[] = [];
+    const capabilityTokens = new Map<string, string>();
+    const store = createBrowserStore();
+    let whiteboardOpen = false;
+    const browserRuntime = new BrowserClientEffectRuntime({
+      sessionId: 'session-1',
+      requestId: 'request-1',
+      store,
+      waitForPresentation: async () => {},
+      observeWhiteboardOpen: () => whiteboardOpen,
+      ensureWhiteboardVisible: async () => {
+        whiteboardOpen = true;
+      },
+      fetchAck: async (_url, init) => {
+        const ack = JSON.parse(String(init?.body)) as unknown;
+        if (!isClientEffectAck(ack)) {
+          return new Response(JSON.stringify({ success: false, error: 'invalid ACK' }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        acknowledgements.push(ack);
+        const capabilityToken = capabilityTokens.get(ack.executionId);
+        if (!capabilityToken) throw new Error('Missing test capability token.');
+        const outcome = piClientEffectCoordinator.acknowledge(
+          ack.executionId,
+          capabilityToken,
+          ack,
+        );
+        if (outcome.kind !== 'applied' && outcome.kind !== 'duplicate' && outcome.kind !== 'late') {
+          return new Response(JSON.stringify({ success: false, error: outcome.kind }), {
+            status: 409,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(
+          JSON.stringify({ success: true, state: { status: outcome.snapshot.status } }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      },
+    });
+    const streamFn = ((_model, context) => {
+      contexts.push(context);
+      const hasTextResult = context.messages.some(
+        (entry) => entry.role === 'toolResult' && entry.toolName === 'wb_draw_text',
+      );
+      const hasOpenResult = context.messages.some(
+        (entry) => entry.role === 'toolResult' && entry.toolName === 'wb_open',
+      );
+      if (hasTextResult) {
+        return streamMessage({
+          role: 'assistant',
+          content: [{ type: 'text', text: '白板已打开并写入结论，我们继续解释。' }],
+          api: 'test',
+          provider: 'test',
+          model: 'deterministic',
+          usage,
+          stopReason: 'stop',
+          timestamp: 1,
+        });
+      }
+      return hasOpenResult
+        ? streamMessage(
+            assistantToolCall('text-after-open', 'wb_draw_text', {
+              content: 'k 定方向，b 定高低',
+              x: 100,
+              y: 120,
+            }),
+          )
+        : streamMessage(assistantToolCall('open-before-text', 'wb_open', {}));
+    }) as StreamFn;
+    const onAgentDone = vi.fn();
+    const onActionDone = vi.fn();
+    const callAgent = buildCallAgentTool({
+      body,
+      agentConfigs: [openAndTextTeacher],
+      send: async (event) => {
+        events.push(event);
+        if (event.type !== 'client_effect') return;
+        capabilityTokens.set(event.data.request.executionId, event.data.acknowledgementToken);
+        await browserRuntime.execute(event.data, new AbortController().signal);
+      },
+      languageModel: {} as LanguageModel,
+      onAgentDone,
+      onActionDone,
+      thinkingConfig: { mode: 'disabled', enabled: false },
+      abortSignal: new AbortController().signal,
+      maxAgentTurns: 2,
+      getAgentTurnCount: () => 0,
+      getAgentResponses: () => [],
+      getWhiteboardLedger: () => [],
+      maxActionsPerAgent: 2,
+      enableWhiteboardTools: true,
+      childRuntimeMode: 'native',
+      enableNativeChildWhiteboard: true,
+      nativeChildStreamFn: streamFn,
+      nativeChildTimeoutMs: 5_000,
+    });
+
+    const result = await callAgent.execute('director-open-then-text', {
+      agentId: openAndTextTeacher.id,
+      instruction: 'Reveal the board, write one conclusion, then continue.',
+    });
+
+    expect(contexts).toHaveLength(3);
+    expect(acknowledgements.map((ack) => ack.status)).toEqual([
+      'presentation_paused',
+      'presentation_resumed',
+      'accepted',
+      'effect_committed',
+      'presentation_paused',
+      'presentation_resumed',
+      'accepted',
+      'effect_committed',
+    ]);
+    expect(acknowledgements.every((ack) => isClientEffectAck(ack))).toBe(true);
+    expect(events.filter((event) => event.type === 'agent_start')).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'agent_end')).toHaveLength(1);
+    expect(onActionDone).toHaveBeenCalledTimes(2);
+    expect(onAgentDone).toHaveBeenCalledWith(
+      expect.objectContaining({ actionCount: 2, whiteboardActions: expect.any(Array) }),
+    );
+    expect(
+      store
+        .getState()
+        .stage?.whiteboard?.at(-1)
+        ?.elements.find((element) => element.type === 'text'),
+    ).toMatchObject({ type: 'text' });
+    expect(result.details).toMatchObject({
+      text: '白板已打开并写入结论，我们继续解释。',
+      nativeChildRun: {
+        status: 'completed',
+        toolExecutions: [
+          { request: { toolName: 'wb_open' }, status: 'succeeded' },
+          { request: { toolName: 'wb_draw_text' }, status: 'succeeded' },
+        ],
+      },
+    });
+  });
+
+  function acknowledgeOpen(
+    delivery: ClientEffectDelivery,
+    observation: { created: boolean; visibilityChanged: boolean },
+  ): void {
+    const { requestId, sessionId, stageId, sceneId } = delivery.request.target;
+    const targetBinding = {
+      requestId,
+      sessionId,
+      stageId,
+      sceneId,
+      whiteboardId: 'whiteboard-open-1',
+      bindingVersion: 1,
+    };
+    piClientEffectCoordinator.acknowledge(
+      delivery.request.executionId,
+      delivery.acknowledgementToken,
+      {
+        ...ackBase(delivery),
+        clientEventId: `${delivery.request.executionId}-accepted`,
+        status: 'accepted',
+        targetBinding,
+      },
+    );
+    piClientEffectCoordinator.acknowledge(
+      delivery.request.executionId,
+      delivery.acknowledgementToken,
+      {
+        ...ackBase(delivery),
+        clientEventId: `${delivery.request.executionId}-committed`,
+        status: 'effect_committed',
+        targetBinding,
+        postcondition: {
+          kind: 'whiteboard_open',
+          normalizationVersion: CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION,
+          whiteboardId: targetBinding.whiteboardId,
+          desiredOpen: true,
+          observedOpen: true,
+          ...observation,
+        },
+      },
+    );
+  }
+
+  function buildOpenCallAgent(opts: {
+    observation: { created: boolean; visibilityChanged: boolean };
+    onActionDone: (record?: WhiteboardActionRecord) => void;
+    onAgentDone: (summary: AgentTurnSummary) => void;
+    contexts: Context[];
+  }) {
+    const streamFn = ((_model, context) => {
+      opts.contexts.push(context);
+      const toolResult = context.messages.find(
+        (entry) => entry.role === 'toolResult' && entry.toolName === 'wb_open',
+      );
+      return toolResult
+        ? streamMessage({
+            role: 'assistant',
+            content: [{ type: 'text', text: '白板已确认可见，我们继续讲解。' }],
+            api: 'test',
+            provider: 'test',
+            model: 'deterministic',
+            usage,
+            stopReason: 'stop',
+            timestamp: 1,
+          })
+        : streamMessage(assistantToolCall('open-call-1', 'wb_open', {}));
+    }) as StreamFn;
+    return buildCallAgentTool({
+      body,
+      agentConfigs: [openTeacher],
+      send: async (event) => {
+        if (event.type === 'client_effect') acknowledgeOpen(event.data, opts.observation);
+      },
+      languageModel: {} as LanguageModel,
+      onAgentDone: opts.onAgentDone,
+      onActionDone: opts.onActionDone,
+      thinkingConfig: { mode: 'disabled', enabled: false },
+      abortSignal: new AbortController().signal,
+      maxAgentTurns: 2,
+      getAgentTurnCount: () => 0,
+      getAgentResponses: () => [],
+      getWhiteboardLedger: () => [],
+      maxActionsPerAgent: 1,
+      enableWhiteboardTools: true,
+      childRuntimeMode: 'native',
+      enableNativeChildWhiteboard: true,
+      nativeChildStreamFn: streamFn,
+      nativeChildTimeoutMs: 5_000,
+    });
+  }
+
+  it('returns resource busy as a structured tool failure instead of throwing', async () => {
+    let firstDelivery!: ClientEffectDelivery;
+    const viewState = new NativeWhiteboardViewState(body);
+    const first = buildNativeWhiteboardOpenTool({
+      body,
+      viewState,
+      messageId: 'message-open-1',
+      send: async (event) => {
+        if (event.type === 'client_effect') firstDelivery = event.data;
+      },
+    });
+    const second = buildNativeWhiteboardOpenTool({
+      body,
+      viewState,
+      messageId: 'message-open-2',
+      send: vi.fn(),
+    });
+    const firstPromise = first.handler({
+      request: { ...envelope, toolName: 'wb_open', args: {}, executionId: 'open-1' },
+      params: {},
+    });
+    await vi.waitFor(() => expect(firstDelivery).toBeDefined());
+
+    await expect(
+      second.handler({
+        request: {
+          ...envelope,
+          toolCallId: 'open-call-2',
+          toolName: 'wb_open',
+          args: {},
+          executionId: 'open-2',
+          idempotencyKey: 'run-1:message-1:open-call-2',
+        },
+        params: {},
+      }),
+    ).resolves.toMatchObject({
+      isError: true,
+      details: { code: 'CLIENT_EFFECT_RESOURCE_BUSY', retryable: true },
+    });
+
+    piClientEffectCoordinator.cancel('open-1', 'TEST_DONE', 'Test cleanup.');
+    await expect(firstPromise).resolves.toMatchObject({ isError: true });
+  });
+
+  it.each([
+    { created: true, visibilityChanged: true, expectedActions: 1 },
+    { created: true, visibilityChanged: false, expectedActions: 1 },
+    { created: false, visibilityChanged: true, expectedActions: 1 },
+    { created: false, visibilityChanged: false, expectedActions: 0 },
+  ])(
+    'continues the same Child and records only a real visibility change: %o',
+    async ({ created, visibilityChanged, expectedActions }) => {
+      const contexts: Context[] = [];
+      const onActionDone = vi.fn();
+      const onAgentDone = vi.fn();
+      const callAgent = buildOpenCallAgent({
+        observation: { created, visibilityChanged },
+        onActionDone,
+        onAgentDone,
+        contexts,
+      });
+
+      const result = await callAgent.execute('director-open-call', {
+        agentId: openTeacher.id,
+        instruction: 'Reveal the board, then continue explaining.',
+      });
+
+      expect(contexts).toHaveLength(2);
+      expect(JSON.stringify(contexts[1])).toContain('Whiteboard visibility was verified.');
+      const toolResult = contexts[1].messages.find(
+        (entry) => entry.role === 'toolResult' && entry.toolName === 'wb_open',
+      );
+      expect(toolResult).toMatchObject({
+        details: {
+          whiteboardId: 'whiteboard-open-1',
+          observedOpen: true,
+          created,
+          visibilityChanged,
+          actionChanged: expectedActions === 1,
+          committedObservation: {
+            whiteboardId: 'whiteboard-open-1',
+            observedOpen: true,
+            created,
+            visibilityChanged,
+          },
+        },
+      });
+      expect(onActionDone).toHaveBeenCalledTimes(expectedActions);
+      expect(onAgentDone).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actionCount: expectedActions,
+          whiteboardActions:
+            expectedActions === 1
+              ? [expect.objectContaining({ actionName: 'wb_open', params: {} })]
+              : [],
+        }),
+      );
+      expect(result.details).toMatchObject({
+        text: '白板已确认可见，我们继续讲解。',
+        nativeChildRun: {
+          status: 'completed',
+          toolExecutions: [
+            {
+              request: { kind: 'client_effect', toolName: 'wb_open' },
+              status: 'succeeded',
+              isError: false,
+            },
+          ],
+        },
+      });
+    },
+  );
 });

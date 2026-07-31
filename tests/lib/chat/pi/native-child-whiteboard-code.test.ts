@@ -19,6 +19,7 @@ import {
 } from '@/lib/agent/runtime/native-child-contract';
 import { buildCallAgentTool } from '@/lib/chat/pi/tools/call-agent';
 import { buildNativeWhiteboardCodeTool } from '@/lib/chat/pi/tools/native-whiteboard';
+import { NativeWhiteboardViewState } from '@/lib/chat/pi/tools/native-whiteboard-view-state';
 import { NativeWhiteboardCodeState } from '@/lib/chat/pi/tools/native-whiteboard-code-state';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import type { WhiteboardActionRecord } from '@/lib/orchestration/types';
@@ -359,6 +360,7 @@ describe('Teacher native wb_draw_code', () => {
     const onCommitted = vi.fn();
     const { handler } = buildNativeWhiteboardCodeTool({
       body,
+      viewState: new NativeWhiteboardViewState(body),
       messageId: 'message-code-1',
       onCommitted,
       send: async (event) => {
@@ -418,6 +420,7 @@ describe('Teacher native wb_draw_code', () => {
     const send = vi.fn();
     const { handler } = buildNativeWhiteboardCodeTool({
       body,
+      viewState: new NativeWhiteboardViewState(body),
       messageId: 'message-code-1',
       send,
     });

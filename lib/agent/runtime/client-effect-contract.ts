@@ -18,6 +18,7 @@ export const CLIENT_EFFECT_CHART_NORMALIZATION_VERSION = 'maic.whiteboard-chart.
 export const CLIENT_EFFECT_CODE_NORMALIZATION_VERSION = 'maic.whiteboard-code.v1' as const;
 export const CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION =
   'maic.whiteboard-code-edit.v1' as const;
+export const CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION = 'maic.whiteboard-visibility.v1' as const;
 export const CLIENT_EFFECT_ACK_HEADER = 'x-maic-effect-token';
 export const CLIENT_EFFECT_ACK_MAX_BYTES = 8 * 1024;
 
@@ -40,6 +41,22 @@ export interface ClientEffectTarget {
   stageId: string;
   sceneId: string;
   messageId: string;
+}
+
+export interface WhiteboardOpenPostcondition {
+  kind: 'whiteboard_open';
+  normalizationVersion: typeof CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION;
+  desiredOpen: true;
+}
+
+export interface WhiteboardOpenCommittedObservation {
+  kind: 'whiteboard_open';
+  normalizationVersion: typeof CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION;
+  whiteboardId: string;
+  desiredOpen: true;
+  observedOpen: true;
+  created: boolean;
+  visibilityChanged: boolean;
 }
 
 export interface WhiteboardTextPostcondition {
@@ -294,7 +311,13 @@ export type WhiteboardCodeEditClientEffectRequest = ClientEffectRequestBase & {
   postcondition: WhiteboardCodeEditPostcondition;
 };
 
+export type WhiteboardOpenClientEffectRequest = ClientEffectRequestBase & {
+  toolName: 'wb_open';
+  postcondition: WhiteboardOpenPostcondition;
+};
+
 export type ClientEffectRequest =
+  | WhiteboardOpenClientEffectRequest
   | WhiteboardTextClientEffectRequest
   | WhiteboardShapeClientEffectRequest
   | WhiteboardLineClientEffectRequest
@@ -338,6 +361,7 @@ export type ClientEffectAck =
       status: 'effect_committed';
       targetBinding: AcceptedTargetBinding;
       postcondition:
+        | WhiteboardOpenCommittedObservation
         | {
             stableElementId: string;
             elementType: 'text';
@@ -414,6 +438,7 @@ export interface ClientEffectTerminalResult {
   isError: boolean;
   completedAt: number;
   targetBinding?: AcceptedTargetBinding;
+  committedObservation?: WhiteboardOpenCommittedObservation;
   error?: {
     code: string;
     message: string;
@@ -1771,6 +1796,27 @@ export function isClientEffectAck(value: unknown): value is ClientEffectAck {
         return false;
       }
       const postcondition = ack.postcondition as Record<string, unknown>;
+      if (
+        postcondition.kind === 'whiteboard_open' &&
+        hasExactKeys(postcondition, [
+          'kind',
+          'normalizationVersion',
+          'whiteboardId',
+          'desiredOpen',
+          'observedOpen',
+          'created',
+          'visibilityChanged',
+        ])
+      ) {
+        return (
+          postcondition.normalizationVersion === CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION &&
+          isNonEmptyString(postcondition.whiteboardId) &&
+          postcondition.desiredOpen === true &&
+          postcondition.observedOpen === true &&
+          typeof postcondition.created === 'boolean' &&
+          typeof postcondition.visibilityChanged === 'boolean'
+        );
+      }
       if (
         postcondition.elementType === 'text' &&
         hasExactKeys(postcondition, [

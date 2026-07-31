@@ -998,6 +998,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               canvas.setWhiteboardOpen(true);
               await abortableDelay(WB_OPEN_MS, signal);
             },
+            observeWhiteboardOpen: () => useCanvasStore.getState().whiteboardOpen,
             onState: (executionId, status, error) => {
               const delivery = effectDeliveries.get(executionId);
               if (!delivery) return;

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   executeNativeWhiteboardTextEffect,
+  prepareNativeWhiteboardOpenTarget,
   prepareNativeWhiteboardTarget,
+  verifyNativeWhiteboardOpenEffect,
   verifyNativeWhiteboardTextEffect,
   type NativeWbDrawTextInput,
 } from '@/lib/action/client-effect-whiteboard';
@@ -405,5 +407,53 @@ describe('native wb_draw_text client effect', () => {
       store.getState().stage?.whiteboard?.find((candidate) => candidate.id === binding.whiteboardId)
         ?.elements,
     ).toHaveLength(0);
+  });
+});
+
+describe('native wb_open client effect', () => {
+  it('samples creation before prepare and returns the exact verified lifecycle observation', () => {
+    const store = createStore();
+    const prepared = prepareNativeWhiteboardOpenTarget(store, target);
+    expect(prepared.created).toBe(true);
+
+    expect(
+      verifyNativeWhiteboardOpenEffect({
+        store,
+        targetBinding: prepared.targetBinding,
+        created: prepared.created,
+        visibilityChanged: true,
+        observedOpen: true,
+      }),
+    ).toMatchObject({
+      kind: 'whiteboard_open',
+      whiteboardId: prepared.targetBinding.whiteboardId,
+      desiredOpen: true,
+      observedOpen: true,
+      created: true,
+      visibilityChanged: true,
+    });
+  });
+
+  it('fails closed if a newer whiteboard replaced the accepted target', () => {
+    const store = createStore();
+    const prepared = prepareNativeWhiteboardOpenTarget(store, target);
+    store.getState().stage?.whiteboard?.push({
+      id: 'newer-whiteboard',
+      viewportSize: 1000,
+      viewportRatio: 16 / 9,
+      elements: [],
+      background: { type: 'solid', color: '#fff' },
+      animations: [],
+    });
+
+    expect(() =>
+      verifyNativeWhiteboardOpenEffect({
+        store,
+        targetBinding: prepared.targetBinding,
+        created: prepared.created,
+        visibilityChanged: true,
+        observedOpen: true,
+      }),
+    ).toThrow('CLIENT_EFFECT_WHITEBOARD_MISMATCH');
   });
 });

@@ -41,11 +41,13 @@ import {
   buildNativeWhiteboardCodeTool,
   buildNativeWhiteboardLatexTool,
   buildNativeWhiteboardLineTool,
+  buildNativeWhiteboardOpenTool,
   buildNativeWhiteboardShapeTool,
   buildNativeWhiteboardTableTool,
   buildNativeWhiteboardTextTool,
 } from './native-whiteboard';
 import { NativeWhiteboardCodeState } from './native-whiteboard-code-state';
+import { NativeWhiteboardViewState } from './native-whiteboard-view-state';
 
 const CallAgentParams = Type.Object({
   agentId: Type.String({
@@ -72,6 +74,7 @@ export function resolveNativeChildCapabilities(opts: {
 }): {
   nativeWhiteboardEnabled: boolean;
   nativeWhiteboardToolNames: Array<
+    | 'wb_open'
     | 'wb_draw_text'
     | 'wb_draw_shape'
     | 'wb_draw_line'
@@ -91,6 +94,7 @@ export function resolveNativeChildCapabilities(opts: {
   const nativeWhiteboardToolNames = nativeWhiteboardEligible
     ? (
         [
+          'wb_open',
           'wb_draw_text',
           'wb_draw_shape',
           'wb_draw_line',
@@ -616,6 +620,7 @@ export function buildCallAgentTool(opts: {
   const requestTraceId = nanoid();
   const whiteboardState = createPiWhiteboardRuntimeState(opts.body);
   const nativeWhiteboardCodeState = new NativeWhiteboardCodeState(opts.body);
+  const nativeWhiteboardViewState = new NativeWhiteboardViewState(opts.body);
   const childRuntimeMode: ChildRuntimeMode = opts.childRuntimeMode ?? 'legacy';
   return {
     name: 'call_agent',
@@ -779,11 +784,40 @@ export function buildCallAgentTool(opts: {
           throw new Error('Native Child web_search is enabled without a tool factory');
         }
         if (nativeWebSearchTool) nativeTools.push(nativeWebSearchTool);
+        if (nativeWhiteboardToolNames.includes('wb_open')) {
+          const nativeWhiteboard = buildNativeWhiteboardOpenTool({
+            body: opts.body,
+            messageId,
+            send: opts.send,
+            viewState: nativeWhiteboardViewState,
+            canExecute: () => actionCount < opts.maxActionsPerAgent,
+            onCommittedWithTerminal: (_params, terminal) => {
+              const observation = terminal.committedObservation;
+              if (!observation) {
+                throw new Error('CLIENT_EFFECT_OPEN_COMMITTED_OBSERVATION_MISSING');
+              }
+              if (!observation.created && !observation.visibilityChanged) return;
+              actionCount += 1;
+              const record: WhiteboardActionRecord = {
+                actionName: 'wb_open',
+                agentId: agent.id,
+                agentName: agent.name,
+                params: {},
+              };
+              whiteboardActions.push(record);
+              opts.onActionDone(record);
+            },
+            onCancelled: abortChild,
+          });
+          nativeTools.push(nativeWhiteboard.tool);
+          clientEffectHandlers.set(nativeWhiteboard.tool.name, nativeWhiteboard.handler);
+        }
         if (nativeWhiteboardToolNames.includes('wb_draw_text')) {
           const nativeWhiteboard = buildNativeWhiteboardTextTool({
             body: opts.body,
             messageId,
             send: opts.send,
+            viewState: nativeWhiteboardViewState,
             canExecute: () => actionCount < opts.maxActionsPerAgent,
             onCommitted: (params) => {
               actionCount += 1;
@@ -806,6 +840,7 @@ export function buildCallAgentTool(opts: {
             body: opts.body,
             messageId,
             send: opts.send,
+            viewState: nativeWhiteboardViewState,
             canExecute: () => actionCount < opts.maxActionsPerAgent,
             onCommitted: (params) => {
               actionCount += 1;
@@ -828,6 +863,7 @@ export function buildCallAgentTool(opts: {
             body: opts.body,
             messageId,
             send: opts.send,
+            viewState: nativeWhiteboardViewState,
             canExecute: () => actionCount < opts.maxActionsPerAgent,
             onCommitted: (params) => {
               actionCount += 1;
@@ -850,6 +886,7 @@ export function buildCallAgentTool(opts: {
             body: opts.body,
             messageId,
             send: opts.send,
+            viewState: nativeWhiteboardViewState,
             canExecute: () => actionCount < opts.maxActionsPerAgent,
             onCommitted: (params) => {
               actionCount += 1;
@@ -872,6 +909,7 @@ export function buildCallAgentTool(opts: {
             body: opts.body,
             messageId,
             send: opts.send,
+            viewState: nativeWhiteboardViewState,
             canExecute: () => actionCount < opts.maxActionsPerAgent,
             onCommitted: (params) => {
               actionCount += 1;
@@ -894,6 +932,7 @@ export function buildCallAgentTool(opts: {
             body: opts.body,
             messageId,
             send: opts.send,
+            viewState: nativeWhiteboardViewState,
             canExecute: () => actionCount < opts.maxActionsPerAgent,
             onCommitted: (params) => {
               actionCount += 1;
@@ -916,6 +955,7 @@ export function buildCallAgentTool(opts: {
             body: opts.body,
             messageId,
             send: opts.send,
+            viewState: nativeWhiteboardViewState,
             canExecute: () => actionCount < opts.maxActionsPerAgent,
             onCommittedWithTerminal: (params, terminal) => {
               actionCount += 1;
@@ -943,6 +983,7 @@ export function buildCallAgentTool(opts: {
             body: opts.body,
             messageId,
             send: opts.send,
+            viewState: nativeWhiteboardViewState,
             codeState: nativeWhiteboardCodeState,
             canExecute: () => actionCount < opts.maxActionsPerAgent,
             onCommitted: (params) => {
@@ -989,6 +1030,7 @@ export function buildCallAgentTool(opts: {
             streamFn: nativeStreamFn,
             systemPrompt: buildNativeWebChildPrompt(opts.body, agent, opts.getAgentResponses(), {
               enableWebSearch: childWebSearchEnabled,
+              enableWhiteboardOpen: nativeWhiteboardToolNames.includes('wb_open'),
               enableWhiteboardText: nativeWhiteboardToolNames.includes('wb_draw_text'),
               enableWhiteboardShape: nativeWhiteboardToolNames.includes('wb_draw_shape'),
               enableWhiteboardLine: nativeWhiteboardToolNames.includes('wb_draw_line'),
@@ -1008,6 +1050,7 @@ export function buildCallAgentTool(opts: {
               },
               {
                 enableWebSearch: childWebSearchEnabled,
+                enableWhiteboardOpen: nativeWhiteboardToolNames.includes('wb_open'),
                 enableWhiteboardText: nativeWhiteboardToolNames.includes('wb_draw_text'),
                 enableWhiteboardShape: nativeWhiteboardToolNames.includes('wb_draw_shape'),
                 enableWhiteboardLine: nativeWhiteboardToolNames.includes('wb_draw_line'),

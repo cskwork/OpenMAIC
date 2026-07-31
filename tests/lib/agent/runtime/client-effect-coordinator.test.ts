@@ -8,6 +8,7 @@ import {
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION,
   digestWhiteboardChartV1,
   digestWhiteboardCodeV1,
   digestWhiteboardEditableCodeStateV1,
@@ -35,6 +36,8 @@ import {
   type WhiteboardShapeClientEffectRequest,
   type WhiteboardShapePostcondition,
   type WhiteboardTextClientEffectRequest,
+  type WhiteboardOpenClientEffectRequest,
+  type WhiteboardOpenCommittedObservation,
   type WhiteboardChartClientEffectRequest,
   type WhiteboardCodeClientEffectRequest,
   type WhiteboardCodeEditClientEffectRequest,
@@ -92,6 +95,50 @@ async function request(
       expectedContentDigest,
     },
     ...overrides,
+  };
+}
+
+async function openRequest(
+  overrides: Partial<WhiteboardOpenClientEffectRequest> = {},
+): Promise<WhiteboardOpenClientEffectRequest> {
+  const base = await request();
+  return {
+    ...base,
+    toolName: 'wb_open',
+    args: {},
+    postcondition: {
+      kind: 'whiteboard_open',
+      normalizationVersion: CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION,
+      desiredOpen: true,
+    },
+    ...overrides,
+  };
+}
+
+function openCommitted(
+  effect: WhiteboardOpenClientEffectRequest,
+  overrides: Partial<WhiteboardOpenCommittedObservation> = {},
+): Omit<Extract<ClientEffectAck, { status: 'effect_committed' }>, 'postcondition'> & {
+  postcondition: WhiteboardOpenCommittedObservation;
+} {
+  return {
+    protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
+    executionId: effect.executionId,
+    idempotencyKey: effect.idempotencyKey,
+    clientEventId: 'event-open-committed',
+    status: 'effect_committed',
+    observedAt: Date.now(),
+    targetBinding,
+    postcondition: {
+      kind: 'whiteboard_open',
+      normalizationVersion: CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION,
+      whiteboardId: targetBinding.whiteboardId,
+      desiredOpen: true,
+      observedOpen: true,
+      created: false,
+      visibilityChanged: true,
+      ...overrides,
+    },
   };
 }
 
@@ -1485,5 +1532,77 @@ describe('isClientEffectAck', () => {
         postcondition: { ...valid.postcondition, data: effect.postcondition.data },
       }),
     ).toBe(false);
+  });
+
+  it('settles wb_open only with its exact lifecycle postcondition and preserves it in terminal state', async () => {
+    const effect = await openRequest();
+    const coordinator = new ClientEffectCoordinator();
+    const registered = coordinator.register(effect);
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        accepted(effect),
+      ),
+    ).toMatchObject({ kind: 'applied', snapshot: { status: 'accepted' } });
+
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        openCommitted(effect, { observedOpen: false as true }),
+      ),
+    ).toMatchObject({ kind: 'invalid' });
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        openCommitted(effect, { whiteboardId: 'wrong-whiteboard' }),
+      ),
+    ).toMatchObject({ kind: 'invalid' });
+
+    const committedAck = openCommitted(effect, { created: true, visibilityChanged: true });
+    expect(isClientEffectAck(committedAck)).toBe(true);
+    expect(
+      isClientEffectAck({
+        ...committedAck,
+        postcondition: {
+          ...committedAck.postcondition,
+          normalizationVersion: 'maic.whiteboard-visibility.v0',
+        },
+      }),
+    ).toBe(false);
+    const { observedOpen: _observedOpen, ...missingObservedOpen } = committedAck.postcondition;
+    expect(isClientEffectAck({ ...committedAck, postcondition: missingObservedOpen })).toBe(false);
+    expect(
+      isClientEffectAck({
+        ...committedAck,
+        postcondition: { ...committedAck.postcondition, observation: 'duplicate-wire-field' },
+      }),
+    ).toBe(false);
+    expect(
+      coordinator.acknowledge(
+        effect.executionId,
+        registered.delivery.acknowledgementToken,
+        committedAck,
+      ),
+    ).toMatchObject({ kind: 'applied', snapshot: { status: 'effect_committed' } });
+    await expect(registered.result).resolves.toMatchObject({
+      status: 'effect_committed',
+      committedObservation: committedAck.postcondition,
+    });
+  });
+
+  it('uses one stage-scoped lifecycle owner across scenes and rejects concurrent wb_open', async () => {
+    const first = await openRequest();
+    const second = await openRequest({
+      executionId: 'execution-open-2',
+      toolCallId: 'tool-call-open-2',
+      idempotencyKey: 'run-1:invocation-1:tool-call-open-2',
+      target: { ...first.target, sceneId: 'scene-2' },
+    });
+    const coordinator = new ClientEffectCoordinator();
+    coordinator.register(first);
+    expect(() => coordinator.register(second)).toThrow('CLIENT_EFFECT_RESOURCE_BUSY');
   });
 });

@@ -25,7 +25,9 @@ import {
   executeNativeWhiteboardTableEffect,
   executeNativeWhiteboardTextEffect,
   prepareNativeExistingWhiteboardTarget,
+  prepareNativeWhiteboardOpenTarget,
   prepareNativeWhiteboardTarget,
+  verifyNativeWhiteboardOpenEffect,
 } from '@/lib/action/client-effect-whiteboard';
 
 type EffectRecord = {
@@ -46,6 +48,7 @@ export interface BrowserClientEffectRuntimeOptions {
   store: StageStore;
   waitForPresentation: (executionId: string, signal: AbortSignal) => Promise<void>;
   ensureWhiteboardVisible: (signal: AbortSignal) => Promise<void>;
+  observeWhiteboardOpen?: () => boolean;
   onState?: (executionId: string, status: ClientEffectStatus, error?: string) => void;
   fetchAck?: typeof fetch;
   now?: () => number;
@@ -86,6 +89,7 @@ function errorDetails(
       !targetChanged &&
       (!preserveClientEffectCode ||
         (code !== 'CLIENT_EFFECT_CODE_EDIT_STALE_BEFORE_STATE' &&
+          code !== 'CLIENT_EFFECT_WHITEBOARD_OBSERVER_UNAVAILABLE' &&
           !code.endsWith('_INVALID') &&
           !code.endsWith('_MISMATCH'))),
   };
@@ -95,6 +99,14 @@ function postconditionsEqual(
   left: ClientEffectDelivery['request']['postcondition'],
   right: ClientEffectDelivery['request']['postcondition'],
 ): boolean {
+  if (left.kind === 'whiteboard_open' || right.kind === 'whiteboard_open') {
+    return (
+      left.kind === 'whiteboard_open' &&
+      right.kind === 'whiteboard_open' &&
+      left.normalizationVersion === right.normalizationVersion &&
+      left.desiredOpen === right.desiredOpen
+    );
+  }
   if (
     left.kind !== right.kind ||
     left.stableElementId !== right.stableElementId ||
@@ -346,25 +358,50 @@ export class BrowserClientEffectRuntime {
         await this.enqueueAck(record, { status: 'presentation_resumed' });
         record.serverPaused = false;
       }
-      const binding =
-        request.toolName === 'wb_edit_code'
-          ? prepareNativeExistingWhiteboardTarget(
-              this.opts.store,
-              request.target,
-              request.postcondition.expectedWhiteboardId,
-            )
-          : prepareNativeWhiteboardTarget(this.opts.store, request.target);
+      const observeWhiteboardOpen = this.opts.observeWhiteboardOpen;
+      if (request.toolName === 'wb_open' && !observeWhiteboardOpen) {
+        throw new Error('CLIENT_EFFECT_WHITEBOARD_OBSERVER_UNAVAILABLE');
+      }
+      let openCreated = false;
+      let binding: AcceptedTargetBinding;
+      if (request.toolName === 'wb_open') {
+        const prepared = prepareNativeWhiteboardOpenTarget(this.opts.store, request.target);
+        binding = prepared.targetBinding;
+        openCreated = prepared.created;
+      } else if (request.toolName === 'wb_edit_code') {
+        binding = prepareNativeExistingWhiteboardTarget(
+          this.opts.store,
+          request.target,
+          request.postcondition.expectedWhiteboardId,
+        );
+      } else {
+        binding = prepareNativeWhiteboardTarget(this.opts.store, request.target);
+      }
       record.binding = binding;
       await this.enqueueAck(record, { status: 'accepted', targetBinding: binding });
       record.status = 'accepted';
       this.opts.onState?.(request.executionId, 'accepted');
 
       await this.waitWhilePaused(record, executionSignal);
+      const openVisibilityChanged =
+        request.toolName === 'wb_open' ? !observeWhiteboardOpen!() : false;
       await this.opts.ensureWhiteboardVisible(executionSignal);
       await this.waitWhilePaused(record, executionSignal);
       const params = request.args as Record<string, unknown>;
       let result;
       switch (request.toolName) {
+        case 'wb_open':
+          result = {
+            postcondition: verifyNativeWhiteboardOpenEffect({
+              store: this.opts.store,
+              targetBinding: binding,
+              created: openCreated,
+              visibilityChanged: openVisibilityChanged,
+              observedOpen: observeWhiteboardOpen!(),
+              signal: executionSignal,
+            }),
+          };
+          break;
         case 'wb_draw_text':
           result = await executeNativeWhiteboardTextEffect({
             store: this.opts.store,
@@ -603,7 +640,10 @@ export class BrowserClientEffectRuntime {
               message: 'Client effect was cancelled.',
               retryable: false,
             }
-          : errorDetails(error, request.toolName === 'wb_edit_code');
+          : errorDetails(
+              error,
+              request.toolName === 'wb_edit_code' || request.toolName === 'wb_open',
+            );
       const editPreparationFailure =
         request.toolName === 'wb_edit_code' &&
         !hardDeadlineExceeded &&

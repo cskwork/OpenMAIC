@@ -32,6 +32,13 @@ const runtimeFlag = 'OPENMAIC_ENABLE_PI_NATIVE_CHILD_RUNTIME';
 let originalFlag: string | undefined;
 let originalRuntimeFlag: string | undefined;
 
+function stableElementId(effect: ClientEffectRequest): string {
+  if (!('stableElementId' in effect.postcondition)) {
+    throw new Error('Expected an element postcondition.');
+  }
+  return effect.postcondition.stableElementId;
+}
+
 async function effectRequest(): Promise<ClientEffectRequest> {
   return {
     protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
@@ -611,7 +618,7 @@ describe('client effect ACK route', () => {
       store.getState().stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements),
     ).toEqual([
       expect.objectContaining({
-        id: effect.postcondition.stableElementId,
+        id: stableElementId(effect),
         type: 'shape',
         left: 180,
         top: 90,
@@ -659,7 +666,7 @@ describe('client effect ACK route', () => {
       store.getState().stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements),
     ).toEqual([
       expect.objectContaining({
-        id: effect.postcondition.stableElementId,
+        id: stableElementId(effect),
         type: 'line',
         left: 100,
         top: 90,
@@ -710,7 +717,7 @@ describe('client effect ACK route', () => {
       store.getState().stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements),
     ).toEqual([
       expect.objectContaining({
-        id: effect.postcondition.stableElementId,
+        id: stableElementId(effect),
         type: 'latex',
         left: 120,
         top: 90,
@@ -760,7 +767,7 @@ describe('client effect ACK route', () => {
       store.getState().stage?.whiteboard?.flatMap((whiteboard) => whiteboard.elements),
     ).toEqual([
       expect.objectContaining({
-        id: effect.postcondition.stableElementId,
+        id: stableElementId(effect),
         type: 'code',
         language: 'typescript',
         fileName: 'slope.ts',

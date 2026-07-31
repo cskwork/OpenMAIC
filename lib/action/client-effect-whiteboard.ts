@@ -9,6 +9,7 @@ import {
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION,
   assertWhiteboardChartSpecV1,
   assertWhiteboardCodeSpecV1,
   assertWhiteboardEditableCodeStateV1,
@@ -46,6 +47,7 @@ import {
   type WhiteboardShapeSpec,
   type WhiteboardTableOutline,
   type WhiteboardTableSpec,
+  type WhiteboardOpenCommittedObservation,
 } from '@/lib/agent/runtime/client-effect-contract';
 import type {
   ChartData,
@@ -235,6 +237,43 @@ export function prepareNativeWhiteboardTarget(
     sceneId: target.sceneId,
     whiteboardId: whiteboard.data.id,
     bindingVersion,
+  };
+}
+
+export function prepareNativeWhiteboardOpenTarget(
+  store: StageStore,
+  target: ClientEffectTarget,
+  bindingVersion = 1,
+): { targetBinding: AcceptedTargetBinding; created: boolean } {
+  assertStageAndScene(store, target);
+  const created = !store.getState().stage?.whiteboard?.at(-1);
+  const targetBinding = prepareNativeWhiteboardTarget(store, target, bindingVersion);
+  return { targetBinding, created };
+}
+
+export function verifyNativeWhiteboardOpenEffect(opts: {
+  store: StageStore;
+  targetBinding: AcceptedTargetBinding;
+  created: boolean;
+  visibilityChanged: boolean;
+  observedOpen: boolean;
+  signal?: AbortSignal;
+}): WhiteboardOpenCommittedObservation {
+  throwIfAborted(opts.signal);
+  assertStageAndScene(opts.store, opts.targetBinding);
+  const latestWhiteboard = opts.store.getState().stage?.whiteboard?.at(-1);
+  if (!latestWhiteboard || latestWhiteboard.id !== opts.targetBinding.whiteboardId) {
+    throw new Error('CLIENT_EFFECT_WHITEBOARD_MISMATCH');
+  }
+  if (!opts.observedOpen) throw new Error('CLIENT_EFFECT_WHITEBOARD_NOT_OPEN');
+  return {
+    kind: 'whiteboard_open',
+    normalizationVersion: CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION,
+    whiteboardId: opts.targetBinding.whiteboardId,
+    desiredOpen: true,
+    observedOpen: true,
+    created: opts.created,
+    visibilityChanged: opts.visibilityChanged,
   };
 }
 

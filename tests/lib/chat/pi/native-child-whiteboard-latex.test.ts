@@ -18,6 +18,7 @@ import {
 } from '@/lib/agent/runtime/native-child-contract';
 import { buildCallAgentTool } from '@/lib/chat/pi/tools/call-agent';
 import { buildNativeWhiteboardLatexTool } from '@/lib/chat/pi/tools/native-whiteboard';
+import { NativeWhiteboardViewState } from '@/lib/chat/pi/tools/native-whiteboard-view-state';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import type { WhiteboardActionRecord } from '@/lib/orchestration/types';
 import type { StatelessChatRequest, StatelessEvent } from '@/lib/types/chat';
@@ -226,6 +227,7 @@ describe('Teacher native wb_draw_latex', () => {
     const onCommitted = vi.fn();
     const { handler } = buildNativeWhiteboardLatexTool({
       body,
+      viewState: new NativeWhiteboardViewState(body),
       messageId: 'message-latex-1',
       onCommitted,
       send: async (event) => {
@@ -264,6 +266,7 @@ describe('Teacher native wb_draw_latex', () => {
     const send = vi.fn();
     const { handler } = buildNativeWhiteboardLatexTool({
       body,
+      viewState: new NativeWhiteboardViewState(body),
       messageId: 'message-latex-1',
       send,
     });
