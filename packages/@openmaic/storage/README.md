@@ -107,6 +107,21 @@ a browser.
 - `deleteAllRuntime` clears every runtime session and record for explicit
   whole-cache reset flows.
 
+## Upgrading from 0.1.x
+
+Version 0.2.0 removes `BrowserAssetProvider` from the package entry point. The
+outward asset API is now `BrowserAssetStore`, whose refs are allocated ids and
+whose data lives in the new `maic-asset-pool` database.
+
+- `BrowserAssetStore` deliberately does not read data written by the 0.1.x
+  provider in `maic-assets`. Its content-addressed `sha256-` refs are no longer
+  outward references, and the contract suite pins sha256-shaped refs as misses;
+  a silent read-through would restore the reference model this release removes.
+- If persisted 0.1.x data must be carried forward, open an issue. The supported
+  shape is an explicit one-time import helper that enumerates old rows,
+  allocates an id per blob, and returns an old-ref-to-new-id mapping for the
+  caller to apply to its documents.
+
 ## Backend equivalence
 
 Each primitive has one implementation-agnostic contract suite
