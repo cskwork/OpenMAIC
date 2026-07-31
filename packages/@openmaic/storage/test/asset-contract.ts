@@ -19,6 +19,47 @@ const bytes = (s: string): Uint8Array => new TextEncoder().encode(s);
 // are UTF-8 either way, so `bytes(s)` stays the source of truth for comparison.
 const blob = (s: string, type = 'text/plain'): Blob => new Blob([s], { type });
 
+function base32(digest: Uint8Array, alphabet: string): string {
+  let encoded = '';
+  let accumulator = 0;
+  let bits = 0;
+  for (const byte of digest) {
+    accumulator = (accumulator << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      encoded += alphabet[(accumulator >>> bits) & 31];
+    }
+  }
+  if (bits > 0) encoded += alphabet[(accumulator << (5 - bits)) & 31];
+  return encoded;
+}
+
+async function commonDigestEncodings(data: Blob): Promise<string[]> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', await data.arrayBuffer()));
+  const binary = String.fromCharCode(...digest);
+  const base64 = btoa(binary);
+  return [
+    Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join(''),
+    Array.from(digest, (byte) => byte.toString(16).padStart(2, '0'))
+      .join('')
+      .toUpperCase(),
+    base32(digest, '0123456789abcdefghjkmnpqrstvwxyz'),
+    base32(digest, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'),
+    base64,
+    base64.replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, ''),
+  ];
+}
+
+async function expectNoDigestSubstring(id: AssetRef, data: Blob): Promise<void> {
+  const minimumLeakLength = 12;
+  for (const encoding of await commonDigestEncodings(data)) {
+    for (let start = 0; start <= encoding.length - minimumLeakLength; start += 1) {
+      expect(id).not.toContain(encoding.slice(start, start + minimumLeakLength));
+    }
+  }
+}
+
 /**
  * Ids a caller might hand back that the store never issued. Every one must be
  * an ordinary miss — the id domain is opaque and unvalidated, so there is no
@@ -111,6 +152,20 @@ export function runAssetStoreContract(
       expect(id.length).toBeGreaterThan(0);
     });
 
+    test('allocated ids contain no digest substring in common encodings', async () => {
+      const s = makeStore();
+      const data = blob('digest independence');
+      const id = await s.put(data);
+      await expectNoDigestSubstring(id, data);
+    });
+
+    test('allocated id width is independent of payload size', async () => {
+      const s = makeStore();
+      const threeBytes = await s.put(blob('abc'));
+      const sixtyFourKiB = await s.put(blob('x'.repeat(64 * 1024)));
+      expect(threeBytes.length).toBe(sixtyFourKiB.length);
+    });
+
     test('ids are allocated: identical bytes yield distinct ids', async () => {
       const s = makeStore();
       const [a, b] = await putAll(s, 'same-content', 2);
@@ -162,12 +217,11 @@ export function runAssetStoreContract(
       for (const id of ids) expect(await bytesAt(s, id)).toEqual(bytes('racing bytes'));
     });
 
-    // The one bypass this design has to close explicitly: `put`-ing bytes that
-    // already exist must not tell the caller so, or `put` becomes an existence
-    // oracle over data the caller never stored. Compared facet by facet rather
-    // than asserted in prose — a newly discovered observable facet has to be
+    // Successful `put` calls must not disclose whether bytes already exist.
+    // Resource-accounting failures are outside this comparison. Compare the
+    // success path facet by facet so a newly discovered observable has to be
     // added to `PutObservation` to count as covered.
-    test('put discloses nothing about whether the bytes already existed', async () => {
+    test('successful put paths do not disclose whether bytes already existed', async () => {
       const s = makeStore();
       const seen = new Set<string>();
       // Seed so the next put of these bytes is a de-duplication hit...

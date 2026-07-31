@@ -5,7 +5,7 @@
 // allocates ids (see `asset-contract.ts`). Content addressing is safe here
 // precisely because a hash never leaves the package.
 import { describe, expect, test } from 'vitest';
-import type { StorageProvider } from '@openmaic/dsl';
+import type { BlobStore } from '../src/asset/blob.js';
 
 type ReadUrl = (url: string) => Promise<Uint8Array>;
 
@@ -18,7 +18,7 @@ const blob = (s: string, type = 'text/plain'): Blob => new Blob([s], { type });
 
 export function runBlobStoreContract(
   name: string,
-  makeProvider: () => StorageProvider,
+  makeProvider: () => BlobStore,
   readUrl: ReadUrl,
 ): void {
   describe(`blob layer contract: ${name}`, () => {

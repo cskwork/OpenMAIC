@@ -23,8 +23,15 @@
  * deletes the entry, so the last entry's removal can never reclaim bytes a
  * concurrent `put` has just adopted.
  *
- * `put` deliberately reveals nothing about whether the bytes already existed —
- * see {@link BrowserAssetStore.put}.
+ * On successful `put` calls, every returned value and every branch taken
+ * reveals nothing about whether the bytes already existed — see
+ * {@link BrowserAssetStore.put}. Resource-accounting channels such as quota
+ * failures and storage estimates remain outside that guarantee.
+ *
+ * Object URLs are deliberately minted per asset id, not per content hash.
+ * Sharing one URL across ids that name identical bytes would let a holder of
+ * both ids discover byte equality by comparing the returned strings. The
+ * accepted cost is that N such ids can retain N in-memory blobs/object URLs.
  */
 import type { AssetMeta, AssetRef, BinaryBlob, StorageProvider } from '@openmaic/dsl';
 import { contentHashOf, ObjectUrlCache, type ContentHash } from './blob.js';
@@ -103,6 +110,7 @@ export class BrowserAssetStore implements StorageProvider {
     // session. Clear the memo on failure so the next call retries.
     this.dbPromise ??= new Promise<IDBDatabase>((resolve, reject) => {
       const req = this.idb.open(this.dbName, 1);
+      // Add future schema migrations in the onupgradeneeded ladder for version 2.
       req.onupgradeneeded = () => {
         const db = req.result;
         if (!db.objectStoreNames.contains(BLOBS)) db.createObjectStore(BLOBS);
@@ -172,17 +180,16 @@ export class BrowserAssetStore implements StorageProvider {
    * Store bytes and return a **newly allocated** id for them.
    *
    * Every call allocates a fresh id and writes a fresh registry entry, whether
-   * or not these bytes were already in the pool. The caller cannot learn which
-   * happened: there is no branch on existence to observe. The blob write is an
-   * unconditional overwrite rather than a read-then-write, so the two cases run
-   * the same statements, issue the same IndexedDB requests, and return the same
-   * shape — a fresh id, indistinguishable from any other. Existence inference
-   * over someone else's bytes is closed at the API shape, not merely
-   * discouraged.
+   * or not these bytes were already in the pool. On the success path there is
+   * no branch on existence to observe. The blob write is an unconditional
+   * overwrite rather than a read-then-write, so the two cases run the same
+   * statements, issue the same IndexedDB requests, and return the same shape —
+   * a fresh id, indistinguishable from any other.
    *
-   * (Wall-clock timing is not claimed to be constant — writing bytes that are
-   * already present may be cheaper at the storage layer. The contract is that
-   * no *value* the caller receives, and no branch this code takes, differs.)
+   * Resource-accounting channels are not hidden: quota errors, storage
+   * estimates, and server-side billing or metering may disclose whether bytes
+   * were already present. Server deployments must budget those channels per
+   * principal. Wall-clock timing is likewise not claimed to be constant.
    */
   async put(data: BinaryBlob, meta?: AssetMeta): Promise<AssetId> {
     const { contentHash, bytes } = await contentHashOf(data);
@@ -194,7 +201,7 @@ export class BrowserAssetStore implements StorageProvider {
     const id = newAssetId();
     await this.tx('readwrite', async ({ assets, blobs }) => {
       await reqP(blobs.put(bytes, contentHash));
-      await reqP(assets.put(entry, id));
+      await reqP(assets.add(entry, id));
     });
     return id;
   }
@@ -208,11 +215,19 @@ export class BrowserAssetStore implements StorageProvider {
    * (see `toAssetId`).
    */
   async resolve(ref: AssetRef): Promise<string | null> {
+    const exists = await this.tx('readonly', async ({ assets }) => {
+      const key = await reqP<IDBValidKey | undefined>(assets.getKey(ref));
+      return key !== undefined;
+    });
+    if (!exists) {
+      await this.urls.invalidate(ref);
+      return null;
+    }
     return this.urls.resolve(ref, () => this.readAsUrl(ref));
   }
 
-  private readAsUrl(ref: AssetRef): Promise<string | null> {
-    return this.tx('readonly', async ({ assets, blobs }) => {
+  private async readAsUrl(ref: AssetRef): Promise<string | null> {
+    const asset = await this.tx('readonly', async ({ assets, blobs }) => {
       const entry = await reqP<AssetEntry | undefined>(assets.get(ref));
       if (!entry) return null;
       const bytes = await reqP<ArrayBuffer | undefined>(blobs.get(entry.contentHash));
@@ -220,8 +235,12 @@ export class BrowserAssetStore implements StorageProvider {
       // throwing: to the caller it is the same "no asset here" as an unknown
       // id, and inventing an error would make byte reclamation observable.
       if (!bytes) return null;
-      return URL.createObjectURL(new Blob([bytes], { type: entry.mime }));
+      return { bytes, mime: entry.mime };
     });
+    if (!asset) return null;
+    // Mint only after the readonly transaction commits, so an aborted read
+    // cannot leak an object URL that no caller ever receives.
+    return URL.createObjectURL(new Blob([asset.bytes], { type: asset.mime }));
   }
 
   /**

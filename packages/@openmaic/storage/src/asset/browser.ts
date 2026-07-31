@@ -17,8 +17,8 @@
  * would replace behind the same interface, with the registry above it
  * unchanged.
  */
-import type { AssetMeta, AssetRef, BinaryBlob, StorageProvider } from '@openmaic/dsl';
-import { contentHashOf, ObjectUrlCache } from './blob.js';
+import type { AssetMeta, AssetRef, BinaryBlob } from '@openmaic/dsl';
+import { contentHashOf, ObjectUrlCache, type BlobStore } from './blob.js';
 
 export interface BrowserAssetProviderOptions {
   /** IndexedDB factory. Defaults to the ambient `indexedDB`. Injectable for tests. */
@@ -34,7 +34,7 @@ interface StoredAsset {
   contentType: string;
 }
 
-export class BrowserAssetProvider implements StorageProvider {
+export class BrowserAssetProvider implements BlobStore {
   private readonly idb: IDBFactory;
   private readonly dbName: string;
   private dbPromise?: Promise<IDBDatabase>;
@@ -104,6 +104,8 @@ export class BrowserAssetProvider implements StorageProvider {
   private async readAsUrl(ref: AssetRef): Promise<string | null> {
     const asset = await this.tx<StoredAsset | undefined>('readonly', (store) => store.get(ref));
     if (!asset) return null;
+    // Mint only after the readonly transaction commits, so an aborted read
+    // cannot leak an object URL that no caller ever receives.
     return URL.createObjectURL(new Blob([asset.bytes], { type: asset.contentType }));
   }
 

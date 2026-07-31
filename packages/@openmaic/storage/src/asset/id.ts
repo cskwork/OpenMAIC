@@ -24,18 +24,17 @@ declare const assetIdBrand: unique symbol;
 /**
  * A branded `AssetRef` denoting an id this package allocated.
  *
- * The brand is a *compile-time* discriminator only — it is what lets an audio
- * id and an image id share one runtime namespace while still being
- * distinguishable where a caller wants them to be, rather than partitioning the
- * id space to buy the same guarantee at permanent runtime cost. It carries no
- * runtime representation: an `AssetId` is a string and nothing more.
+ * The brand is a *compile-time* discriminator only: it separates ids allocated
+ * by this package from arbitrary strings. It does not distinguish media types;
+ * typed DSL fields own that distinction. It carries no runtime representation:
+ * an `AssetId` is a string and nothing more.
  */
 export type AssetId = AssetRef & { readonly [assetIdBrand]: true };
 
 /** The type prefix every allocated asset id carries. */
 export const ASSET_ID_PREFIX = 'ast_';
 
-/** Bits of randomness in an allocated id. */
+/** Bytes of randomness in an allocated id. */
 const ASSET_ID_ENTROPY_BYTES = 16;
 
 /**
@@ -84,6 +83,8 @@ export function newAssetId(): AssetId {
  * An id that this package never allocated is therefore not an error — it is a
  * lookup that misses. `resolve` returns `null` for it and `remove` is a no-op,
  * which is the same answer a valid-but-deleted id gets, and deliberately so.
+ * On a server, untrusted input passed through `toAssetId` is still owed
+ * authorization through a registry ownership check, not validation.
  */
 export function toAssetId(value: string): AssetId {
   return value as AssetId;

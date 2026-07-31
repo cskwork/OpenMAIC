@@ -5,6 +5,7 @@
 import { IDBFactory } from 'fake-indexeddb';
 import { expect, test } from 'vitest';
 import { BrowserAssetProvider } from '../src/asset/browser.js';
+import { contentHashOf } from '../src/asset/blob.js';
 import { blobForObjectUrl } from './setup.js';
 import { runBlobStoreContract } from './asset-blob-contract.js';
 
@@ -17,6 +18,21 @@ runBlobStoreContract(
     return new Uint8Array(await b.arrayBuffer());
   },
 );
+
+test('content hashing fails clearly when crypto.subtle is unavailable', async () => {
+  const crypto = globalThis.crypto;
+  Object.defineProperty(globalThis, 'crypto', {
+    value: { getRandomValues: crypto.getRandomValues.bind(crypto), subtle: undefined },
+    configurable: true,
+  });
+  try {
+    await expect(contentHashOf(new Blob(['bytes']))).rejects.toThrow(
+      /crypto\.subtle.*secure context/i,
+    );
+  } finally {
+    Object.defineProperty(globalThis, 'crypto', { value: crypto, configurable: true });
+  }
+});
 
 // Re-putting the same bytes with a corrected contentType must not leave a
 // stale cached object URL: resolve() has to reflect the latest write, not

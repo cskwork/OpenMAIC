@@ -49,11 +49,17 @@ a browser.
   package, so the "whoever knows the hash can reach the bytes" threat that pure
   content-addressing must defend against does not arise. Images, audio and
   video share one id space — the medium is a `mime` column, not a partition.
-  `put` **always allocates a new id**, so a caller cannot learn whether the
-  bytes were already present; the content-addressed blob backend beneath, whose
-  refs would disclose exactly that, is internal and unexported. The id domain is
-  opaque and unvalidated (the KV key-domain lesson, applied forward): an
-  unrecognized id is a miss, never an error. The server backend is still to
+  `put` **always allocates a new id**, so its successful return values and
+  branches do not reveal whether the bytes were already present; the
+  content-addressed blob backend beneath, whose refs would disclose exactly
+  that, is internal and unexported. Resource-accounting channels remain:
+  quota errors, storage estimates, and server billing or metering can disclose
+  existence, so server deployments must budget them per principal. Object URLs
+  are minted per id, not shared per `contentHash`: sharing would let a holder of
+  two ids learn that their bytes match by comparing URL strings. The accepted
+  cost is N in-memory blobs/URLs for N resolved ids over identical bytes. The id
+  domain is opaque and unvalidated (the KV key-domain lesson, applied forward):
+  an unrecognized id is a miss, never an error. The server backend is still to
   come.
 - **Document normalization.** The DSL `document` is a portable embedded
   aggregate; `DocumentStore` normalizes it into per-entity rows so scene-level

@@ -9,7 +9,18 @@
  * asset an identity — the id, the MIME type, the provenance — lives one layer
  * up, in the registry.
  */
-import type { AssetRef, BinaryBlob } from '@openmaic/dsl';
+import type { AssetMeta, AssetRef, BinaryBlob } from '@openmaic/dsl';
+
+/**
+ * Internal content-addressed blob-layer contract. Unlike `StorageProvider`,
+ * `put` returns the key derived from the bytes and may return the same key for
+ * repeated content.
+ */
+export interface BlobStore {
+  put(data: BinaryBlob, meta?: AssetMeta): Promise<AssetRef>;
+  resolve(key: AssetRef): Promise<string | null>;
+  remove(key: AssetRef): Promise<void>;
+}
 
 /** `sha256-<hex>` over the stored bytes. Internal to this package. */
 export type ContentHash = string;
@@ -25,8 +36,14 @@ function toHex(buffer: ArrayBuffer): string {
 export async function contentHashOf(
   data: BinaryBlob,
 ): Promise<{ contentHash: ContentHash; bytes: ArrayBuffer }> {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) {
+    throw new Error(
+      'Web Crypto crypto.subtle is unavailable; content hashing requires a secure context (HTTPS or localhost).',
+    );
+  }
   const bytes = await data.arrayBuffer();
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  const digest = await subtle.digest('SHA-256', bytes);
   return { contentHash: `sha256-${toHex(digest)}`, bytes };
 }
 

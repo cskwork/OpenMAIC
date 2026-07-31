@@ -59,12 +59,17 @@ export interface BinaryBlob {
  * The blob-resolution contract: store bytes, get back an allocated ref, and
  * resolve a ref to a URL usable as an `<img>` / `<audio>` / `<video>` `src`.
  *
- * `put` allocates. Every call returns a *new* ref, and nothing the caller
- * receives reveals whether those bytes were already stored. This is a contract
- * requirement rather than an implementation preference: a provider that handed
- * back an existing ref for repeated bytes would let any caller test whether
- * arbitrary bytes are already present, which is an existence oracle over data
- * the caller never stored.
+ * `put` allocates. Every successful call returns a *new* ref, and every value
+ * returned and branch taken on that success path is independent of whether
+ * those bytes were already stored. This is a contract requirement rather than
+ * an implementation preference: a provider that handed back an existing ref
+ * for repeated bytes would let any caller test whether arbitrary bytes are
+ * already present, which is an existence oracle over data the caller never
+ * stored.
+ *
+ * Resource-accounting channels remain outside this guarantee: quota errors,
+ * storage estimates, and server-side billing or metering may disclose
+ * existence. A server deployment must budget those channels per principal.
  */
 export interface StorageProvider {
   /** Store bytes and return a newly allocated ref to them. */

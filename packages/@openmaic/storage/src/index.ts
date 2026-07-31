@@ -32,7 +32,7 @@ export {
   type HttpKVStoreOptions,
 } from './kv/http.js';
 export { BrowserAssetStore, type BrowserAssetStoreOptions } from './asset/browser-store.js';
-export { ASSET_ID_PREFIX, newAssetId, toAssetId, type AssetId } from './asset/id.js';
+export { newAssetId, toAssetId, type AssetId } from './asset/id.js';
 
 export {
   kvPersistStorage,

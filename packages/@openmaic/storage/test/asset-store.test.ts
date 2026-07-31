@@ -1,6 +1,7 @@
 import { IDBFactory } from 'fake-indexeddb';
-import { describe, expect, test } from 'vitest';
-import { ASSET_ID_PREFIX, BrowserAssetStore, newAssetId, toAssetId } from '../src/index.js';
+import { describe, expect, test, vi } from 'vitest';
+import { BrowserAssetStore, newAssetId, toAssetId } from '../src/index.js';
+import { ASSET_ID_PREFIX } from '../src/asset/id.js';
 import { blobForObjectUrl } from './setup.js';
 import { runAssetStoreContract } from './asset-contract.js';
 
@@ -106,6 +107,19 @@ describe('BrowserAssetStore de-duplicates bytes beneath allocated ids', () => {
 });
 
 describe('BrowserAssetStore reclaims bytes at the last reference', () => {
+  test('a cached URL is revoked when another instance removes its registry entry', async () => {
+    const pool = makePool('cross-instance-cache');
+    const id = await pool.store.put(blob('shared database'));
+    const url = await pool.store.resolve(id);
+    expect(url).not.toBeNull();
+    expect(blobForObjectUrl(url!)).toBeDefined();
+
+    await pool.cold().remove(id);
+
+    expect(await pool.store.resolve(id)).toBeNull();
+    expect(blobForObjectUrl(url!)).toBeUndefined();
+  });
+
   test('removing one of two ids drops the row but keeps the bytes', async () => {
     const pool = makePool('reclaim-partial');
     const a = await pool.store.put(blob('two owners'));
@@ -278,6 +292,27 @@ describe('allocated asset ids', () => {
 });
 
 describe('BrowserAssetStore failure handling', () => {
+  test('an allocated-id collision aborts without overwriting or orphaning bytes', async () => {
+    const pool = makePool('id-collision');
+    const random = vi
+      .spyOn(globalThis.crypto, 'getRandomValues')
+      .mockImplementation(<T extends ArrayBufferView | null>(array: T): T => {
+        if (array) new Uint8Array(array.buffer, array.byteOffset, array.byteLength).fill(7);
+        return array;
+      });
+    try {
+      const first = await pool.store.put(blob('kept bytes'));
+      await expect(pool.store.put(blob('rejected bytes'))).rejects.toThrow();
+      const url = await pool.store.resolve(first);
+      expect(url).not.toBeNull();
+      expect(await readObjectUrl(url!)).toEqual(bytes('kept bytes'));
+      expect(await pool.assets()).toBe(1);
+      expect(await pool.blobs()).toBe(1);
+    } finally {
+      random.mockRestore();
+    }
+  });
+
   test('recovers after a transient open failure instead of replaying it', async () => {
     const real = new IDBFactory();
     const seeded = new BrowserAssetStore({ indexedDB: real, dbName: 'flaky-pool' });
@@ -315,9 +350,9 @@ describe('BrowserAssetStore failure handling', () => {
     const proto = Object.getPrototypeOf(
       db.transaction('blobs', 'readonly').objectStore('blobs'),
     ) as IDBObjectStore;
-    const originalPut = proto.put;
-    proto.put = function patched(this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
-      const req = originalPut.call(this, value, key);
+    const originalAdd = proto.add;
+    proto.add = function patched(this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
+      const req = originalAdd.call(this, value, key);
       // Only the registry write (keyed by the allocated id) arms the abort, so
       // the blob write ahead of it completes normally and the store sees a
       // fully successful sequence of requests.
@@ -330,7 +365,7 @@ describe('BrowserAssetStore failure handling', () => {
     try {
       await expect(pool.store.put(blob('doomed write'))).rejects.toThrow();
     } finally {
-      proto.put = originalPut;
+      proto.add = originalAdd;
     }
     expect(await pool.assets()).toBe(1);
     expect(await pool.blobs()).toBe(1);
