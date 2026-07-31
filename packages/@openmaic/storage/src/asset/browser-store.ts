@@ -48,7 +48,7 @@
  * `replace`, and `remove` update both rows atomically.
  */
 import type { AssetMeta, AssetRef, BinaryBlob, StorageProvider } from '@openmaic/dsl';
-import { contentHashOf, ObjectUrlCache, type ContentHash } from './blob.js';
+import { contentHashOf, ObjectUrlCache, type ContentHash, type ObjectUrlIdentity } from './blob.js';
 import { newAssetId, type AssetId } from './id.js';
 
 export interface BrowserAssetStoreOptions {
@@ -163,7 +163,12 @@ export class BrowserAssetStore implements StorageProvider {
    * beyond the same origin's existing IndexedDB access.
    */
   private broadcastInvalidation(ref: AssetRef): void {
-    this.invalidations?.postMessage(ref);
+    try {
+      this.invalidations?.postMessage(ref);
+    } catch {
+      // The registry mutation is already durable. A closed or failed
+      // best-effort channel must not turn that success into a rejection.
+    }
   }
 
   private assertOpen(): void {
@@ -267,10 +272,11 @@ export class BrowserAssetStore implements StorageProvider {
   async put(data: BinaryBlob, meta?: AssetMeta): Promise<AssetId> {
     this.assertOpen();
     const storedMeta = meta === undefined ? {} : cloneMeta(meta);
+    const dataType = data.type ?? '';
     const { contentHash, bytes } = await contentHashOf(data);
     const entry: AssetEntry = {
       contentHash,
-      mime: storedMeta.contentType ?? data.type ?? '',
+      mime: storedMeta.contentType ?? dataType,
       meta: storedMeta,
     };
     const id = newAssetId();
@@ -289,11 +295,17 @@ export class BrowserAssetStore implements StorageProvider {
    * all are misses, none are errors. There is no id validator to disagree with
    * (see `toAssetId`).
    *
-   * Every call reads the registry entry and compares its `contentHash` with the
-   * hash recorded alongside this instance's cached URL. A missing entry
-   * invalidates the cache and returns `null`; a changed hash invalidates the
-   * stale URL and mints from the current row. Thus correctness is independent
-   * of BroadcastChannel availability.
+   * Every call reads the registry entry and compares its content hash and MIME
+   * with the identity recorded alongside this instance's cached URL. A missing
+   * entry invalidates the cache and returns `null`; a changed identity
+   * invalidates the stale URL and mints from the current row. Thus correctness
+   * is independent of BroadcastChannel availability.
+   *
+   * A cold resolution reads the registry a second time in the same transaction
+   * as its blob bytes. Keeping that mint snapshot atomic preserves a live,
+   * consistent result when `replace` races the resolve; folding the first row
+   * into a later blob-only read would let reclamation remove those bytes
+   * between transactions.
    */
   async resolve(ref: AssetRef): Promise<string | null> {
     this.assertOpen();
@@ -305,7 +317,11 @@ export class BrowserAssetStore implements StorageProvider {
       return null;
     }
     this.assertOpen();
-    return this.urls.resolve(ref, entry.contentHash, () => this.readAsUrl(ref));
+    const identity: ObjectUrlIdentity = {
+      contentHash: entry.contentHash,
+      mime: entry.mime,
+    };
+    return this.urls.resolve(ref, identity, () => this.readAsUrl(ref));
   }
 
   /**
@@ -316,9 +332,9 @@ export class BrowserAssetStore implements StorageProvider {
    * deliberately share one URL, so releasing it revokes that shared URL.
    * Idempotent; an unknown or uncached ref is a no-op.
    */
-  release(ref: AssetRef): Promise<void> {
+  async release(ref: AssetRef): Promise<void> {
     this.assertOpen();
-    return this.urls.release(ref);
+    await this.urls.release(ref);
   }
 
   /**
@@ -338,6 +354,7 @@ export class BrowserAssetStore implements StorageProvider {
   async replace(ref: AssetId, data: BinaryBlob, meta?: AssetMeta): Promise<void> {
     this.assertOpen();
     const storedMeta = meta === undefined ? undefined : cloneMeta(meta);
+    const dataType = data.type ?? '';
     const { contentHash, bytes } = await contentHashOf(data);
     await this.tx('readwrite', async ({ assets, blobs }) => {
       const oldEntry = await reqP<AssetEntry | undefined>(assets.get(ref));
@@ -348,8 +365,8 @@ export class BrowserAssetStore implements StorageProvider {
         contentHash,
         mime:
           storedMeta === undefined
-            ? data.type || oldEntry.mime
-            : (storedMeta.contentType ?? data.type ?? ''),
+            ? dataType || oldEntry.mime
+            : (storedMeta.contentType ?? dataType),
         meta: storedMeta ?? oldEntry.meta,
       };
       await reqP(assets.put(nextEntry, ref));
@@ -363,7 +380,9 @@ export class BrowserAssetStore implements StorageProvider {
     this.broadcastInvalidation(ref);
   }
 
-  private async readAsUrl(ref: AssetRef): Promise<{ identity: ContentHash; url: string } | null> {
+  private async readAsUrl(
+    ref: AssetRef,
+  ): Promise<{ identity: ObjectUrlIdentity; url: string } | null> {
     const asset = await this.tx('readonly', async ({ assets, blobs }) => {
       const entry = await reqP<AssetEntry | undefined>(assets.get(ref));
       if (!entry) return null;
@@ -378,7 +397,10 @@ export class BrowserAssetStore implements StorageProvider {
     // Mint only after the readonly transaction commits, so an aborted read
     // cannot leak an object URL that no caller ever receives.
     return {
-      identity: asset.contentHash,
+      identity: {
+        contentHash: asset.contentHash,
+        mime: asset.mime,
+      },
       url: URL.createObjectURL(new Blob([asset.bytes], { type: asset.mime })),
     };
   }

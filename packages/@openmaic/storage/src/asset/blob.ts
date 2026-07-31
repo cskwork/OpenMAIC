@@ -53,17 +53,29 @@ export async function contentHashOf(
 
 interface ResolvedObjectUrl {
   /** Identity of the exact bytes from which `url` was minted. */
-  identity: string;
+  identity: ObjectUrlIdentity;
   url: string;
 }
 
+export type ObjectUrlIdentity =
+  | string
+  | {
+      contentHash: string;
+      mime: string;
+    };
+
 interface CachedObjectUrl {
   epoch: number;
-  identity: string;
+  identity: ObjectUrlIdentity;
   pending: Promise<ResolvedObjectUrl | null>;
   settled?: ResolvedObjectUrl | null;
   supersededEpoch?: number;
   deliveries: number;
+}
+
+function sameIdentity(left: ObjectUrlIdentity, right: ObjectUrlIdentity): boolean {
+  if (typeof left === 'string' || typeof right === 'string') return left === right;
+  return left.contentHash === right.contentHash && left.mime === right.mime;
 }
 
 /**
@@ -87,6 +99,8 @@ export class ObjectUrlCache {
   private readonly urls = new Map<AssetRef, CachedObjectUrl>();
   private readonly epochs = new Map<AssetRef, number>();
   private readonly orphans = new Map<AssetRef, Set<string>>();
+  private readonly pending = new Map<AssetRef, Set<CachedObjectUrl>>();
+  private closed = false;
 
   /**
    * Return the cached resolution for `ref` when it has `identity`, or run
@@ -98,11 +112,15 @@ export class ObjectUrlCache {
    */
   async resolve(
     ref: AssetRef,
-    identity: string,
+    identity: ObjectUrlIdentity,
     read: () => Promise<ResolvedObjectUrl | null>,
   ): Promise<string | null> {
     const cached = this.urls.get(ref);
-    if (cached?.identity === identity && cached.epoch === (this.epochs.get(ref) ?? 0)) {
+    if (
+      cached &&
+      sameIdentity(cached.identity, identity) &&
+      cached.epoch === (this.epochs.get(ref) ?? 0)
+    ) {
       return this.deliver(cached);
     }
     // `invalidate` advances and removes synchronously even though it returns a
@@ -117,27 +135,39 @@ export class ObjectUrlCache {
       pending: Promise.resolve(null),
       deliveries: 0,
     };
+    this.addPending(ref, entry);
     entry.pending = read().then(
       (resolved) => {
         entry.settled = resolved;
         if (resolved) entry.identity = resolved.identity;
         if (this.urls.get(ref) !== entry) {
           if (resolved) {
-            this.addOrphan(ref, resolved.url);
-            if ((this.epochs.get(ref) ?? 0) > (entry.supersededEpoch ?? 0)) {
+            if (this.closed) {
+              URL.revokeObjectURL(resolved.url);
+            } else {
+              this.addOrphan(ref, resolved.url);
+            }
+            if (!this.closed && (this.epochs.get(ref) ?? 0) > (entry.supersededEpoch ?? 0)) {
               // A later invalidation already occurred while this mint was
               // pending. Reclaim after promise delivery, never before the
               // raced caller can observe its consistent snapshot.
-              setTimeout(() => this.revokeOrphan(ref, resolved.url), 0);
+              setTimeout(() => {
+                this.revokeOrphan(ref, resolved.url);
+                this.pruneEpoch(ref);
+              }, 0);
             }
           }
         } else if (resolved === null) {
           this.urls.delete(ref);
         }
+        this.removePending(ref, entry);
+        this.pruneEpoch(ref);
         return resolved;
       },
       (error: unknown) => {
         if (this.urls.get(ref) === entry) this.urls.delete(ref);
+        this.removePending(ref, entry);
+        this.pruneEpoch(ref);
         throw error;
       },
     );
@@ -152,6 +182,29 @@ export class ObjectUrlCache {
     } finally {
       entry.deliveries -= 1;
     }
+  }
+
+  private addPending(ref: AssetRef, entry: CachedObjectUrl): void {
+    let entries = this.pending.get(ref);
+    if (!entries) {
+      entries = new Set();
+      this.pending.set(ref, entries);
+    }
+    entries.add(entry);
+  }
+
+  private removePending(ref: AssetRef, entry: CachedObjectUrl): void {
+    const entries = this.pending.get(ref);
+    if (!entries?.delete(entry)) return;
+    if (entries.size === 0) this.pending.delete(ref);
+  }
+
+  private hasState(ref: AssetRef): boolean {
+    return this.urls.has(ref) || this.pending.has(ref) || this.orphans.has(ref);
+  }
+
+  private pruneEpoch(ref: AssetRef): void {
+    if (!this.hasState(ref)) this.epochs.delete(ref);
   }
 
   private addOrphan(ref: AssetRef, url: string): void {
@@ -187,38 +240,49 @@ export class ObjectUrlCache {
    */
   async invalidate(ref: AssetRef): Promise<void> {
     const entry = this.urls.get(ref);
-    if (!entry && !this.orphans.has(ref)) return;
+    if (!this.hasState(ref)) return;
     this.epochs.set(ref, (this.epochs.get(ref) ?? 0) + 1);
     this.revokeOrphans(ref);
-    if (!entry) return;
-    this.urls.delete(ref);
-    entry.supersededEpoch = this.epochs.get(ref);
-    if (entry.settled) {
-      if (entry.deliveries > 0) this.addOrphan(ref, entry.settled.url);
-      else URL.revokeObjectURL(entry.settled.url);
+    if (entry) {
+      this.urls.delete(ref);
+      entry.supersededEpoch = this.epochs.get(ref);
+      if (entry.settled) {
+        if (entry.deliveries > 0) this.addOrphan(ref, entry.settled.url);
+        else URL.revokeObjectURL(entry.settled.url);
+      }
     }
+    this.pruneEpoch(ref);
   }
 
   /** Force-revoke every URL for one owner-controlled ref. */
   async release(ref: AssetRef): Promise<void> {
+    if (!this.hasState(ref)) return;
     this.epochs.set(ref, (this.epochs.get(ref) ?? 0) + 1);
     this.revokeOrphans(ref);
     const entry = this.urls.get(ref);
-    if (!entry) return;
-    this.urls.delete(ref);
-    const resolved = await entry.pending.catch(() => null);
-    if (resolved) {
-      const orphaned = this.orphans.get(ref)?.delete(resolved.url) ?? false;
-      if (this.orphans.get(ref)?.size === 0) this.orphans.delete(ref);
-      if (orphaned || entry.settled) URL.revokeObjectURL(resolved.url);
+    if (entry) {
+      this.urls.delete(ref);
+      entry.supersededEpoch = this.epochs.get(ref);
     }
+    const entries = new Set(this.pending.get(ref) ?? []);
+    if (entry) entries.add(entry);
+    const resolved = await Promise.all(
+      [...entries].map((pendingEntry) => pendingEntry.pending.catch(() => null)),
+    );
+    for (const result of resolved) {
+      if (result) URL.revokeObjectURL(result.url);
+    }
+    this.revokeOrphans(ref);
+    this.pruneEpoch(ref);
   }
 
   /** Force-revoke all cached, in-flight, and orphaned URLs. */
   async close(): Promise<void> {
-    const refs = new Set([...this.urls.keys(), ...this.orphans.keys()]);
+    this.closed = true;
+    const refs = new Set([...this.urls.keys(), ...this.pending.keys(), ...this.orphans.keys()]);
     await Promise.all([...refs].map((ref) => this.release(ref)));
     this.urls.clear();
+    this.pending.clear();
     this.orphans.clear();
     this.epochs.clear();
   }

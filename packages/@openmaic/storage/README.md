@@ -61,9 +61,13 @@ a browser.
   cost is N in-memory blobs/URLs for N resolved ids over identical bytes. A
   resolved URL pins its Blob in that store instance until `close`, `remove`,
   `replace`, or a failed content-identity check revokes it. Application
-  lifecycles should close stores they no longer own; removing an asset also
-  releases it everywhere. `release` is an owner-level escape hatch for a
-  sole-consumer caller that owns every use of the shared URL in that instance.
+  code that constructs a concrete `BrowserAssetStore` owns its `close`
+  lifecycle (the narrower DSL `StorageProvider` seam does not expose `close`).
+  Removing an asset proactively releases cached URLs in reachable same-origin
+  instances when the optional invalidation channel is available; channel-less
+  instances release a stale URL on their next `resolve`. `release` is an
+  owner-level escape hatch for a sole-consumer caller that owns every use of
+  the shared URL in that instance.
   The id domain is opaque and unvalidated (the KV key-domain lesson, applied
   forward): an unrecognized id is a miss, never an error. The server backend is
   still to come.
