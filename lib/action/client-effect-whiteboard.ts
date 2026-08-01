@@ -3,6 +3,7 @@ import {
   CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
   CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
   CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_DELETE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_RENDER_VERSION,
@@ -48,6 +49,8 @@ import {
   type WhiteboardTableOutline,
   type WhiteboardTableSpec,
   type WhiteboardOpenCommittedObservation,
+  type WhiteboardDeleteCommittedObservation,
+  type WhiteboardElementType,
 } from '@/lib/agent/runtime/client-effect-contract';
 import type {
   ChartData,
@@ -299,6 +302,105 @@ export function prepareNativeExistingWhiteboardTarget(
     sceneId: target.sceneId,
     whiteboardId: expectedWhiteboardId,
     bindingVersion,
+  };
+}
+
+export function prepareNativeWhiteboardDeleteTarget(
+  store: StageStore,
+  target: ClientEffectTarget,
+  expectedWhiteboardId: string,
+  bindingVersion = 1,
+): AcceptedTargetBinding {
+  assertStageAndScene(store, target);
+  if (typeof expectedWhiteboardId !== 'string' || !expectedWhiteboardId) {
+    throw new Error('CLIENT_EFFECT_DELETE_WHITEBOARD_ID_INVALID');
+  }
+  const latestWhiteboard = store.getState().stage?.whiteboard?.at(-1);
+  if (!latestWhiteboard || latestWhiteboard.id !== expectedWhiteboardId) {
+    throw new Error('CLIENT_EFFECT_DELETE_WHITEBOARD_MISMATCH');
+  }
+  return {
+    requestId: target.requestId,
+    sessionId: target.sessionId,
+    stageId: target.stageId,
+    sceneId: target.sceneId,
+    whiteboardId: expectedWhiteboardId,
+    bindingVersion,
+  };
+}
+
+export function executeNativeWhiteboardDeleteEffect(opts: {
+  store: StageStore;
+  targetBinding: AcceptedTargetBinding;
+  stableElementId: string;
+  expectedWhiteboardId: string;
+  expectedElementType: WhiteboardElementType;
+  signal?: AbortSignal;
+}): NativeWhiteboardExecutionResult<WhiteboardDeleteCommittedObservation> {
+  throwIfAborted(opts.signal);
+  assertStageAndScene(opts.store, opts.targetBinding);
+  if (opts.targetBinding.whiteboardId !== opts.expectedWhiteboardId || !opts.stableElementId) {
+    throw new Error('CLIENT_EFFECT_DELETE_TARGET_INVALID');
+  }
+
+  const whiteboardApi = createStageAPI(opts.store).whiteboard;
+  const beforeResult = whiteboardApi.listElements(opts.targetBinding.whiteboardId);
+  if (!beforeResult.success || !beforeResult.data) {
+    throw new Error(beforeResult.error || 'CLIENT_EFFECT_WHITEBOARD_NOT_FOUND');
+  }
+  const before = beforeResult.data;
+  const matchesBefore = before.filter((element) => element.id === opts.stableElementId);
+  if (matchesBefore.length !== 1) {
+    throw new Error(
+      matchesBefore.length === 0
+        ? 'CLIENT_EFFECT_DELETE_ELEMENT_NOT_FOUND'
+        : 'CLIENT_EFFECT_DUPLICATE_ELEMENT_ID',
+    );
+  }
+  if (matchesBefore[0].type !== opts.expectedElementType) {
+    throw new Error('CLIENT_EFFECT_DELETE_ELEMENT_TYPE_MISMATCH');
+  }
+
+  // The final target check, mutation, and postcondition read are intentionally
+  // synchronous. No await may separate them, otherwise a later binding could
+  // be deleted after the accepted target changes.
+  assertStageAndScene(opts.store, opts.targetBinding);
+  const latestWhiteboard = opts.store.getState().stage?.whiteboard?.at(-1);
+  if (!latestWhiteboard || latestWhiteboard.id !== opts.expectedWhiteboardId) {
+    throw new Error('CLIENT_EFFECT_DELETE_WHITEBOARD_MISMATCH');
+  }
+  const deleteResult = whiteboardApi.deleteElement(
+    opts.stableElementId,
+    opts.targetBinding.whiteboardId,
+  );
+  if (!deleteResult.success) {
+    throw new Error(deleteResult.error || 'CLIENT_EFFECT_WHITEBOARD_MUTATION_FAILED');
+  }
+  const afterResult = whiteboardApi.listElements(opts.targetBinding.whiteboardId);
+  if (!afterResult.success || !afterResult.data) {
+    throw new Error(afterResult.error || 'CLIENT_EFFECT_WHITEBOARD_NOT_FOUND');
+  }
+  const matchingElementCountAfter = afterResult.data.filter(
+    (element) => element.id === opts.stableElementId,
+  ).length;
+  if (matchingElementCountAfter !== 0 || afterResult.data.length !== before.length - 1) {
+    throw new Error('CLIENT_EFFECT_DELETE_POSTCONDITION_FAILED');
+  }
+
+  return {
+    replayed: false,
+    postcondition: {
+      kind: 'whiteboard_element_absent',
+      normalizationVersion: CLIENT_EFFECT_DELETE_NORMALIZATION_VERSION,
+      stableElementId: opts.stableElementId,
+      whiteboardId: opts.targetBinding.whiteboardId,
+      observedElementType: opts.expectedElementType,
+      matchingElementCountBefore: 1,
+      matchingElementCountAfter: 0,
+      elementCountBefore: before.length,
+      elementCountAfter: afterResult.data.length,
+      deleted: true,
+    },
   };
 }
 

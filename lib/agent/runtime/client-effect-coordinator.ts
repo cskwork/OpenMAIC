@@ -7,6 +7,7 @@ import {
   type ClientEffectRequest,
   type ClientEffectTraceEvent,
   type ClientEffectTerminalResult,
+  type WhiteboardDeleteCommittedObservation,
   type WhiteboardOpenCommittedObservation,
 } from './client-effect-contract';
 
@@ -141,13 +142,15 @@ export class ClientEffectCoordinator {
     const ownershipKey = this.ownershipKey(request);
     const owner = this.effectOwners.get(ownershipKey);
     if (owner && owner !== request.executionId) {
-      if (request.postcondition.kind === 'whiteboard_open') {
+      if (
+        request.postcondition.kind === 'whiteboard_open' ||
+        request.postcondition.kind === 'whiteboard_code_edited' ||
+        request.postcondition.kind === 'whiteboard_element_absent'
+      ) {
         throw new Error('CLIENT_EFFECT_RESOURCE_BUSY');
       }
-      const scopeLabel =
-        request.postcondition.kind === 'whiteboard_code_edited' ? ' in this whiteboard scope' : '';
       throw new Error(
-        `Stable element "${request.postcondition.stableElementId}" belongs to another execution${scopeLabel}.`,
+        `Stable element "${request.postcondition.stableElementId}" belongs to another execution.`,
       );
     }
 
@@ -337,10 +340,13 @@ export class ClientEffectCoordinator {
           return 'Accepted target does not match the requested stage and scene.';
         }
         if (
-          entry.request.postcondition.kind === 'whiteboard_code_edited' &&
+          (entry.request.postcondition.kind === 'whiteboard_code_edited' ||
+            entry.request.postcondition.kind === 'whiteboard_element_absent') &&
           ack.targetBinding.whiteboardId !== entry.request.postcondition.expectedWhiteboardId
         ) {
-          return 'Accepted whiteboard does not match the requested edit target.';
+          return entry.request.postcondition.kind === 'whiteboard_code_edited'
+            ? 'Accepted whiteboard does not match the requested edit target.'
+            : 'Accepted whiteboard does not match the requested delete target.';
         }
         entry.targetBinding = ack.targetBinding;
         entry.status = 'accepted';
@@ -355,6 +361,26 @@ export class ClientEffectCoordinator {
         }
         const expected = entry.request.postcondition;
         const observed = ack.postcondition;
+        if (expected.kind === 'whiteboard_element_absent') {
+          if (
+            !('kind' in observed) ||
+            observed.kind !== 'whiteboard_element_absent' ||
+            observed.normalizationVersion !== expected.normalizationVersion ||
+            observed.stableElementId !== expected.stableElementId ||
+            observed.whiteboardId !== expected.expectedWhiteboardId ||
+            observed.whiteboardId !== entry.targetBinding.whiteboardId ||
+            observed.observedElementType !== expected.expectedElementType ||
+            observed.matchingElementCountBefore !== 1 ||
+            observed.matchingElementCountAfter !== 0 ||
+            observed.elementCountBefore <= 0 ||
+            observed.elementCountAfter !== observed.elementCountBefore - 1 ||
+            observed.deleted !== true
+          ) {
+            return 'Committed postcondition does not match the requested whiteboard delete effect.';
+          }
+          this.settle(entry, 'effect_committed', undefined, observed);
+          return null;
+        }
         if (expected.kind === 'whiteboard_open') {
           if (
             !('kind' in observed) ||
@@ -444,10 +470,11 @@ export class ClientEffectCoordinator {
           entry.status !== 'accepted' &&
           !(
             entry.status === 'pending' &&
-            entry.request.postcondition.kind === 'whiteboard_code_edited'
+            (entry.request.postcondition.kind === 'whiteboard_code_edited' ||
+              entry.request.postcondition.kind === 'whiteboard_element_absent')
           )
         ) {
-          return 'effect_failed requires accepted state, except for code-edit preparation failure.';
+          return 'effect_failed requires accepted state, except for existing-element preparation failure.';
         }
         this.settle(entry, 'effect_failed', ack.error);
         return null;
@@ -463,7 +490,10 @@ export class ClientEffectCoordinator {
         '\u0000',
       );
     }
-    if (request.postcondition.kind !== 'whiteboard_code_edited') {
+    if (
+      request.postcondition.kind !== 'whiteboard_code_edited' &&
+      request.postcondition.kind !== 'whiteboard_element_absent'
+    ) {
       return request.postcondition.stableElementId;
     }
     const whiteboardScope = request.postcondition.expectedWhiteboardId;
@@ -535,15 +565,18 @@ export class ClientEffectCoordinator {
     entry: CoordinatorEntry,
     status: ClientEffectTerminalResult['status'],
     error?: ClientEffectTerminalResult['error'],
-    committedObservation?: WhiteboardOpenCommittedObservation,
+    committedObservation?:
+      | WhiteboardOpenCommittedObservation
+      | WhiteboardDeleteCommittedObservation,
   ): void {
     if (entry.terminalResult) return;
     if (
       status === 'effect_committed' &&
-      entry.request.postcondition.kind === 'whiteboard_open' &&
+      (entry.request.postcondition.kind === 'whiteboard_open' ||
+        entry.request.postcondition.kind === 'whiteboard_element_absent') &&
       !committedObservation
     ) {
-      throw new Error('CLIENT_EFFECT_OPEN_COMMITTED_OBSERVATION_MISSING');
+      throw new Error('CLIENT_EFFECT_LIFECYCLE_COMMITTED_OBSERVATION_MISSING');
     }
     if (entry.activeStartedAt !== null) {
       entry.activeRemainingMs = Math.max(

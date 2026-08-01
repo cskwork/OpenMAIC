@@ -51,7 +51,10 @@ function buildDirectorCourseOutline(body: StatelessChatRequest): string {
 
 function buildThinChildContext(
   body: StatelessChatRequest,
-  options: { excludeWhiteboardCode?: boolean } = {},
+  options: {
+    excludeWhiteboardCode?: boolean;
+    excludeWhiteboardElementIds?: boolean;
+  } = {},
 ): string {
   const currentScene = body.storeState.currentSceneId
     ? body.storeState.scenes.find((scene) => scene.id === body.storeState.currentSceneId)
@@ -66,14 +69,17 @@ function buildThinChildContext(
           })),
         }
       : body.storeState.stage;
-  const whiteboardRuntimeContext = buildStateContext({
-    ...body.storeState,
-    stage,
-    scenes: [],
-    outlines: [],
-    currentSceneId: null,
-    quizResults: undefined,
-  });
+  const whiteboardRuntimeContext = buildStateContext(
+    {
+      ...body.storeState,
+      stage,
+      scenes: [],
+      outlines: [],
+      currentSceneId: null,
+      quizResults: undefined,
+    },
+    { includeWhiteboardElementIds: options.excludeWhiteboardElementIds !== true },
+  );
   return [
     whiteboardRuntimeContext,
     `Current scene: ${currentScene ? `"${currentScene.title}" (${currentScene.type}, id: ${currentScene.id})` : 'none'}`,
@@ -275,7 +281,9 @@ export function buildNativeWebChildPrompt(
     enableWhiteboardChart?: boolean;
     enableWhiteboardCode?: boolean;
     enableWhiteboardCodeEdit?: boolean;
+    enableWhiteboardDelete?: boolean;
     whiteboardCodeContext?: string;
+    whiteboardElementContext?: string;
   } = {
     enableWebSearch: true,
   },
@@ -308,7 +316,8 @@ export function buildNativeWebChildPrompt(
     options.enableWhiteboardTable ||
     options.enableWhiteboardChart ||
     options.enableWhiteboardCode ||
-    options.enableWhiteboardCodeEdit
+    options.enableWhiteboardCodeEdit ||
+    options.enableWhiteboardDelete
       ? [
           '# Native Whiteboard',
           options.enableWhiteboardOpen
@@ -338,6 +347,9 @@ export function buildNativeWebChildPrompt(
           options.enableWhiteboardCodeEdit
             ? 'You may call `wb_edit_code` to edit one existing code block. Use only exact Runtime-provided element and line IDs, wait for the verified result, and never redraw the block as a substitute for an edit.'
             : '',
+          options.enableWhiteboardDelete
+            ? 'You may call `wb_delete` to remove exactly one existing whiteboard element. Use only an exact element ID from Runtime-verified state or a prior successful tool result.'
+            : '',
           'The board uses a 1000 × 563 coordinate system. Keep every complete element within the visible board.',
           'Every Native whiteboard drawing tool opens the board automatically. Do not call `wb_open` before drawing; use it only when revealing the board without an immediate drawing is itself useful.',
           'Before calling it, say briefly what you are about to show. Wait for the tool result, then continue explaining in this same turn.',
@@ -358,8 +370,10 @@ export function buildNativeWebChildPrompt(
     '# Current State',
     buildThinChildContext(body, {
       excludeWhiteboardCode: options.enableWhiteboardCodeEdit === true,
+      excludeWhiteboardElementIds: options.enableWhiteboardDelete === true,
     }),
     options.whiteboardCodeContext ?? '',
+    options.whiteboardElementContext ?? '',
   ]
     .filter(Boolean)
     .join('\n');
@@ -380,6 +394,7 @@ export function buildNativeWebChildTurnPrompt(
     enableWhiteboardChart?: boolean;
     enableWhiteboardCode?: boolean;
     enableWhiteboardCodeEdit?: boolean;
+    enableWhiteboardDelete?: boolean;
   } = {
     enableWebSearch: true,
   },
@@ -430,6 +445,9 @@ export function buildNativeWebChildTurnPrompt(
       : '',
     options.enableWhiteboardCodeEdit
       ? 'Use `wb_edit_code` only for an existing code block whose exact element and line IDs are present in Runtime-verified state or a prior tool result. Speak before the edit and continue only after the committed result. On failure, correct the target or explain without claiming the edit happened.'
+      : '',
+    options.enableWhiteboardDelete
+      ? 'Use `wb_delete` only for one exact Runtime-verified element ID. Continue only after the committed result. On failure or unconfirmed cancellation, do not claim that the element was removed.'
       : '',
     'After the tool result, provide the final classroom response in this same Child run.',
   ].join('\n');

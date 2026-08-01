@@ -29,8 +29,8 @@ function extractCodeLines(el: any): CodeLine[] {
  * lines fit the shared budget) only the header is returned.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PPTElement variants have heterogeneous shapes
-function summarizeElement(el: any, codeText?: string): string {
-  const id = el.id ? `[id:${el.id}]` : '';
+function summarizeElement(el: any, codeText?: string, includeId = true): string {
+  const id = includeId && el.id ? `[id:${el.id}]` : '';
   const pos = `at (${Math.round(el.left)},${Math.round(el.top)})`;
   const size =
     el.width != null && el.height != null
@@ -104,6 +104,7 @@ export function summarizeElements(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PPTElement variants have heterogeneous shapes
   elements: any[],
   budgetOrder: 'source' | 'newest-first' = 'source',
+  options: { includeIds?: boolean } = {},
 ): string {
   if (elements.length === 0) return '  (empty)';
 
@@ -122,7 +123,12 @@ export function summarizeElements(
   }
 
   const lines = elements.map(
-    (el, i) => `  ${i + 1}. ${summarizeElement(el, renderedCodeByIndex.get(i))}`,
+    (el, i) =>
+      `  ${i + 1}. ${summarizeElement(
+        el,
+        renderedCodeByIndex.get(i),
+        options.includeIds !== false,
+      )}`,
   );
 
   return lines.join('\n');
@@ -133,7 +139,10 @@ export function summarizeElements(
 /**
  * Build context string from store state
  */
-export function buildStateContext(storeState: StatelessChatRequest['storeState']): string {
+export function buildStateContext(
+  storeState: StatelessChatRequest['storeState'],
+  options: { includeWhiteboardElementIds?: boolean } = {},
+): string {
   const { stage, scenes, currentSceneId, mode, whiteboardOpen, quizResults } = storeState;
 
   const lines: string[] = [];
@@ -261,9 +270,15 @@ export function buildStateContext(storeState: StatelessChatRequest['storeState']
     const lastWb = stage.whiteboard[stage.whiteboard.length - 1];
     const wbElements = lastWb.elements || [];
     lines.push(
-      `Whiteboard (last of ${stage.whiteboard.length}, ${wbElements.length} elements):\n${summarizeElements(wbElements, 'newest-first')}`,
+      `Whiteboard (last of ${stage.whiteboard.length}, ${wbElements.length} elements):\n${summarizeElements(
+        wbElements,
+        'newest-first',
+        { includeIds: options.includeWhiteboardElementIds !== false },
+      )}`,
     );
-    const conflictsText = buildWhiteboardConflicts(wbElements);
+    const conflictsText = buildWhiteboardConflicts(wbElements, {
+      includeIds: options.includeWhiteboardElementIds !== false,
+    });
     if (conflictsText) lines.push(conflictsText);
   }
 

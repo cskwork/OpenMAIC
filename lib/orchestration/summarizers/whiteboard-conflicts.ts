@@ -174,8 +174,11 @@ function shortId(id: string): string {
  * - line/arrow path crossing through any non-line element's bbox
  * - any element extending past the 1000×563 canvas bounds
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- PPTElement variants
-export function buildWhiteboardConflicts(elements: any[]): string {
+export function buildWhiteboardConflicts(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PPTElement variants
+  elements: any[],
+  options: { includeIds?: boolean } = {},
+): string {
   if (!elements || elements.length === 0) return '';
 
   const bboxes: BBox[] = [];
@@ -199,7 +202,7 @@ export function buildWhiteboardConflicts(elements: any[]): string {
       const ratio = relativeOverlap(bboxes[i], bboxes[j]);
       if (ratio >= OVERLAP_THRESHOLD) {
         conflicts.push(
-          `OVERLAP: ${bboxes[i].label}${shortId(bboxes[i].id)} and ${bboxes[j].label}${shortId(bboxes[j].id)} share ${Math.round(ratio * 100)}% of the smaller one's area — they sit on top of each other.`,
+          `OVERLAP: ${bboxes[i].label}${options.includeIds === false ? '' : shortId(bboxes[i].id)} and ${bboxes[j].label}${options.includeIds === false ? '' : shortId(bboxes[j].id)} share ${Math.round(ratio * 100)}% of the smaller one's area — they sit on top of each other.`,
         );
       }
     }
@@ -210,7 +213,7 @@ export function buildWhiteboardConflicts(elements: any[]): string {
     for (const b of bboxes) {
       if (lineCrossesBBox(line, b)) {
         conflicts.push(
-          `LINE CROSSES: ${line.label}${shortId(line.id)} from (${Math.round(line.x1)},${Math.round(line.y1)}) to (${Math.round(line.x2)},${Math.round(line.y2)}) passes through ${b.label}${shortId(b.id)} — the line is drawn over content.`,
+          `LINE CROSSES: ${line.label}${options.includeIds === false ? '' : shortId(line.id)} from (${Math.round(line.x1)},${Math.round(line.y1)}) to (${Math.round(line.x2)},${Math.round(line.y2)}) passes through ${b.label}${options.includeIds === false ? '' : shortId(b.id)} — the line is drawn over content.`,
         );
       }
     }
@@ -227,7 +230,7 @@ export function buildWhiteboardConflicts(elements: any[]): string {
       out.push(`bottom edge by ${Math.round(b.y + b.h - CANVAS_HEIGHT)}px`);
     if (out.length > 0) {
       conflicts.push(
-        `OUT OF CANVAS: ${b.label}${shortId(b.id)} extends past ${out.join(', ')} — content is clipped.`,
+        `OUT OF CANVAS: ${b.label}${options.includeIds === false ? '' : shortId(b.id)} extends past ${out.join(', ')} — content is clipped.`,
       );
     }
   }

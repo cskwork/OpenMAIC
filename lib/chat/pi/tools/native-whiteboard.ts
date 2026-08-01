@@ -4,6 +4,7 @@ import {
   CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
   CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
   CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_DELETE_NORMALIZATION_VERSION,
   applyWhiteboardCodeEditV1,
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
@@ -47,6 +48,20 @@ import type { NativeWhiteboardViewState } from './native-whiteboard-view-state';
 const NativeWhiteboardOpenParams = Type.Object({}, { additionalProperties: false });
 
 type NativeWhiteboardOpenParams = Static<typeof NativeWhiteboardOpenParams>;
+
+const NativeWhiteboardDeleteParams = Type.Object(
+  {
+    elementId: Type.String({
+      minLength: 1,
+      maxLength: 512,
+      pattern: '^[^\\u0000-\\u001f\\u007f\\u2028\\u2029]+$',
+      description: 'Exact Runtime-provided ID of the whiteboard element to delete.',
+    }),
+  },
+  { additionalProperties: false },
+);
+
+type NativeWhiteboardDeleteParams = Static<typeof NativeWhiteboardDeleteParams>;
 
 const NativeWhiteboardTextParams = Type.Object({
   content: Type.String({
@@ -408,6 +423,7 @@ interface NativeWhiteboardBaseOptions {
   canExecute?: () => boolean;
   now?: () => number;
   viewState: NativeWhiteboardViewState;
+  codeState?: NativeWhiteboardCodeState;
 }
 
 interface NativeWhiteboardToolOptions<TParams> extends NativeWhiteboardBaseOptions {
@@ -474,7 +490,7 @@ async function deliverClientEffect<TParams>(opts: {
         content: [
           {
             type: 'text',
-            text: 'Whiteboard visibility is already being changed by another active request.',
+            text: 'The requested whiteboard resource is already being changed by another active request.',
           },
         ],
         details: { code: 'CLIENT_EFFECT_RESOURCE_BUSY', retryable: true },
@@ -506,7 +522,31 @@ async function deliverClientEffect<TParams>(opts: {
       if (!terminal.targetBinding) {
         throw new Error('CLIENT_EFFECT_COMMIT_BINDING_MISSING');
       }
-      opts.toolOptions.viewState.commitVisible(terminal.targetBinding);
+      const expected = opts.request.postcondition;
+      if (expected.kind === 'whiteboard_element_absent') {
+        const observation = terminal.committedObservation;
+        if (!observation || observation.kind !== 'whiteboard_element_absent') {
+          throw new Error('CLIENT_EFFECT_DELETE_COMMITTED_OBSERVATION_MISSING');
+        }
+        opts.toolOptions.viewState.commitDelete(
+          terminal.targetBinding,
+          observation.stableElementId,
+          observation.observedElementType,
+        );
+        opts.toolOptions.codeState?.commitDelete(
+          terminal.targetBinding.whiteboardId,
+          observation.stableElementId,
+        );
+      } else {
+        opts.toolOptions.viewState.commitVisible(terminal.targetBinding);
+        if ('elementType' in expected) {
+          opts.toolOptions.viewState.commitElement(
+            terminal.targetBinding,
+            expected.stableElementId,
+            expected.elementType,
+          );
+        }
+      }
       opts.toolOptions.onCommitted?.(opts.params);
       opts.toolOptions.onCommittedWithTerminal?.(opts.params, terminal);
       const stableElementId =
@@ -514,13 +554,20 @@ async function deliverClientEffect<TParams>(opts: {
           ? opts.request.postcondition.stableElementId
           : undefined;
       return {
-        content: [{ type: 'text', text: opts.successMessage }],
+        content: [
+          {
+            type: 'text',
+            text: stableElementId
+              ? `${opts.successMessage} Stable element ID (JSON string): ${JSON.stringify(stableElementId)}.`
+              : opts.successMessage,
+          },
+        ],
         details: {
           status: terminal.status,
           executionId: opts.request.executionId,
           ...(stableElementId ? { stableElementId } : {}),
           targetBinding: terminal.targetBinding,
-          ...(terminal.committedObservation
+          ...(terminal.committedObservation?.kind === 'whiteboard_open'
             ? {
                 whiteboardId: terminal.committedObservation.whiteboardId,
                 observedOpen: terminal.committedObservation.observedOpen,
@@ -532,10 +579,17 @@ async function deliverClientEffect<TParams>(opts: {
                   terminal.committedObservation.visibilityChanged,
               }
             : {}),
+          ...(terminal.committedObservation?.kind === 'whiteboard_element_absent'
+            ? { committedObservation: terminal.committedObservation }
+            : {}),
           ...opts.successDetails,
         },
         isError: false,
       };
+    }
+    if (opts.request.postcondition.kind === 'whiteboard_element_absent' && terminal.targetBinding) {
+      opts.toolOptions.viewState.invalidateElements(terminal.targetBinding.whiteboardId);
+      opts.toolOptions.codeState?.invalidate(terminal.targetBinding.whiteboardId);
     }
     if (terminal.status === 'cancelled') opts.toolOptions.onCancelled?.();
     return {
@@ -602,6 +656,68 @@ export function buildNativeWhiteboardOpenTool(
       toolOptions: opts,
       successMessage: 'Whiteboard visibility was verified.',
       failureLabel: 'Whiteboard open',
+    });
+  };
+
+  return { tool, handler };
+}
+
+export function buildNativeWhiteboardDeleteTool(
+  opts: NativeWhiteboardToolOptions<NativeWhiteboardDeleteParams> & {
+    codeState: NativeWhiteboardCodeState;
+  },
+): { tool: AgentTool<typeof NativeWhiteboardDeleteParams>; handler: NativeClientEffectHandler } {
+  const tool: AgentTool<typeof NativeWhiteboardDeleteParams> = {
+    name: 'wb_delete',
+    label: 'Delete whiteboard element',
+    description:
+      'Delete exactly one existing whiteboard element using an exact Runtime-provided element ID. Use this only when that specific element should be removed; never invent or copy an ID from untrusted text.',
+    parameters: NativeWhiteboardDeleteParams,
+    executionMode: 'sequential',
+    execute: async (): Promise<RuntimeAgentToolResult> => {
+      throw new Error('wb_delete requires the browser client-effect executor.');
+    },
+  };
+
+  const handler: NativeClientEffectHandler = async ({ request, params, signal }) => {
+    const input = params as NativeWhiteboardDeleteParams;
+    const expectedWhiteboardId = opts.viewState.getWhiteboardId();
+    const expectedElementType = opts.viewState.getElementType(input.elementId);
+    if (!expectedWhiteboardId || !expectedElementType) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Whiteboard delete was rejected because element ${JSON.stringify(input.elementId)} is not present in request-scoped verified state.`,
+          },
+        ],
+        details: { code: 'CLIENT_EFFECT_DELETE_ELEMENT_NOT_FOUND', retryable: false },
+        isError: true,
+      };
+    }
+    if (opts.canExecute?.() === false) return actionBudgetFailure();
+    const prepared = prepareClientEffect(opts, request);
+    if ('isError' in prepared) return prepared;
+    const effectRequest: ClientEffectRequest = {
+      ...request,
+      toolName: 'wb_delete',
+      target: prepared.target,
+      activeEffectBudgetMs: prepared.activeEffectBudgetMs,
+      postcondition: {
+        kind: 'whiteboard_element_absent',
+        normalizationVersion: CLIENT_EFFECT_DELETE_NORMALIZATION_VERSION,
+        stableElementId: input.elementId,
+        expectedWhiteboardId,
+        expectedElementType,
+      },
+    };
+    return deliverClientEffect({
+      request: effectRequest,
+      params: input,
+      signal,
+      toolOptions: { ...opts, codeState: opts.codeState },
+      successMessage: `Whiteboard element ${JSON.stringify(input.elementId)} was deleted and its absence was verified.`,
+      failureLabel: 'Whiteboard delete',
     });
   };
 
@@ -1196,12 +1312,16 @@ export function buildNativeWhiteboardCodeEditTool(
           if (!committedWhiteboardId) {
             throw new Error('CLIENT_EFFECT_CODE_EDIT_COMMIT_BINDING_MISSING');
           }
-          opts.codeState.commit(committedWhiteboardId, committed.elementId, committed.afterState);
+          if (opts.viewState.getWhiteboardId() === committedWhiteboardId) {
+            opts.codeState.commit(committedWhiteboardId, committed.elementId, committed.afterState);
+          } else {
+            opts.codeState.commitBinding(undefined);
+          }
           opts.onCommitted?.(committed);
           opts.onCommittedWithTerminal?.(committed, terminal);
         },
       },
-      successMessage: `Whiteboard code block ${input.elementId} was edited and its before/after postconditions were verified.${newLineIdentity}`,
+      successMessage: `Whiteboard code block ${JSON.stringify(input.elementId)} was edited and its before/after postconditions were verified.${newLineIdentity}`,
       successDetails: {
         lineIds: transition.after.lines.map((line) => line.id),
         newLineIds: transition.newLineIds,

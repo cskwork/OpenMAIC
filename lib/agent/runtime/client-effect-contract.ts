@@ -18,6 +18,7 @@ export const CLIENT_EFFECT_CHART_NORMALIZATION_VERSION = 'maic.whiteboard-chart.
 export const CLIENT_EFFECT_CODE_NORMALIZATION_VERSION = 'maic.whiteboard-code.v1' as const;
 export const CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION =
   'maic.whiteboard-code-edit.v1' as const;
+export const CLIENT_EFFECT_DELETE_NORMALIZATION_VERSION = 'maic.whiteboard-delete.v1' as const;
 export const CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION = 'maic.whiteboard-visibility.v1' as const;
 export const CLIENT_EFFECT_ACK_HEADER = 'x-maic-effect-token';
 export const CLIENT_EFFECT_ACK_MAX_BYTES = 8 * 1024;
@@ -57,6 +58,39 @@ export interface WhiteboardOpenCommittedObservation {
   observedOpen: true;
   created: boolean;
   visibilityChanged: boolean;
+}
+
+export type WhiteboardElementType =
+  | 'text'
+  | 'image'
+  | 'shape'
+  | 'line'
+  | 'chart'
+  | 'table'
+  | 'latex'
+  | 'video'
+  | 'audio'
+  | 'code';
+
+export interface WhiteboardDeletePostcondition {
+  kind: 'whiteboard_element_absent';
+  normalizationVersion: typeof CLIENT_EFFECT_DELETE_NORMALIZATION_VERSION;
+  stableElementId: string;
+  expectedWhiteboardId: string;
+  expectedElementType: WhiteboardElementType;
+}
+
+export interface WhiteboardDeleteCommittedObservation {
+  kind: 'whiteboard_element_absent';
+  normalizationVersion: typeof CLIENT_EFFECT_DELETE_NORMALIZATION_VERSION;
+  stableElementId: string;
+  whiteboardId: string;
+  observedElementType: WhiteboardElementType;
+  matchingElementCountBefore: 1;
+  matchingElementCountAfter: 0;
+  elementCountBefore: number;
+  elementCountAfter: number;
+  deleted: true;
 }
 
 export interface WhiteboardTextPostcondition {
@@ -316,8 +350,14 @@ export type WhiteboardOpenClientEffectRequest = ClientEffectRequestBase & {
   postcondition: WhiteboardOpenPostcondition;
 };
 
+export type WhiteboardDeleteClientEffectRequest = ClientEffectRequestBase & {
+  toolName: 'wb_delete';
+  postcondition: WhiteboardDeletePostcondition;
+};
+
 export type ClientEffectRequest =
   | WhiteboardOpenClientEffectRequest
+  | WhiteboardDeleteClientEffectRequest
   | WhiteboardTextClientEffectRequest
   | WhiteboardShapeClientEffectRequest
   | WhiteboardLineClientEffectRequest
@@ -362,6 +402,7 @@ export type ClientEffectAck =
       targetBinding: AcceptedTargetBinding;
       postcondition:
         | WhiteboardOpenCommittedObservation
+        | WhiteboardDeleteCommittedObservation
         | {
             stableElementId: string;
             elementType: 'text';
@@ -438,7 +479,7 @@ export interface ClientEffectTerminalResult {
   isError: boolean;
   completedAt: number;
   targetBinding?: AcceptedTargetBinding;
-  committedObservation?: WhiteboardOpenCommittedObservation;
+  committedObservation?: WhiteboardOpenCommittedObservation | WhiteboardDeleteCommittedObservation;
   error?: {
     code: string;
     message: string;
@@ -1704,6 +1745,21 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function isWhiteboardElementType(value: unknown): value is WhiteboardElementType {
+  return (
+    value === 'text' ||
+    value === 'image' ||
+    value === 'shape' ||
+    value === 'line' ||
+    value === 'chart' ||
+    value === 'table' ||
+    value === 'latex' ||
+    value === 'video' ||
+    value === 'audio' ||
+    value === 'code'
+  );
+}
+
 function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
   const actual = Object.keys(value).sort();
   const sortedExpected = [...expected].sort();
@@ -1796,6 +1852,37 @@ export function isClientEffectAck(value: unknown): value is ClientEffectAck {
         return false;
       }
       const postcondition = ack.postcondition as Record<string, unknown>;
+      if (
+        postcondition.kind === 'whiteboard_element_absent' &&
+        hasExactKeys(postcondition, [
+          'kind',
+          'normalizationVersion',
+          'stableElementId',
+          'whiteboardId',
+          'observedElementType',
+          'matchingElementCountBefore',
+          'matchingElementCountAfter',
+          'elementCountBefore',
+          'elementCountAfter',
+          'deleted',
+        ])
+      ) {
+        return (
+          postcondition.normalizationVersion === CLIENT_EFFECT_DELETE_NORMALIZATION_VERSION &&
+          isNonEmptyString(postcondition.stableElementId) &&
+          isNonEmptyString(postcondition.whiteboardId) &&
+          isWhiteboardElementType(postcondition.observedElementType) &&
+          postcondition.matchingElementCountBefore === 1 &&
+          postcondition.matchingElementCountAfter === 0 &&
+          Number.isInteger(postcondition.elementCountBefore) &&
+          Number(postcondition.elementCountBefore) > 0 &&
+          Number.isInteger(postcondition.elementCountAfter) &&
+          Number(postcondition.elementCountAfter) >= 0 &&
+          Number(postcondition.elementCountAfter) ===
+            Number(postcondition.elementCountBefore) - 1 &&
+          postcondition.deleted === true
+        );
+      }
       if (
         postcondition.kind === 'whiteboard_open' &&
         hasExactKeys(postcondition, [

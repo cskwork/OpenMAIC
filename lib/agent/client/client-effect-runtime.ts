@@ -19,12 +19,14 @@ import {
   executeNativeWhiteboardChartEffect,
   executeNativeWhiteboardCodeEditEffect,
   executeNativeWhiteboardCodeEffect,
+  executeNativeWhiteboardDeleteEffect,
   executeNativeWhiteboardLatexEffect,
   executeNativeWhiteboardLineEffect,
   executeNativeWhiteboardShapeEffect,
   executeNativeWhiteboardTableEffect,
   executeNativeWhiteboardTextEffect,
   prepareNativeExistingWhiteboardTarget,
+  prepareNativeWhiteboardDeleteTarget,
   prepareNativeWhiteboardOpenTarget,
   prepareNativeWhiteboardTarget,
   verifyNativeWhiteboardOpenEffect,
@@ -90,6 +92,9 @@ function errorDetails(
       (!preserveClientEffectCode ||
         (code !== 'CLIENT_EFFECT_CODE_EDIT_STALE_BEFORE_STATE' &&
           code !== 'CLIENT_EFFECT_WHITEBOARD_OBSERVER_UNAVAILABLE' &&
+          code !== 'CLIENT_EFFECT_DUPLICATE_ELEMENT_ID' &&
+          code !== 'CLIENT_EFFECT_DELETE_POSTCONDITION_FAILED' &&
+          !code.endsWith('_NOT_FOUND') &&
           !code.endsWith('_INVALID') &&
           !code.endsWith('_MISMATCH'))),
   };
@@ -105,6 +110,16 @@ function postconditionsEqual(
       right.kind === 'whiteboard_open' &&
       left.normalizationVersion === right.normalizationVersion &&
       left.desiredOpen === right.desiredOpen
+    );
+  }
+  if (left.kind === 'whiteboard_element_absent' || right.kind === 'whiteboard_element_absent') {
+    return (
+      left.kind === 'whiteboard_element_absent' &&
+      right.kind === 'whiteboard_element_absent' &&
+      left.normalizationVersion === right.normalizationVersion &&
+      left.stableElementId === right.stableElementId &&
+      left.expectedWhiteboardId === right.expectedWhiteboardId &&
+      left.expectedElementType === right.expectedElementType
     );
   }
   if (
@@ -374,6 +389,12 @@ export class BrowserClientEffectRuntime {
           request.target,
           request.postcondition.expectedWhiteboardId,
         );
+      } else if (request.toolName === 'wb_delete') {
+        binding = prepareNativeWhiteboardDeleteTarget(
+          this.opts.store,
+          request.target,
+          request.postcondition.expectedWhiteboardId,
+        );
       } else {
         binding = prepareNativeWhiteboardTarget(this.opts.store, request.target);
       }
@@ -610,6 +631,16 @@ export class BrowserClientEffectRuntime {
             signal: executionSignal,
           });
           break;
+        case 'wb_delete':
+          result = executeNativeWhiteboardDeleteEffect({
+            store: this.opts.store,
+            targetBinding: binding,
+            stableElementId: request.postcondition.stableElementId,
+            expectedWhiteboardId: request.postcondition.expectedWhiteboardId,
+            expectedElementType: request.postcondition.expectedElementType,
+            signal: executionSignal,
+          });
+          break;
       }
       await this.enqueueAck(record, {
         status: 'effect_committed',
@@ -642,14 +673,16 @@ export class BrowserClientEffectRuntime {
             }
           : errorDetails(
               error,
-              request.toolName === 'wb_edit_code' || request.toolName === 'wb_open',
+              request.toolName === 'wb_edit_code' ||
+                request.toolName === 'wb_delete' ||
+                request.toolName === 'wb_open',
             );
-      const editPreparationFailure =
-        request.toolName === 'wb_edit_code' &&
+      const existingElementPreparationFailure =
+        (request.toolName === 'wb_edit_code' || request.toolName === 'wb_delete') &&
         !hardDeadlineExceeded &&
         !aborted &&
         details.code !== 'CLIENT_EFFECT_TARGET_CHANGED';
-      const localFailureStatus: 'cancelled' | 'effect_failed' = editPreparationFailure
+      const localFailureStatus: 'cancelled' | 'effect_failed' = existingElementPreparationFailure
         ? 'effect_failed'
         : hardDeadlineExceeded ||
             aborted ||

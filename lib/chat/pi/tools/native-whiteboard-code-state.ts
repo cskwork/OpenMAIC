@@ -8,6 +8,7 @@ import {
   renderCodeLines,
 } from '@/lib/orchestration/summarizers/code-line-budget';
 import type { StatelessChatRequest } from '@/lib/types/chat';
+import { isPromptSafeWhiteboardIdentifier } from './native-whiteboard-view-state';
 
 function cloneState(state: WhiteboardEditableCodeState): WhiteboardEditableCodeState {
   return {
@@ -48,27 +49,29 @@ function stateFromElement(value: unknown): WhiteboardEditableCodeState | null {
   }
 }
 
-function isPromptSafeElementId(value: unknown): value is string {
-  return (
-    typeof value === 'string' &&
-    value.length > 0 &&
-    value.length <= 512 &&
-    !/[\u0000-\u001f\u007f\u2028\u2029]/.test(value)
-  );
-}
-
 export class NativeWhiteboardCodeState {
   private whiteboardId: string | undefined;
   private readonly codeByElementId = new Map<string, WhiteboardEditableCodeState>();
 
   constructor(body: StatelessChatRequest) {
     const latestWhiteboard = body.storeState.stage?.whiteboard?.at(-1);
-    this.whiteboardId = isPromptSafeElementId(latestWhiteboard?.id)
+    this.whiteboardId = isPromptSafeWhiteboardIdentifier(latestWhiteboard?.id)
       ? latestWhiteboard.id
       : undefined;
     if (!this.whiteboardId) return;
+    const idCounts = new Map<string, number>();
     for (const element of latestWhiteboard?.elements ?? []) {
-      if (!element || !isPromptSafeElementId(element.id)) continue;
+      if (!isPromptSafeWhiteboardIdentifier(element?.id)) continue;
+      idCounts.set(element.id, (idCounts.get(element.id) ?? 0) + 1);
+    }
+    for (const element of latestWhiteboard?.elements ?? []) {
+      if (
+        !element ||
+        !isPromptSafeWhiteboardIdentifier(element.id) ||
+        idCounts.get(element.id) !== 1
+      ) {
+        continue;
+      }
       const state = stateFromElement(element);
       if (state) this.codeByElementId.set(element.id, state);
     }
@@ -83,11 +86,21 @@ export class NativeWhiteboardCodeState {
     return state ? cloneState(state) : undefined;
   }
 
+  commitBinding(whiteboardId: string | undefined): void {
+    if (!isPromptSafeWhiteboardIdentifier(whiteboardId)) {
+      this.codeByElementId.clear();
+      this.whiteboardId = undefined;
+      return;
+    }
+    if (this.whiteboardId !== whiteboardId) this.codeByElementId.clear();
+    this.whiteboardId = whiteboardId;
+  }
+
   commit(whiteboardId: string, elementId: string, state: WhiteboardEditableCodeState): void {
-    if (!isPromptSafeElementId(whiteboardId)) {
+    if (!isPromptSafeWhiteboardIdentifier(whiteboardId)) {
       throw new Error('CLIENT_EFFECT_CODE_EDIT_WHITEBOARD_ID_INVALID');
     }
-    if (!isPromptSafeElementId(elementId)) {
+    if (!isPromptSafeWhiteboardIdentifier(elementId)) {
       throw new Error('CLIENT_EFFECT_CODE_EDIT_ELEMENT_ID_INVALID');
     }
     const canonical = assertWhiteboardEditableCodeStateV1(state);
@@ -97,6 +110,15 @@ export class NativeWhiteboardCodeState {
     this.whiteboardId = whiteboardId;
     this.codeByElementId.delete(elementId);
     this.codeByElementId.set(elementId, cloneState(canonical));
+  }
+
+  commitDelete(whiteboardId: string, elementId: string): void {
+    this.commitBinding(whiteboardId);
+    this.codeByElementId.delete(elementId);
+  }
+
+  invalidate(whiteboardId: string): void {
+    if (this.whiteboardId === whiteboardId) this.codeByElementId.clear();
   }
 
   commitDraw(

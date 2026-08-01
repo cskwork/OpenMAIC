@@ -39,6 +39,7 @@ import {
   buildNativeWhiteboardChartTool,
   buildNativeWhiteboardCodeEditTool,
   buildNativeWhiteboardCodeTool,
+  buildNativeWhiteboardDeleteTool,
   buildNativeWhiteboardLatexTool,
   buildNativeWhiteboardLineTool,
   buildNativeWhiteboardOpenTool,
@@ -83,6 +84,7 @@ export function resolveNativeChildCapabilities(opts: {
     | 'wb_draw_chart'
     | 'wb_draw_code'
     | 'wb_edit_code'
+    | 'wb_delete'
   >;
   childWebSearchEnabled: boolean;
 } {
@@ -103,6 +105,7 @@ export function resolveNativeChildCapabilities(opts: {
           'wb_draw_chart',
           'wb_draw_code',
           'wb_edit_code',
+          'wb_delete',
         ] as const
       ).filter((toolName) => opts.agent.allowedActions.includes(toolName))
     : [];
@@ -620,7 +623,9 @@ export function buildCallAgentTool(opts: {
   const requestTraceId = nanoid();
   const whiteboardState = createPiWhiteboardRuntimeState(opts.body);
   const nativeWhiteboardCodeState = new NativeWhiteboardCodeState(opts.body);
-  const nativeWhiteboardViewState = new NativeWhiteboardViewState(opts.body);
+  const nativeWhiteboardViewState = new NativeWhiteboardViewState(opts.body, (whiteboardId) => {
+    nativeWhiteboardCodeState.commitBinding(whiteboardId);
+  });
   const childRuntimeMode: ChildRuntimeMode = opts.childRuntimeMode ?? 'legacy';
   return {
     name: 'call_agent',
@@ -793,7 +798,7 @@ export function buildCallAgentTool(opts: {
             canExecute: () => actionCount < opts.maxActionsPerAgent,
             onCommittedWithTerminal: (_params, terminal) => {
               const observation = terminal.committedObservation;
-              if (!observation) {
+              if (!observation || observation.kind !== 'whiteboard_open') {
                 throw new Error('CLIENT_EFFECT_OPEN_COMMITTED_OBSERVATION_MISSING');
               }
               if (!observation.created && !observation.visibilityChanged) return;
@@ -963,7 +968,11 @@ export function buildCallAgentTool(opts: {
               if (!committedWhiteboardId) {
                 throw new Error('CLIENT_EFFECT_CODE_COMMIT_BINDING_MISSING');
               }
-              nativeWhiteboardCodeState.commitDraw(committedWhiteboardId, params);
+              if (nativeWhiteboardViewState.getWhiteboardId() === committedWhiteboardId) {
+                nativeWhiteboardCodeState.commitDraw(committedWhiteboardId, params);
+              } else {
+                nativeWhiteboardCodeState.commitBinding(undefined);
+              }
               const record: WhiteboardActionRecord = {
                 actionName: 'wb_draw_code',
                 agentId: agent.id,
@@ -994,6 +1003,30 @@ export function buildCallAgentTool(opts: {
                 agentId: agent.id,
                 agentName: agent.name,
                 params: recordParams,
+              };
+              whiteboardActions.push(record);
+              opts.onActionDone(record);
+            },
+            onCancelled: abortChild,
+          });
+          nativeTools.push(nativeWhiteboard.tool);
+          clientEffectHandlers.set(nativeWhiteboard.tool.name, nativeWhiteboard.handler);
+        }
+        if (nativeWhiteboardToolNames.includes('wb_delete')) {
+          const nativeWhiteboard = buildNativeWhiteboardDeleteTool({
+            body: opts.body,
+            messageId,
+            send: opts.send,
+            viewState: nativeWhiteboardViewState,
+            codeState: nativeWhiteboardCodeState,
+            canExecute: () => actionCount < opts.maxActionsPerAgent,
+            onCommitted: (params) => {
+              actionCount += 1;
+              const record: WhiteboardActionRecord = {
+                actionName: 'wb_delete',
+                agentId: agent.id,
+                agentName: agent.name,
+                params,
               };
               whiteboardActions.push(record);
               opts.onActionDone(record);
@@ -1039,7 +1072,11 @@ export function buildCallAgentTool(opts: {
               enableWhiteboardChart: nativeWhiteboardToolNames.includes('wb_draw_chart'),
               enableWhiteboardCode: nativeWhiteboardToolNames.includes('wb_draw_code'),
               enableWhiteboardCodeEdit: nativeWhiteboardToolNames.includes('wb_edit_code'),
+              enableWhiteboardDelete: nativeWhiteboardToolNames.includes('wb_delete'),
               whiteboardCodeContext: nativeWhiteboardCodeState.buildPromptProjection(),
+              whiteboardElementContext: nativeWhiteboardToolNames.includes('wb_delete')
+                ? nativeWhiteboardViewState.buildElementPromptProjection()
+                : '',
             }),
             prompt: buildNativeWebChildTurnPrompt(
               params.instruction,
@@ -1059,6 +1096,7 @@ export function buildCallAgentTool(opts: {
                 enableWhiteboardChart: nativeWhiteboardToolNames.includes('wb_draw_chart'),
                 enableWhiteboardCode: nativeWhiteboardToolNames.includes('wb_draw_code'),
                 enableWhiteboardCodeEdit: nativeWhiteboardToolNames.includes('wb_edit_code'),
+                enableWhiteboardDelete: nativeWhiteboardToolNames.includes('wb_delete'),
               },
             ),
             tools: nativeTools,

@@ -838,7 +838,7 @@ describe('ClientEffectCoordinator', () => {
       target: { ...first.target, requestId: 'request-concurrent' },
     });
     expect(() => coordinator.register(sameTargetOtherRequest)).toThrow(
-      'belongs to another execution in this whiteboard scope',
+      'CLIENT_EFFECT_RESOURCE_BUSY',
     );
   });
 
