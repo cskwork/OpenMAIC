@@ -259,6 +259,59 @@ export function runAssetStoreContract(
     });
 
     describe('allocation independence', () => {
+      const pairedScriptedIds = [
+        'ast_00000000000000000000000000',
+        'ast_040g2081040g2081040g208104',
+        'ast_081040g2081040g2081040g208',
+      ].map(toAssetId);
+
+      const runPairedHistory = async (history: readonly string[]): Promise<AssetRef[]> => {
+        let allocatorCalls = 0;
+        const allocator = (): AssetId => {
+          const id = pairedScriptedIds[allocatorCalls];
+          allocatorCalls += 1;
+          if (id === undefined) throw new Error('Scripted asset id allocator exhausted.');
+          return id;
+        };
+
+        return withAllocator(allocator, async () => {
+          // Each history gets a fresh store but the same ordinal-by-ordinal
+          // allocator script, making prior byte existence the only difference.
+          const s = makeStore();
+          const returnedIds: AssetRef[] = [];
+          for (const content of history) {
+            const ordinal = returnedIds.length;
+            const id = await s.put(blob(content));
+            expect(id).toBe(pairedScriptedIds[ordinal]);
+            returnedIds.push(id);
+            expect(allocatorCalls).toBe(returnedIds.length);
+          }
+          return returnedIds;
+        });
+      };
+
+      test('ordinal 2 is byte-identical for duplicate and fresh puts', async () => {
+        const duplicateAtTwo = await runPairedHistory(['allocation A', 'allocation A']);
+        const freshAtTwo = await runPairedHistory(['allocation A', 'allocation B']);
+
+        expect(duplicateAtTwo[1]).toBe(freshAtTwo[1]);
+      });
+
+      test('ordinal 3 is byte-identical for duplicate and fresh puts', async () => {
+        const duplicateAtThree = await runPairedHistory([
+          'allocation A',
+          'allocation B',
+          'allocation A',
+        ]);
+        const freshAtThree = await runPairedHistory([
+          'allocation A',
+          'allocation B',
+          'allocation C',
+        ]);
+
+        expect(duplicateAtThree[2]).toBe(freshAtThree[2]);
+      });
+
       test('every put returns exactly one allocator output regardless of prior existence', async () => {
         // These are the base32 renderings of six fixed 16-byte inputs.
         const scriptedIds = [
