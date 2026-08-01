@@ -1,6 +1,6 @@
 /**
- * Browser asset pool: an **allocated-id registry layered over a
- * content-addressed blob store**, both in one IndexedDB database.
+ * Browser asset pool: an **allocated-id registry with an embedded
+ * content-addressed byte table**, both in one IndexedDB database.
  *
  * The reference chain is `assetId → contentHash → bytes`, deliberately neither
  * pure content-addressing nor pure allocation:
@@ -15,13 +15,17 @@
  *   registry and is never returned, logged in an error, or accepted as an
  *   input. The threat that pure content-addressing has to defend against —
  *   "whoever knows the hash can reach the bytes" — structurally does not arise,
- *   which is what lets the blob layer stay global and metadata-free.
+ *   which is what lets the byte table stay global and metadata-free.
  *
  * Two object stores, one database, so a `put` and a `remove` that touch the
  * same bytes are serialized by IndexedDB rather than racing across two
  * databases: reference counting happens *inside* the same transaction that
  * deletes the entry, so the last entry's removal can never reclaim bytes a
- * concurrent `put` has just adopted.
+ * concurrent `put` has just adopted. The byte table is deliberately not a
+ * replaceable browser-side backend: byte writes, reference counting, and
+ * reclamation must share this transaction. A genuinely replaceable blob
+ * service belongs to the server backend in delivery plan part 4, where the
+ * server enforces consistency.
  *
  * On successful `put` calls, every returned value and every branch taken
  * reveals nothing about whether the bytes already existed — see
@@ -221,7 +225,7 @@ export class BrowserAssetStore implements StorageProvider {
    * Resolves on commit, not on request success: a write that succeeds as a
    * request can still abort at commit (e.g. `QuotaExceededError`), and
    * reporting that as success would claim durability the store never gave —
-   * the same rule the blob backend follows.
+   * the durability rule for this store.
    */
   private async tx<T>(
     mode: IDBTransactionMode,

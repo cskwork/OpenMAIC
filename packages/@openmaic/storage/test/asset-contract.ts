@@ -1,12 +1,9 @@
-// Implementation-agnostic contract for the OUTWARD asset store (the DSL-owned
-// `StorageProvider` seam), whose refs are *allocated* ids over a
-// content-addressed blob layer. `resolve` yields a URL whose bytes must equal
+// Implementation-agnostic contract for the DSL-owned `StorageProvider` seam,
+// whose refs are allocated ids. `resolve` yields a URL whose bytes must equal
 // what was `put`; how a URL is read back differs per backend (object URL vs
-// HTTP), so the reader is injected, keeping the assertions universal.
-//
-// The content-addressed semantics of the blob layer underneath live in
-// `asset-blob-contract.ts` and are deliberately the opposite of these: down
-// there identical bytes share a key, up here they never share an id.
+// HTTP), so the reader is injected, keeping the assertions universal. A browser
+// implementation may deduplicate its private byte rows, but identical bytes
+// must never share a caller-visible id.
 import { describe, expect, test } from 'vitest';
 import type { AssetMeta, AssetRef, StorageProvider } from '@openmaic/dsl';
 import { toAssetId, type AssetId } from '../src/asset/id.js';

@@ -13,10 +13,11 @@
  *
  * The asset seam ships `BrowserAssetStore`: a global asset pool, in which an
  * allocated `AssetId` names a registry entry and the registry names
- * content-addressed bytes (#1007). The content-addressed blob backend beneath
- * it is internal — a hash is a private storage key, never a reference a
- * document embeds — so it is not exported. The asset server backend is still to
- * come; no HTTP backend is exposed here yet.
+ * content-addressed bytes (#1007). Its byte table is embedded in the registry's
+ * IndexedDB database so writes, reference counting, and reclamation share one
+ * transaction. A replaceable blob interface belongs to the future asset server
+ * backend, where consistency is enforced server-side; no HTTP asset backend is
+ * exposed here yet.
  */
 export type { DeviceSafeKVStore, KVScope, KVStore, LocalKVStore } from './kv/types.js';
 export { assertKVScope, DEFAULT_KV_SCOPE, KVScopeViolationError } from './kv/types.js';

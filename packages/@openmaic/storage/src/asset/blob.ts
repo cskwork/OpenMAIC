@@ -1,37 +1,18 @@
 /**
- * Blob-layer primitives shared by the two IndexedDB asset backends: the
- * content hash that keys stored bytes, and the object-URL cache that hands a
- * `blob:` URL back to a renderer.
+ * Browser-registry primitives: the branded content hash that keys its embedded
+ * byte table, the hashing operation, and the object-URL cache used by resolve.
  *
- * The blob layer maps `contentHash → bytes` and nothing else. It is a storage
- * optimization, not an identity: it holds no metadata, no ownership, and no
- * reference anyone outside this package ever sees. Everything that gives an
- * asset an identity — the id, the MIME type, the provenance — lives one layer
- * up, in the registry.
+ * These are implementation building blocks, not a replaceable blob-backend
+ * seam. The browser registry keeps byte writes, reference counting, and
+ * reclamation in the same IndexedDB transaction. Replaceable blob storage is a
+ * server-backend concern, where the server enforces consistency.
  */
-import type { AssetMeta, AssetRef, BinaryBlob } from '@openmaic/dsl';
+import type { AssetRef, BinaryBlob } from '@openmaic/dsl';
 
 declare const contentHashBrand: unique symbol;
 
 /** `sha256-<hex>` over the stored bytes. Internal to this package. */
 export type ContentHash = string & { readonly [contentHashBrand]: true };
-
-/**
- * Internal content-addressed blob-layer contract. Unlike `StorageProvider`,
- * `put` returns the key derived from the bytes and may return the same key for
- * repeated content. Function-typed properties keep the branded hash parameters
- * contravariant under `strictFunctionTypes`, so this internal store cannot be
- * substituted for the allocated-id DSL contract. Implementations own every
- * object URL they mint: `release` reclaims one key's snapshots and `close`
- * reclaims the whole instance.
- */
-export interface BlobStore {
-  put: (data: BinaryBlob, meta?: AssetMeta) => Promise<ContentHash>;
-  resolve: (key: ContentHash) => Promise<string | null>;
-  remove: (key: ContentHash) => Promise<void>;
-  release: (key: ContentHash) => Promise<void>;
-  close: () => Promise<void>;
-}
 
 function toHex(buffer: ArrayBuffer): string {
   const view = new Uint8Array(buffer);
@@ -72,8 +53,8 @@ interface RetiredObjectUrl {
 }
 
 /**
- * Per-backend cache of minted object URLs, keyed on whatever reference the
- * backend resolves by.
+ * Per-store cache of minted object URLs, keyed on whatever reference the store
+ * resolves by.
  *
  * Keyed on the *promise* so concurrent `resolve(ref)` calls share one
  * `URL.createObjectURL` (a second would be orphaned, revocable by nothing), and

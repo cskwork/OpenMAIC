@@ -1,7 +1,9 @@
 import { IDBFactory } from 'fake-indexeddb';
 import { describe, expect, test, vi } from 'vitest';
+import type { AssetRef } from '@openmaic/dsl';
 import * as storageExports from '../src/index.js';
 import { BrowserAssetStore, newAssetId, toAssetId } from '../src/index.js';
+import { contentHashOf, type ContentHash } from '../src/asset/blob.js';
 import { ASSET_ID_PREFIX, __setAssetIdFactoryForTesting } from '../src/asset/id.js';
 import { blobForObjectUrl, objectUrlCount } from './setup.js';
 import { runAssetStoreContract } from './asset-contract.js';
@@ -956,6 +958,32 @@ describe('BrowserAssetStore snapshot retention', () => {
     expect(objectUrlCount()).toBe(0);
     await store.close();
   });
+});
+
+test('plain asset refs are not assignable to branded content hashes', () => {
+  const contentHashFromAssetRef = (ref: AssetRef): ContentHash => {
+    // @ts-expect-error caller-visible asset refs lack the internal content-hash brand.
+    return ref;
+  };
+
+  expect(typeof contentHashFromAssetRef).toBe('function');
+});
+
+test('content hashing fails clearly when crypto.subtle is unavailable', async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+  const crypto = globalThis.crypto;
+  Object.defineProperty(globalThis, 'crypto', {
+    value: { getRandomValues: crypto.getRandomValues.bind(crypto), subtle: undefined },
+    configurable: true,
+  });
+  try {
+    await expect(contentHashOf(new Blob(['bytes']))).rejects.toThrow(
+      /crypto\.subtle.*secure context/i,
+    );
+  } finally {
+    if (descriptor) Object.defineProperty(globalThis, 'crypto', descriptor);
+    else Reflect.deleteProperty(globalThis, 'crypto');
+  }
 });
 
 test('the package entry does not expose internal asset-layer symbols', () => {
