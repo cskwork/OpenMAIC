@@ -136,9 +136,11 @@ semantics. The asset layer has two, because its two layers have deliberately
 opposite semantics: `test/asset-contract.ts` for the outward allocated-id store
 (identical bytes never share an id) and `test/asset-blob-contract.ts` for the
 internal blob layer (identical bytes always share a key). Outward-store
-backends must expose allocator-instrumented construction so the suite can prove
-that every successful `put` consumes exactly one allocator output, independent
-of whether the bytes already existed.
+backends must let the suite temporarily instrument the production allocation
+source while constructing the store through the same factory used by every
+other contract test. This proves that every successful `put` consumes exactly
+one allocator output, independent of whether the bytes already existed, without
+adding a caller-configurable allocation path.
 
 ## Roadmap
 

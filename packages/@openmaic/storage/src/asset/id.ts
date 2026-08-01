@@ -47,6 +47,17 @@ const ASSET_ID_ENTROPY_BYTES = 16;
  */
 const ALPHABET = '0123456789abcdefghjkmnpqrstvwxyz';
 
+let assetIdFactoryForTesting: (() => AssetId) | null = null;
+
+/**
+ * Override asset-id allocation for test instrumentation only.
+ * Production code must never call this function. The package exports map
+ * already blocks consumers from deep-importing this internal module.
+ */
+export function __setAssetIdFactoryForTesting(factory: (() => AssetId) | null): void {
+  assetIdFactoryForTesting = factory;
+}
+
 function encodeBase32(bytes: Uint8Array): string {
   let out = '';
   let acc = 0;
@@ -67,6 +78,7 @@ function encodeBase32(bytes: Uint8Array): string {
 
 /** Allocate a fresh, unguessable asset id. */
 export function newAssetId(): AssetId {
+  if (assetIdFactoryForTesting !== null) return assetIdFactoryForTesting();
   const getRandomValues = globalThis.crypto?.getRandomValues;
   if (!getRandomValues) {
     throw new Error(

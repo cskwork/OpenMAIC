@@ -15,7 +15,7 @@ type ReadUrl = (url: string) => Promise<Uint8Array>;
 
 interface AssetStoreContractFactories {
   makeStore: () => StorageProvider;
-  makeStoreWithAllocator: (idAllocator: () => AssetId) => StorageProvider;
+  withAllocator: <T>(allocator: () => AssetId, run: () => Promise<T>) => Promise<T>;
 }
 
 interface ReplaceCapableStore extends StorageProvider {
@@ -122,7 +122,7 @@ export function runAssetStoreContract(
   factories: AssetStoreContractFactories,
   readUrl: ReadUrl,
 ): void {
-  const { makeStore, makeStoreWithAllocator } = factories;
+  const { makeStore, withAllocator } = factories;
   const putAll = (store: StorageProvider, content: string, times: number): Promise<AssetRef[]> =>
     Promise.all(Array.from({ length: times }, () => store.put(blob(content))));
 
@@ -276,34 +276,39 @@ export function runAssetStoreContract(
           if (id === undefined) throw new Error('Scripted asset id allocator exhausted.');
           return id;
         };
-        const s = makeStoreWithAllocator(allocator);
-        const returnedIds: AssetRef[] = [];
-        const put = async (content: string): Promise<void> => {
-          const expectedId = scriptedIds[returnedIds.length];
-          returnedIds.push(await s.put(blob(content)));
-          expect(returnedIds.at(-1)).toBe(expectedId);
+        await withAllocator(allocator, async () => {
+          // Use the same construction callback as every other contract test.
+          // Instrumentation wraps the backend's production allocation source;
+          // it does not construct a second, test-only store shape.
+          const s = makeStore();
+          const returnedIds: AssetRef[] = [];
+          const put = async (content: string): Promise<void> => {
+            const expectedId = scriptedIds[returnedIds.length];
+            returnedIds.push(await s.put(blob(content)));
+            expect(returnedIds.at(-1)).toBe(expectedId);
+            expect(allocatorCalls).toBe(returnedIds.length);
+          };
+
+          await put('allocation A'); // fresh A
+          await put('allocation A'); // duplicate A
+          await put('allocation B'); // fresh B
+          await put('allocation B'); // duplicate B
+          await put('allocation A'); // duplicate A
+          await put('allocation C'); // fresh C
+
+          expect(returnedIds).toEqual(scriptedIds.slice(0, returnedIds.length));
           expect(allocatorCalls).toBe(returnedIds.length);
-        };
 
-        await put('allocation A'); // fresh A
-        await put('allocation A'); // duplicate A
-        await put('allocation B'); // fresh B
-        await put('allocation B'); // duplicate B
-        await put('allocation A'); // duplicate A
-        await put('allocation C'); // fresh C
-
-        expect(returnedIds).toEqual(scriptedIds.slice(0, returnedIds.length));
-        expect(allocatorCalls).toBe(returnedIds.length);
-
-        if (typeof (s as Partial<ReplaceCapableStore>).replace === 'function') {
-          const callsBeforeReplace = allocatorCalls;
-          await (s as ReplaceCapableStore).replace(
-            returnedIds[0] as AssetId,
-            blob('allocation replacement'),
-          );
-          expect(allocatorCalls).toBe(callsBeforeReplace);
-          expect(await bytesAt(s, returnedIds[0])).toEqual(bytes('allocation replacement'));
-        }
+          if (typeof (s as Partial<ReplaceCapableStore>).replace === 'function') {
+            const callsBeforeReplace = allocatorCalls;
+            await (s as ReplaceCapableStore).replace(
+              returnedIds[0] as AssetId,
+              blob('allocation replacement'),
+            );
+            expect(allocatorCalls).toBe(callsBeforeReplace);
+            expect(await bytesAt(s, returnedIds[0])).toEqual(bytes('allocation replacement'));
+          }
+        });
       });
     });
 

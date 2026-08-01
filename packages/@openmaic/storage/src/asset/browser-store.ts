@@ -52,17 +52,17 @@ import type { AssetMeta, AssetRef, BinaryBlob, StorageProvider } from '@openmaic
 import { contentHashOf, ObjectUrlCache, type ContentHash } from './blob.js';
 import { newAssetId, type AssetId } from './id.js';
 
+/**
+ * Browser asset-store persistence options.
+ *
+ * Asset ids are always allocated by the package's secure id source and are
+ * deliberately not configurable per store instance.
+ */
 export interface BrowserAssetStoreOptions {
   /** IndexedDB factory. Defaults to the ambient `indexedDB`. Injectable for tests. */
   indexedDB?: IDBFactory;
   /** Database name. Defaults to `maic-asset-pool`. */
   dbName?: string;
-  /**
-   * Id-allocation seam for instrumentation and alternate backends. Defaults to
-   * {@link newAssetId}. Implementations must draw ids from this allocator and
-   * from nothing else: id bytes must be independent of storage lookup outcomes.
-   */
-  idAllocator?: () => AssetId;
 }
 
 /** Registry table: `assetId → entry`. */
@@ -142,7 +142,6 @@ interface AssetStores {
 export class BrowserAssetStore implements StorageProvider {
   private readonly idb?: IDBFactory;
   private readonly dbName: string;
-  private readonly idAllocator: () => AssetId;
   private dbPromise?: Promise<IDBDatabase>;
   private readonly urls = new ObjectUrlCache<RegistryObjectUrlIdentity>(
     (left, right) => left.contentHash === right.contentHash && left.mime === right.mime,
@@ -153,7 +152,6 @@ export class BrowserAssetStore implements StorageProvider {
   constructor(options: BrowserAssetStoreOptions = {}) {
     this.idb = options.indexedDB ?? globalThis.indexedDB;
     this.dbName = options.dbName ?? 'maic-asset-pool';
-    this.idAllocator = options.idAllocator ?? newAssetId;
   }
 
   private assertOpen(): void {
@@ -285,7 +283,7 @@ export class BrowserAssetStore implements StorageProvider {
       mime: storedMeta.contentType ?? dataType,
       meta: storedMeta,
     };
-    const id = this.idAllocator();
+    const id = newAssetId();
     await this.tx('readwrite', async ({ assets, blobs }) => {
       await reqP(blobs.put(bytes, contentHash));
       await reqP(assets.add(entry, id));

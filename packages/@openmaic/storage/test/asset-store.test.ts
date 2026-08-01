@@ -2,7 +2,7 @@ import { IDBFactory } from 'fake-indexeddb';
 import { describe, expect, test, vi } from 'vitest';
 import * as storageExports from '../src/index.js';
 import { BrowserAssetStore, newAssetId, toAssetId } from '../src/index.js';
-import { ASSET_ID_PREFIX } from '../src/asset/id.js';
+import { ASSET_ID_PREFIX, __setAssetIdFactoryForTesting } from '../src/asset/id.js';
 import { blobForObjectUrl, objectUrlCount } from './setup.js';
 import { runAssetStoreContract } from './asset-contract.js';
 
@@ -17,12 +17,14 @@ runAssetStoreContract(
   {
     makeStore: () =>
       new BrowserAssetStore({ indexedDB: new IDBFactory(), dbName: 'test-asset-pool' }),
-    makeStoreWithAllocator: (idAllocator) =>
-      new BrowserAssetStore({
-        indexedDB: new IDBFactory(),
-        dbName: 'test-asset-pool',
-        idAllocator,
-      }),
+    withAllocator: async (allocator, run) => {
+      __setAssetIdFactoryForTesting(allocator);
+      try {
+        return await run();
+      } finally {
+        __setAssetIdFactoryForTesting(null);
+      }
+    },
   },
   readObjectUrl,
 );
@@ -957,7 +959,13 @@ describe('BrowserAssetStore snapshot retention', () => {
 });
 
 test('the package entry does not expose internal asset-layer symbols', () => {
-  for (const name of ['ASSET_ID_PREFIX', 'ContentHash', 'BlobStore', 'BrowserAssetProvider']) {
+  for (const name of [
+    'ASSET_ID_PREFIX',
+    '__setAssetIdFactoryForTesting',
+    'ContentHash',
+    'BlobStore',
+    'BrowserAssetProvider',
+  ]) {
     expect(storageExports).not.toHaveProperty(name);
   }
 });
