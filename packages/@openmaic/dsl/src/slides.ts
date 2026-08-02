@@ -16,6 +16,8 @@
  * Pure types only — no runtime imports, no React/pptx/echarts.
  */
 
+import type { AssetRef } from './storage.js';
+
 /**
  * Regular (not `const`) enum on purpose: consumers compile with
  * `isolatedModules`, under which importing an ambient `const enum` across the
@@ -331,7 +333,12 @@ export interface PPTImageElement extends PPTBaseElement {
   type: 'image';
   /** @default true */
   fixedRatio: boolean;
-  src: string;
+  /**
+   * An asset reference. Import and render paths historically also store concrete URLs here; those
+   * values are foreign refs to the asset pool and are drained when reference conversion lands
+   * (delivery plan part 2).
+   */
+  src: AssetRef;
   outline?: PPTElementOutline;
   filters?: ImageElementFilters;
   clip?: ImageElementClip;
@@ -728,8 +735,10 @@ export interface PPTLatexElement extends PPTBaseElement {
  */
 export interface PPTVideoElement extends PPTBaseElement {
   type: 'video';
-  src?: string;
-  mediaRef?: string;
+  /** Concrete URL produced by rendering or import; merging is deferred to delivery plan part 3. */
+  src?: AssetRef;
+  /** An asset reference; merging with `src` is deferred to delivery plan part 3. */
+  mediaRef?: AssetRef;
   autoplay: boolean;
   poster?: string;
   ext?: string;
