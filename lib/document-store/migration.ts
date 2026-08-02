@@ -1,4 +1,4 @@
-import { DSL_VERSION } from '@openmaic/dsl';
+import { DSL_VERSION, migrate } from '@openmaic/dsl';
 import { BrowserKVStore, type DocumentStore, type KVStore } from '@openmaic/storage';
 import isEqual from 'lodash/isEqual';
 
@@ -172,15 +172,28 @@ function assertValidDestination(stageId: string, document: AppDocument): void {
   }
 }
 
+export function migrateDocumentForVerification(
+  document: AppDocument,
+  migrateDsl: (document: unknown) => unknown = migrate,
+): AppDocument {
+  const { outline, ...core } = document;
+  const migrated = migrateDsl(core) as AppDocument;
+  return outline === undefined ? migrated : { ...migrated, outline };
+}
+
 function assertMigrationVerified(expected: AppDocument, actual: AppDocument): void {
   assertValidDestination(expected.stage.id, actual);
+  const migratedExpected = migrateDocumentForVerification(expected);
   const strip = (document: AppDocument) => ({
     stage: document.stage,
     scenes: [...document.scenes].sort((a, b) => a.order - b.order),
     outline: document.outline,
   });
   if (
-    !isEqual(omitUndefinedObjectMembers(strip(actual)), omitUndefinedObjectMembers(strip(expected)))
+    !isEqual(
+      omitUndefinedObjectMembers(strip(actual)),
+      omitUndefinedObjectMembers(strip(migratedExpected)),
+    )
   ) {
     throw new Error(
       `Legacy migration verification failed for document ${JSON.stringify(expected.stage.id)}`,

@@ -11,6 +11,7 @@ import { describe, expect, test, vi } from 'vitest';
 
 import {
   accessDocument,
+  migrateDocumentForVerification,
   type LegacyDocumentSnapshot,
   type LegacyDocumentStore,
 } from '@/lib/document-store/migration';
@@ -157,6 +158,34 @@ function store(idb = new IDBFactory()): DocumentStore<AppScene> {
 }
 
 describe('legacy document migration', () => {
+  test('keeps the opaque outline outside the migration verification baseline', () => {
+    const outline = {
+      outlines: [],
+      generationComplete: true,
+      createdAt: 100,
+      updatedAt: 200,
+    };
+    const document: AppDocument = {
+      dslVersion: DSL_VERSION,
+      stage: { id: 'stage-1', name: 'Legacy', createdAt: 100, updatedAt: 200 },
+      scenes: [],
+      outline,
+    };
+    const migrateDsl = vi.fn((value: unknown) => {
+      const candidate = value as AppDocument;
+      return 'outline' in candidate
+        ? { ...candidate, stage: { ...candidate.stage, name: 'Corrupted' } }
+        : candidate;
+    });
+
+    const migrated = migrateDocumentForVerification(document, migrateDsl);
+
+    expect(migrateDsl).toHaveBeenCalledOnce();
+    expect(migrateDsl.mock.calls[0]![0]).not.toHaveProperty('outline');
+    expect(migrated).toEqual(document);
+    expect(migrated.outline).toBe(outline);
+  });
+
   test('returns null when neither store has a document', async () => {
     await expect(
       accessDocument('missing', {
@@ -191,6 +220,26 @@ describe('legacy document migration', () => {
     });
     expect(await kv.get('document-migration:stage-1', 'device')).toMatchObject({
       sourceUpdatedAt: 200,
+    });
+  });
+
+  test('verifies a legacy Dexie snapshot without throwing', async () => {
+    const idb = new IDBFactory();
+
+    await expect(
+      accessDocument('stage-1', {
+        store: store(idb),
+        kv: new MemoryKv(),
+        legacyStore: await indexedLegacyStore(idb, snapshot()),
+        lockManager: lockManager(),
+      }),
+    ).resolves.toMatchObject({
+      document: {
+        dslVersion: DSL_VERSION,
+        stage: { id: 'stage-1' },
+        outline: { generationComplete: true },
+      },
+      readOnlyLegacy: false,
     });
   });
 
