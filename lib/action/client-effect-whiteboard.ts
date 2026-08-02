@@ -58,6 +58,8 @@ import {
   type WhiteboardTableOutline,
   type WhiteboardTableSpec,
   type WhiteboardOpenCommittedObservation,
+  type WhiteboardCloseCommittedObservation,
+  type WhiteboardVisibilityTarget,
   type WhiteboardClearCommittedObservation,
   type WhiteboardDeleteCommittedObservation,
   type WhiteboardElementType,
@@ -263,6 +265,40 @@ export function prepareNativeWhiteboardOpenTarget(
   const created = !store.getState().stage?.whiteboard?.at(-1);
   const targetBinding = prepareNativeWhiteboardTarget(store, target, bindingVersion);
   return { targetBinding, created };
+}
+
+export function prepareNativeWhiteboardCloseTarget(
+  store: StageStore,
+  target: ClientEffectTarget,
+  bindingVersion = 1,
+): WhiteboardVisibilityTarget {
+  assertStageAndScene(store, target);
+  return {
+    requestId: target.requestId,
+    sessionId: target.sessionId,
+    stageId: target.stageId,
+    sceneId: target.sceneId,
+    bindingVersion,
+  };
+}
+
+export function verifyNativeWhiteboardCloseEffect(opts: {
+  store: StageStore;
+  visibilityTarget: WhiteboardVisibilityTarget;
+  visibilityChanged: boolean;
+  observedOpen: boolean;
+  signal?: AbortSignal;
+}): WhiteboardCloseCommittedObservation {
+  throwIfAborted(opts.signal);
+  assertStageAndScene(opts.store, opts.visibilityTarget);
+  if (opts.observedOpen) throw new Error('CLIENT_EFFECT_WHITEBOARD_NOT_CLOSED');
+  return {
+    kind: 'whiteboard_closed',
+    normalizationVersion: CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION,
+    desiredOpen: false,
+    observedOpen: false,
+    visibilityChanged: opts.visibilityChanged,
+  };
 }
 
 export function verifyNativeWhiteboardOpenEffect(opts: {

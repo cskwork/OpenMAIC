@@ -999,6 +999,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               canvas.setWhiteboardOpen(true);
               await abortableDelay(WB_OPEN_MS, signal);
             },
+            setWhiteboardVisible: (open) => useCanvasStore.getState().setWhiteboardOpen(open),
             observeWhiteboardOpen: () => useCanvasStore.getState().whiteboardOpen,
             setWhiteboardClearing: (clearing) =>
               useCanvasStore.getState().setWhiteboardClearing(clearing),

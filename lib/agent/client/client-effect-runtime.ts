@@ -13,6 +13,7 @@ import {
   type ClientEffectStatus,
   type ClientEffectTerminalStatus,
   type WhiteboardClearCommittedObservation,
+  type WhiteboardVisibilityTarget,
   whiteboardChartSpecsEqual,
   whiteboardCodeSpecsEqual,
   whiteboardEditableCodeStatesEqual,
@@ -35,11 +36,13 @@ import {
   prepareNativeExistingWhiteboardTarget,
   prepareNativeWhiteboardDeleteTarget,
   prepareNativeWhiteboardOpenTarget,
+  prepareNativeWhiteboardCloseTarget,
   prepareNativeWhiteboardClearTarget,
   prepareNativeWhiteboardTarget,
   verifyNativeWhiteboardOpenEffect,
+  verifyNativeWhiteboardCloseEffect,
 } from '@/lib/action/client-effect-whiteboard';
-import { wbClearMs } from '@/lib/choreography/timing';
+import { WB_CLOSE_MS, wbClearMs } from '@/lib/choreography/timing';
 import type { PPTElement } from '@openmaic/dsl';
 import type { WhiteboardSnapshotReceipt } from '@/lib/store/whiteboard-history';
 
@@ -47,6 +50,7 @@ type EffectRecord = {
   delivery: ClientEffectDelivery;
   status: ClientEffectStatus;
   binding?: AcceptedTargetBinding;
+  visibilityTarget?: WhiteboardVisibilityTarget;
   ackChain: Promise<void>;
   resumeWaiters: Set<() => void>;
   execution?: Promise<ClientEffectStatus>;
@@ -61,6 +65,7 @@ export interface BrowserClientEffectRuntimeOptions {
   store: StageStore;
   waitForPresentation: (executionId: string, signal: AbortSignal) => Promise<void>;
   ensureWhiteboardVisible: (signal: AbortSignal) => Promise<void>;
+  setWhiteboardVisible?: (open: boolean) => void;
   observeWhiteboardOpen?: () => boolean;
   setWhiteboardClearing?: (clearing: boolean) => void;
   pushExactWhiteboardSnapshot?: (
@@ -124,6 +129,14 @@ function postconditionsEqual(
     return (
       left.kind === 'whiteboard_open' &&
       right.kind === 'whiteboard_open' &&
+      left.normalizationVersion === right.normalizationVersion &&
+      left.desiredOpen === right.desiredOpen
+    );
+  }
+  if (left.kind === 'whiteboard_closed' || right.kind === 'whiteboard_closed') {
+    return (
+      left.kind === 'whiteboard_closed' &&
+      right.kind === 'whiteboard_closed' &&
       left.normalizationVersion === right.normalizationVersion &&
       left.desiredOpen === right.desiredOpen
     );
@@ -393,6 +406,7 @@ export class BrowserClientEffectRuntime {
     const hardTimer = hardRemainingMs > 0 ? setTimeout(expireDeadline, hardRemainingMs) : undefined;
     if (hardRemainingMs <= 0) expireDeadline();
     const executionSignal = AbortSignal.any([signal, deadlineController.signal]);
+    let closeMutationStarted = false;
     try {
       await this.opts.waitForPresentation(request.executionId, executionSignal);
       record.presentationReady = true;
@@ -403,10 +417,62 @@ export class BrowserClientEffectRuntime {
       }
       const observeWhiteboardOpen = this.opts.observeWhiteboardOpen;
       if (
-        (request.toolName === 'wb_open' || request.toolName === 'wb_clear') &&
+        (request.toolName === 'wb_open' ||
+          request.toolName === 'wb_close' ||
+          request.toolName === 'wb_clear') &&
         !observeWhiteboardOpen
       ) {
         throw new Error('CLIENT_EFFECT_WHITEBOARD_OBSERVER_UNAVAILABLE');
+      }
+      if (request.toolName === 'wb_close') {
+        if (!this.opts.setWhiteboardVisible) {
+          throw new Error('CLIENT_EFFECT_WHITEBOARD_VISIBILITY_EXECUTOR_UNAVAILABLE');
+        }
+        const visibilityTarget = prepareNativeWhiteboardCloseTarget(
+          this.opts.store,
+          request.target,
+        );
+        record.visibilityTarget = visibilityTarget;
+        await this.enqueueAck(record, { status: 'accepted', visibilityTarget });
+        record.status = 'accepted';
+        this.opts.onState?.(request.executionId, 'accepted');
+
+        await this.waitWhilePaused(record, executionSignal);
+        const visibilityChanged = observeWhiteboardOpen!();
+        if (visibilityChanged) {
+          const currentTarget = prepareNativeWhiteboardCloseTarget(this.opts.store, request.target);
+          if (
+            currentTarget.requestId !== visibilityTarget.requestId ||
+            currentTarget.sessionId !== visibilityTarget.sessionId ||
+            currentTarget.stageId !== visibilityTarget.stageId ||
+            currentTarget.sceneId !== visibilityTarget.sceneId ||
+            currentTarget.bindingVersion !== visibilityTarget.bindingVersion
+          ) {
+            throw new Error('CLIENT_EFFECT_TARGET_CHANGED');
+          }
+          executionSignal.throwIfAborted();
+          closeMutationStarted = true;
+          this.opts.setWhiteboardVisible(false);
+          await this.waitActiveDelay(record, WB_CLOSE_MS, executionSignal);
+        }
+        // CSS visibility animation is not frame-paused. If pause arrives after
+        // the synchronous mutation, withhold authoritative commit until resume.
+        await this.waitWhilePaused(record, executionSignal);
+        const result = verifyNativeWhiteboardCloseEffect({
+          store: this.opts.store,
+          visibilityTarget,
+          visibilityChanged,
+          observedOpen: observeWhiteboardOpen!(),
+          signal: executionSignal,
+        });
+        await this.enqueueAck(record, {
+          status: 'effect_committed',
+          visibilityTarget,
+          postcondition: result,
+        });
+        record.status = 'effect_committed';
+        this.opts.onState?.(request.executionId, 'effect_committed');
+        return record.status;
       }
       let openCreated = false;
       let binding: AcceptedTargetBinding;
@@ -731,32 +797,46 @@ export class BrowserClientEffectRuntime {
                 request.toolName === 'wb_open' ||
                 request.toolName === 'wb_clear',
             );
+      const reportedDetails =
+        request.toolName === 'wb_close' && record.visibilityTarget
+          ? closeMutationStarted
+            ? {
+                code: 'CLIENT_EFFECT_CLOSE_STATE_UNCONFIRMED',
+                message: details.message,
+                retryable: details.retryable,
+              }
+            : {
+                code: 'CLIENT_EFFECT_CLOSE_FAILED_BEFORE_MUTATION',
+                message: details.message,
+                retryable: details.retryable,
+              }
+          : details;
       const existingElementPreparationFailure =
         (request.toolName === 'wb_edit_code' ||
           request.toolName === 'wb_delete' ||
           request.toolName === 'wb_clear') &&
         !hardDeadlineExceeded &&
         !aborted &&
-        details.code !== 'CLIENT_EFFECT_TARGET_CHANGED';
+        reportedDetails.code !== 'CLIENT_EFFECT_TARGET_CHANGED';
       const localFailureStatus: 'cancelled' | 'effect_failed' = existingElementPreparationFailure
         ? 'effect_failed'
         : hardDeadlineExceeded ||
             aborted ||
             details.code === 'CLIENT_EFFECT_TARGET_CHANGED' ||
-            !record.binding
+            (!record.binding && !record.visibilityTarget)
           ? 'cancelled'
           : 'effect_failed';
       const status = authoritativeStatus ?? localFailureStatus;
       if (!authoritativeStatus) {
         try {
-          await this.enqueueAck(record, { status: localFailureStatus, error: details });
+          await this.enqueueAck(record, { status: localFailureStatus, error: reportedDetails });
         } catch {
           // Preserve the original execution failure; the server hard deadline is
           // still the authoritative settlement if the ACK channel is unavailable.
         }
       }
       record.status = status;
-      this.opts.onState?.(request.executionId, status, details.message);
+      this.opts.onState?.(request.executionId, status, reportedDetails.message);
       return record.status;
     } finally {
       if (hardTimer) clearTimeout(hardTimer);
@@ -895,10 +975,21 @@ export class BrowserClientEffectRuntime {
           Extract<ClientEffectAck, { status: 'presentation_paused' | 'presentation_resumed' }>,
           'status'
         >
-      | Pick<Extract<ClientEffectAck, { status: 'accepted' }>, 'status' | 'targetBinding'>
       | Pick<
-          Extract<ClientEffectAck, { status: 'effect_committed' }>,
+          Extract<ClientEffectAck, { status: 'accepted'; targetBinding: unknown }>,
+          'status' | 'targetBinding'
+        >
+      | Pick<
+          Extract<ClientEffectAck, { status: 'accepted'; visibilityTarget: unknown }>,
+          'status' | 'visibilityTarget'
+        >
+      | Pick<
+          Extract<ClientEffectAck, { status: 'effect_committed'; targetBinding: unknown }>,
           'status' | 'targetBinding' | 'postcondition'
+        >
+      | Pick<
+          Extract<ClientEffectAck, { status: 'effect_committed'; visibilityTarget: unknown }>,
+          'status' | 'visibilityTarget' | 'postcondition'
         >
       | Pick<
           Extract<ClientEffectAck, { status: 'effect_failed' | 'cancelled' }>,
@@ -918,10 +1009,21 @@ export class BrowserClientEffectRuntime {
           Extract<ClientEffectAck, { status: 'presentation_paused' | 'presentation_resumed' }>,
           'status'
         >
-      | Pick<Extract<ClientEffectAck, { status: 'accepted' }>, 'status' | 'targetBinding'>
       | Pick<
-          Extract<ClientEffectAck, { status: 'effect_committed' }>,
+          Extract<ClientEffectAck, { status: 'accepted'; targetBinding: unknown }>,
+          'status' | 'targetBinding'
+        >
+      | Pick<
+          Extract<ClientEffectAck, { status: 'accepted'; visibilityTarget: unknown }>,
+          'status' | 'visibilityTarget'
+        >
+      | Pick<
+          Extract<ClientEffectAck, { status: 'effect_committed'; targetBinding: unknown }>,
           'status' | 'targetBinding' | 'postcondition'
+        >
+      | Pick<
+          Extract<ClientEffectAck, { status: 'effect_committed'; visibilityTarget: unknown }>,
+          'status' | 'visibilityTarget' | 'postcondition'
         >
       | Pick<
           Extract<ClientEffectAck, { status: 'effect_failed' | 'cancelled' }>,
@@ -942,10 +1044,21 @@ export class BrowserClientEffectRuntime {
     record: EffectRecord,
     payload:
       | Pick<ClientEffectAck, 'status'>
-      | Pick<Extract<ClientEffectAck, { status: 'accepted' }>, 'status' | 'targetBinding'>
       | Pick<
-          Extract<ClientEffectAck, { status: 'effect_committed' }>,
+          Extract<ClientEffectAck, { status: 'accepted'; targetBinding: unknown }>,
+          'status' | 'targetBinding'
+        >
+      | Pick<
+          Extract<ClientEffectAck, { status: 'accepted'; visibilityTarget: unknown }>,
+          'status' | 'visibilityTarget'
+        >
+      | Pick<
+          Extract<ClientEffectAck, { status: 'effect_committed'; targetBinding: unknown }>,
           'status' | 'targetBinding' | 'postcondition'
+        >
+      | Pick<
+          Extract<ClientEffectAck, { status: 'effect_committed'; visibilityTarget: unknown }>,
+          'status' | 'visibilityTarget' | 'postcondition'
         >
       | Pick<
           Extract<ClientEffectAck, { status: 'effect_failed' | 'cancelled' }>,

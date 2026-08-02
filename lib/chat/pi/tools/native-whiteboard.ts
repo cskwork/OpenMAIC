@@ -43,7 +43,7 @@ import type {
   NativeClientEffectHandler,
   RuntimeAgentToolResult,
 } from '@/lib/agent/runtime/native-child-contract';
-import { WB_OPEN_MS } from '@/lib/choreography/timing';
+import { WB_CLOSE_MS, WB_OPEN_MS } from '@/lib/choreography/timing';
 import type { StatelessChatRequest } from '@/lib/types/chat';
 import type { SendEvent } from '../types';
 import type { NativeWhiteboardCodeState } from './native-whiteboard-code-state';
@@ -52,6 +52,10 @@ import type { NativeWhiteboardViewState } from './native-whiteboard-view-state';
 const NativeWhiteboardOpenParams = Type.Object({}, { additionalProperties: false });
 
 type NativeWhiteboardOpenParams = Static<typeof NativeWhiteboardOpenParams>;
+
+const NativeWhiteboardCloseParams = Type.Object({}, { additionalProperties: false });
+
+type NativeWhiteboardCloseParams = Static<typeof NativeWhiteboardCloseParams>;
 
 const NativeWhiteboardClearParams = Type.Object({}, { additionalProperties: false });
 type NativeWhiteboardClearParams = Static<typeof NativeWhiteboardClearParams>;
@@ -441,7 +445,10 @@ interface NativeWhiteboardToolOptions<TParams> extends NativeWhiteboardBaseOptio
 function prepareClientEffect(
   opts: NativeWhiteboardBaseOptions,
   request: Parameters<NativeClientEffectHandler>[0]['request'],
-  options: { requiresWhiteboardOpenBudget?: boolean } = {},
+  options: {
+    requiresWhiteboardOpenBudget?: boolean;
+    requiredVisibilityAnimationMs?: number;
+  } = {},
 ): { target: ClientEffectTarget; activeEffectBudgetMs: number } | RuntimeAgentToolResult {
   const target = {
     requestId: opts.body.config.piRequestId ?? '',
@@ -468,11 +475,14 @@ function prepareClientEffect(
   });
   const requiresWhiteboardOpenBudget =
     options.requiresWhiteboardOpenBudget ??
-    (request.toolName !== 'wb_clear' && !opts.viewState.isOpen());
+    (request.toolName !== 'wb_clear' &&
+      (!opts.viewState.isVisibilityTrusted() || !opts.viewState.isOpen()));
+  const requiredVisibilityAnimationMs =
+    options.requiredVisibilityAnimationMs ?? (requiresWhiteboardOpenBudget ? WB_OPEN_MS : 0);
   if (
     !activeEffectBudgetMs ||
-    (requiresWhiteboardOpenBudget &&
-      activeEffectBudgetMs <= WB_OPEN_MS + WHITEBOARD_OPEN_SETTLEMENT_MARGIN_MS)
+    (requiredVisibilityAnimationMs > 0 &&
+      activeEffectBudgetMs <= requiredVisibilityAnimationMs + WHITEBOARD_OPEN_SETTLEMENT_MARGIN_MS)
   ) {
     return {
       content: [{ type: 'text', text: 'Whiteboard execution deadline is exhausted.' }],
@@ -530,49 +540,61 @@ async function deliverClientEffect<TParams>(opts: {
     }
     const terminal = await registered.result;
     if (terminal.status === 'effect_committed') {
-      if (!terminal.targetBinding) {
-        throw new Error('CLIENT_EFFECT_COMMIT_BINDING_MISSING');
-      }
       const expected = opts.request.postcondition;
-      if (expected.kind === 'whiteboard_empty') {
+      if (expected.kind === 'whiteboard_closed') {
         const observation = terminal.committedObservation;
-        if (!observation || observation.kind !== 'whiteboard_empty') {
-          throw new Error('CLIENT_EFFECT_CLEAR_COMMITTED_OBSERVATION_MISSING');
-        }
-        opts.toolOptions.viewState.commitCleared(terminal.targetBinding, observation);
-        opts.toolOptions.codeState?.invalidate(terminal.targetBinding.whiteboardId);
-      } else if (expected.kind === 'whiteboard_element_absent') {
-        const observation = terminal.committedObservation;
-        if (!observation || observation.kind !== 'whiteboard_element_absent') {
-          throw new Error('CLIENT_EFFECT_DELETE_COMMITTED_OBSERVATION_MISSING');
-        }
-        opts.toolOptions.viewState.commitDelete(
-          terminal.targetBinding,
-          observation.stableElementId,
-          observation.observedElementType,
-        );
-        opts.toolOptions.codeState?.commitDelete(
-          terminal.targetBinding.whiteboardId,
-          observation.stableElementId,
-        );
-      } else {
         if (
-          expected.kind === 'whiteboard_open' &&
-          terminal.committedObservation?.kind === 'whiteboard_open'
+          !terminal.visibilityTarget ||
+          !observation ||
+          observation.kind !== 'whiteboard_closed'
         ) {
-          opts.toolOptions.viewState.commitOpen(
+          throw new Error('CLIENT_EFFECT_CLOSE_COMMITTED_OBSERVATION_MISSING');
+        }
+        opts.toolOptions.viewState.commitClosed(observation);
+      } else {
+        if (!terminal.targetBinding) {
+          throw new Error('CLIENT_EFFECT_COMMIT_BINDING_MISSING');
+        }
+        if (expected.kind === 'whiteboard_empty') {
+          const observation = terminal.committedObservation;
+          if (!observation || observation.kind !== 'whiteboard_empty') {
+            throw new Error('CLIENT_EFFECT_CLEAR_COMMITTED_OBSERVATION_MISSING');
+          }
+          opts.toolOptions.viewState.commitCleared(terminal.targetBinding, observation);
+          opts.toolOptions.codeState?.invalidate(terminal.targetBinding.whiteboardId);
+        } else if (expected.kind === 'whiteboard_element_absent') {
+          const observation = terminal.committedObservation;
+          if (!observation || observation.kind !== 'whiteboard_element_absent') {
+            throw new Error('CLIENT_EFFECT_DELETE_COMMITTED_OBSERVATION_MISSING');
+          }
+          opts.toolOptions.viewState.commitDelete(
             terminal.targetBinding,
-            terminal.committedObservation,
+            observation.stableElementId,
+            observation.observedElementType,
+          );
+          opts.toolOptions.codeState?.commitDelete(
+            terminal.targetBinding.whiteboardId,
+            observation.stableElementId,
           );
         } else {
-          opts.toolOptions.viewState.commitVisible(terminal.targetBinding);
-        }
-        if ('elementType' in expected) {
-          opts.toolOptions.viewState.commitElement(
-            terminal.targetBinding,
-            expected.stableElementId,
-            expected.elementType,
-          );
+          if (
+            expected.kind === 'whiteboard_open' &&
+            terminal.committedObservation?.kind === 'whiteboard_open'
+          ) {
+            opts.toolOptions.viewState.commitOpen(
+              terminal.targetBinding,
+              terminal.committedObservation,
+            );
+          } else {
+            opts.toolOptions.viewState.commitVisible(terminal.targetBinding);
+          }
+          if ('elementType' in expected) {
+            opts.toolOptions.viewState.commitElement(
+              terminal.targetBinding,
+              expected.stableElementId,
+              expected.elementType,
+            );
+          }
         }
       }
       opts.toolOptions.onCommitted?.(opts.params);
@@ -594,7 +616,8 @@ async function deliverClientEffect<TParams>(opts: {
           status: terminal.status,
           executionId: opts.request.executionId,
           ...(stableElementId ? { stableElementId } : {}),
-          targetBinding: terminal.targetBinding,
+          ...(terminal.targetBinding ? { targetBinding: terminal.targetBinding } : {}),
+          ...(terminal.visibilityTarget ? { visibilityTarget: terminal.visibilityTarget } : {}),
           ...(terminal.committedObservation?.kind === 'whiteboard_open'
             ? {
                 whiteboardId: terminal.committedObservation.whiteboardId,
@@ -609,6 +632,14 @@ async function deliverClientEffect<TParams>(opts: {
             : {}),
           ...(terminal.committedObservation?.kind === 'whiteboard_element_absent'
             ? { committedObservation: terminal.committedObservation }
+            : {}),
+          ...(terminal.committedObservation?.kind === 'whiteboard_closed'
+            ? {
+                observedOpen: terminal.committedObservation.observedOpen,
+                visibilityChanged: terminal.committedObservation.visibilityChanged,
+                committedObservation: terminal.committedObservation,
+                actionChanged: terminal.committedObservation.visibilityChanged,
+              }
             : {}),
           ...(terminal.committedObservation?.kind === 'whiteboard_empty'
             ? {
@@ -638,6 +669,12 @@ async function deliverClientEffect<TParams>(opts: {
     ) {
       opts.toolOptions.viewState.invalidateElements(terminal.targetBinding.whiteboardId);
       opts.toolOptions.codeState?.invalidate(terminal.targetBinding.whiteboardId);
+    } else if (
+      opts.request.postcondition.kind === 'whiteboard_closed' &&
+      terminal.visibilityTarget &&
+      terminal.error?.code !== 'CLIENT_EFFECT_CLOSE_FAILED_BEFORE_MUTATION'
+    ) {
+      opts.toolOptions.viewState.invalidateVisibility();
     }
     if (terminal.status === 'cancelled') opts.toolOptions.onCancelled?.();
     return {
@@ -704,6 +741,54 @@ export function buildNativeWhiteboardOpenTool(
       toolOptions: opts,
       successMessage: 'Whiteboard visibility was verified.',
       failureLabel: 'Whiteboard open',
+    });
+  };
+
+  return { tool, handler };
+}
+
+export function buildNativeWhiteboardCloseTool(
+  opts: NativeWhiteboardToolOptions<NativeWhiteboardCloseParams>,
+): { tool: AgentTool<typeof NativeWhiteboardCloseParams>; handler: NativeClientEffectHandler } {
+  const tool: AgentTool<typeof NativeWhiteboardCloseParams> = {
+    name: 'wb_close',
+    label: 'Close whiteboard',
+    description:
+      'Hide the whiteboard only when the user explicitly asks or when deliberately returning the class to the slide view. Do not close merely because your own drawing or turn is complete. Keep it open when the user or a later classroom agent still needs it, and avoid close-then-immediate-reopen churn.',
+    parameters: NativeWhiteboardCloseParams,
+    executionMode: 'sequential',
+    execute: async (): Promise<RuntimeAgentToolResult> => {
+      throw new Error('wb_close requires the browser client-effect executor.');
+    },
+  };
+
+  const handler: NativeClientEffectHandler = async ({ request, params, signal }) => {
+    if (opts.canExecute?.() === false) return actionBudgetFailure();
+    const prepared = prepareClientEffect(opts, request, {
+      requiresWhiteboardOpenBudget: false,
+      // Whether Close is a mutation is authoritative only after browser observation.
+      // Reserve the worst case before delivery rather than trusting a stale snapshot.
+      requiredVisibilityAnimationMs: WB_CLOSE_MS,
+    });
+    if ('isError' in prepared) return prepared;
+    const effectRequest: ClientEffectRequest = {
+      ...request,
+      toolName: 'wb_close',
+      target: prepared.target,
+      activeEffectBudgetMs: prepared.activeEffectBudgetMs,
+      postcondition: {
+        kind: 'whiteboard_closed',
+        normalizationVersion: CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION,
+        desiredOpen: false,
+      },
+    };
+    return deliverClientEffect({
+      request: effectRequest,
+      params: params as NativeWhiteboardCloseParams,
+      signal,
+      toolOptions: opts,
+      successMessage: 'Whiteboard close was verified.',
+      failureLabel: 'Whiteboard close',
     });
   };
 

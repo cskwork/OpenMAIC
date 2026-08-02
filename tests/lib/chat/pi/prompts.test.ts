@@ -302,6 +302,10 @@ describe('Pi director prompt closure routing', () => {
       enableWebSearch: false,
       enableWhiteboardClear: true,
     });
+    const closeOnly = buildNativeWebChildPrompt(makeBody(), agents[0], [], {
+      enableWebSearch: false,
+      enableWhiteboardClose: true,
+    });
     const shapeTurn = buildNativeWebChildTurnPrompt(
       'Draw one simple shape.',
       'teacher',
@@ -383,6 +387,15 @@ describe('Pi director prompt closure routing', () => {
         enableWhiteboardClear: true,
       },
     );
+    const closeTurn = buildNativeWebChildTurnPrompt(
+      'Close the board after the requested explanation.',
+      'teacher',
+      {},
+      {
+        enableWebSearch: false,
+        enableWhiteboardClose: true,
+      },
+    );
 
     expect(openOnly).toContain('call `wb_open`');
     expect(openOnly).toContain('drawing tool opens the board automatically');
@@ -448,6 +461,14 @@ describe('Pi director prompt closure routing', () => {
       'Do not clear merely because the user manually stopped earlier, a new UI session began, or the slide changed',
     );
     expect(clearOnly).not.toContain('call `wb_delete`');
+    expect(closeOnly).toContain('call `wb_close`');
+    expect(closeOnly).toContain('Do not close merely because your own drawing or turn is complete');
+    expect(closeOnly).toContain('a later classroom agent still needs it');
+    expect(closeOnly).toContain('Avoid close-then-immediate-reopen churn');
+    expect(closeOnly).toContain('verified `wb_close` result');
+    expect(closeOnly).not.toContain('spotlight');
+    expect(closeOnly).not.toContain('laser');
+    expect(openOnly).toContain('Do not attempt, imitate, or claim to close the whiteboard');
     expect(shapeTurn).toContain('Use `wb_draw_shape` only when one simple shape genuinely helps');
     expect(shapeTurn).not.toContain('Use `wb_draw_text`');
     expect(lineTurn).toContain(
@@ -478,6 +499,11 @@ describe('Pi director prompt closure routing', () => {
       'Do not clear merely because the user manually stopped earlier, a new UI session began, or the slide changed',
     );
     expect(clearTurn).toContain('do not claim the board is empty');
+    expect(closeTurn).toContain('Use `wb_close` only when the user explicitly requests it');
+    expect(closeTurn).toContain('keep the board open for later classroom agents');
+    expect(closeTurn).toContain('do not claim the board is closed or the slide is visible');
+    expect(closeTurn).not.toContain('spotlight');
+    expect(closeTurn).not.toContain('laser');
     expect(latexTurn).toContain('If the formula is rejected, correct the LaTeX');
     expect(latexTurn).not.toContain('Use `wb_draw_text`');
     expect(latexTurn).not.toContain('Use `wb_draw_shape`');

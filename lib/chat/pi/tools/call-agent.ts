@@ -38,6 +38,7 @@ import type { SendEvent } from '../types';
 import { buildChildActionTools, createPiWhiteboardRuntimeState } from './classroom-actions';
 import {
   buildNativeWhiteboardChartTool,
+  buildNativeWhiteboardCloseTool,
   buildNativeWhiteboardCodeEditTool,
   buildNativeWhiteboardCodeTool,
   buildNativeWhiteboardClearTool,
@@ -78,6 +79,7 @@ export function resolveNativeChildCapabilities(opts: {
   nativeWhiteboardEnabled: boolean;
   nativeWhiteboardToolNames: Array<
     | 'wb_open'
+    | 'wb_close'
     | 'wb_draw_text'
     | 'wb_draw_shape'
     | 'wb_draw_line'
@@ -100,6 +102,7 @@ export function resolveNativeChildCapabilities(opts: {
     ? (
         [
           'wb_open',
+          'wb_close',
           'wb_draw_text',
           'wb_draw_shape',
           'wb_draw_line',
@@ -821,6 +824,37 @@ export function buildCallAgentTool(opts: {
           nativeTools.push(nativeWhiteboard.tool);
           clientEffectHandlers.set(nativeWhiteboard.tool.name, nativeWhiteboard.handler);
         }
+        if (nativeWhiteboardToolNames.includes('wb_close')) {
+          const nativeWhiteboard = buildNativeWhiteboardCloseTool({
+            body: opts.body,
+            messageId,
+            send: opts.send,
+            viewState: nativeWhiteboardViewState,
+            canExecute: () => actionCount < opts.maxActionsPerAgent,
+            onCommittedWithTerminal: (_params, terminal) => {
+              const observation = terminal.committedObservation;
+              if (
+                !observation ||
+                observation.kind !== 'whiteboard_closed' ||
+                !observation.visibilityChanged
+              ) {
+                return;
+              }
+              actionCount += 1;
+              const record: WhiteboardActionRecord = {
+                actionName: 'wb_close',
+                agentId: agent.id,
+                agentName: agent.name,
+                params: {},
+              };
+              whiteboardActions.push(record);
+              opts.onActionDone(record);
+            },
+            onCancelled: abortChild,
+          });
+          nativeTools.push(nativeWhiteboard.tool);
+          clientEffectHandlers.set(nativeWhiteboard.tool.name, nativeWhiteboard.handler);
+        }
         if (nativeWhiteboardToolNames.includes('wb_draw_text')) {
           const nativeWhiteboard = buildNativeWhiteboardTextTool({
             body: opts.body,
@@ -1096,6 +1130,7 @@ export function buildCallAgentTool(opts: {
             systemPrompt: buildNativeWebChildPrompt(opts.body, agent, opts.getAgentResponses(), {
               enableWebSearch: childWebSearchEnabled,
               enableWhiteboardOpen: nativeWhiteboardToolNames.includes('wb_open'),
+              enableWhiteboardClose: nativeWhiteboardToolNames.includes('wb_close'),
               enableWhiteboardText: nativeWhiteboardToolNames.includes('wb_draw_text'),
               enableWhiteboardShape: nativeWhiteboardToolNames.includes('wb_draw_shape'),
               enableWhiteboardLine: nativeWhiteboardToolNames.includes('wb_draw_line'),
@@ -1109,8 +1144,11 @@ export function buildCallAgentTool(opts: {
               whiteboardCodeContext: nativeWhiteboardCodeState.buildPromptProjection(),
               suppressRequestStartWhiteboard:
                 nativeWhiteboardViewState.shouldSuppressRequestStartSnapshot(),
-              whiteboardOpenOverride: nativeWhiteboardViewState.isOpen(),
+              whiteboardOpenOverride: nativeWhiteboardViewState.isVisibilityTrusted()
+                ? nativeWhiteboardViewState.isOpen()
+                : undefined,
               suppressWhiteboardStatus:
+                !nativeWhiteboardViewState.isVisibilityTrusted() ||
                 nativeWhiteboardViewState.getSnapshotAuthority() === 'untrusted',
               whiteboardRuntimeContext:
                 nativeWhiteboardViewState.getSnapshotAuthority() === 'runtime_verified'
@@ -1136,6 +1174,7 @@ export function buildCallAgentTool(opts: {
               {
                 enableWebSearch: childWebSearchEnabled,
                 enableWhiteboardOpen: nativeWhiteboardToolNames.includes('wb_open'),
+                enableWhiteboardClose: nativeWhiteboardToolNames.includes('wb_close'),
                 enableWhiteboardText: nativeWhiteboardToolNames.includes('wb_draw_text'),
                 enableWhiteboardShape: nativeWhiteboardToolNames.includes('wb_draw_shape'),
                 enableWhiteboardLine: nativeWhiteboardToolNames.includes('wb_draw_line'),

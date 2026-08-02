@@ -57,6 +57,15 @@ const targetBinding: AcceptedTargetBinding = {
   bindingVersion: 1,
 };
 
+type EntityAcceptedAck = Extract<
+  ClientEffectAck,
+  { status: 'accepted'; targetBinding: AcceptedTargetBinding }
+>;
+type EntityCommittedAck = Extract<
+  ClientEffectAck,
+  { status: 'effect_committed'; targetBinding: AcceptedTargetBinding }
+>;
+
 async function request(
   overrides: Partial<WhiteboardTextClientEffectRequest> = {},
 ): Promise<WhiteboardTextClientEffectRequest> {
@@ -118,7 +127,7 @@ async function openRequest(
 function openCommitted(
   effect: WhiteboardOpenClientEffectRequest,
   overrides: Partial<WhiteboardOpenCommittedObservation> = {},
-): Omit<Extract<ClientEffectAck, { status: 'effect_committed' }>, 'postcondition'> & {
+): Omit<EntityCommittedAck, 'postcondition'> & {
   postcondition: WhiteboardOpenCommittedObservation;
 } {
   return {
@@ -145,7 +154,7 @@ function openCommitted(
 function accepted(
   effect: ClientEffectRequest,
   clientEventId = 'event-accepted',
-): Extract<ClientEffectAck, { status: 'accepted' }> {
+): EntityAcceptedAck {
   return {
     protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
     executionId: effect.executionId,
@@ -160,7 +169,7 @@ function accepted(
 function committed(
   effect: WhiteboardTextClientEffectRequest,
   clientEventId = 'event-committed',
-): Extract<ClientEffectAck, { status: 'effect_committed' }> {
+): EntityCommittedAck {
   return {
     protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
     executionId: effect.executionId,
@@ -206,7 +215,7 @@ async function shapeRequest(): Promise<WhiteboardShapeClientEffectRequest> {
 function shapeCommitted(
   effect: WhiteboardShapeClientEffectRequest,
   overrides: Partial<Omit<WhiteboardShapePostcondition, 'kind' | 'expectedShapeDigest'>> = {},
-): Extract<ClientEffectAck, { status: 'effect_committed' }> {
+): EntityCommittedAck {
   return {
     protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
     executionId: effect.executionId,
@@ -267,7 +276,7 @@ async function lineRequest(): Promise<WhiteboardLineClientEffectRequest> {
 function lineCommitted(
   effect: WhiteboardLineClientEffectRequest,
   overrides: Partial<Omit<WhiteboardLinePostcondition, 'kind' | 'expectedLineDigest'>> = {},
-): Extract<ClientEffectAck, { status: 'effect_committed' }> {
+): EntityCommittedAck {
   return {
     protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
     executionId: effect.executionId,
@@ -331,7 +340,7 @@ function latexCommitted(
   overrides: Partial<
     Omit<WhiteboardLatexPostcondition, 'kind' | 'expectedFormulaDigest' | 'expectedHtmlDigest'>
   > = {},
-): Extract<ClientEffectAck, { status: 'effect_committed' }> {
+): EntityCommittedAck {
   return {
     protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
     executionId: effect.executionId,
@@ -386,7 +395,7 @@ async function tableRequest(): Promise<WhiteboardTableClientEffectRequest> {
 function tableCommitted(
   effect: WhiteboardTableClientEffectRequest,
   observedTableDigest = effect.postcondition.expectedTableDigest,
-): Extract<ClientEffectAck, { status: 'effect_committed' }> {
+): EntityCommittedAck {
   return {
     protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
     executionId: effect.executionId,
@@ -440,7 +449,7 @@ async function chartRequest(): Promise<WhiteboardChartClientEffectRequest> {
 function chartCommitted(
   effect: WhiteboardChartClientEffectRequest,
   observedChartDigest = effect.postcondition.expectedChartDigest,
-): Extract<ClientEffectAck, { status: 'effect_committed' }> {
+): EntityCommittedAck {
   return {
     protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
     executionId: effect.executionId,
@@ -488,7 +497,7 @@ async function codeRequest(): Promise<WhiteboardCodeClientEffectRequest> {
 function codeCommitted(
   effect: WhiteboardCodeClientEffectRequest,
   observedCodeDigest = effect.postcondition.expectedCodeDigest,
-): Extract<ClientEffectAck, { status: 'effect_committed' }> {
+): EntityCommittedAck {
   return {
     protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
     executionId: effect.executionId,
@@ -553,11 +562,11 @@ function codeEditCommitted(
   effect: WhiteboardCodeEditClientEffectRequest,
   overrides: Partial<
     Extract<
-      Extract<ClientEffectAck, { status: 'effect_committed' }>['postcondition'],
+      EntityCommittedAck['postcondition'],
       { normalizationVersion: typeof CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION }
     >
   > = {},
-): Extract<ClientEffectAck, { status: 'effect_committed' }> {
+): EntityCommittedAck {
   return {
     protocolVersion: TOOL_EXECUTION_PROTOCOL_VERSION,
     executionId: effect.executionId,

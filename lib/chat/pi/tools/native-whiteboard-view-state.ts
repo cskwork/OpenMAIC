@@ -3,6 +3,7 @@ import {
   isWhiteboardElementType,
   type AcceptedTargetBinding,
   type WhiteboardClearCommittedObservation,
+  type WhiteboardCloseCommittedObservation,
   type WhiteboardElementType,
   type WhiteboardOpenCommittedObservation,
 } from '@/lib/agent/runtime/client-effect-contract';
@@ -25,6 +26,7 @@ type SnapshotAuthority = 'request_start' | 'runtime_verified' | 'untrusted';
 /** Request-scoped whiteboard state advanced only by verified client effects. */
 export class NativeWhiteboardViewState {
   private open: boolean;
+  private visibilityTrusted = true;
   private whiteboardId: string | undefined;
   private entityTrusted: boolean;
   private membershipComplete: boolean;
@@ -73,6 +75,10 @@ export class NativeWhiteboardViewState {
 
   isOpen(): boolean {
     return this.open;
+  }
+
+  isVisibilityTrusted(): boolean {
+    return this.visibilityTrusted;
   }
 
   getWhiteboardId(): string | undefined {
@@ -124,6 +130,7 @@ export class NativeWhiteboardViewState {
     this.whiteboardId = committedWhiteboardId;
     this.entityTrusted = true;
     this.open = true;
+    this.visibilityTrusted = true;
   }
 
   commitOpen(
@@ -135,6 +142,15 @@ export class NativeWhiteboardViewState {
       this.elementTypeById.clear();
       this.membershipComplete = true;
     }
+  }
+
+  commitClosed(observation: WhiteboardCloseCommittedObservation): void {
+    this.open = observation.observedOpen;
+    this.visibilityTrusted = true;
+  }
+
+  invalidateVisibility(): void {
+    this.visibilityTrusted = false;
   }
 
   commitElement(
@@ -171,6 +187,7 @@ export class NativeWhiteboardViewState {
     this.membershipComplete = true;
     this.elementTypeById.clear();
     this.open = observation.observedOpen;
+    this.visibilityTrusted = true;
     this.snapshotAuthority = 'runtime_verified';
     this.onBindingChanged?.(binding.whiteboardId);
   }
@@ -200,6 +217,7 @@ export class NativeWhiteboardViewState {
     this.membershipComplete = false;
     this.snapshotAuthority = 'untrusted';
     this.open = open;
+    this.visibilityTrusted = true;
     this.onBindingChanged?.(undefined);
   }
 

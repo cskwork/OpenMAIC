@@ -283,6 +283,7 @@ export function buildNativeWebChildPrompt(
   options: {
     enableWebSearch?: boolean;
     enableWhiteboardOpen?: boolean;
+    enableWhiteboardClose?: boolean;
     enableWhiteboardText?: boolean;
     enableWhiteboardShape?: boolean;
     enableWhiteboardLine?: boolean;
@@ -325,6 +326,7 @@ export function buildNativeWebChildPrompt(
         ].join('\n')
       : '',
     options.enableWhiteboardOpen ||
+    options.enableWhiteboardClose ||
     options.enableWhiteboardText ||
     options.enableWhiteboardShape ||
     options.enableWhiteboardLine ||
@@ -339,6 +341,9 @@ export function buildNativeWebChildPrompt(
           '# Native Whiteboard',
           options.enableWhiteboardOpen
             ? 'You may call `wb_open` to reveal the whiteboard without immediately drawing an element.'
+            : '',
+          options.enableWhiteboardClose
+            ? 'You may call `wb_close` to hide the whiteboard only when the user explicitly asks or when deliberately returning the class to the slide view.'
             : '',
           options.enableWhiteboardText
             ? 'You may call `wb_draw_text` to place concise teaching text on the whiteboard.'
@@ -375,7 +380,10 @@ export function buildNativeWebChildPrompt(
           'Before calling it, say briefly what you are about to show. Wait for the tool result, then continue explaining in this same turn.',
           'A successful result means the browser verified the requested whiteboard state or element. A failed result must not be described as successful.',
           'Only the Native whiteboard tools listed above are available in this invocation. Do not request or imitate an unavailable whiteboard action.',
-          'Do not emit JSON actions and do not attempt to close the whiteboard.',
+          'Do not emit JSON actions.',
+          options.enableWhiteboardClose
+            ? 'Do not close merely because your own drawing or turn is complete. Keep the board open when the current instruction, the user, or a later classroom agent still needs it. Avoid close-then-immediate-reopen churn. Wait for the verified `wb_close` result before claiming the board is closed or the slide is visible.'
+            : 'Do not attempt, imitate, or claim to close the whiteboard.',
         ]
           .filter(Boolean)
           .join('\n')
@@ -415,6 +423,7 @@ export function buildNativeWebChildTurnPrompt(
   options: {
     enableWebSearch?: boolean;
     enableWhiteboardOpen?: boolean;
+    enableWhiteboardClose?: boolean;
     enableWhiteboardText?: boolean;
     enableWhiteboardShape?: boolean;
     enableWhiteboardLine?: boolean;
@@ -452,6 +461,9 @@ export function buildNativeWebChildTurnPrompt(
     options.enableWhiteboardOpen
       ? 'Use `wb_open` only to reveal the whiteboard without immediately drawing. Drawing tools already open it automatically, so never call `wb_open` as their prerequisite.'
       : '',
+    options.enableWhiteboardClose
+      ? 'Use `wb_close` only when the user explicitly requests it or when deliberately returning the class to the slide view. Do not close merely because your drawing or turn is complete, and keep the board open for later classroom agents that still need it. Avoid close-then-immediate-reopen churn. Continue only after the committed result; on failure or unconfirmed cancellation, do not claim the board is closed or the slide is visible.'
+      : 'Do not attempt, imitate, or claim to close the whiteboard.',
     options.enableWhiteboardText
       ? 'Use `wb_draw_text` only when a concise visual genuinely helps. Speak before the tool call and continue after its tool result.'
       : '',

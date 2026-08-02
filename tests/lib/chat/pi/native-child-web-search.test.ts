@@ -261,6 +261,7 @@ describe('Phase 1 Child native web_search', () => {
           role: base.role,
           allowedActions: [
             'wb_open',
+            'wb_close',
             'wb_draw_text',
             'wb_draw_shape',
             'wb_draw_line',
@@ -275,6 +276,7 @@ describe('Phase 1 Child native web_search', () => {
       nativeWhiteboardEnabled: true,
       nativeWhiteboardToolNames: [
         'wb_open',
+        'wb_close',
         'wb_draw_text',
         'wb_draw_shape',
         'wb_draw_line',

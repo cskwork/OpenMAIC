@@ -60,6 +60,20 @@ export interface WhiteboardOpenCommittedObservation {
   visibilityChanged: boolean;
 }
 
+export interface WhiteboardClosePostcondition {
+  kind: 'whiteboard_closed';
+  normalizationVersion: typeof CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION;
+  desiredOpen: false;
+}
+
+export interface WhiteboardCloseCommittedObservation {
+  kind: 'whiteboard_closed';
+  normalizationVersion: typeof CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION;
+  desiredOpen: false;
+  observedOpen: false;
+  visibilityChanged: boolean;
+}
+
 export type WhiteboardElementType =
   | 'text'
   | 'image'
@@ -536,6 +550,11 @@ export type WhiteboardOpenClientEffectRequest = ClientEffectRequestBase & {
   postcondition: WhiteboardOpenPostcondition;
 };
 
+export type WhiteboardCloseClientEffectRequest = ClientEffectRequestBase & {
+  toolName: 'wb_close';
+  postcondition: WhiteboardClosePostcondition;
+};
+
 export type WhiteboardDeleteClientEffectRequest = ClientEffectRequestBase & {
   toolName: 'wb_delete';
   postcondition: WhiteboardDeletePostcondition;
@@ -548,6 +567,7 @@ export type WhiteboardClearClientEffectRequest = ClientEffectRequestBase & {
 
 export type ClientEffectRequest =
   | WhiteboardOpenClientEffectRequest
+  | WhiteboardCloseClientEffectRequest
   | WhiteboardClearClientEffectRequest
   | WhiteboardDeleteClientEffectRequest
   | WhiteboardTextClientEffectRequest
@@ -573,6 +593,15 @@ export interface AcceptedTargetBinding {
   bindingVersion: number;
 }
 
+/** Stage/scene visibility target for lifecycle effects that do not require a whiteboard entity. */
+export interface WhiteboardVisibilityTarget {
+  requestId: string;
+  sessionId: string;
+  stageId: string;
+  sceneId: string;
+  bindingVersion: number;
+}
+
 interface ClientEffectAckBase {
   protocolVersion: ClientEffectRequest['protocolVersion'];
   executionId: string;
@@ -585,6 +614,10 @@ export type ClientEffectAck =
   | (ClientEffectAckBase & {
       status: 'accepted';
       targetBinding: AcceptedTargetBinding;
+    })
+  | (ClientEffectAckBase & {
+      status: 'accepted';
+      visibilityTarget: WhiteboardVisibilityTarget;
     })
   | (ClientEffectAckBase & {
       status: 'presentation_paused' | 'presentation_resumed';
@@ -658,6 +691,11 @@ export type ClientEffectAck =
           };
     })
   | (ClientEffectAckBase & {
+      status: 'effect_committed';
+      visibilityTarget: WhiteboardVisibilityTarget;
+      postcondition: WhiteboardCloseCommittedObservation;
+    })
+  | (ClientEffectAckBase & {
       status: 'effect_failed' | 'cancelled';
       error: {
         code: string;
@@ -672,8 +710,10 @@ export interface ClientEffectTerminalResult {
   isError: boolean;
   completedAt: number;
   targetBinding?: AcceptedTargetBinding;
+  visibilityTarget?: WhiteboardVisibilityTarget;
   committedObservation?:
     | WhiteboardOpenCommittedObservation
+    | WhiteboardCloseCommittedObservation
     | WhiteboardClearCommittedObservation
     | WhiteboardDeleteCommittedObservation;
   error?: {
@@ -691,6 +731,7 @@ export interface ClientEffectCoordinatorSnapshot {
   activeRemainingMs: number;
   deadlineAt: number;
   targetBinding?: AcceptedTargetBinding;
+  visibilityTarget?: WhiteboardVisibilityTarget;
   terminalResult?: ClientEffectTerminalResult;
 }
 
@@ -1987,6 +2028,20 @@ function isTargetBinding(value: unknown): value is AcceptedTargetBinding {
   );
 }
 
+function isVisibilityTarget(value: unknown): value is WhiteboardVisibilityTarget {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const target = value as Record<string, unknown>;
+  return (
+    hasExactKeys(target, ['requestId', 'sessionId', 'stageId', 'sceneId', 'bindingVersion']) &&
+    isNonEmptyString(target.requestId) &&
+    isNonEmptyString(target.sessionId) &&
+    isNonEmptyString(target.stageId) &&
+    isNonEmptyString(target.sceneId) &&
+    Number.isInteger(target.bindingVersion) &&
+    Number(target.bindingVersion) > 0
+  );
+}
+
 export function isClientEffectAck(value: unknown): value is ClientEffectAck {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const ack = value as Record<string, unknown>;
@@ -2003,7 +2058,7 @@ export function isClientEffectAck(value: unknown): value is ClientEffectAck {
 
   switch (ack.status) {
     case 'accepted':
-      return (
+      if (
         hasExactKeys(ack, [
           'protocolVersion',
           'executionId',
@@ -2012,7 +2067,20 @@ export function isClientEffectAck(value: unknown): value is ClientEffectAck {
           'observedAt',
           'status',
           'targetBinding',
-        ]) && isTargetBinding(ack.targetBinding)
+        ])
+      ) {
+        return isTargetBinding(ack.targetBinding);
+      }
+      return (
+        hasExactKeys(ack, [
+          'protocolVersion',
+          'executionId',
+          'idempotencyKey',
+          'clientEventId',
+          'observedAt',
+          'status',
+          'visibilityTarget',
+        ]) && isVisibilityTarget(ack.visibilityTarget)
       );
     case 'presentation_paused':
     case 'presentation_resumed':
@@ -2025,6 +2093,42 @@ export function isClientEffectAck(value: unknown): value is ClientEffectAck {
         'status',
       ]);
     case 'effect_committed': {
+      if (
+        hasExactKeys(ack, [
+          'protocolVersion',
+          'executionId',
+          'idempotencyKey',
+          'clientEventId',
+          'observedAt',
+          'status',
+          'visibilityTarget',
+          'postcondition',
+        ])
+      ) {
+        if (
+          !isVisibilityTarget(ack.visibilityTarget) ||
+          !ack.postcondition ||
+          typeof ack.postcondition !== 'object' ||
+          Array.isArray(ack.postcondition)
+        ) {
+          return false;
+        }
+        const postcondition = ack.postcondition as Record<string, unknown>;
+        return (
+          hasExactKeys(postcondition, [
+            'kind',
+            'normalizationVersion',
+            'desiredOpen',
+            'observedOpen',
+            'visibilityChanged',
+          ]) &&
+          postcondition.kind === 'whiteboard_closed' &&
+          postcondition.normalizationVersion === CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION &&
+          postcondition.desiredOpen === false &&
+          postcondition.observedOpen === false &&
+          typeof postcondition.visibilityChanged === 'boolean'
+        );
+      }
       if (
         !hasExactKeys(ack, [
           'protocolVersion',

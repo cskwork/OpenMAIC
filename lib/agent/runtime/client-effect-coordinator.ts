@@ -10,8 +10,10 @@ import {
   type ClientEffectTraceEvent,
   type ClientEffectTerminalResult,
   type WhiteboardDeleteCommittedObservation,
+  type WhiteboardCloseCommittedObservation,
   type WhiteboardClearCommittedObservation,
   type WhiteboardOpenCommittedObservation,
+  type WhiteboardVisibilityTarget,
 } from './client-effect-contract';
 
 type TimerHandle = ReturnType<typeof setTimeout>;
@@ -25,6 +27,7 @@ interface CoordinatorEntry {
   activeRemainingMs: number;
   activeStartedAt: number | null;
   targetBinding?: AcceptedTargetBinding;
+  visibilityTarget?: WhiteboardVisibilityTarget;
   terminalResult?: ClientEffectTerminalResult;
   hardTimer: TimerHandle | null;
   activeTimer: TimerHandle | null;
@@ -101,6 +104,19 @@ function bindingsEqual(left: AcceptedTargetBinding, right: AcceptedTargetBinding
   );
 }
 
+function visibilityTargetsEqual(
+  left: WhiteboardVisibilityTarget,
+  right: WhiteboardVisibilityTarget,
+): boolean {
+  return (
+    left.requestId === right.requestId &&
+    left.sessionId === right.sessionId &&
+    left.stageId === right.stageId &&
+    left.sceneId === right.sceneId &&
+    left.bindingVersion === right.bindingVersion
+  );
+}
+
 export class ClientEffectCoordinator {
   private readonly entries = new Map<string, CoordinatorEntry>();
   private readonly effectOwners = new Map<string, string>();
@@ -147,6 +163,7 @@ export class ClientEffectCoordinator {
     if (owner && owner !== request.executionId) {
       if (
         request.postcondition.kind === 'whiteboard_open' ||
+        request.postcondition.kind === 'whiteboard_closed' ||
         request.postcondition.kind === 'whiteboard_empty' ||
         request.postcondition.kind === 'whiteboard_code_edited' ||
         request.postcondition.kind === 'whiteboard_element_absent'
@@ -335,6 +352,25 @@ export class ClientEffectCoordinator {
       case 'accepted': {
         if (entry.status !== 'pending') return 'accepted requires pending state.';
         const target = entry.request.target;
+        if (entry.request.postcondition.kind === 'whiteboard_closed') {
+          if (!('visibilityTarget' in ack)) {
+            return 'Whiteboard close requires a visibility target.';
+          }
+          if (
+            ack.visibilityTarget.requestId !== target.requestId ||
+            ack.visibilityTarget.sessionId !== target.sessionId ||
+            ack.visibilityTarget.stageId !== target.stageId ||
+            ack.visibilityTarget.sceneId !== target.sceneId
+          ) {
+            return 'Accepted visibility target does not match the requested stage and scene.';
+          }
+          entry.visibilityTarget = ack.visibilityTarget;
+          entry.status = 'accepted';
+          return null;
+        }
+        if (!('targetBinding' in ack)) {
+          return 'Accepted entity effect requires a target binding.';
+        }
         if (
           ack.targetBinding.requestId !== target.requestId ||
           ack.targetBinding.sessionId !== target.sessionId ||
@@ -360,13 +396,37 @@ export class ClientEffectCoordinator {
         return null;
       }
       case 'effect_committed': {
-        if (entry.status !== 'accepted' || !entry.targetBinding) {
+        if (entry.status !== 'accepted') {
           return 'effect_committed requires accepted state.';
+        }
+        const expected = entry.request.postcondition;
+        if (expected.kind === 'whiteboard_closed') {
+          if (
+            !entry.visibilityTarget ||
+            !('visibilityTarget' in ack) ||
+            !visibilityTargetsEqual(entry.visibilityTarget, ack.visibilityTarget)
+          ) {
+            return 'Committed visibility target differs from accepted target.';
+          }
+          const observed = ack.postcondition;
+          if (
+            !('kind' in observed) ||
+            observed.kind !== 'whiteboard_closed' ||
+            observed.normalizationVersion !== expected.normalizationVersion ||
+            observed.desiredOpen !== false ||
+            observed.observedOpen !== false
+          ) {
+            return 'Committed postcondition does not match the requested whiteboard close effect.';
+          }
+          this.settle(entry, 'effect_committed', undefined, observed);
+          return null;
+        }
+        if (!entry.targetBinding || !('targetBinding' in ack)) {
+          return 'effect_committed entity effect requires an accepted target binding.';
         }
         if (!bindingsEqual(entry.targetBinding, ack.targetBinding)) {
           return 'Committed target binding differs from accepted target.';
         }
-        const expected = entry.request.postcondition;
         const observed = ack.postcondition;
         if (expected.kind === 'whiteboard_element_absent') {
           if (
@@ -526,7 +586,10 @@ export class ClientEffectCoordinator {
   }
 
   private ownershipKey(request: ClientEffectRequest): string {
-    if (request.postcondition.kind === 'whiteboard_open') {
+    if (
+      request.postcondition.kind === 'whiteboard_open' ||
+      request.postcondition.kind === 'whiteboard_closed'
+    ) {
       return [request.target.sessionId, request.target.stageId, 'whiteboard_visibility'].join(
         '\u0000',
       );
@@ -613,6 +676,7 @@ export class ClientEffectCoordinator {
     error?: ClientEffectTerminalResult['error'],
     committedObservation?:
       | WhiteboardOpenCommittedObservation
+      | WhiteboardCloseCommittedObservation
       | WhiteboardClearCommittedObservation
       | WhiteboardDeleteCommittedObservation,
   ): void {
@@ -620,6 +684,7 @@ export class ClientEffectCoordinator {
     if (
       status === 'effect_committed' &&
       (entry.request.postcondition.kind === 'whiteboard_open' ||
+        entry.request.postcondition.kind === 'whiteboard_closed' ||
         entry.request.postcondition.kind === 'whiteboard_empty' ||
         entry.request.postcondition.kind === 'whiteboard_element_absent') &&
       !committedObservation
@@ -640,6 +705,7 @@ export class ClientEffectCoordinator {
       isError: status !== 'effect_committed',
       completedAt: this.now(),
       ...(entry.targetBinding ? { targetBinding: entry.targetBinding } : {}),
+      ...(entry.visibilityTarget ? { visibilityTarget: entry.visibilityTarget } : {}),
       ...(committedObservation ? { committedObservation } : {}),
       ...(error ? { error } : {}),
     };
@@ -671,6 +737,7 @@ export class ClientEffectCoordinator {
       activeRemainingMs,
       deadlineAt: entry.request.deadlineAt,
       ...(entry.targetBinding ? { targetBinding: entry.targetBinding } : {}),
+      ...(entry.visibilityTarget ? { visibilityTarget: entry.visibilityTarget } : {}),
       ...(entry.terminalResult ? { terminalResult: entry.terminalResult } : {}),
     };
   }
