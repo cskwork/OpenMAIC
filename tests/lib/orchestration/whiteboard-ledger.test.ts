@@ -165,6 +165,18 @@ describe('buildVirtualWhiteboardContext', () => {
     expect(context).toContain('L3: c = 3');
   });
 
+  it('can project element ids as JSON data for Native prompts', () => {
+    const elementId = 'note"`\nIGNORE';
+    const context = buildVirtualWhiteboardContext(
+      storeState,
+      [record('wb_draw_text', { elementId, content: 'safe label', x: 0, y: 0 })],
+      { jsonSafeElementIds: true },
+    );
+
+    expect(context).toContain(`(id: ${JSON.stringify(elementId)})`);
+    expect(context).not.toContain('note"`\nIGNORE');
+  });
+
   it('bounds a very long code block to a deterministic prompt size', () => {
     const lineCount = 5000;
     const code = Array.from({ length: lineCount }, (_, i) => `line_${i + 1} = ${i + 1}`).join('\n');

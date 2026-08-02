@@ -2,7 +2,7 @@ import {
   TOOL_EXECUTION_PROTOCOL_VERSION,
   type ToolExecutionEnvelope,
 } from './native-child-contract';
-import type { ChartData, ChartType, CodeLine } from '@openmaic/dsl';
+import type { ChartData, ChartType, CodeLine, PPTElement } from '@openmaic/dsl';
 import tinycolor from 'tinycolor2';
 import { DEFAULT_WHITEBOARD_CHART_THEME_COLORS } from '@/lib/action/whiteboard-charts';
 import { createWhiteboardCodeLines } from '@/lib/action/whiteboard-code';
@@ -71,6 +71,192 @@ export type WhiteboardElementType =
   | 'video'
   | 'audio'
   | 'code';
+
+export const CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION = 'maic.whiteboard-clear.v1' as const;
+export const CLIENT_EFFECT_WHITEBOARD_MEMBERSHIP_VERSION = 'maic.whiteboard-membership.v1' as const;
+export const CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION = 'maic.whiteboard-content.v1' as const;
+
+export const CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST =
+  'sha256:e30d867b451745648162038b847a467dfc7d36998a544fccfb3d6f384af73f01' as const;
+export const CANONICAL_EMPTY_WHITEBOARD_CONTENT_DIGEST =
+  'sha256:2c71ae6c2e19e4eb3796a6af2d744046bff4087c7b43500226c10d4528e69287' as const;
+
+/**
+ * Browser-only execution receipts persisted on otherwise user-visible elements.
+ * Keep this exact allowlist centralized: unknown future fields remain part of the
+ * board-content digest until they are deliberately classified and tested here.
+ */
+export const CLIENT_EFFECT_ELEMENT_METADATA_KEYS = [
+  'clientEffectExecutionId',
+  'clientEffectNormalizationVersion',
+  'clientEffectContentDigest',
+  'clientEffectShapeDigest',
+  'clientEffectShapeKind',
+  'clientEffectLineDigest',
+  'clientEffectFormulaDigest',
+  'clientEffectHtmlDigest',
+  'clientEffectRenderVersion',
+  'clientEffectTableDigest',
+  'clientEffectChartDigest',
+  'clientEffectCodeDigest',
+  'clientEffectLastEditExecutionId',
+  'clientEffectLastEditBeforeDigest',
+  'clientEffectLastEditAfterDigest',
+  'clientEffectEditNormalizationVersion',
+] as const;
+
+export interface WhiteboardClearPostcondition {
+  kind: 'whiteboard_empty';
+  normalizationVersion: typeof CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION;
+  membershipNormalizationVersion: typeof CLIENT_EFFECT_WHITEBOARD_MEMBERSHIP_VERSION;
+  boardContentNormalizationVersion: typeof CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION;
+  expectedWhiteboardId: string;
+  expectedElementCount: number;
+  expectedMembershipDigest: string;
+}
+
+interface WhiteboardClearCommittedObservationBase {
+  kind: 'whiteboard_empty';
+  normalizationVersion: typeof CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION;
+  membershipNormalizationVersion: typeof CLIENT_EFFECT_WHITEBOARD_MEMBERSHIP_VERSION;
+  boardContentNormalizationVersion: typeof CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION;
+  whiteboardId: string;
+  observedOpen: boolean;
+  visibilityChanged: boolean;
+}
+
+export type WhiteboardClearCommittedObservation =
+  | (WhiteboardClearCommittedObservationBase & {
+      cleared: true;
+      elementCountBefore: number;
+      elementCountAfter: 0;
+      observedMembershipDigestBefore: string;
+      boardContentDigestAtAccepted: string;
+      boardContentDigestBeforeMutation: string;
+      observedBoardContentDigestAfter: typeof CANONICAL_EMPTY_WHITEBOARD_CONTENT_DIGEST;
+      historySnapshotDigest: string;
+      observedOpen: true;
+    })
+  | (WhiteboardClearCommittedObservationBase & {
+      cleared: false;
+      elementCountBefore: 0;
+      elementCountAfter: 0;
+      observedMembershipDigestBefore: typeof CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST;
+      verifiedEmptyBoardContentDigest: typeof CANONICAL_EMPTY_WHITEBOARD_CONTENT_DIGEST;
+      visibilityChanged: false;
+    });
+
+const CLIENT_EFFECT_ELEMENT_METADATA_KEY_SET = new Set<string>(CLIENT_EFFECT_ELEMENT_METADATA_KEYS);
+
+export function isPromptSafeWhiteboardIdentifier(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 512 &&
+    !/[\u0000-\u001f\u007f\u2028\u2029]/.test(value)
+  );
+}
+
+function canonicalizeJsonValue(value: unknown, ancestors: Set<object>): unknown {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error('CLIENT_EFFECT_BOARD_CONTENT_NUMBER_INVALID');
+    return Object.is(value, -0) ? 0 : value;
+  }
+  if (Array.isArray(value)) {
+    if (ancestors.has(value)) throw new Error('CLIENT_EFFECT_BOARD_CONTENT_CYCLE');
+    ancestors.add(value);
+    // Match JSON serialization semantics for non-visible array gaps: both a
+    // sparse hole and an explicit undefined item serialize as null. Keeping
+    // that equivalence explicit avoids runtime-dependent map/JSON behavior.
+    const normalized = Array.from({ length: value.length }, (_, index) => {
+      if (!(index in value) || value[index] === undefined) return null;
+      return canonicalizeJsonValue(value[index], ancestors);
+    });
+    ancestors.delete(value);
+    return normalized;
+  }
+  if (value && typeof value === 'object') {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error('CLIENT_EFFECT_BOARD_CONTENT_OBJECT_INVALID');
+    }
+    if (ancestors.has(value)) throw new Error('CLIENT_EFFECT_BOARD_CONTENT_CYCLE');
+    ancestors.add(value);
+    const normalized = Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        // Optional undefined object fields are not persisted or visible in
+        // JSON-backed whiteboard state, so canonicalize them as absent.
+        .filter(([, entry]) => entry !== undefined)
+        .sort(([left], [right]) => compareCanonicalStrings(left, right))
+        .map(([key, entry]) => [key, canonicalizeJsonValue(entry, ancestors)]),
+    );
+    ancestors.delete(value);
+    return normalized;
+  }
+  throw new Error('CLIENT_EFFECT_BOARD_CONTENT_VALUE_INVALID');
+}
+
+function compareCanonicalStrings(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+export function canonicalizeWhiteboardContentV1(elements: PPTElement[]): string {
+  const normalizedElements = elements.map((element) => {
+    const visibleElement = Object.fromEntries(
+      Object.entries(element as unknown as Record<string, unknown>).filter(
+        ([key]) => !CLIENT_EFFECT_ELEMENT_METADATA_KEY_SET.has(key),
+      ),
+    );
+    return canonicalizeJsonValue(visibleElement, new Set());
+  });
+  return JSON.stringify({
+    version: CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION,
+    elements: normalizedElements,
+  });
+}
+
+export function canonicalizeWhiteboardMembershipV1(
+  elements: Array<{ id: string; type: WhiteboardElementType }>,
+): string {
+  const normalized = elements
+    .map(({ id, type }) => {
+      if (!isPromptSafeWhiteboardIdentifier(id) || !isWhiteboardElementType(type)) {
+        throw new Error('CLIENT_EFFECT_WHITEBOARD_MEMBERSHIP_INVALID');
+      }
+      return [id, type] as const;
+    })
+    .sort(([leftId, leftType], [rightId, rightType]) =>
+      leftId === rightId
+        ? compareCanonicalStrings(leftType, rightType)
+        : compareCanonicalStrings(leftId, rightId),
+    );
+  return JSON.stringify({
+    version: CLIENT_EFFECT_WHITEBOARD_MEMBERSHIP_VERSION,
+    elements: normalized,
+  });
+}
+
+async function digestCanonicalClientEffectValue(value: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return `sha256:${Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('')}`;
+}
+
+export function digestCanonicalWhiteboardContentV1(canonicalContent: string): Promise<string> {
+  return digestCanonicalClientEffectValue(canonicalContent);
+}
+
+export function digestWhiteboardContentV1(elements: PPTElement[]): Promise<string> {
+  return digestCanonicalWhiteboardContentV1(canonicalizeWhiteboardContentV1(elements));
+}
+
+export function digestWhiteboardMembershipV1(
+  elements: Array<{ id: string; type: WhiteboardElementType }>,
+): Promise<string> {
+  return digestCanonicalClientEffectValue(canonicalizeWhiteboardMembershipV1(elements));
+}
 
 export interface WhiteboardDeletePostcondition {
   kind: 'whiteboard_element_absent';
@@ -355,8 +541,14 @@ export type WhiteboardDeleteClientEffectRequest = ClientEffectRequestBase & {
   postcondition: WhiteboardDeletePostcondition;
 };
 
+export type WhiteboardClearClientEffectRequest = ClientEffectRequestBase & {
+  toolName: 'wb_clear';
+  postcondition: WhiteboardClearPostcondition;
+};
+
 export type ClientEffectRequest =
   | WhiteboardOpenClientEffectRequest
+  | WhiteboardClearClientEffectRequest
   | WhiteboardDeleteClientEffectRequest
   | WhiteboardTextClientEffectRequest
   | WhiteboardShapeClientEffectRequest
@@ -402,6 +594,7 @@ export type ClientEffectAck =
       targetBinding: AcceptedTargetBinding;
       postcondition:
         | WhiteboardOpenCommittedObservation
+        | WhiteboardClearCommittedObservation
         | WhiteboardDeleteCommittedObservation
         | {
             stableElementId: string;
@@ -479,7 +672,10 @@ export interface ClientEffectTerminalResult {
   isError: boolean;
   completedAt: number;
   targetBinding?: AcceptedTargetBinding;
-  committedObservation?: WhiteboardOpenCommittedObservation | WhiteboardDeleteCommittedObservation;
+  committedObservation?:
+    | WhiteboardOpenCommittedObservation
+    | WhiteboardClearCommittedObservation
+    | WhiteboardDeleteCommittedObservation;
   error?: {
     code: string;
     message: string;
@@ -1745,7 +1941,7 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-function isWhiteboardElementType(value: unknown): value is WhiteboardElementType {
+export function isWhiteboardElementType(value: unknown): value is WhiteboardElementType {
   return (
     value === 'text' ||
     value === 'image' ||
@@ -1852,6 +2048,64 @@ export function isClientEffectAck(value: unknown): value is ClientEffectAck {
         return false;
       }
       const postcondition = ack.postcondition as Record<string, unknown>;
+      if (postcondition.kind === 'whiteboard_empty') {
+        const commonKeys = [
+          'kind',
+          'normalizationVersion',
+          'membershipNormalizationVersion',
+          'boardContentNormalizationVersion',
+          'whiteboardId',
+          'cleared',
+          'elementCountBefore',
+          'elementCountAfter',
+          'observedMembershipDigestBefore',
+          'observedOpen',
+          'visibilityChanged',
+        ];
+        const commonValid =
+          postcondition.normalizationVersion === CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION &&
+          postcondition.membershipNormalizationVersion ===
+            CLIENT_EFFECT_WHITEBOARD_MEMBERSHIP_VERSION &&
+          postcondition.boardContentNormalizationVersion ===
+            CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION &&
+          isNonEmptyString(postcondition.whiteboardId) &&
+          Number.isInteger(postcondition.elementCountBefore) &&
+          postcondition.elementCountAfter === 0 &&
+          isNonEmptyString(postcondition.observedMembershipDigestBefore) &&
+          typeof postcondition.observedOpen === 'boolean' &&
+          typeof postcondition.visibilityChanged === 'boolean';
+        if (!commonValid) return false;
+        if (postcondition.cleared === true) {
+          return (
+            hasExactKeys(postcondition, [
+              ...commonKeys,
+              'boardContentDigestAtAccepted',
+              'boardContentDigestBeforeMutation',
+              'observedBoardContentDigestAfter',
+              'historySnapshotDigest',
+            ]) &&
+            Number(postcondition.elementCountBefore) > 0 &&
+            postcondition.observedOpen === true &&
+            isNonEmptyString(postcondition.boardContentDigestAtAccepted) &&
+            isNonEmptyString(postcondition.boardContentDigestBeforeMutation) &&
+            postcondition.observedBoardContentDigestAfter ===
+              CANONICAL_EMPTY_WHITEBOARD_CONTENT_DIGEST &&
+            isNonEmptyString(postcondition.historySnapshotDigest)
+          );
+        }
+        if (postcondition.cleared === false) {
+          return (
+            hasExactKeys(postcondition, [...commonKeys, 'verifiedEmptyBoardContentDigest']) &&
+            postcondition.elementCountBefore === 0 &&
+            postcondition.observedMembershipDigestBefore ===
+              CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST &&
+            postcondition.verifiedEmptyBoardContentDigest ===
+              CANONICAL_EMPTY_WHITEBOARD_CONTENT_DIGEST &&
+            postcondition.visibilityChanged === false
+          );
+        }
+        return false;
+      }
       if (
         postcondition.kind === 'whiteboard_element_absent' &&
         hasExactKeys(postcondition, [

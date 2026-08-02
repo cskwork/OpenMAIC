@@ -141,7 +141,7 @@ export function summarizeElements(
  */
 export function buildStateContext(
   storeState: StatelessChatRequest['storeState'],
-  options: { includeWhiteboardElementIds?: boolean } = {},
+  options: { includeWhiteboardElementIds?: boolean; includeWhiteboardStatus?: boolean } = {},
 ): string {
   const { stage, scenes, currentSceneId, mode, whiteboardOpen, quizResults } = storeState;
 
@@ -151,9 +151,11 @@ export function buildStateContext(
   lines.push(`Mode: ${mode}`);
 
   // Whiteboard status
-  lines.push(
-    `Whiteboard: ${whiteboardOpen ? 'OPEN (slide canvas is hidden)' : 'closed (slide canvas is visible)'}`,
-  );
+  if (options.includeWhiteboardStatus !== false) {
+    lines.push(
+      `Whiteboard: ${whiteboardOpen ? 'OPEN (slide canvas is hidden)' : 'closed (slide canvas is visible)'}`,
+    );
+  }
 
   // Stage info
   if (stage) {

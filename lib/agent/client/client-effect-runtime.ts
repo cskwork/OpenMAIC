@@ -4,11 +4,15 @@ import { nanoid } from 'nanoid';
 import type { StageStore } from '@/lib/api/stage-api';
 import {
   CLIENT_EFFECT_ACK_HEADER,
+  CANONICAL_EMPTY_WHITEBOARD_CONTENT_DIGEST,
+  CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST,
+  digestCanonicalWhiteboardContentV1,
   type AcceptedTargetBinding,
   type ClientEffectAck,
   type ClientEffectDelivery,
   type ClientEffectStatus,
   type ClientEffectTerminalStatus,
+  type WhiteboardClearCommittedObservation,
   whiteboardChartSpecsEqual,
   whiteboardCodeSpecsEqual,
   whiteboardEditableCodeStatesEqual,
@@ -25,12 +29,19 @@ import {
   executeNativeWhiteboardShapeEffect,
   executeNativeWhiteboardTableEffect,
   executeNativeWhiteboardTextEffect,
+  captureNativeWhiteboardClearState,
+  commitNativeWhiteboardClearEffect,
+  verifyNativeWhiteboardClearNoOp,
   prepareNativeExistingWhiteboardTarget,
   prepareNativeWhiteboardDeleteTarget,
   prepareNativeWhiteboardOpenTarget,
+  prepareNativeWhiteboardClearTarget,
   prepareNativeWhiteboardTarget,
   verifyNativeWhiteboardOpenEffect,
 } from '@/lib/action/client-effect-whiteboard';
+import { wbClearMs } from '@/lib/choreography/timing';
+import type { PPTElement } from '@openmaic/dsl';
+import type { WhiteboardSnapshotReceipt } from '@/lib/store/whiteboard-history';
 
 type EffectRecord = {
   delivery: ClientEffectDelivery;
@@ -51,6 +62,11 @@ export interface BrowserClientEffectRuntimeOptions {
   waitForPresentation: (executionId: string, signal: AbortSignal) => Promise<void>;
   ensureWhiteboardVisible: (signal: AbortSignal) => Promise<void>;
   observeWhiteboardOpen?: () => boolean;
+  setWhiteboardClearing?: (clearing: boolean) => void;
+  pushExactWhiteboardSnapshot?: (
+    elements: PPTElement[],
+    boardContentDigest: string,
+  ) => WhiteboardSnapshotReceipt;
   onState?: (executionId: string, status: ClientEffectStatus, error?: string) => void;
   fetchAck?: typeof fetch;
   now?: () => number;
@@ -110,6 +126,18 @@ function postconditionsEqual(
       right.kind === 'whiteboard_open' &&
       left.normalizationVersion === right.normalizationVersion &&
       left.desiredOpen === right.desiredOpen
+    );
+  }
+  if (left.kind === 'whiteboard_empty' || right.kind === 'whiteboard_empty') {
+    return (
+      left.kind === 'whiteboard_empty' &&
+      right.kind === 'whiteboard_empty' &&
+      left.normalizationVersion === right.normalizationVersion &&
+      left.membershipNormalizationVersion === right.membershipNormalizationVersion &&
+      left.boardContentNormalizationVersion === right.boardContentNormalizationVersion &&
+      left.expectedWhiteboardId === right.expectedWhiteboardId &&
+      left.expectedElementCount === right.expectedElementCount &&
+      left.expectedMembershipDigest === right.expectedMembershipDigest
     );
   }
   if (left.kind === 'whiteboard_element_absent' || right.kind === 'whiteboard_element_absent') {
@@ -374,7 +402,10 @@ export class BrowserClientEffectRuntime {
         record.serverPaused = false;
       }
       const observeWhiteboardOpen = this.opts.observeWhiteboardOpen;
-      if (request.toolName === 'wb_open' && !observeWhiteboardOpen) {
+      if (
+        (request.toolName === 'wb_open' || request.toolName === 'wb_clear') &&
+        !observeWhiteboardOpen
+      ) {
         throw new Error('CLIENT_EFFECT_WHITEBOARD_OBSERVER_UNAVAILABLE');
       }
       let openCreated = false;
@@ -395,6 +426,12 @@ export class BrowserClientEffectRuntime {
           request.target,
           request.postcondition.expectedWhiteboardId,
         );
+      } else if (request.toolName === 'wb_clear') {
+        binding = prepareNativeWhiteboardClearTarget(
+          this.opts.store,
+          request.target,
+          request.postcondition.expectedWhiteboardId,
+        );
       } else {
         binding = prepareNativeWhiteboardTarget(this.opts.store, request.target);
       }
@@ -406,6 +443,22 @@ export class BrowserClientEffectRuntime {
       await this.waitWhilePaused(record, executionSignal);
       const openVisibilityChanged =
         request.toolName === 'wb_open' ? !observeWhiteboardOpen!() : false;
+      if (request.toolName === 'wb_clear') {
+        const result = await this.executeWhiteboardClear(
+          record,
+          binding,
+          executionSignal,
+          observeWhiteboardOpen!,
+        );
+        await this.enqueueAck(record, {
+          status: 'effect_committed',
+          targetBinding: binding,
+          postcondition: result,
+        });
+        record.status = 'effect_committed';
+        this.opts.onState?.(request.executionId, 'effect_committed');
+        return record.status;
+      }
       await this.opts.ensureWhiteboardVisible(executionSignal);
       await this.waitWhilePaused(record, executionSignal);
       const params = request.args as Record<string, unknown>;
@@ -675,10 +728,13 @@ export class BrowserClientEffectRuntime {
               error,
               request.toolName === 'wb_edit_code' ||
                 request.toolName === 'wb_delete' ||
-                request.toolName === 'wb_open',
+                request.toolName === 'wb_open' ||
+                request.toolName === 'wb_clear',
             );
       const existingElementPreparationFailure =
-        (request.toolName === 'wb_edit_code' || request.toolName === 'wb_delete') &&
+        (request.toolName === 'wb_edit_code' ||
+          request.toolName === 'wb_delete' ||
+          request.toolName === 'wb_clear') &&
         !hardDeadlineExceeded &&
         !aborted &&
         details.code !== 'CLIENT_EFFECT_TARGET_CHANGED';
@@ -704,6 +760,109 @@ export class BrowserClientEffectRuntime {
       return record.status;
     } finally {
       if (hardTimer) clearTimeout(hardTimer);
+    }
+  }
+
+  private async executeWhiteboardClear(
+    record: EffectRecord,
+    binding: AcceptedTargetBinding,
+    signal: AbortSignal,
+    observeWhiteboardOpen: () => boolean,
+  ): Promise<WhiteboardClearCommittedObservation> {
+    const request = record.delivery.request;
+    if (request.toolName !== 'wb_clear') throw new Error('CLIENT_EFFECT_CLEAR_REQUEST_INVALID');
+    const initial = await captureNativeWhiteboardClearState({
+      store: this.opts.store,
+      targetBinding: binding,
+      signal,
+    });
+    if (
+      initial.elementCount !== request.postcondition.expectedElementCount ||
+      initial.membershipDigest !== request.postcondition.expectedMembershipDigest
+    ) {
+      throw new Error('CLIENT_EFFECT_CLEAR_MEMBERSHIP_CHANGED');
+    }
+    const acceptedDigest = await digestCanonicalWhiteboardContentV1(initial.canonicalContent);
+    await this.waitWhilePaused(record, signal);
+    if (initial.elementCount === 0) {
+      if (
+        initial.membershipDigest !== CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST ||
+        acceptedDigest !== CANONICAL_EMPTY_WHITEBOARD_CONTENT_DIGEST
+      ) {
+        throw new Error('CLIENT_EFFECT_CLEAR_EMPTY_DIGEST_MISMATCH');
+      }
+      return verifyNativeWhiteboardClearNoOp({
+        store: this.opts.store,
+        targetBinding: binding,
+        observedOpen: observeWhiteboardOpen(),
+        signal,
+      });
+    }
+    if (!this.opts.pushExactWhiteboardSnapshot || !this.opts.setWhiteboardClearing) {
+      throw new Error('CLIENT_EFFECT_CLEAR_EXECUTOR_UNAVAILABLE');
+    }
+    const visibilityChanged = !observeWhiteboardOpen();
+    await this.opts.ensureWhiteboardVisible(signal);
+    await this.waitWhilePaused(record, signal);
+    this.opts.setWhiteboardClearing(true);
+    try {
+      await this.waitActiveDelay(record, wbClearMs(initial.elementCount), signal);
+      await this.waitWhilePaused(record, signal);
+      const beforeMutation = await captureNativeWhiteboardClearState({
+        store: this.opts.store,
+        targetBinding: binding,
+        signal,
+      });
+      const beforeMutationDigest = await digestCanonicalWhiteboardContentV1(
+        beforeMutation.canonicalContent,
+      );
+      if (
+        beforeMutation.elementCount !== initial.elementCount ||
+        beforeMutation.membershipDigest !== initial.membershipDigest ||
+        beforeMutationDigest !== acceptedDigest
+      ) {
+        throw new Error('CLIENT_EFFECT_CLEAR_CONTENT_CHANGED');
+      }
+      // Final barrier. After this returns, commitNativeWhiteboardClearEffect
+      // synchronously re-captures and byte-compares C before history + mutation.
+      await this.waitWhilePaused(record, signal);
+      return commitNativeWhiteboardClearEffect({
+        store: this.opts.store,
+        targetBinding: binding,
+        expectedCanonicalContent: beforeMutation.canonicalContent,
+        boardContentDigestAtAccepted: acceptedDigest,
+        boardContentDigestBeforeMutation: beforeMutationDigest,
+        membershipDigestBefore: beforeMutation.membershipDigest,
+        pushExactSnapshot: this.opts.pushExactWhiteboardSnapshot,
+        observedOpen: observeWhiteboardOpen(),
+        visibilityChanged,
+        signal,
+      });
+    } finally {
+      this.opts.setWhiteboardClearing(false);
+    }
+  }
+
+  private async waitActiveDelay(
+    record: EffectRecord,
+    durationMs: number,
+    signal: AbortSignal,
+  ): Promise<void> {
+    let remaining = durationMs;
+    while (remaining > 0) {
+      await this.waitWhilePaused(record, signal);
+      const slice = Math.min(remaining, 25);
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, slice);
+        const onAbort = () => {
+          clearTimeout(timer);
+          reject(abortError());
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        if (signal.aborted) onAbort();
+        else setTimeout(() => signal.removeEventListener('abort', onAbort), slice);
+      });
+      remaining -= slice;
     }
   }
 

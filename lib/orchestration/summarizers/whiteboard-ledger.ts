@@ -32,6 +32,7 @@ function summarizeCodeElement(element: VirtualWhiteboardElement): string {
 
 function getInitialWhiteboardElements(
   storeState: StatelessChatRequest['storeState'],
+  jsonSafeElementIds: boolean,
 ): VirtualWhiteboardElement[] {
   const whiteboards = storeState.stage?.whiteboard;
   const latestWhiteboard = Array.isArray(whiteboards) ? whiteboards.at(-1) : null;
@@ -53,7 +54,7 @@ function getInitialWhiteboardElements(
         {
           agentName: 'Before this round',
           elementId: candidate.id,
-          summary: `existing ${String(candidate.type || 'element')} [id:${candidate.id}]`,
+          summary: `existing ${String(candidate.type || 'element')} [id:${jsonSafeElementIds ? JSON.stringify(candidate.id) : candidate.id}]`,
           lastTouchedSequence: null,
         },
       ];
@@ -135,10 +136,12 @@ function applyCodeEdit(
 export function buildVirtualWhiteboardContext(
   storeState: StatelessChatRequest['storeState'],
   ledger?: WhiteboardActionRecord[],
+  options: { jsonSafeElementIds?: boolean } = {},
 ): string {
   if (!ledger || ledger.length === 0) return '';
 
-  const elements = getInitialWhiteboardElements(storeState);
+  const jsonSafeElementIds = options.jsonSafeElementIds === true;
+  const elements = getInitialWhiteboardElements(storeState, jsonSafeElementIds);
   let hasContentMutation = false;
   // Monotonic counter incremented on each wb_draw_code / successful
   // wb_edit_code, recorded on the target element so budget allocation can
@@ -299,7 +302,9 @@ The whiteboard is now empty after changes made during this discussion round.
   }
   const elementLines = elements
     .map((element, index) => {
-      const idTag = element.elementId ? ` (id: ${element.elementId})` : '';
+      const idTag = element.elementId
+        ? ` (id: ${jsonSafeElementIds ? JSON.stringify(element.elementId) : element.elementId})`
+        : '';
       const header = `  ${index + 1}. [by ${element.agentName}]${idTag} ${element.summary}`;
       const codeText = renderedCodeByIndex.get(index);
       return codeText ? `${header}\n${codeText}` : header;

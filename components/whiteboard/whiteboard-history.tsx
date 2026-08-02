@@ -68,7 +68,9 @@ export function WhiteboardHistory({ isOpen, onClose }: WhiteboardHistoryProps) {
     // on screen, restoring would be a no-op.
     const restoredElementsKey = snapshot.fingerprint;
     const currentKey = elementFingerprint(wbResult.data.elements ?? []);
-    if (restoredElementsKey === currentKey) {
+    // Exact Native snapshots deliberately do not trust the legacy coarse
+    // fingerprint as a restore no-op authority.
+    if (!snapshot.boardContentDigest && restoredElementsKey === currentKey) {
       toast.success(t('whiteboard.restored'));
       onClose();
       return;

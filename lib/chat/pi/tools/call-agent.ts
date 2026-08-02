@@ -18,6 +18,7 @@ import {
 } from '@/lib/orchestration/stateless-generate';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import type { AgentTurnSummary, WhiteboardActionRecord } from '@/lib/orchestration/types';
+import { buildVirtualWhiteboardContext } from '@/lib/orchestration/summarizers/whiteboard-ledger';
 import type { ThinkingConfig } from '@/lib/types/provider';
 import type { DirectorSceneEvidenceMetadata } from './read-scene';
 import type { DirectorWebEvidenceMetadata } from './web-search';
@@ -39,6 +40,7 @@ import {
   buildNativeWhiteboardChartTool,
   buildNativeWhiteboardCodeEditTool,
   buildNativeWhiteboardCodeTool,
+  buildNativeWhiteboardClearTool,
   buildNativeWhiteboardDeleteTool,
   buildNativeWhiteboardLatexTool,
   buildNativeWhiteboardLineTool,
@@ -85,6 +87,7 @@ export function resolveNativeChildCapabilities(opts: {
     | 'wb_draw_code'
     | 'wb_edit_code'
     | 'wb_delete'
+    | 'wb_clear'
   >;
   childWebSearchEnabled: boolean;
 } {
@@ -106,6 +109,7 @@ export function resolveNativeChildCapabilities(opts: {
           'wb_draw_code',
           'wb_edit_code',
           'wb_delete',
+          'wb_clear',
         ] as const
       ).filter((toolName) => opts.agent.allowedActions.includes(toolName))
     : [];
@@ -1036,6 +1040,34 @@ export function buildCallAgentTool(opts: {
           nativeTools.push(nativeWhiteboard.tool);
           clientEffectHandlers.set(nativeWhiteboard.tool.name, nativeWhiteboard.handler);
         }
+        if (nativeWhiteboardToolNames.includes('wb_clear')) {
+          const nativeWhiteboard = buildNativeWhiteboardClearTool({
+            body: opts.body,
+            messageId,
+            send: opts.send,
+            viewState: nativeWhiteboardViewState,
+            codeState: nativeWhiteboardCodeState,
+            canExecute: () => actionCount < opts.maxActionsPerAgent,
+            onCommittedWithTerminal: (_params, terminal) => {
+              const observation = terminal.committedObservation;
+              if (!observation || observation.kind !== 'whiteboard_empty' || !observation.cleared) {
+                return;
+              }
+              actionCount += 1;
+              const record: WhiteboardActionRecord = {
+                actionName: 'wb_clear',
+                agentId: agent.id,
+                agentName: agent.name,
+                params: {},
+              };
+              whiteboardActions.push(record);
+              opts.onActionDone(record);
+            },
+            onCancelled: abortChild,
+          });
+          nativeTools.push(nativeWhiteboard.tool);
+          clientEffectHandlers.set(nativeWhiteboard.tool.name, nativeWhiteboard.handler);
+        }
 
         const availableToolNames = nativeTools.map((tool) => tool.name);
         const availableToolNameSet = new Set(availableToolNames);
@@ -1073,10 +1105,26 @@ export function buildCallAgentTool(opts: {
               enableWhiteboardCode: nativeWhiteboardToolNames.includes('wb_draw_code'),
               enableWhiteboardCodeEdit: nativeWhiteboardToolNames.includes('wb_edit_code'),
               enableWhiteboardDelete: nativeWhiteboardToolNames.includes('wb_delete'),
+              enableWhiteboardClear: nativeWhiteboardToolNames.includes('wb_clear'),
               whiteboardCodeContext: nativeWhiteboardCodeState.buildPromptProjection(),
-              whiteboardElementContext: nativeWhiteboardToolNames.includes('wb_delete')
-                ? nativeWhiteboardViewState.buildElementPromptProjection()
-                : '',
+              suppressRequestStartWhiteboard:
+                nativeWhiteboardViewState.shouldSuppressRequestStartSnapshot(),
+              whiteboardOpenOverride: nativeWhiteboardViewState.isOpen(),
+              suppressWhiteboardStatus:
+                nativeWhiteboardViewState.getSnapshotAuthority() === 'untrusted',
+              whiteboardRuntimeContext:
+                nativeWhiteboardViewState.getSnapshotAuthority() === 'runtime_verified'
+                  ? buildVirtualWhiteboardContext(
+                      opts.body.storeState,
+                      opts.getWhiteboardLedger(),
+                      { jsonSafeElementIds: true },
+                    )
+                  : '',
+              whiteboardElementContext:
+                nativeWhiteboardToolNames.includes('wb_delete') ||
+                nativeWhiteboardToolNames.includes('wb_clear')
+                  ? nativeWhiteboardViewState.buildElementPromptProjection()
+                  : '',
             }),
             prompt: buildNativeWebChildTurnPrompt(
               params.instruction,
@@ -1097,6 +1145,7 @@ export function buildCallAgentTool(opts: {
                 enableWhiteboardCode: nativeWhiteboardToolNames.includes('wb_draw_code'),
                 enableWhiteboardCodeEdit: nativeWhiteboardToolNames.includes('wb_edit_code'),
                 enableWhiteboardDelete: nativeWhiteboardToolNames.includes('wb_delete'),
+                enableWhiteboardClear: nativeWhiteboardToolNames.includes('wb_clear'),
               },
             ),
             tools: nativeTools,

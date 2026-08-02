@@ -3,6 +3,7 @@ import {
   CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
   CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
   CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION,
   CLIENT_EFFECT_DELETE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
@@ -11,6 +12,10 @@ import {
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
   CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION,
+  CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION,
+  CLIENT_EFFECT_WHITEBOARD_MEMBERSHIP_VERSION,
+  CANONICAL_EMPTY_WHITEBOARD_CONTENT_DIGEST,
+  CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST,
   assertWhiteboardChartSpecV1,
   assertWhiteboardCodeSpecV1,
   assertWhiteboardEditableCodeStateV1,
@@ -24,6 +29,10 @@ import {
   digestWhiteboardShapeV1,
   digestWhiteboardTableV1,
   digestVisibleTextV1,
+  canonicalizeWhiteboardContentV1,
+  digestWhiteboardMembershipV1,
+  isPromptSafeWhiteboardIdentifier,
+  isWhiteboardElementType,
   normalizeWhiteboardChartV1,
   normalizeWhiteboardCodeV1,
   normalizeWhiteboardLatexV1,
@@ -49,9 +58,11 @@ import {
   type WhiteboardTableOutline,
   type WhiteboardTableSpec,
   type WhiteboardOpenCommittedObservation,
+  type WhiteboardClearCommittedObservation,
   type WhiteboardDeleteCommittedObservation,
   type WhiteboardElementType,
 } from '@/lib/agent/runtime/client-effect-contract';
+import type { WhiteboardSnapshotReceipt } from '@/lib/store/whiteboard-history';
 import type {
   ChartData,
   ChartType,
@@ -326,6 +337,167 @@ export function prepareNativeWhiteboardDeleteTarget(
     sceneId: target.sceneId,
     whiteboardId: expectedWhiteboardId,
     bindingVersion,
+  };
+}
+
+export function prepareNativeWhiteboardClearTarget(
+  store: StageStore,
+  target: ClientEffectTarget,
+  expectedWhiteboardId: string,
+  bindingVersion = 1,
+): AcceptedTargetBinding {
+  assertStageAndScene(store, target);
+  if (!isPromptSafeWhiteboardIdentifier(expectedWhiteboardId)) {
+    throw new Error('CLIENT_EFFECT_CLEAR_WHITEBOARD_ID_INVALID');
+  }
+  const latestWhiteboard = store.getState().stage?.whiteboard?.at(-1);
+  if (!latestWhiteboard || latestWhiteboard.id !== expectedWhiteboardId) {
+    throw new Error('CLIENT_EFFECT_CLEAR_WHITEBOARD_MISMATCH');
+  }
+  return {
+    requestId: target.requestId,
+    sessionId: target.sessionId,
+    stageId: target.stageId,
+    sceneId: target.sceneId,
+    whiteboardId: expectedWhiteboardId,
+    bindingVersion,
+  };
+}
+
+export interface NativeWhiteboardClearCapture {
+  elements: PPTElement[];
+  canonicalContent: string;
+  elementCount: number;
+  membershipDigest: string;
+}
+
+export function verifyNativeWhiteboardClearNoOp(opts: {
+  store: StageStore;
+  targetBinding: AcceptedTargetBinding;
+  observedOpen: boolean;
+  signal?: AbortSignal;
+}): WhiteboardClearCommittedObservation {
+  throwIfAborted(opts.signal);
+  assertStageAndScene(opts.store, opts.targetBinding);
+  const latest = opts.store.getState().stage?.whiteboard?.at(-1);
+  if (
+    !latest ||
+    latest.id !== opts.targetBinding.whiteboardId ||
+    (latest.elements ?? []).length !== 0
+  ) {
+    throw new Error('CLIENT_EFFECT_CLEAR_EMPTY_STATE_CHANGED');
+  }
+  return {
+    kind: 'whiteboard_empty',
+    normalizationVersion: CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION,
+    membershipNormalizationVersion: CLIENT_EFFECT_WHITEBOARD_MEMBERSHIP_VERSION,
+    boardContentNormalizationVersion: CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION,
+    whiteboardId: opts.targetBinding.whiteboardId,
+    cleared: false,
+    elementCountBefore: 0,
+    elementCountAfter: 0,
+    observedMembershipDigestBefore: CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST,
+    verifiedEmptyBoardContentDigest: CANONICAL_EMPTY_WHITEBOARD_CONTENT_DIGEST,
+    observedOpen: opts.observedOpen,
+    visibilityChanged: false,
+  };
+}
+
+export async function captureNativeWhiteboardClearState(opts: {
+  store: StageStore;
+  targetBinding: AcceptedTargetBinding;
+  signal?: AbortSignal;
+}): Promise<NativeWhiteboardClearCapture> {
+  throwIfAborted(opts.signal);
+  assertStageAndScene(opts.store, opts.targetBinding);
+  const latest = opts.store.getState().stage?.whiteboard?.at(-1);
+  if (!latest || latest.id !== opts.targetBinding.whiteboardId) {
+    throw new Error('CLIENT_EFFECT_CLEAR_WHITEBOARD_MISMATCH');
+  }
+  const elements = latest.elements ?? [];
+  const membership = elements.map((element) => {
+    if (!isPromptSafeWhiteboardIdentifier(element.id) || !isWhiteboardElementType(element.type)) {
+      throw new Error('CLIENT_EFFECT_CLEAR_MEMBERSHIP_UNTRUSTED');
+    }
+    return { id: element.id, type: element.type };
+  });
+  if (new Set(membership.map(({ id }) => id)).size !== membership.length) {
+    throw new Error('CLIENT_EFFECT_DUPLICATE_ELEMENT_ID');
+  }
+  const canonicalContent = canonicalizeWhiteboardContentV1(elements);
+  const membershipDigest = await digestWhiteboardMembershipV1(membership);
+  throwIfAborted(opts.signal);
+  return {
+    elements: JSON.parse(JSON.stringify(elements)) as PPTElement[],
+    canonicalContent,
+    elementCount: elements.length,
+    membershipDigest,
+  };
+}
+
+/**
+ * Exact clear commit. Call only after the final asynchronous digest gate. This
+ * function is intentionally synchronous from the final capture through history,
+ * mutation, and postcondition verification.
+ */
+export function commitNativeWhiteboardClearEffect(opts: {
+  store: StageStore;
+  targetBinding: AcceptedTargetBinding;
+  expectedCanonicalContent: string;
+  boardContentDigestAtAccepted: string;
+  boardContentDigestBeforeMutation: string;
+  membershipDigestBefore: string;
+  pushExactSnapshot: (elements: PPTElement[], digest: string) => WhiteboardSnapshotReceipt;
+  observedOpen: boolean;
+  visibilityChanged: boolean;
+  signal?: AbortSignal;
+}): WhiteboardClearCommittedObservation {
+  throwIfAborted(opts.signal);
+  assertStageAndScene(opts.store, opts.targetBinding);
+  const latest = opts.store.getState().stage?.whiteboard?.at(-1);
+  if (!latest || latest.id !== opts.targetBinding.whiteboardId) {
+    throw new Error('CLIENT_EFFECT_CLEAR_WHITEBOARD_MISMATCH');
+  }
+  const elements = latest.elements ?? [];
+  if (!opts.observedOpen) throw new Error('CLIENT_EFFECT_WHITEBOARD_NOT_OPEN');
+  if (elements.length === 0) throw new Error('CLIENT_EFFECT_CLEAR_ALREADY_EMPTY');
+  if (canonicalizeWhiteboardContentV1(elements) !== opts.expectedCanonicalContent) {
+    throw new Error('CLIENT_EFFECT_CLEAR_CONTENT_CHANGED');
+  }
+  const receipt = opts.pushExactSnapshot(elements, opts.boardContentDigestBeforeMutation);
+  if (receipt.boardContentDigest !== opts.boardContentDigestBeforeMutation) {
+    throw new Error('CLIENT_EFFECT_CLEAR_HISTORY_RECEIPT_MISMATCH');
+  }
+  const updated = createStageAPI(opts.store).whiteboard.update(
+    { elements: [] },
+    opts.targetBinding.whiteboardId,
+  );
+  if (!updated.success)
+    throw new Error(updated.error || 'CLIENT_EFFECT_WHITEBOARD_MUTATION_FAILED');
+  const after = opts.store.getState().stage?.whiteboard?.at(-1);
+  if (
+    !after ||
+    after.id !== opts.targetBinding.whiteboardId ||
+    (after.elements ?? []).length !== 0
+  ) {
+    throw new Error('CLIENT_EFFECT_CLEAR_POSTCONDITION_FAILED');
+  }
+  return {
+    kind: 'whiteboard_empty',
+    normalizationVersion: CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION,
+    membershipNormalizationVersion: CLIENT_EFFECT_WHITEBOARD_MEMBERSHIP_VERSION,
+    boardContentNormalizationVersion: CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION,
+    whiteboardId: opts.targetBinding.whiteboardId,
+    cleared: true,
+    elementCountBefore: elements.length,
+    elementCountAfter: 0,
+    observedMembershipDigestBefore: opts.membershipDigestBefore,
+    boardContentDigestAtAccepted: opts.boardContentDigestAtAccepted,
+    boardContentDigestBeforeMutation: opts.boardContentDigestBeforeMutation,
+    observedBoardContentDigestAfter: CANONICAL_EMPTY_WHITEBOARD_CONTENT_DIGEST,
+    historySnapshotDigest: receipt.boardContentDigest,
+    observedOpen: true,
+    visibilityChanged: opts.visibilityChanged,
   };
 }
 

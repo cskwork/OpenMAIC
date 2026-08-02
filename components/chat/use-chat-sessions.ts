@@ -19,6 +19,7 @@ import type { UIMessage } from 'ai';
 import type { ThinkingConfig } from '@/lib/types/provider';
 import { useStageStore } from '@/lib/store';
 import { useCanvasStore } from '@/lib/store/canvas';
+import { useWhiteboardHistoryStore } from '@/lib/store/whiteboard-history';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useUserProfileStore } from '@/lib/store/user-profile';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
@@ -999,6 +1000,10 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               await abortableDelay(WB_OPEN_MS, signal);
             },
             observeWhiteboardOpen: () => useCanvasStore.getState().whiteboardOpen,
+            setWhiteboardClearing: (clearing) =>
+              useCanvasStore.getState().setWhiteboardClearing(clearing),
+            pushExactWhiteboardSnapshot: (elements, digest) =>
+              useWhiteboardHistoryStore.getState().pushExactSnapshot(elements, digest),
             onState: (executionId, status, error) => {
               const delivery = effectDeliveries.get(executionId);
               if (!delivery) return;

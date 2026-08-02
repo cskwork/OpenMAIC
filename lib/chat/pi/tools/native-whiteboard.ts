@@ -2,6 +2,7 @@ import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type, type Static } from 'typebox';
 import {
   CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION,
   CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
   CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_DELETE_NORMALIZATION_VERSION,
@@ -11,6 +12,8 @@ import {
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_WHITEBOARD_VISIBILITY_VERSION,
+  CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION,
+  CLIENT_EFFECT_WHITEBOARD_MEMBERSHIP_VERSION,
   digestWhiteboardChartV1,
   digestWhiteboardCodeV1,
   digestWhiteboardEditableCodeStateV1,
@@ -20,6 +23,7 @@ import {
   digestWhiteboardShapeV1,
   digestWhiteboardTableV1,
   digestVisibleTextV1,
+  digestWhiteboardMembershipV1,
   normalizeWhiteboardChartV1,
   normalizeWhiteboardCodeV1,
   normalizeWhiteboardLatexV1,
@@ -48,6 +52,9 @@ import type { NativeWhiteboardViewState } from './native-whiteboard-view-state';
 const NativeWhiteboardOpenParams = Type.Object({}, { additionalProperties: false });
 
 type NativeWhiteboardOpenParams = Static<typeof NativeWhiteboardOpenParams>;
+
+const NativeWhiteboardClearParams = Type.Object({}, { additionalProperties: false });
+type NativeWhiteboardClearParams = Static<typeof NativeWhiteboardClearParams>;
 
 const NativeWhiteboardDeleteParams = Type.Object(
   {
@@ -434,6 +441,7 @@ interface NativeWhiteboardToolOptions<TParams> extends NativeWhiteboardBaseOptio
 function prepareClientEffect(
   opts: NativeWhiteboardBaseOptions,
   request: Parameters<NativeClientEffectHandler>[0]['request'],
+  options: { requiresWhiteboardOpenBudget?: boolean } = {},
 ): { target: ClientEffectTarget; activeEffectBudgetMs: number } | RuntimeAgentToolResult {
   const target = {
     requestId: opts.body.config.piRequestId ?? '',
@@ -458,9 +466,12 @@ function prepareClientEffect(
     now: (opts.now ?? Date.now)(),
     settlementSafetyMarginMs: 1_000,
   });
+  const requiresWhiteboardOpenBudget =
+    options.requiresWhiteboardOpenBudget ??
+    (request.toolName !== 'wb_clear' && !opts.viewState.isOpen());
   if (
     !activeEffectBudgetMs ||
-    (!opts.viewState.isOpen() &&
+    (requiresWhiteboardOpenBudget &&
       activeEffectBudgetMs <= WB_OPEN_MS + WHITEBOARD_OPEN_SETTLEMENT_MARGIN_MS)
   ) {
     return {
@@ -523,7 +534,14 @@ async function deliverClientEffect<TParams>(opts: {
         throw new Error('CLIENT_EFFECT_COMMIT_BINDING_MISSING');
       }
       const expected = opts.request.postcondition;
-      if (expected.kind === 'whiteboard_element_absent') {
+      if (expected.kind === 'whiteboard_empty') {
+        const observation = terminal.committedObservation;
+        if (!observation || observation.kind !== 'whiteboard_empty') {
+          throw new Error('CLIENT_EFFECT_CLEAR_COMMITTED_OBSERVATION_MISSING');
+        }
+        opts.toolOptions.viewState.commitCleared(terminal.targetBinding, observation);
+        opts.toolOptions.codeState?.invalidate(terminal.targetBinding.whiteboardId);
+      } else if (expected.kind === 'whiteboard_element_absent') {
         const observation = terminal.committedObservation;
         if (!observation || observation.kind !== 'whiteboard_element_absent') {
           throw new Error('CLIENT_EFFECT_DELETE_COMMITTED_OBSERVATION_MISSING');
@@ -538,7 +556,17 @@ async function deliverClientEffect<TParams>(opts: {
           observation.stableElementId,
         );
       } else {
-        opts.toolOptions.viewState.commitVisible(terminal.targetBinding);
+        if (
+          expected.kind === 'whiteboard_open' &&
+          terminal.committedObservation?.kind === 'whiteboard_open'
+        ) {
+          opts.toolOptions.viewState.commitOpen(
+            terminal.targetBinding,
+            terminal.committedObservation,
+          );
+        } else {
+          opts.toolOptions.viewState.commitVisible(terminal.targetBinding);
+        }
         if ('elementType' in expected) {
           opts.toolOptions.viewState.commitElement(
             terminal.targetBinding,
@@ -582,12 +610,32 @@ async function deliverClientEffect<TParams>(opts: {
           ...(terminal.committedObservation?.kind === 'whiteboard_element_absent'
             ? { committedObservation: terminal.committedObservation }
             : {}),
+          ...(terminal.committedObservation?.kind === 'whiteboard_empty'
+            ? {
+                committedObservation: terminal.committedObservation,
+                cleared: terminal.committedObservation.cleared,
+                actionChanged: terminal.committedObservation.cleared,
+                elementCountBefore: terminal.committedObservation.elementCountBefore,
+                elementCountAfter: terminal.committedObservation.elementCountAfter,
+                observedOpen: terminal.committedObservation.observedOpen,
+              }
+            : {}),
           ...opts.successDetails,
         },
         isError: false,
       };
     }
-    if (opts.request.postcondition.kind === 'whiteboard_element_absent' && terminal.targetBinding) {
+    if (opts.request.postcondition.kind === 'whiteboard_empty' && terminal.targetBinding) {
+      // accepted means the browser may already have saved history or mutated;
+      // do not restore stale request-start targeting authority.
+      opts.toolOptions.viewState.invalidateAfterDestructiveAttempt(
+        terminal.targetBinding.whiteboardId,
+      );
+      opts.toolOptions.codeState?.invalidate(terminal.targetBinding.whiteboardId);
+    } else if (
+      opts.request.postcondition.kind === 'whiteboard_element_absent' &&
+      terminal.targetBinding
+    ) {
       opts.toolOptions.viewState.invalidateElements(terminal.targetBinding.whiteboardId);
       opts.toolOptions.codeState?.invalidate(terminal.targetBinding.whiteboardId);
     }
@@ -718,6 +766,85 @@ export function buildNativeWhiteboardDeleteTool(
       toolOptions: { ...opts, codeState: opts.codeState },
       successMessage: `Whiteboard element ${JSON.stringify(input.elementId)} was deleted and its absence was verified.`,
       failureLabel: 'Whiteboard delete',
+    });
+  };
+
+  return { tool, handler };
+}
+
+export function buildNativeWhiteboardClearTool(
+  opts: NativeWhiteboardToolOptions<NativeWhiteboardClearParams> & {
+    codeState: NativeWhiteboardCodeState;
+  },
+): { tool: AgentTool<typeof NativeWhiteboardClearParams>; handler: NativeClientEffectHandler } {
+  const tool: AgentTool<typeof NativeWhiteboardClearParams> = {
+    name: 'wb_clear',
+    label: 'Clear whiteboard',
+    description:
+      'Clear all current whiteboard content only when it is unrelated, confusing, or too crowded to repair element-by-element. Follow-up discussion and agent handoff preserve the board by default; use wb_delete for one or a few known elements.',
+    parameters: NativeWhiteboardClearParams,
+    executionMode: 'sequential',
+    execute: async (): Promise<RuntimeAgentToolResult> => {
+      throw new Error('wb_clear requires the browser client-effect executor.');
+    },
+  };
+
+  const handler: NativeClientEffectHandler = async ({ request, params, signal }) => {
+    const authority = opts.viewState.getClearAuthority();
+    if (authority.status === 'trusted_absent') {
+      return {
+        content: [{ type: 'text', text: 'Whiteboard is already absent; no content was cleared.' }],
+        details: {
+          status: 'skipped',
+          reason: 'whiteboard_absent',
+          cleared: false,
+          actionChanged: false,
+        },
+        isError: false,
+      };
+    }
+    if (authority.status !== 'trusted_present' || !authority.membershipComplete) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: 'Whiteboard clear was rejected because complete request-scoped membership is not trusted.',
+          },
+        ],
+        details: { code: 'CLIENT_EFFECT_CLEAR_MEMBERSHIP_UNTRUSTED', retryable: false },
+        isError: true,
+      };
+    }
+    if (authority.elements.length > 0 && opts.canExecute?.() === false)
+      return actionBudgetFailure();
+    const prepared = prepareClientEffect(opts, request, {
+      requiresWhiteboardOpenBudget: authority.elements.length > 0 && !opts.viewState.isOpen(),
+    });
+    if ('isError' in prepared) return prepared;
+    const expectedMembershipDigest = await digestWhiteboardMembershipV1(authority.elements);
+    const effectRequest: ClientEffectRequest = {
+      ...request,
+      toolName: 'wb_clear',
+      target: prepared.target,
+      activeEffectBudgetMs: prepared.activeEffectBudgetMs,
+      postcondition: {
+        kind: 'whiteboard_empty',
+        normalizationVersion: CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION,
+        membershipNormalizationVersion: CLIENT_EFFECT_WHITEBOARD_MEMBERSHIP_VERSION,
+        boardContentNormalizationVersion: CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION,
+        expectedWhiteboardId: authority.whiteboardId,
+        expectedElementCount: authority.elements.length,
+        expectedMembershipDigest,
+      },
+    };
+    return deliverClientEffect({
+      request: effectRequest,
+      params: params as NativeWhiteboardClearParams,
+      signal,
+      toolOptions: { ...opts, codeState: opts.codeState },
+      successMessage:
+        'Whiteboard empty state was verified. This Runtime result supersedes the request-start whiteboard snapshot; do not reuse any older element IDs.',
+      failureLabel: 'Whiteboard clear',
     });
   };
 
