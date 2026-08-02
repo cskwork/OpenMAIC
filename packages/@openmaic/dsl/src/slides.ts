@@ -334,9 +334,9 @@ export interface PPTImageElement extends PPTBaseElement {
   /** @default true */
   fixedRatio: boolean;
   /**
-   * An asset reference. Import and render paths also store concrete URLs here today; those values
-   * are foreign refs to the asset pool and are drained when reference conversion lands (delivery
-   * plan part 2).
+   * An asset reference. Legacy documents and import/render paths also store placeholder ids or
+   * concrete URLs here; such values are foreign to the asset pool and are addressed by later
+   * delivery-plan steps.
    */
   src: AssetRef;
   outline?: PPTElementOutline;
@@ -743,8 +743,10 @@ export interface PPTVideoElement extends PPTBaseElement {
    */
   src?: AssetRef;
   /**
-   * An asset reference for the generated video. Merging `src` and `mediaRef` is deliberately out
-   * of scope for this type-unification step.
+   * An asset reference for generated video. Legacy documents and generation paths also store
+   * generated-video placeholder ids here; such values are foreign to the asset pool and are
+   * addressed by later delivery-plan steps. Merging `src` and `mediaRef` is deliberately out of
+   * scope for this type-unification step.
    */
   mediaRef?: AssetRef;
   autoplay: boolean;

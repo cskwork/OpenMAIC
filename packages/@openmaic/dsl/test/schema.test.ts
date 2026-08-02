@@ -18,7 +18,7 @@ type GeneratedSchema = {
     string,
     {
       type?: string;
-      properties?: Record<string, { deprecated?: boolean }>;
+      properties?: Record<string, Record<string, unknown>>;
     }
   >;
 };
@@ -32,13 +32,18 @@ describe('generated JSON Schema — asset references', () => {
     expect((schema as GeneratedSchema).definitions.AssetRef).toMatchObject({ type: 'string' });
   });
 
-  it('emits a valid deprecated keyword for SpeechAction.audioUrl', () => {
-    const audioUrl = (schemas.Action as GeneratedSchema).definitions.SpeechAction.properties
-      ?.audioUrl;
-    expect(audioUrl).toBeDefined();
-    expect(audioUrl?.deprecated === undefined || typeof audioUrl.deprecated === 'boolean').toBe(
-      true,
-    );
+  it.each(Object.entries(schemas))('%s emits only boolean deprecated keywords', (root, schema) => {
+    for (const [definitionName, definition] of Object.entries(
+      (schema as GeneratedSchema).definitions,
+    )) {
+      for (const [propertyName, property] of Object.entries(definition.properties ?? {})) {
+        if (!Object.prototype.hasOwnProperty.call(property, 'deprecated')) continue;
+        const path = `${root}.definitions.${definitionName}.properties.${propertyName}.deprecated`;
+        expect(typeof property.deprecated, `${path} = ${JSON.stringify(property.deprecated)}`).toBe(
+          'boolean',
+        );
+      }
+    }
   });
 });
 

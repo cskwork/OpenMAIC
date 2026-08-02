@@ -47,7 +47,11 @@ export interface LaserAction extends ActionBase {
 export interface SpeechAction extends ActionBase {
   type: 'speech';
   text: string;
-  /** An asset reference for narration audio. */
+  /**
+   * An asset reference for narration audio. Legacy documents and TTS paths also store TTS-derived
+   * ids here; such values are foreign to the asset pool and are addressed by later delivery-plan
+   * steps.
+   */
   audioId?: AssetRef;
   /**
    * Deprecated: A transitional server-provided playback URL. Use `audioId` instead. Removed

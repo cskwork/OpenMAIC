@@ -186,6 +186,8 @@ function assertValidDestination(stageId: string, document: AppDocument): void {
  * shape and are expected to key on `scene.type` and pass app kinds through
  * untouched. This is the deliberate asymmetry with `outline`, which the DSL owns
  * no contract for at all.
+ * This mirrors `@openmaic/storage`'s private `migrateDocument` in
+ * `document/browser.ts`; changes must be kept in sync.
  */
 export function migrateDocumentForVerification(
   document: AppDocument,

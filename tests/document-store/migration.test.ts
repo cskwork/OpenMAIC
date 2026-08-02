@@ -223,6 +223,29 @@ describe('legacy document migration', () => {
     });
   });
 
+  test('uses the injected DSL migration to verify a fresh destination', async () => {
+    const migrateDsl = vi.fn((value: unknown) => ({
+      ...(value as AppDocument),
+      dslVersion: DSL_VERSION,
+    }));
+
+    await expect(
+      accessDocument('stage-1', {
+        store: store(),
+        kv: new MemoryKv(),
+        legacyStore: legacy(snapshot()),
+        lockManager: lockManager(),
+        migrateDsl,
+      }),
+    ).resolves.toMatchObject({
+      document: { dslVersion: DSL_VERSION, stage: { id: 'stage-1' } },
+      readOnlyLegacy: false,
+    });
+
+    expect(migrateDsl).toHaveBeenCalledOnce();
+    expect(migrateDsl.mock.calls[0]![0]).toMatchObject({ stage: { id: 'stage-1' } });
+  });
+
   test('uses the injected DSL migration to verify an existing destination', async () => {
     const documentStore = store();
     const kv = new MemoryKv();

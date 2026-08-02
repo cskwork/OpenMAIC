@@ -9,9 +9,9 @@ import {
   getEditablePropSchema,
   mapProposalsToEditIntents,
   normalizeRotate,
-  resolveSchema,
-  type JsonSchema,
+  validateJsonSchemaSubset,
   type ElementInventoryItem,
+  type JsonSchema,
 } from '@/lib/agent/tools/edit-elements-gate';
 import type { PPTElement } from '@openmaic/dsl';
 
@@ -700,7 +700,10 @@ describe('edit-elements-gate', () => {
     ] as const) {
       const propertySchema = definitions[definition]?.properties?.[property];
       expect(propertySchema, `${definition}.${property} should exist`).toBeDefined();
-      expect(resolveSchema(propertySchema ?? {}).type).toBe('string');
+      expect(validateJsonSchemaSubset('asset-ref', propertySchema ?? {}, property)).toBeNull();
+      expect(validateJsonSchemaSubset(1, propertySchema ?? {}, property)).toBe(
+        `${property} must be string`,
+      );
     }
   });
 
