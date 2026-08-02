@@ -223,7 +223,7 @@ function decodeRefName(ref: string): string | null {
 
 assertGateSchemaSource(schemaDefinitions);
 
-function resolveSchema(schema: JsonSchema, seen = new Set<string>()): JsonSchema {
+export function resolveSchema(schema: JsonSchema, seen = new Set<string>()): JsonSchema {
   if (!schema.$ref) return schema;
   const name = decodeRefName(schema.$ref);
   if (!name || seen.has(name)) return schema;

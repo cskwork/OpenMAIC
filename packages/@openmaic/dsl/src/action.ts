@@ -50,9 +50,9 @@ export interface SpeechAction extends ActionBase {
   /** An asset reference for narration audio. */
   audioId?: AssetRef;
   /**
-   * @deprecated Transitional. A server-provided playback URL. Removed together with the
-   * byte-ingestion step of #1007 part 2, which rewrites speech references to allocated asset ids;
-   * new writers should not add it.
+   * Deprecated: A transitional server-provided playback URL. Use `audioId` instead. Removed
+   * together with the byte-ingestion step of #1007 part 2, which rewrites speech references to
+   * allocated asset ids; new writers should not add it.
    */
   audioUrl?: string;
   voice?: string;

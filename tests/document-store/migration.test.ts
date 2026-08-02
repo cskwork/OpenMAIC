@@ -223,23 +223,44 @@ describe('legacy document migration', () => {
     });
   });
 
-  test('verifies a legacy Dexie snapshot without throwing', async () => {
-    const idb = new IDBFactory();
+  test('uses the injected DSL migration to verify an existing destination', async () => {
+    const documentStore = store();
+    const kv = new MemoryKv();
+    const destination: AppDocument = {
+      dslVersion: DSL_VERSION,
+      stage: { id: 'stage-1', name: 'Migrated', createdAt: 100, updatedAt: 200 },
+      scenes: [],
+      outline: {
+        outlines: [],
+        generationComplete: true,
+        createdAt: 100,
+        updatedAt: 200,
+      },
+    };
+    await documentStore.saveDocument(destination);
+    const migrateDsl = vi.fn((value: unknown) => {
+      const candidate = value as AppDocument;
+      return {
+        ...candidate,
+        dslVersion: DSL_VERSION,
+        stage: { ...candidate.stage, name: 'Migrated' },
+        scenes: [],
+      };
+    });
 
     await expect(
       accessDocument('stage-1', {
-        store: store(idb),
-        kv: new MemoryKv(),
-        legacyStore: await indexedLegacyStore(idb, snapshot()),
+        store: documentStore,
+        kv,
+        legacyStore: legacy(snapshot()),
         lockManager: lockManager(),
+        migrateDsl,
       }),
-    ).resolves.toMatchObject({
-      document: {
-        dslVersion: DSL_VERSION,
-        stage: { id: 'stage-1' },
-        outline: { generationComplete: true },
-      },
-      readOnlyLegacy: false,
+    ).resolves.toMatchObject({ document: destination, readOnlyLegacy: false });
+
+    expect(migrateDsl).toHaveBeenCalledOnce();
+    expect(await kv.get('document-migration:stage-1', 'device')).toMatchObject({
+      sourceUpdatedAt: 200,
     });
   });
 

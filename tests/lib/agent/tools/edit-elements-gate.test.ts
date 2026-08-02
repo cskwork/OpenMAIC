@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as editElementsGate from '@/lib/agent/tools/edit-elements-gate';
+import sceneSchemaJson from '@openmaic/dsl/schema/scene.schema.json';
 import {
   ALLOWED_EDIT_PROPS,
   buildElementInventory,
@@ -8,6 +9,8 @@ import {
   getEditablePropSchema,
   mapProposalsToEditIntents,
   normalizeRotate,
+  resolveSchema,
+  type JsonSchema,
   type ElementInventoryItem,
 } from '@/lib/agent/tools/edit-elements-gate';
 import type { PPTElement } from '@openmaic/dsl';
@@ -683,6 +686,22 @@ describe('edit-elements-gate', () => {
 
     expect(getEditablePropSchema('text', 'notARealProp')).toBeNull();
     expect(getEditablePropSchema('shape', 'notARealProp')).toBeNull();
+  });
+
+  it('resolves asset-reference property indirection to strings', () => {
+    const definitions = (sceneSchemaJson as { definitions: Record<string, JsonSchema> })
+      .definitions;
+
+    for (const [definition, property] of [
+      ['PPTImageElement', 'src'],
+      ['PPTVideoElement', 'src'],
+      ['PPTVideoElement', 'mediaRef'],
+      ['SpeechAction', 'audioId'],
+    ] as const) {
+      const propertySchema = definitions[definition]?.properties?.[property];
+      expect(propertySchema, `${definition}.${property} should exist`).toBeDefined();
+      expect(resolveSchema(propertySchema ?? {}).type).toBe('string');
+    }
   });
 
   it('keeps layered policy on top of schema-derived object validation', () => {

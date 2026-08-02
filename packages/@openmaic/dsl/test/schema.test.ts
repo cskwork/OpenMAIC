@@ -13,9 +13,34 @@ const schemas = {
   SerializedScene: generateSchema('SerializedScene'),
 } as const;
 
+type GeneratedSchema = {
+  definitions: Record<
+    string,
+    {
+      type?: string;
+      properties?: Record<string, { deprecated?: boolean }>;
+    }
+  >;
+};
+
 function validator(root: keyof typeof schemas) {
   return new Ajv({ allErrors: true, strict: false }).compile(schemas[root]);
 }
+
+describe('generated JSON Schema — asset references', () => {
+  it.each(Object.entries(schemas))('%s defines AssetRef as a string', (_root, schema) => {
+    expect((schema as GeneratedSchema).definitions.AssetRef).toMatchObject({ type: 'string' });
+  });
+
+  it('emits a valid deprecated keyword for SpeechAction.audioUrl', () => {
+    const audioUrl = (schemas.Action as GeneratedSchema).definitions.SpeechAction.properties
+      ?.audioUrl;
+    expect(audioUrl).toBeDefined();
+    expect(audioUrl?.deprecated === undefined || typeof audioUrl.deprecated === 'boolean').toBe(
+      true,
+    );
+  });
+});
 
 describe('generated JSON Schema — Stage', () => {
   const v = validator('Stage');
