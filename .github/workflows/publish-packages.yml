@@ -130,20 +130,24 @@ jobs:
       # copies are stale, the build rewrites them here and the registry would
       # receive content that is not in the commit being released.
       #
-      # Compare against HEAD, not the index. A bare `git diff` compares the
-      # worktree to the index, so anything the build staged is invisible to it:
-      # the steps above run third-party package code, which needs no credential
-      # to rewrite a tracked file and `git add` it, after which the bare form
-      # reports clean and the rewritten bytes are packed and published. `git
-      # diff HEAD` compares against the commit being released, which is the
-      # thing this step actually claims.
+      # Compare against GITHUB_SHA, not the index or HEAD. A bare `git diff`
+      # misses staged changes, while build code can create a commit and move
+      # HEAD. This check exists precisely because build code ran before it, so
+      # its reference point must be something that code cannot move. Disabling
+      # replacement objects also prevents a local replace ref from redirecting
+      # the commit comparison.
       - name: Verify the build did not rewrite tracked files
         run: |
           set -euo pipefail
-          if ! git diff --quiet HEAD; then
+          actual_head="$(git --no-replace-objects rev-parse HEAD)"
+          if [ "$actual_head" != "$GITHUB_SHA" ]; then
+            echo "::error::HEAD moved from $GITHUB_SHA to $actual_head during the build."
+            exit 1
+          fi
+          if ! git --no-replace-objects diff --quiet "$GITHUB_SHA"; then
             echo "::error::The build modified tracked repository files."
             echo "Regenerate them and commit the result before releasing."
-            git --no-pager diff --stat HEAD
+            git --no-replace-objects --no-pager diff --stat "$GITHUB_SHA"
             exit 1
           fi
           echo "Tracked repository files match the commit being released."
@@ -212,6 +216,13 @@ jobs:
             --baseline "$STORAGE_PG_BASELINE"
           pnpm --filter "@openmaic/dsl" --filter "@openmaic/storage" --filter "@openmaic/renderer" run typecheck
 
+      # KNOWN LIMITATION: this smoke test reads the writable local directory,
+      # not the uploaded snapshot. Because upload already happened, a test
+      # process can replace a poisoned local tarball with a valid one and make
+      # this pass while `publish` downloads the poisoned snapshot, whose own
+      # SHA256SUMS can still be internally consistent. This cannot be closed
+      # while packing, uploading, and testing share one job and filesystem;
+      # closing it requires a separate packing-only job that runs no tests.
       - name: Smoke-test publishable tarballs
         env:
           RELEASE_ARTIFACTS: ${{ runner.temp }}/openmaic-package-tarballs
@@ -310,14 +321,21 @@ jobs:
           done
 
       # No install or build runs in this job. This whole-tree check is defence
-      # in depth that the checked-out enforcement scripts still match HEAD
-      # before NPM_TOKEN is exposed to the registry preflight and publication.
+      # in depth after repository code has run. It exists precisely because
+      # code ran before it, so its reference point must be GITHUB_SHA, which
+      # that code cannot move, rather than HEAD, which it can. Disabling
+      # replacement objects prevents local indirection during the comparison.
       - name: Verify the release checkout is unchanged
         run: |
           set -euo pipefail
-          if ! git diff --quiet HEAD; then
+          actual_head="$(git --no-replace-objects rev-parse HEAD)"
+          if [ "$actual_head" != "$GITHUB_SHA" ]; then
+            echo "::error::HEAD moved from $GITHUB_SHA to $actual_head before publication."
+            exit 1
+          fi
+          if ! git --no-replace-objects diff --quiet "$GITHUB_SHA"; then
             echo "::error::Tracked repository files differ from the release commit."
-            git --no-pager diff --stat HEAD
+            git --no-replace-objects --no-pager diff --stat "$GITHUB_SHA"
             exit 1
           fi
 
