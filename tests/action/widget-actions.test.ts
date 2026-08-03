@@ -1,12 +1,23 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ActionEngine } from '@/lib/action/engine';
+import type { StageStore } from '@/lib/api/stage-api';
 import type { Action } from '@/lib/types/action';
 
 async function executeWidgetAction(action: Action) {
   vi.useFakeTimers();
   const messages: Array<{ type: string; payload: Record<string, unknown> }> = [];
-  const engine = new ActionEngine({} as never, null, (type, payload) => {
+  const stageStore: StageStore = {
+    getState: () => ({
+      stage: null,
+      scenes: [],
+      currentSceneId: null,
+      mode: 'playback',
+    }),
+    setState: () => undefined,
+    subscribe: () => () => undefined,
+  };
+  const engine = new ActionEngine(stageStore, null, (type, payload) => {
     messages.push({ type, payload });
   });
 
