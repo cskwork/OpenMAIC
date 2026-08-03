@@ -7,11 +7,14 @@ import { fileURLToPath } from 'node:url';
 import { INTERNAL_DEPENDENTS, OPENMAIC_PACKAGES, readManifest } from './openmaic-packages.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const artifactDirectoryArgument = process.argv[2];
+const args = process.argv.slice(2);
+if (args[0] === '--') args.shift();
+const artifactDirectoryArgument = args[0];
 assert(
   artifactDirectoryArgument,
   'Usage: node smoke-test-package-tarballs.mjs <artifact-directory>',
 );
+assert.equal(args.length, 1, 'Unexpected command-line arguments');
 const artifactDirectory = resolve(root, artifactDirectoryArgument);
 const temporaryDirectory = mkdtempSync(join(tmpdir(), 'openmaic-package-smoke-'));
 

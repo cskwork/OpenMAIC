@@ -352,8 +352,8 @@ jobs:
   # plan alone could never do, because a version already on the registry is
   # excluded from it.
   #
-  # Tag pushes use GITHUB_TOKEN credentials, and GitHub does not start new
-  # workflow runs from GITHUB_TOKEN pushes.
+  # Tags are created through the GitHub API with GITHUB_TOKEN, and GitHub does
+  # not start new workflow runs from GITHUB_TOKEN writes.
   mark:
     name: Mark released versions
     needs: publish

@@ -65,8 +65,8 @@ jobs:
           BEFORE_SHA: ${{ github.event.before }}
 
       # The tarball smoke test proves this about the bytes that would actually
-      # be published, but it packs and installs four packages, so it runs only
-      # on the release path. This is the cheap source-level form, here so that a
+      # be published, but it installs four package tarballs, so it runs only on
+      # the release path. This is the cheap source-level form, here so that a
       # pull request restoring `workspace:*` fails at review time rather than at
       # release time, after a version number has already been spent.
       - name: Internal dependency ranges
