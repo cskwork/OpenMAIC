@@ -483,6 +483,67 @@ describe('runNativeChild Phase 0', () => {
     expect(result.toolExecutions.every((execution) => execution.status === 'rejected')).toBe(true);
   });
 
+  it('counts repeated unknown tool calls against the hard attempt cap', async () => {
+    let streamCalls = 0;
+    const streamFn = (() => {
+      streamCalls += 1;
+      return streamMessage(assistantToolCall(`unknown-attempt-${streamCalls}`, 'unknown_tool', {}));
+    }) as StreamFn;
+
+    const result = await runNativeChild(
+      baseOptions({
+        streamFn,
+        tools: [],
+        maxToolExecutions: 1,
+        maxToolCallAttempts: 2,
+      }),
+    );
+
+    expect(streamCalls).toBe(3);
+    expect(result.status).toBe('exhausted');
+    expect(result.stopReason).toBe('tool_call_attempt_budget');
+    expect(result.toolExecutions).toHaveLength(3);
+    expect(result.toolExecutions.every((execution) => execution.status === 'rejected')).toBe(true);
+  });
+
+  it('counts repeated schema-invalid tool calls against the hard attempt cap', async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'must not execute' }],
+      details: {},
+    }));
+    const tool: AgentTool = {
+      name: 'strict_tool',
+      label: 'Strict tool',
+      description: 'Require a non-empty query.',
+      parameters: Type.Object(
+        { query: Type.String({ minLength: 1 }) },
+        { additionalProperties: false },
+      ),
+      execute,
+    };
+    let streamCalls = 0;
+    const streamFn = (() => {
+      streamCalls += 1;
+      return streamMessage(assistantToolCall(`invalid-attempt-${streamCalls}`, tool.name, {}));
+    }) as StreamFn;
+
+    const result = await runNativeChild(
+      baseOptions({
+        streamFn,
+        tools: [tool],
+        maxToolExecutions: 1,
+        maxToolCallAttempts: 2,
+      }),
+    );
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(streamCalls).toBe(3);
+    expect(result.status).toBe('exhausted');
+    expect(result.stopReason).toBe('tool_call_attempt_budget');
+    expect(result.toolExecutions).toHaveLength(3);
+    expect(result.toolExecutions.every((execution) => execution.status === 'rejected')).toBe(true);
+  });
+
   it('returns on timeout even when the underlying tool ignores AbortSignal forever', async () => {
     const tool: AgentTool = {
       name: 'blocking_tool',

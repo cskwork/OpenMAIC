@@ -22,6 +22,7 @@ import type {
   Tool as PiTool,
   ToolCall,
   SimpleStreamOptions,
+  StopReason,
 } from '@earendil-works/pi-ai';
 import type { StreamFn } from '@earendil-works/pi-agent-core';
 import {
@@ -29,6 +30,7 @@ import {
   stepCountIs,
   tool as aiTool,
   type LanguageModel,
+  type FinishReason,
   type ModelMessage,
   type ToolSet,
 } from 'ai';
@@ -225,12 +227,46 @@ export function combineAbortSignals(
   return AbortSignal.any([requestSignal, agentSignal]);
 }
 
+function mapAiSdkFinishReason(opts: {
+  finishReason?: FinishReason;
+  hasToolCall: boolean;
+  sawAbort: boolean;
+}): StopReason {
+  if (opts.sawAbort) return 'aborted';
+  switch (opts.finishReason) {
+    case 'length':
+      return 'length';
+    case 'tool-calls':
+      return opts.hasToolCall ? 'toolUse' : 'error';
+    case 'content-filter':
+    case 'error':
+    case 'other':
+      return 'error';
+    case 'stop':
+    case undefined:
+      // Some OpenAI-compatible providers emit a valid tool call with a generic
+      // stop reason. Preserve that compatibility without allowing length/error
+      // reasons to be overwritten by content inference.
+      return opts.hasToolCall ? 'toolUse' : 'stop';
+  }
+}
+
+function finishErrorMessage(reason: FinishReason | undefined): string {
+  if (reason === 'tool-calls') {
+    return 'LLM stream reported tool-calls without a parsed tool call.';
+  }
+  if (reason === 'content-filter') return 'LLM stream was blocked by the content filter.';
+  if (reason === 'other') return 'LLM stream ended with an unrecognized finish reason.';
+  return 'LLM stream reported an error finish reason.';
+}
+
 async function pump(
   stream: LocalAssistantEventStream,
   context: PiContext,
   opts: CallLlmStreamFnOptions,
   streamOptions?: SimpleStreamOptions,
 ): Promise<void> {
+  const combinedAbortSignal = combineAbortSignals(opts.abortSignal, streamOptions?.signal);
   const partial: AssistantMessage = {
     role: 'assistant',
     content: [],
@@ -266,7 +302,7 @@ async function pump(
         // The request signal handles client/runtime cancellation, while Pi's
         // per-run signal handles Agent.abort() (for example the Director
         // tool-attempt hard cap). Neither cancellation source may mask the other.
-        abortSignal: combineAbortSignals(opts.abortSignal, streamOptions?.signal),
+        abortSignal: combinedAbortSignal,
       },
       opts.source ?? 'maic-agent',
       opts.thinkingConfig,
@@ -275,10 +311,25 @@ async function pump(
     stream.push({ type: 'start', partial });
 
     const mapper = createPartMapper(partial, (event) => stream.push(event));
+    let finishReason: FinishReason | undefined;
+    let sawAbort = false;
+    let abortReason: string | undefined;
     for await (const part of result.fullStream as AsyncIterable<Record<string, unknown>>) {
+      if (part.type === 'finish') finishReason = part.finishReason as FinishReason | undefined;
+      if (part.type === 'abort') {
+        sawAbort = true;
+        abortReason = typeof part.reason === 'string' ? part.reason : undefined;
+      }
       mapper.handle(part);
     }
     mapper.finalize();
+
+    if (sawAbort) {
+      partial.stopReason = 'aborted';
+      partial.errorMessage = abortReason ?? 'LLM stream was aborted.';
+      stream.push({ type: 'error', reason: 'aborted', error: partial });
+      return;
+    }
 
     const usage = normalizeUsage(await result.usage);
     // AI SDK inputTokens includes cached input. Pi stores cached classes
@@ -298,12 +349,24 @@ async function pump(
     };
 
     const hasToolCall = partial.content.some((c) => (c as ToolCall).type === 'toolCall');
-    partial.stopReason = hasToolCall ? 'toolUse' : 'stop';
-    stream.push({ type: 'done', reason: hasToolCall ? 'toolUse' : 'stop', message: partial });
+    const stopReason = mapAiSdkFinishReason({ finishReason, hasToolCall, sawAbort });
+    partial.stopReason = stopReason;
+    if (stopReason === 'error' || stopReason === 'aborted') {
+      partial.errorMessage =
+        stopReason === 'aborted' ? 'LLM stream was aborted.' : finishErrorMessage(finishReason);
+      stream.push({ type: 'error', reason: stopReason, error: partial });
+      return;
+    }
+    stream.push({ type: 'done', reason: stopReason, message: partial });
   } catch (err) {
-    partial.stopReason = 'error';
+    const aborted = combinedAbortSignal?.aborted === true;
+    partial.stopReason = aborted ? 'aborted' : 'error';
     partial.errorMessage = err instanceof Error ? err.message : String(err);
-    stream.push({ type: 'error', reason: 'error', error: partial });
+    stream.push({
+      type: 'error',
+      reason: aborted ? 'aborted' : 'error',
+      error: partial,
+    });
   }
 }
 
@@ -353,7 +416,7 @@ export function toModelMessages(
             type: 'tool-result',
             toolCallId: m.toolCallId,
             toolName: m.toolName,
-            output: { type: 'text', value: text },
+            output: m.isError ? { type: 'error-text', value: text } : { type: 'text', value: text },
           },
         ],
       } as unknown as ModelMessage);

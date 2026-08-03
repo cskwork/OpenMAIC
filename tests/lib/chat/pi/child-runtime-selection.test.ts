@@ -3,6 +3,7 @@ import { createAssistantMessageEventStream, type AssistantMessage } from '@earen
 import type { StreamFn } from '@earendil-works/pi-agent-core';
 import type { LanguageModel } from 'ai';
 import { MockLanguageModelV3, convertArrayToReadableStream } from 'ai/test';
+import { createCallLlmStreamFn } from '@/lib/agent/runtime/stream-fn';
 import { buildCallAgentTool } from '@/lib/chat/pi/tools/call-agent';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import type { StatelessChatRequest } from '@/lib/types/chat';
@@ -104,6 +105,45 @@ function legacyTextModel(text: string): LanguageModel {
   });
 }
 
+function nativeFinishModel(text: string, finishReason: 'stop' | 'length'): LanguageModel {
+  return new MockLanguageModelV3({
+    doStream: async () => ({
+      stream: convertArrayToReadableStream([
+        { type: 'stream-start' as const, warnings: [] },
+        { type: 'text-start' as const, id: 'native-text' },
+        { type: 'text-delta' as const, id: 'native-text', delta: text },
+        { type: 'text-end' as const, id: 'native-text' },
+        {
+          type: 'finish' as const,
+          finishReason: { unified: finishReason, raw: finishReason },
+          usage: {
+            inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+            outputTokens: { total: 1, text: 1, reasoning: 0 },
+          },
+        },
+      ]),
+    }),
+  });
+}
+
+function nativeEmptyToolCallsFinishModel(): LanguageModel {
+  return new MockLanguageModelV3({
+    doStream: async () => ({
+      stream: convertArrayToReadableStream([
+        { type: 'stream-start' as const, warnings: [] },
+        {
+          type: 'finish' as const,
+          finishReason: { unified: 'tool-calls' as const, raw: 'tool-calls' },
+          usage: {
+            inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+            outputTokens: { total: 0, text: 0, reasoning: 0 },
+          },
+        },
+      ]),
+    }),
+  });
+}
+
 function buildTool(opts: {
   childRuntimeMode?: 'legacy' | 'native';
   nativeChildStreamFn: StreamFn;
@@ -192,6 +232,65 @@ describe('Pi Child runtime selection', () => {
       nativeChildRun: {
         status: 'completed',
         toolExecutions: [],
+      },
+    });
+  });
+
+  it('propagates an AI SDK length finish through call_agent as output-token exhaustion', async () => {
+    const nativeStreamFn = createCallLlmStreamFn({
+      languageModel: nativeFinishModel('Truncated native response.', 'length'),
+      maxOutputTokens: 8,
+    });
+    const tool = buildTool({
+      childRuntimeMode: 'native',
+      nativeChildStreamFn: nativeStreamFn,
+      enableWhiteboardTools: false,
+      enableNativeChildWhiteboard: false,
+      maxActionsPerAgent: 1,
+    });
+
+    const result = await tool.execute('call-native-length', {
+      agentId: teacher.id,
+      instruction: 'Give a response that reaches the output limit.',
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(result.details).toMatchObject({
+      runtimeMode: 'native',
+      text: 'Truncated native response.',
+      nativeChildRun: {
+        status: 'exhausted',
+        stopReason: 'output_token_limit',
+      },
+    });
+    expect(
+      (result.details as { nativeChildRun: { finalOutput?: string } }).nativeChildRun.finalOutput,
+    ).toBeUndefined();
+  });
+
+  it('fails closed when AI SDK reports tool-calls without a parsed tool call', async () => {
+    const nativeStreamFn = createCallLlmStreamFn({
+      languageModel: nativeEmptyToolCallsFinishModel(),
+    });
+    const tool = buildTool({
+      childRuntimeMode: 'native',
+      nativeChildStreamFn: nativeStreamFn,
+      enableWhiteboardTools: false,
+      enableNativeChildWhiteboard: false,
+      maxActionsPerAgent: 1,
+    });
+
+    const result = await tool.execute('call-native-empty-tool-calls', {
+      agentId: teacher.id,
+      instruction: 'Call a tool.',
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(result.details).toMatchObject({
+      runtimeMode: 'native',
+      nativeChildRun: {
+        status: 'failed',
+        stopReason: 'LLM stream reported tool-calls without a parsed tool call.',
       },
     });
   });
