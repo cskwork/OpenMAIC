@@ -373,6 +373,112 @@ describe('schedulePresentationCommitFlush', () => {
 });
 
 describe('runPiSingleRequest', () => {
+  it('awaits async client-query handling before consuming the next SSE event', async () => {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            [
+              {
+                type: 'client_query',
+                data: {
+                  request: {
+                    protocolVersion: 'maic.tool-execution.v1',
+                    kind: 'client_query',
+                    traceId: 'trace-1',
+                    runId: 'run-1',
+                    agentInvocationId: 'child-1',
+                    agentId: 'teacher-1',
+                    depth: 1,
+                    sequence: 1,
+                    toolCallId: 'tool-1',
+                    executionId: 'query-1',
+                    idempotencyKey: 'idem-1',
+                    toolName: 'wb_read',
+                    args: { scope: 'summary' },
+                    argsDigest: 'sha256:test',
+                    issuedAt: 1,
+                    deadlineAt: 10_000,
+                    attempt: 1,
+                    queryId: 'query-1',
+                    target: {
+                      requestId: 'request-1',
+                      sessionId: 'session-1',
+                      stageId: 'stage-1',
+                      sceneId: 'scene-1',
+                    },
+                    query: { scope: 'summary' },
+                    activeQueryBudgetMs: 5_000,
+                  },
+                  responseToken: 'test-token',
+                },
+              },
+              {
+                type: 'done',
+                data: { totalActions: 0, totalAgents: 1, agentHadContent: true },
+              },
+            ]
+              .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+              .join(''),
+          ),
+        );
+        controller.close();
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(body, { status: 200 })),
+    );
+    const order: string[] = [];
+    let resolveQuery!: () => void;
+    const queryHandled = new Promise<void>((resolve) => {
+      resolveQuery = resolve;
+    });
+
+    try {
+      const running = runPiSingleRequest(
+        'session-1',
+        {
+          messages: [],
+          storeState: {},
+          config: { agentIds: ['teacher-1'], piRequestId: 'request-1' },
+          apiKey: '',
+        } as unknown as Parameters<typeof runPiSingleRequest>[1],
+        new AbortController(),
+        'qa',
+        () => ({
+          onEvent: vi.fn(async (event) => {
+            order.push(`start:${event.type}`);
+            if (event.type === 'client_query') await queryHandled;
+            order.push(`end:${event.type}`);
+          }),
+          onIterationEnd: vi.fn(async () => ({
+            directorState: undefined,
+            totalAgents: 1,
+            agentHadContent: true,
+          })),
+        }),
+        vi.fn(),
+        vi.fn(),
+        vi.fn(),
+        vi.fn(),
+        { current: vi.fn() },
+        (key) => key,
+      );
+
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(order).toEqual(['start:client_query']);
+      resolveQuery();
+      await running;
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(order).toEqual(['start:client_query', 'end:client_query', 'start:done', 'end:done']);
+  });
+
   it('does not accept the first-request context when fetch fails before a response', async () => {
     vi.stubGlobal(
       'fetch',

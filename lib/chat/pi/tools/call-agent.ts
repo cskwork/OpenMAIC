@@ -7,6 +7,7 @@ import { runNativeChild } from '@/lib/agent/runtime/run-native-child';
 import type {
   ChildRunResult,
   NativeClientEffectHandler,
+  NativeToolCategory,
 } from '@/lib/agent/runtime/native-child-contract';
 import { createCallLlmStreamFn } from '@/lib/agent/runtime/stream-fn';
 import {
@@ -1104,6 +1105,12 @@ export function buildCallAgentTool(opts: {
         }
 
         const availableToolNames = nativeTools.map((tool) => tool.name);
+        const nativeToolCategories = new Map<string, NativeToolCategory>(
+          nativeTools.map((tool) => [
+            tool.name,
+            clientEffectHandlers.has(tool.name) ? 'mutation' : 'other',
+          ]),
+        );
         const availableToolNameSet = new Set(availableToolNames);
         const unavailableAllowedToolNames = agent.allowedActions.filter(
           (toolName) => !availableToolNameSet.has(toolName),
@@ -1205,8 +1212,14 @@ export function buildCallAgentTool(opts: {
             },
             history: toHistoryMessages(opts.body.messages),
             timeoutMs: opts.nativeChildTimeoutMs ?? 60_000,
-            maxToolExecutions: 2,
-            maxToolCallAttempts: 4,
+            toolBudgets: {
+              maxMutationExecutions: 2,
+              maxReadExecutions: 0,
+              maxOtherToolExecutions: 2,
+              maxToolCallAttempts: 4,
+              maxAggregateToolExecutions: 2,
+            },
+            toolCategories: nativeToolCategories,
             abortSignal: childAbort.signal,
           });
         } finally {

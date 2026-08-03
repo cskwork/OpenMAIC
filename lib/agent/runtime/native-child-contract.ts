@@ -7,7 +7,29 @@ import type {
 
 export const TOOL_EXECUTION_PROTOCOL_VERSION = 'maic.tool-execution.v1';
 
-export type ExecutionKind = 'server' | 'client_effect' | 'server_proposal_client_commit';
+export type ExecutionKind =
+  | 'server'
+  | 'client_query'
+  | 'client_effect'
+  | 'server_proposal_client_commit';
+
+export type NativeToolCategory = 'mutation' | 'read' | 'other';
+
+export interface NativeChildToolBudgets {
+  maxMutationExecutions: number;
+  maxReadExecutions: number;
+  maxOtherToolExecutions: number;
+  maxToolCallAttempts: number;
+  /** Temporary compatibility cap retained until the atomic public inventory cutover. */
+  maxAggregateToolExecutions?: number;
+}
+
+export interface NativeChildToolBudgetUsage {
+  mutationExecutions: number;
+  readExecutions: number;
+  otherToolExecutions: number;
+  toolCallAttempts: number;
+}
 
 export interface ToolExecutionEnvelope {
   protocolVersion: typeof TOOL_EXECUTION_PROTOCOL_VERSION;
@@ -37,8 +59,18 @@ export interface ClientEffectExecutionRequest extends ToolExecutionEnvelope {
   kind: 'client_effect';
 }
 
+export interface ClientQueryExecutionRequest extends ToolExecutionEnvelope {
+  kind: 'client_query';
+}
+
 export type NativeClientEffectHandler = (opts: {
   request: ClientEffectExecutionRequest;
+  params: unknown;
+  signal?: AbortSignal;
+}) => Promise<RuntimeAgentToolResult>;
+
+export type NativeClientQueryHandler = (opts: {
+  request: ClientQueryExecutionRequest;
   params: unknown;
   signal?: AbortSignal;
 }) => Promise<RuntimeAgentToolResult>;
@@ -51,7 +83,7 @@ export type ServerToolExecutionStatus =
   | 'cancelled';
 
 export interface ToolExecutionSummary {
-  request: ServerExecutionRequest | ClientEffectExecutionRequest;
+  request: ServerExecutionRequest | ClientQueryExecutionRequest | ClientEffectExecutionRequest;
   status: ServerToolExecutionStatus;
   isError: boolean;
   startedAt: number;
@@ -95,6 +127,7 @@ export interface ChildRunResult {
   /** Exact visible deltas forwarded to the classroom bubble across Pi turns. */
   visibleOutput?: string;
   toolExecutions: ToolExecutionSummary[];
+  toolBudgetUsage: NativeChildToolBudgetUsage;
   stopReason: string;
   usage?: AgentUsage;
 }
@@ -110,9 +143,10 @@ export interface RunNativeChildOptions {
   prompt: string;
   tools: AgentTool[];
   timeoutMs: number;
-  maxToolExecutions: number;
-  maxToolCallAttempts: number;
+  toolBudgets: NativeChildToolBudgets;
+  toolCategories: ReadonlyMap<string, NativeToolCategory>;
   allowedToolNames?: ReadonlySet<string>;
+  clientQueryHandlers?: ReadonlyMap<string, NativeClientQueryHandler>;
   clientEffectHandlers?: ReadonlyMap<string, NativeClientEffectHandler>;
   onVisibleTextDelta?: (event: {
     agentInvocationId: string;
@@ -123,4 +157,5 @@ export interface RunNativeChildOptions {
   abortSignal?: AbortSignal;
   now?: () => number;
   createExecutionId?: () => string;
+  onSettled?: (agentInvocationId: string) => void | Promise<void>;
 }

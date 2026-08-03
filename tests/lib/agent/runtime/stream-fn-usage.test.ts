@@ -165,8 +165,13 @@ describe('createCallLlmStreamFn usage', () => {
       prompt: 'Call the failing tool, then continue.',
       tools: [tool],
       timeoutMs: 1_000,
-      maxToolExecutions: 2,
-      maxToolCallAttempts: 4,
+      toolBudgets: {
+        maxMutationExecutions: 0,
+        maxReadExecutions: 0,
+        maxOtherToolExecutions: 2,
+        maxToolCallAttempts: 4,
+      },
+      toolCategories: new Map([[tool.name, 'other']]),
       createExecutionId: () => 'execution-error-result',
     });
 

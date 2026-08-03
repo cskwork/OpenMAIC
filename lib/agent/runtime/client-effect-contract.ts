@@ -1540,7 +1540,7 @@ const WHITEBOARD_CODE_LANGUAGE_ALIASES: Readonly<Record<string, string>> = {
 };
 const WHITEBOARD_CODE_DISALLOWED_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 
-function normalizeWhiteboardCodeLanguage(value: unknown): string {
+export function normalizeWhiteboardCodeLanguage(value: unknown): string {
   if (typeof value !== 'string' || value.length > WHITEBOARD_CODE_MAX_LANGUAGE_CHARACTERS) {
     throw new Error('CLIENT_EFFECT_CODE_LANGUAGE_INVALID');
   }
@@ -1555,7 +1555,7 @@ function normalizeWhiteboardCodeLanguage(value: unknown): string {
   return WHITEBOARD_CODE_LANGUAGE_ALIASES[normalized] ?? normalized;
 }
 
-function normalizeWhiteboardCodeFileName(value: unknown): string | undefined {
+export function normalizeWhiteboardCodeFileName(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'string' || value.length > WHITEBOARD_CODE_MAX_FILE_NAME_CHARACTERS) {
     throw new Error('CLIENT_EFFECT_CODE_FILE_NAME_INVALID');

@@ -124,6 +124,7 @@ async function settlesWithin<T>(promise: Promise<T>, timeoutMs: number): Promise
 }
 
 function baseOptions(overrides: Partial<RunNativeChildOptions> = {}): RunNativeChildOptions {
+  const tools = overrides.tools ?? [];
   return {
     traceId: 'trace-1',
     runId: 'run-1',
@@ -133,10 +134,15 @@ function baseOptions(overrides: Partial<RunNativeChildOptions> = {}): RunNativeC
     streamFn: (() => streamMessage(assistantText('unused'))) as StreamFn,
     systemPrompt: 'You are a deterministic test child.',
     prompt: 'Use the tool, then explain its result.',
-    tools: [],
+    tools,
     timeoutMs: 1_000,
-    maxToolExecutions: 4,
-    maxToolCallAttempts: 8,
+    toolBudgets: {
+      maxMutationExecutions: 4,
+      maxReadExecutions: 4,
+      maxOtherToolExecutions: 4,
+      maxToolCallAttempts: 8,
+    },
+    toolCategories: new Map(tools.map((tool) => [tool.name, 'other'] as const)),
     now: (() => {
       let time = 100;
       return () => time++;
@@ -433,13 +439,18 @@ describe('runNativeChild Phase 0', () => {
       baseOptions({
         streamFn,
         tools: [tool],
-        maxToolExecutions: 1,
+        toolBudgets: {
+          maxMutationExecutions: 0,
+          maxReadExecutions: 0,
+          maxOtherToolExecutions: 1,
+          maxToolCallAttempts: 8,
+        },
       }),
     );
 
     expect(execute).toHaveBeenCalledOnce();
     expect(result.status).toBe('exhausted');
-    expect(result.stopReason).toBe('tool_execution_budget');
+    expect(result.stopReason).toBe('other_tool_budget');
     expect(result.finalOutput).toBeUndefined();
     expect(result.toolExecutions.map((execution) => execution.status)).toEqual([
       'succeeded',
@@ -470,8 +481,12 @@ describe('runNativeChild Phase 0', () => {
         streamFn,
         tools: [tool],
         allowedToolNames: new Set(),
-        maxToolExecutions: 1,
-        maxToolCallAttempts: 2,
+        toolBudgets: {
+          maxMutationExecutions: 0,
+          maxReadExecutions: 0,
+          maxOtherToolExecutions: 8,
+          maxToolCallAttempts: 2,
+        },
       }),
     );
 
@@ -479,8 +494,9 @@ describe('runNativeChild Phase 0', () => {
     expect(streamCalls).toBe(3);
     expect(result.status).toBe('exhausted');
     expect(result.stopReason).toBe('tool_call_attempt_budget');
-    expect(result.toolExecutions).toHaveLength(3);
+    expect(result.toolExecutions).toHaveLength(2);
     expect(result.toolExecutions.every((execution) => execution.status === 'rejected')).toBe(true);
+    expect(result.toolBudgetUsage.toolCallAttempts).toBe(3);
   });
 
   it('counts repeated unknown tool calls against the hard attempt cap', async () => {
@@ -494,16 +510,21 @@ describe('runNativeChild Phase 0', () => {
       baseOptions({
         streamFn,
         tools: [],
-        maxToolExecutions: 1,
-        maxToolCallAttempts: 2,
+        toolBudgets: {
+          maxMutationExecutions: 0,
+          maxReadExecutions: 0,
+          maxOtherToolExecutions: 8,
+          maxToolCallAttempts: 2,
+        },
       }),
     );
 
     expect(streamCalls).toBe(3);
     expect(result.status).toBe('exhausted');
     expect(result.stopReason).toBe('tool_call_attempt_budget');
-    expect(result.toolExecutions).toHaveLength(3);
+    expect(result.toolExecutions).toHaveLength(2);
     expect(result.toolExecutions.every((execution) => execution.status === 'rejected')).toBe(true);
+    expect(result.toolBudgetUsage.toolCallAttempts).toBe(3);
   });
 
   it('counts repeated schema-invalid tool calls against the hard attempt cap', async () => {
@@ -531,8 +552,12 @@ describe('runNativeChild Phase 0', () => {
       baseOptions({
         streamFn,
         tools: [tool],
-        maxToolExecutions: 1,
-        maxToolCallAttempts: 2,
+        toolBudgets: {
+          maxMutationExecutions: 0,
+          maxReadExecutions: 0,
+          maxOtherToolExecutions: 8,
+          maxToolCallAttempts: 2,
+        },
       }),
     );
 
@@ -540,8 +565,239 @@ describe('runNativeChild Phase 0', () => {
     expect(streamCalls).toBe(3);
     expect(result.status).toBe('exhausted');
     expect(result.stopReason).toBe('tool_call_attempt_budget');
-    expect(result.toolExecutions).toHaveLength(3);
+    expect(result.toolExecutions).toHaveLength(2);
     expect(result.toolExecutions.every((execution) => execution.status === 'rejected')).toBe(true);
+    expect(result.toolBudgetUsage).toMatchObject({
+      otherToolExecutions: 2,
+      toolCallAttempts: 3,
+    });
+  });
+
+  it('uses explicit categorized budgets and reports final usage', async () => {
+    const tools = ['mutate', 'read', 'search'].map(
+      (name): AgentTool => ({
+        name,
+        label: name,
+        description: name,
+        parameters: Type.Object({}, { additionalProperties: false }),
+        execute: vi.fn(async () => ({
+          content: [{ type: 'text' as const, text: 'ok' }],
+          details: {},
+        })),
+      }),
+    );
+    const calls = [tools[2], tools[1], tools[0], tools[1], tools[0]];
+    let turn = 0;
+    const streamFn = (() => {
+      const tool = calls[turn++];
+      return streamMessage(
+        tool ? assistantToolCall(`categorized-${turn}`, tool.name, {}) : assistantText('done'),
+      );
+    }) as StreamFn;
+
+    const result = await runNativeChild(
+      baseOptions({
+        streamFn,
+        tools,
+        toolBudgets: {
+          maxMutationExecutions: 2,
+          maxReadExecutions: 8,
+          maxOtherToolExecutions: 2,
+          maxToolCallAttempts: 12,
+        },
+        toolCategories: new Map([
+          ['mutate', 'mutation'],
+          ['read', 'read'],
+          ['search', 'other'],
+        ]),
+      }),
+    );
+
+    expect(result.status).toBe('completed');
+    expect(result.toolBudgetUsage).toEqual({
+      mutationExecutions: 2,
+      readExecutions: 2,
+      otherToolExecutions: 1,
+      toolCallAttempts: 5,
+    });
+  });
+
+  it('fails construction when a registered tool has no explicit category', async () => {
+    const tool: AgentTool = {
+      name: 'uncategorized',
+      label: 'Uncategorized',
+      description: 'Invalid fixture.',
+      parameters: Type.Object({}),
+      execute: vi.fn(),
+    };
+
+    await expect(
+      runNativeChild(baseOptions({ tools: [tool], toolCategories: new Map() })),
+    ).rejects.toThrow('missing a category');
+  });
+
+  it('fails construction for an invalid runtime category or a query/effect handler conflict', async () => {
+    const tool: AgentTool = {
+      name: 'conflicted',
+      label: 'Conflicted',
+      description: 'Invalid fixture.',
+      parameters: Type.Object({}),
+      execute: vi.fn(),
+    };
+    await expect(
+      runNativeChild(
+        baseOptions({
+          tools: [tool],
+          toolCategories: new Map([['conflicted', 'invalid' as never]]),
+        }),
+      ),
+    ).rejects.toThrow('invalid category');
+
+    const handler = vi.fn(async () => ({ content: [], details: {}, isError: false }));
+    await expect(
+      runNativeChild(
+        baseOptions({
+          tools: [tool],
+          clientQueryHandlers: new Map([['conflicted', handler]]),
+          clientEffectHandlers: new Map([['conflicted', handler]]),
+        }),
+      ),
+    ).rejects.toThrow('cannot be both client query and client effect');
+  });
+
+  it('rejects a repeated provider toolCallId without a second execution', async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'ok' }],
+      details: {},
+    }));
+    const tool: AgentTool = {
+      name: 'repeatable',
+      label: 'Repeatable',
+      description: 'Must not repeat an ID.',
+      parameters: Type.Object({}),
+      execute,
+    };
+    const streamFn = vi
+      .fn<StreamFn>()
+      .mockImplementationOnce(() => streamMessage(assistantToolCall('same-id', tool.name, {})))
+      .mockImplementationOnce(() => streamMessage(assistantToolCall('same-id', tool.name, {})));
+
+    const result = await runNativeChild(baseOptions({ streamFn, tools: [tool] }));
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(result.status).toBe('exhausted');
+    expect(result.stopReason).toBe('duplicate_tool_call_id');
+    expect(result.toolBudgetUsage).toMatchObject({ otherToolExecutions: 1, toolCallAttempts: 2 });
+  });
+
+  it('keeps the pre-cutover aggregate cap authoritative across categories', async () => {
+    const tools = ['draw', 'search'].map(
+      (name): AgentTool => ({
+        name,
+        label: name,
+        description: name,
+        parameters: Type.Object({}),
+        execute: vi.fn(async () => ({
+          content: [{ type: 'text' as const, text: 'ok' }],
+          details: {},
+        })),
+      }),
+    );
+    let turn = 0;
+    const streamFn = (() =>
+      streamMessage(assistantToolCall(`aggregate-${turn}`, tools[turn++].name, {}))) as StreamFn;
+
+    const result = await runNativeChild(
+      baseOptions({
+        streamFn,
+        tools,
+        toolBudgets: {
+          maxMutationExecutions: 2,
+          maxReadExecutions: 0,
+          maxOtherToolExecutions: 2,
+          maxToolCallAttempts: 4,
+          maxAggregateToolExecutions: 1,
+        },
+        toolCategories: new Map([
+          ['draw', 'mutation'],
+          ['search', 'other'],
+        ]),
+      }),
+    );
+
+    expect(result.status).toBe('exhausted');
+    expect(result.stopReason).toBe('aggregate_tool_budget');
+    expect(result.toolBudgetUsage).toMatchObject({
+      mutationExecutions: 1,
+      otherToolExecutions: 0,
+      toolCallAttempts: 2,
+    });
+  });
+
+  it('prevents a later valid call in the same sequential batch after category exhaustion', async () => {
+    const readExecute = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'read' }],
+      details: {},
+    }));
+    const mutationExecute = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'mutation' }],
+      details: {},
+    }));
+    const readTool: AgentTool = {
+      name: 'read_tool',
+      label: 'Read',
+      description: 'Read once.',
+      parameters: Type.Object({}),
+      execute: readExecute,
+    };
+    const mutationTool: AgentTool = {
+      name: 'mutation_tool',
+      label: 'Mutation',
+      description: 'Must not run after overflow.',
+      parameters: Type.Object({}),
+      execute: mutationExecute,
+    };
+    let turn = 0;
+    const streamFn = (() => {
+      turn += 1;
+      if (turn === 1) return streamMessage(assistantToolCall('read-1', readTool.name, {}));
+      return streamMessage({
+        ...assistantText(''),
+        stopReason: 'toolUse',
+        content: [
+          { type: 'toolCall', id: 'read-2', name: readTool.name, arguments: {} },
+          { type: 'toolCall', id: 'mutation-1', name: mutationTool.name, arguments: {} },
+        ],
+      });
+    }) as StreamFn;
+
+    const result = await runNativeChild(
+      baseOptions({
+        streamFn,
+        tools: [readTool, mutationTool],
+        toolCategories: new Map([
+          [readTool.name, 'read'],
+          [mutationTool.name, 'mutation'],
+        ]),
+        toolBudgets: {
+          maxMutationExecutions: 1,
+          maxReadExecutions: 1,
+          maxOtherToolExecutions: 0,
+          maxToolCallAttempts: 4,
+        },
+      }),
+    );
+
+    expect(result.status).toBe('exhausted');
+    expect(result.stopReason).toBe('read_tool_budget');
+    expect(readExecute).toHaveBeenCalledOnce();
+    expect(mutationExecute).not.toHaveBeenCalled();
+    expect(result.toolBudgetUsage).toEqual({
+      mutationExecutions: 0,
+      readExecutions: 1,
+      otherToolExecutions: 0,
+      toolCallAttempts: 2,
+    });
   });
 
   it('returns on timeout even when the underlying tool ignores AbortSignal forever', async () => {

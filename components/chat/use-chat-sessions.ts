@@ -40,6 +40,8 @@ import { isPiChatEnabled } from '@/lib/config/feature-flags';
 import type { CleanupSource } from '@/lib/playback/auto-resume';
 import { nanoid } from 'nanoid';
 import { BrowserClientEffectRuntime } from '@/lib/agent/client/client-effect-runtime';
+import { BrowserClientQueryRuntime } from '@/lib/agent/client/client-query-runtime';
+import type { ClientQueryDelivery } from '@/lib/agent/runtime/client-query-contract';
 import type {
   ClientEffectDelivery,
   ClientEffectStatus,
@@ -280,7 +282,7 @@ type StatelessStreamConsumerFactory = (
   sessionType: SessionType,
   requestId?: string,
 ) => {
-  onEvent: (event: StatelessEvent) => void;
+  onEvent: (event: StatelessEvent) => void | Promise<void>;
   onIterationEnd: () => Promise<{
     directorState: DirectorState | undefined;
     totalAgents: number;
@@ -435,7 +437,7 @@ export async function runPiSingleRequest(
       if (!dataLine) continue;
       const event = JSON.parse(dataLine.slice(6)) as StatelessEvent;
       if (event.type === 'done') sawDoneEvent = true;
-      consumer.onEvent(event);
+      await consumer.onEvent(event);
     }
   }
 
@@ -470,6 +472,24 @@ export async function runPiSingleRequest(
     source: 'turn_complete',
   });
   onStopSessionRef.current?.({ sessionId, source: 'turn_complete' });
+}
+
+export async function handlePiClientQueryDelivery(
+  queryRuntime: BrowserClientQueryRuntime,
+  delivery: ClientQueryDelivery,
+  controller: AbortController,
+): Promise<void> {
+  try {
+    await queryRuntime.execute(delivery, controller.signal);
+  } catch (error) {
+    if (controller.signal.aborted) throw error;
+    try {
+      await queryRuntime.failDelivery(delivery, error, controller.signal);
+    } catch (failureError) {
+      controller.abort();
+      throw failureError;
+    }
+  }
 }
 
 export function useChatSessions(options: UseChatSessionsOptions = {}) {
@@ -1255,8 +1275,21 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     ) => {
       let currentBuffer: StreamBuffer | null = null;
       let currentMessageId: string | null = null;
+      const queryRuntime = requestId
+        ? new BrowserClientQueryRuntime({
+            requestId,
+            sessionId,
+            readCurrentStageId: () => useStageStore.getState().stage?.id,
+            readCurrentSceneId: () => useStageStore.getState().currentSceneId,
+          })
+        : null;
 
-      const onEvent = (event: StatelessEvent) => {
+      const onEvent = async (event: StatelessEvent) => {
+        if (event.type === 'client_query') {
+          if (controller.signal.aborted || !queryRuntime) return;
+          await handlePiClientQueryDelivery(queryRuntime, event.data, controller);
+          return;
+        }
         if (!currentBuffer) {
           currentBuffer = createBufferForSession(sessionId, sessionType, requestId);
         }
@@ -1322,6 +1355,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       };
 
       const onIterationEnd = async () => {
+        queryRuntime?.clear();
         if (!currentBuffer) return null;
 
         try {
