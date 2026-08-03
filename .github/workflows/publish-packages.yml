@@ -58,6 +58,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A full commit SHA is the only immutable GitHub Action reference. Version
+  # comments beside each pin keep the selected release human-readable.
   # SECURITY BOUNDARY: package installation, builds and packing happen only in
   # `validate`, before any job can read NPM_TOKEN. `publish` receives immutable
   # tarballs and verifies their digests before giving those exact files to npm.
@@ -92,13 +94,13 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
@@ -146,6 +148,27 @@ jobs:
           fi
           echo "Tracked repository files match the commit being released."
 
+      # Seal the checked build before any repository test code runs. The tests
+      # below may mutate the worktree, but the tarballs they smoke-test and the
+      # publish job receives are already fixed at this point.
+      #
+      # Pack each package exactly once. pnpm resolves workspace:^ in the packed
+      # manifest, while the config form suppresses prepack and prepare (pnpm
+      # pack does not accept --ignore-scripts).
+      - name: Pack release artifacts and record digests
+        env:
+          RELEASE_ARTIFACTS: ${{ runner.temp }}/openmaic-package-tarballs
+        run: |
+          set -euo pipefail
+          mkdir "$RELEASE_ARTIFACTS"
+          for pkg in dsl storage renderer importer; do
+            echo "::group::@openmaic/$pkg"
+            ( cd "packages/@openmaic/$pkg" \
+              && pnpm pack --config.ignore-scripts=true --pack-destination "$RELEASE_ARTIFACTS" )
+            echo "::endgroup::"
+          done
+          node scripts/verify-package-artifacts.mjs --write "$RELEASE_ARTIFACTS"
+
       # storage runs separately, under the json reporter, so that the run leaves
       # a record of WHICH suites executed. STORAGE_PG_CONTRACT_REQUIRED only
       # protects against a missing database: it is a `throw` inside the test
@@ -172,23 +195,6 @@ jobs:
             --baseline "$STORAGE_PG_BASELINE"
           pnpm --filter "@openmaic/dsl" --filter "@openmaic/storage" --filter "@openmaic/renderer" run typecheck
 
-      # Pack each package exactly once. pnpm resolves workspace:^ in the packed
-      # manifest, while the config form suppresses prepack and prepare (pnpm
-      # pack does not accept --ignore-scripts).
-      - name: Pack release artifacts and record digests
-        env:
-          RELEASE_ARTIFACTS: ${{ runner.temp }}/openmaic-package-tarballs
-        run: |
-          set -euo pipefail
-          mkdir "$RELEASE_ARTIFACTS"
-          for pkg in dsl storage renderer importer; do
-            echo "::group::@openmaic/$pkg"
-            ( cd "packages/@openmaic/$pkg" \
-              && pnpm pack --config.ignore-scripts=true --pack-destination "$RELEASE_ARTIFACTS" )
-            echo "::endgroup::"
-          done
-          node scripts/verify-package-artifacts.mjs --write "$RELEASE_ARTIFACTS"
-
       - name: Smoke-test publishable tarballs
         env:
           RELEASE_ARTIFACTS: ${{ runner.temp }}/openmaic-package-tarballs
@@ -199,11 +205,12 @@ jobs:
           RELEASE_ARTIFACTS: ${{ runner.temp }}/openmaic-package-tarballs
         run: node scripts/verify-package-artifacts.mjs "$RELEASE_ARTIFACTS"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: openmaic-package-tarballs-${{ github.sha }}
           path: ${{ runner.temp }}/openmaic-package-tarballs
           if-no-files-found: error
+          overwrite: true
           retention-days: 7
 
   # The only job that can reach NPM_TOKEN. It is separate so the environment,
@@ -219,7 +226,7 @@ jobs:
       actions: read # required to read this commit's CI conclusion
       id-token: write # required for npm provenance
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # The first-parent check needs real history.
           fetch-depth: 0
@@ -227,13 +234,13 @@ jobs:
           # remains isolated in the `mark` job.
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
       - name: Download validated package tarballs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: openmaic-package-tarballs-${{ github.sha }}
           path: ${{ runner.temp }}/openmaic-package-tarballs
@@ -325,6 +332,15 @@ jobs:
           RELEASE_ARTIFACTS: ${{ runner.temp }}/openmaic-package-tarballs
         run: |
           set -euo pipefail
+          # Anchor the validated digests in this shell before any repository
+          # script runs with the npm token. A child process can alter files,
+          # but it cannot rewrite its parent shell's associative array.
+          node scripts/verify-package-artifacts.mjs "$RELEASE_ARTIFACTS"
+          declare -A trusted_digests
+          while read -r digest filename; do
+            trusted_digests["$filename"]="$digest"
+          done < "$RELEASE_ARTIFACTS/SHA256SUMS"
+
           node scripts/check-package-version-bumps.mjs --release
           for pkg in dsl storage renderer importer; do
             name="@openmaic/$pkg"
@@ -337,7 +353,22 @@ jobs:
               echo "Skipping $name@$version: already on the registry."
               continue
             fi
-            tarball="$RELEASE_ARTIFACTS/openmaic-$pkg-$version.tgz"
+            filename="openmaic-$pkg-$version.tgz"
+            tarball="$RELEASE_ARTIFACTS/$filename"
+            expected_digest="${trusted_digests[$filename]:-}"
+            if [ -z "$expected_digest" ]; then
+              echo "::error::$filename has no validated SHA-256 digest."
+              exit 1
+            fi
+            if ! actual_digest="$(sha256sum "$tarball" | awk '{print $1}')"; then
+              echo "::error::Could not re-verify $filename immediately before publication."
+              exit 1
+            fi
+            if [ "$actual_digest" != "$expected_digest" ]; then
+              echo "::error::$filename failed its pre-publish SHA-256 re-check."
+              exit 1
+            fi
+            echo "Re-verified $filename immediately before publication."
             # npm accepts a tarball package-spec and attaches provenance to the
             # supplied bytes. --ignore-scripts also prevents publish lifecycle
             # scripts from executing in the token-bearing job.
@@ -361,12 +392,12 @@ jobs:
     permissions:
       contents: write # required to push the release marker tags
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
 
