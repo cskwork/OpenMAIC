@@ -15,9 +15,14 @@ import type {
 } from '@/lib/agent/runtime/native-child-contract';
 import type { StatelessChatRequest } from '@/lib/types/chat';
 import type { SendEvent } from '../types';
+import {
+  NativeWhiteboardObservationLedger,
+  type ConsumeObservationClaimInput,
+  type ConsumeObservationClaimResult,
+  type ObservationCoverage,
+} from './native-whiteboard-observation-ledger';
 
 const DEFAULT_ELEMENTS_LIMIT = 64;
-const MAX_OBSERVATION_CLAIMS = 600;
 const MAX_CURSOR_CLAIMS = 8;
 
 const WbReadParams = Type.Union([
@@ -70,43 +75,11 @@ type CursorClaim = {
     }
 );
 
-type ObservationClaim = {
-  childInvocationId: string;
-  requestId: string;
-  stageId: string;
-  whiteboardId: string | null;
-  revision: number;
-  source: 'wb_read';
-  sourceId: string;
-  coverage:
-    | { kind: 'binding' }
-    | { kind: 'element'; elementId: string }
-    | { kind: 'membership'; complete: true }
-    | { kind: 'code'; elementId: string; complete: true };
-  expiresAt: number;
-};
-
-export type ObservationCoverage = ObservationClaim['coverage'];
-
-export interface ConsumeObservationClaimInput {
-  token: string;
-  childInvocationId: string;
-  requestId: string;
-  stageId: string;
-  whiteboardId: string | null;
-  revision: number;
-  requiredCoverage: ObservationCoverage;
-}
-
-export type ConsumeObservationClaimResult =
-  | { ok: true }
-  | {
-      ok: false;
-      code:
-        | 'OBSERVATION_CAPABILITY_INVALID'
-        | 'OBSERVATION_CAPABILITY_STALE'
-        | 'OBSERVATION_COVERAGE_MISMATCH';
-    };
+export type {
+  ConsumeObservationClaimInput,
+  ConsumeObservationClaimResult,
+  ObservationCoverage,
+} from './native-whiteboard-observation-ledger';
 
 export type WbReadToolResult = {
   queryId: string;
@@ -175,6 +148,7 @@ export interface NativeWhiteboardReadToolOptions {
   send: SendEvent;
   now?: () => number;
   createCapability?: () => string;
+  observationLedger?: NativeWhiteboardObservationLedger;
 }
 
 export interface NativeWhiteboardReadToolBundle {
@@ -183,17 +157,6 @@ export interface NativeWhiteboardReadToolBundle {
   dispose: (childInvocationId: string) => void;
   consumeObservationClaim: (input: ConsumeObservationClaimInput) => ConsumeObservationClaimResult;
   getClaimCountsForTests: () => { cursors: number; observations: number };
-}
-
-function coverageMatches(actual: ObservationCoverage, required: ObservationCoverage): boolean {
-  if (required.kind === 'binding') return true;
-  if (required.kind === 'element') {
-    return actual.kind === 'element' && actual.elementId === required.elementId;
-  }
-  if (required.kind === 'code') {
-    return actual.kind === 'code' && actual.elementId === required.elementId;
-  }
-  return actual.kind === 'membership' && actual.complete === true;
 }
 
 function toolFailure(code: string, text: string, retryable = false): RuntimeAgentToolResult {
@@ -260,26 +223,22 @@ export function buildInternalNativeWhiteboardReadTool(
   const now = opts.now ?? Date.now;
   const createCapability = opts.createCapability ?? (() => nanoid(32));
   const cursorClaims = new Map<string, CursorClaim>();
-  const observationClaims = new Map<string, ObservationClaim>();
+  const observationLedger =
+    opts.observationLedger ?? new NativeWhiteboardObservationLedger({ now, createCapability });
 
   const mintObservation = (
     request: ClientQueryRequest,
     result: ClientQueryBrowserSuccess,
-    coverage: ObservationClaim['coverage'],
+    coverage: ObservationCoverage,
     issuedTokens: string[],
   ) => {
-    if (observationClaims.size >= MAX_OBSERVATION_CLAIMS) {
-      throw new Error('OBSERVATION_CAPABILITY_LIMIT');
-    }
-    const token = createCapability();
-    observationClaims.set(token, {
+    const token = observationLedger.mintFromRead({
       childInvocationId: request.agentInvocationId,
       requestId: request.target.requestId,
       stageId: result.stageId,
       whiteboardId: result.whiteboardId,
       revision: result.revision,
-      source: 'wb_read',
-      sourceId: request.queryId,
+      queryId: request.queryId,
       coverage,
       expiresAt: request.deadlineAt,
     });
@@ -508,7 +467,7 @@ export function buildInternalNativeWhiteboardReadTool(
       const issuedObservations: string[] = [];
       const issuedCursors: string[] = [];
       const rollbackIssuedClaims = () => {
-        for (const token of issuedObservations) observationClaims.delete(token);
+        for (const token of issuedObservations) observationLedger.revoke(token);
         for (const token of issuedCursors) cursorClaims.delete(token);
       };
       rollbackClaims = rollbackIssuedClaims;
@@ -681,33 +640,12 @@ export function buildInternalNativeWhiteboardReadTool(
       for (const [token, claim] of cursorClaims) {
         if (claim.childInvocationId === childInvocationId) cursorClaims.delete(token);
       }
-      for (const [token, claim] of observationClaims) {
-        if (claim.childInvocationId === childInvocationId) observationClaims.delete(token);
-      }
+      observationLedger.disposeChild(childInvocationId);
     },
-    consumeObservationClaim: (input) => {
-      const claim = observationClaims.get(input.token);
-      if (
-        !claim ||
-        claim.expiresAt <= now() ||
-        claim.childInvocationId !== input.childInvocationId ||
-        claim.requestId !== input.requestId ||
-        claim.stageId !== input.stageId
-      ) {
-        return { ok: false, code: 'OBSERVATION_CAPABILITY_INVALID' };
-      }
-      if (claim.whiteboardId !== input.whiteboardId || claim.revision !== input.revision) {
-        return { ok: false, code: 'OBSERVATION_CAPABILITY_STALE' };
-      }
-      if (!coverageMatches(claim.coverage, input.requiredCoverage)) {
-        return { ok: false, code: 'OBSERVATION_COVERAGE_MISMATCH' };
-      }
-      observationClaims.delete(input.token);
-      return { ok: true };
-    },
+    consumeObservationClaim: (input) => observationLedger.consume(input),
     getClaimCountsForTests: () => ({
       cursors: cursorClaims.size,
-      observations: observationClaims.size,
+      observations: observationLedger.getSizeForTests(),
     }),
   };
 }

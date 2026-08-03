@@ -351,14 +351,15 @@ const useCanvasStoreBase = create<CanvasState>((set, get) => ({
   // ===== Whiteboard Actions =====
 
   setWhiteboardOpen: (open) => {
+    const commit = () => set({ whiteboardOpen: open });
     const authority = getDefaultWhiteboardEnvironmentAuthority();
     if (!authority) {
-      set({ whiteboardOpen: open });
+      commit();
       return;
     }
     const result = authority.transact({
       label: 'canvas.setWhiteboardOpen',
-      writes: [{ label: 'canvas.whiteboardOpen', write: () => set({ whiteboardOpen: open }) }],
+      writes: [{ label: 'canvas.whiteboardOpen', write: commit }],
     });
     if (!result.ok) {
       log.error('Whiteboard visibility transaction did not settle cleanly:', result);

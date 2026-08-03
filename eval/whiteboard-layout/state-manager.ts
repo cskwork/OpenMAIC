@@ -5,6 +5,7 @@ import { ActionEngine } from '@/lib/action/engine';
 import type { Action } from '@/lib/types/action';
 import type { PPTElement } from '@openmaic/dsl';
 import type { Stage, Scene } from '@/lib/types/stage';
+import { getDefaultWhiteboardEnvironmentAuthority } from '@/lib/store/whiteboard-environment-authority';
 
 interface InitialState {
   stage: Stage | null;
@@ -24,16 +25,13 @@ export class EvalStateManager {
   private actionEngine: ActionEngine;
 
   constructor(initial: InitialState) {
-    // Reset stores to clean state
-    useCanvasStore.setState({
-      whiteboardOpen: false,
-      whiteboardClearing: false,
-    });
+    // Reset non-domain history immediately. Stage + whiteboard visibility are
+    // committed together through the same Environment Authority used in-app.
     useWhiteboardHistoryStore.setState({ snapshots: [] });
 
     // Build stage with optional pre-existing whiteboard elements
     const now = Date.now();
-    const stage: Stage = initial.stage ?? {
+    const baseStage: Stage = initial.stage ?? {
       id: 'eval-stage',
       name: 'Eval Stage',
       languageDirective: 'en-US',
@@ -41,26 +39,46 @@ export class EvalStateManager {
       updatedAt: now,
     };
 
-    // If pre-existing whiteboard elements provided, seed the whiteboard
-    if (initial.whiteboardElements && initial.whiteboardElements.length > 0) {
-      stage.whiteboard = [
-        {
-          id: 'eval-whiteboard',
-          viewportSize: 1000,
-          viewportRatio: 16 / 9,
-          elements: initial.whiteboardElements,
-          background: { type: 'solid', color: '#ffffff' },
-          animations: [],
-        },
-      ];
-    }
+    // If pre-existing whiteboard elements are provided, construct the seeded
+    // document immutably before it enters the Authority transaction.
+    const stage: Stage =
+      initial.whiteboardElements && initial.whiteboardElements.length > 0
+        ? {
+            ...baseStage,
+            whiteboard: [
+              {
+                id: 'eval-whiteboard',
+                viewportSize: 1000,
+                viewportRatio: 16 / 9,
+                elements: initial.whiteboardElements,
+                background: { type: 'solid', color: '#ffffff' },
+                animations: [],
+              },
+            ],
+          }
+        : baseStage;
 
-    useStageStore.setState({
-      stage,
-      scenes: initial.scenes,
-      currentSceneId: initial.currentSceneId,
-      mode: 'autonomous',
+    const hydrate = () => {
+      useCanvasStore.setState({
+        whiteboardOpen: false,
+        whiteboardClearing: false,
+      });
+      useStageStore.setState({
+        stage,
+        scenes: initial.scenes,
+        currentSceneId: initial.currentSceneId,
+        mode: 'autonomous',
+      });
+    };
+    const authority = getDefaultWhiteboardEnvironmentAuthority();
+    const result = authority?.transact({
+      label: 'eval.whiteboard-layout.hydrate',
+      writes: [{ label: 'eval.hydrate', write: hydrate }],
     });
+    if (!authority) hydrate();
+    if (result && !result.ok && !result.mutationMayHaveCommitted) {
+      throw new Error(`${result.code}: ${result.errors.join('; ')}`);
+    }
 
     // ActionEngine takes the store module as its StageStore argument
     this.actionEngine = new ActionEngine(useStageStore);
@@ -88,10 +106,8 @@ export class EvalStateManager {
   }
 
   getWhiteboardElements(): PPTElement[] {
-    const stage = useStageStore.getState().stage;
-    if (!stage?.whiteboard || stage.whiteboard.length === 0) return [];
-    const lastWb = stage.whiteboard[stage.whiteboard.length - 1];
-    return lastWb.elements ?? [];
+    const active = getDefaultWhiteboardEnvironmentAuthority()?.queryActiveWhiteboard();
+    return active?.ok ? (active.value?.elements ?? []) : [];
   }
 
   dispose(): void {

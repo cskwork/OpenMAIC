@@ -1,5 +1,23 @@
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
+import {
+  MAX_REVISIONED_WHITEBOARD_RECEIPT_BYTES,
+  REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
+  isRevisionedWhiteboardAuthorityReceipt,
+  isRevisionedWhiteboardAuthenticatedTarget,
+  isRevisionedWhiteboardMutationIdentity,
+  revisionedWhiteboardWireBytes,
+  verifyRevisionedWhiteboardAuthorityReceipt,
+  type JsonValue,
+  type RevisionedWhiteboardAuthenticatedTarget,
+  type RevisionedWhiteboardAuthorityReceipt,
+  type RevisionedWhiteboardBinding,
+  type RevisionedWhiteboardEnvironmentBinding,
+  type RevisionedWhiteboardCommittedReceipt,
+  type RevisionedWhiteboardRejectedReceipt,
+  type RevisionedWhiteboardMutationToolName,
+  type RevisionedWhiteboardUncertainReceipt,
+} from '@/lib/agent/runtime/revisioned-whiteboard-contract';
 import type { Stage, Whiteboard } from '@/lib/types/stage';
 import type { StageStore } from '@/lib/api/stage-api-types';
 
@@ -7,6 +25,11 @@ export const WHITEBOARD_AUTHORITY_RESOURCE_BUSY = 'CLIENT_EFFECT_RESOURCE_BUSY';
 export const WHITEBOARD_AUTHORITY_UNCERTAIN = 'POSTCONDITION_UNCERTAIN';
 export const WHITEBOARD_AUTHORITY_BYPASS = 'WHITEBOARD_AUTHORITY_BYPASS_DETECTED';
 export const WHITEBOARD_AUTHORITY_STALE_STATE = 'STALE_STATE';
+export const WHITEBOARD_AUTHORITY_TARGET_CHANGED = 'TARGET_CHANGED';
+export const WHITEBOARD_AUTHORITY_MUTATION_REQUEST_INVALID = 'MUTATION_REQUEST_INVALID';
+export const WHITEBOARD_AUTHORITY_JOURNAL_CAPACITY_EXCEEDED =
+  'REVISIONED_JOURNAL_CAPACITY_EXCEEDED';
+export const WHITEBOARD_AUTHORITY_DEADLINE_EXCEEDED = 'REVISIONED_WHITEBOARD_DEADLINE_EXCEEDED';
 
 export interface WhiteboardAuthoritySnapshot {
   stageId: string | null;
@@ -52,7 +75,8 @@ export type WhiteboardAuthorityTransactionResult =
         | typeof WHITEBOARD_AUTHORITY_RESOURCE_BUSY
         | typeof WHITEBOARD_AUTHORITY_UNCERTAIN
         | typeof WHITEBOARD_AUTHORITY_BYPASS
-        | typeof WHITEBOARD_AUTHORITY_STALE_STATE;
+        | typeof WHITEBOARD_AUTHORITY_STALE_STATE
+        | typeof WHITEBOARD_AUTHORITY_TARGET_CHANGED;
       changed: boolean;
       mutationMayHaveCommitted: boolean;
       snapshot: WhiteboardAuthoritySnapshot;
@@ -61,6 +85,115 @@ export type WhiteboardAuthorityTransactionResult =
 
 interface WhiteboardAuthorityStore {
   getState(): Pick<ReturnType<StageStore['getState']>, 'stage'>;
+  setState(partial: { stage: Stage | null }): void;
+}
+
+interface WhiteboardAuthorityOpenStore {
+  getState(): { whiteboardOpen: boolean };
+  setState(partial: { whiteboardOpen: boolean }): void;
+}
+
+export type WhiteboardAuthorityRevisionedPlan =
+  | {
+      ok: false;
+      code: 'TARGET_PRECONDITION_FAILED';
+    }
+  | {
+      ok: true;
+      nextWhiteboards: readonly Whiteboard[];
+      nextOpen: boolean;
+      preferredActiveWhiteboardId?: string | null;
+    };
+
+export interface WhiteboardAuthorityRevisionedMutationOptions {
+  executionId: string;
+  requestDigest: string;
+  toolName: RevisionedWhiteboardMutationToolName;
+  label: string;
+  expected: RevisionedWhiteboardBinding;
+  authenticatedTarget: RevisionedWhiteboardAuthenticatedTarget;
+  deadlineAt: number;
+  plan: WhiteboardAuthorityRevisionedPlan;
+}
+
+export type WhiteboardAuthorityRevisionedMutationResult =
+  | {
+      ok: true;
+      replayed: boolean;
+      receipt: RevisionedWhiteboardAuthorityReceipt;
+    }
+  | {
+      ok: false;
+      code:
+        | typeof WHITEBOARD_AUTHORITY_RESOURCE_BUSY
+        | typeof WHITEBOARD_AUTHORITY_MUTATION_REQUEST_INVALID
+        | typeof WHITEBOARD_AUTHORITY_JOURNAL_CAPACITY_EXCEEDED
+        | typeof WHITEBOARD_AUTHORITY_DEADLINE_EXCEEDED;
+      errors: readonly string[];
+    };
+
+type RevisionedJournalEntry = {
+  identity: RevisionedJournalIdentity;
+  receipt: RevisionedWhiteboardAuthorityReceipt;
+  expiresAt: number;
+};
+
+type RevisionedJournalIdentity = Pick<
+  WhiteboardAuthorityRevisionedMutationOptions,
+  'executionId' | 'requestDigest' | 'toolName' | 'expected' | 'authenticatedTarget' | 'deadlineAt'
+>;
+
+const MAX_REVISIONED_JOURNAL_ENTRIES = 256;
+const REVISIONED_JOURNAL_REPLAY_GRACE_MS = 30_000;
+
+function isRevisionedPlan(value: unknown): value is WhiteboardAuthorityRevisionedPlan {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const plan = value as Partial<WhiteboardAuthorityRevisionedPlan>;
+  if (plan.ok === false) {
+    return (
+      plan.code === 'TARGET_PRECONDITION_FAILED' &&
+      Object.keys(value).every((key) => key === 'ok' || key === 'code')
+    );
+  }
+  const allowedKeys = new Set(['ok', 'nextWhiteboards', 'nextOpen', 'preferredActiveWhiteboardId']);
+  return (
+    plan.ok === true &&
+    isRevisionedWhiteboards(plan.nextWhiteboards) &&
+    typeof plan.nextOpen === 'boolean' &&
+    (plan.preferredActiveWhiteboardId === undefined ||
+      plan.preferredActiveWhiteboardId === null ||
+      (typeof plan.preferredActiveWhiteboardId === 'string' &&
+        plan.preferredActiveWhiteboardId.length >= 1 &&
+        plan.preferredActiveWhiteboardId.length <= 512 &&
+        !/[\u0000-\u001f\u007f\u2028\u2029]/u.test(plan.preferredActiveWhiteboardId))) &&
+    Object.keys(value).every((key) => allowedKeys.has(key))
+  );
+}
+
+function isRevisionedWhiteboards(value: unknown): value is readonly Whiteboard[] {
+  if (!Array.isArray(value)) return false;
+  const ids = new Set<string>();
+  for (const candidate of value as Array<Partial<Whiteboard>>) {
+    if (
+      !candidate ||
+      typeof candidate !== 'object' ||
+      typeof candidate.id !== 'string' ||
+      candidate.id.length < 1 ||
+      candidate.id.length > 512 ||
+      /[\u0000-\u001f\u007f\u2028\u2029]/u.test(candidate.id) ||
+      ids.has(candidate.id) ||
+      !Array.isArray(candidate.elements)
+    ) {
+      return false;
+    }
+    ids.add(candidate.id);
+  }
+  try {
+    canonicalizeJsonValue(value, new Set());
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function canonicalizeJsonValue(value: unknown, ancestors: Set<object>): unknown {
@@ -79,6 +212,12 @@ function canonicalizeJsonValue(value: unknown, ancestors: Set<object>): unknown 
   }
   if (value && typeof value === 'object') {
     if (ancestors.has(value)) throw new Error('Whiteboard state must not contain cycles');
+    if (
+      Object.getPrototypeOf(value) !== Object.prototype &&
+      Object.getPrototypeOf(value) !== null
+    ) {
+      throw new Error('Whiteboard state must contain only plain JSON objects');
+    }
     ancestors.add(value);
     const normalized = Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
@@ -92,9 +231,59 @@ function canonicalizeJsonValue(value: unknown, ancestors: Set<object>): unknown 
   throw new Error(`Whiteboard state contains a non-JSON value: ${typeof value}`);
 }
 
-function fingerprintWhiteboards(whiteboards: readonly Whiteboard[] | null | undefined): string {
-  const serialized = JSON.stringify(canonicalizeJsonValue(whiteboards ?? [], new Set()));
+function immutableCanonicalSnapshot<T>(value: T): T {
+  const snapshot = canonicalizeJsonValue(value, new Set()) as T;
+  const freeze = (entry: unknown): void => {
+    if (!entry || typeof entry !== 'object' || Object.isFrozen(entry)) return;
+    for (const child of Object.values(entry as Record<string, unknown>)) freeze(child);
+    Object.freeze(entry);
+  };
+  freeze(snapshot);
+  return snapshot;
+}
+
+function mutableCanonicalSnapshot<T>(value: unknown): T {
+  return canonicalizeJsonValue(value, new Set()) as T;
+}
+
+function fingerprintJson(value: unknown): string {
+  const serialized = JSON.stringify(canonicalizeJsonValue(value, new Set()));
   return `sha256:${bytesToHex(sha256(utf8ToBytes(serialized)))}`;
+}
+
+function fingerprintWhiteboards(whiteboards: readonly Whiteboard[] | null | undefined): string {
+  return fingerprintJson(whiteboards ?? []);
+}
+
+function fingerprintNonWhiteboardStage(stage: Stage): string {
+  const { whiteboard: _whiteboard, ...rest } = stage;
+  return fingerprintJson(rest);
+}
+
+function revisionedDomainDelta(
+  before: WhiteboardDomainSnapshot,
+  after: WhiteboardDomainSnapshot,
+): JsonValue {
+  return {
+    kind: 'whiteboard_domain_transition',
+    previousWhiteboardId: before.activeWhiteboardId,
+    currentWhiteboardId: after.activeWhiteboardId,
+    previousRevision: before.revision,
+    currentRevision: after.revision,
+    visibilityChanged: before.open !== after.open,
+    whiteboardContentChanged: before.whiteboardFingerprint !== after.whiteboardFingerprint,
+  };
+}
+
+function revisionedDomainPostcondition(domain: WhiteboardDomainSnapshot): JsonValue {
+  return {
+    kind: 'whiteboard_domain_state',
+    stageId: domain.stageId,
+    whiteboardId: domain.activeWhiteboardId,
+    revision: domain.revision,
+    open: domain.open,
+    whiteboardFingerprint: domain.whiteboardFingerprint,
+  };
 }
 
 function selectActiveId(
@@ -138,6 +327,43 @@ function stringifyError(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }
 
+function revisionedBindingsEqual(
+  left: RevisionedWhiteboardBinding,
+  right: RevisionedWhiteboardBinding,
+): boolean {
+  return (
+    left.stageId === right.stageId &&
+    left.whiteboardId === right.whiteboardId &&
+    left.revision === right.revision
+  );
+}
+
+function authenticatedTargetsEqual(
+  left: RevisionedWhiteboardAuthenticatedTarget,
+  right: RevisionedWhiteboardAuthenticatedTarget,
+): boolean {
+  return (
+    left.childInvocationId === right.childInvocationId &&
+    left.requestId === right.requestId &&
+    left.sessionId === right.sessionId &&
+    left.sceneId === right.sceneId
+  );
+}
+
+function journalIdentitiesEqual(
+  left: RevisionedJournalIdentity,
+  right: RevisionedJournalIdentity,
+): boolean {
+  return (
+    left.executionId === right.executionId &&
+    left.requestDigest === right.requestDigest &&
+    left.toolName === right.toolName &&
+    revisionedBindingsEqual(left.expected, right.expected) &&
+    authenticatedTargetsEqual(left.authenticatedTarget, right.authenticatedTarget) &&
+    left.deadlineAt === right.deadlineAt
+  );
+}
+
 /**
  * Browser-owned whiteboard transaction boundary.
  *
@@ -147,32 +373,65 @@ function stringifyError(error: unknown): string {
  */
 export class WhiteboardEnvironmentAuthority {
   private readonly store: WhiteboardAuthorityStore;
-  private readOpen: () => boolean;
+  private openStore: WhiteboardAuthorityOpenStore | null;
+  private fallbackReadOpen: () => boolean;
   private domain: WhiteboardDomainSnapshot;
   private transactionActive = false;
   private readonly listeners = new Set<() => void>();
+  private readonly revisionedJournal = new Map<string, RevisionedJournalEntry>();
+  private validateAuthenticatedTarget:
+    | ((target: RevisionedWhiteboardAuthenticatedTarget) => boolean)
+    | null = null;
+  private readonly now: () => number;
+  private readonly maxRevisionedJournalEntries: number;
+  private readonly revisionedJournalReplayGraceMs: number;
 
-  constructor(store: WhiteboardAuthorityStore, readOpen: () => boolean = () => false) {
+  constructor(
+    store: WhiteboardAuthorityStore,
+    readOpen: () => boolean = () => false,
+    opts: {
+      now?: () => number;
+      maxRevisionedJournalEntries?: number;
+      revisionedJournalReplayGraceMs?: number;
+    } = {},
+  ) {
     this.store = store;
-    this.readOpen = readOpen;
+    this.openStore = null;
+    this.fallbackReadOpen = readOpen;
+    this.now = opts.now ?? Date.now;
+    this.maxRevisionedJournalEntries =
+      opts.maxRevisionedJournalEntries ?? MAX_REVISIONED_JOURNAL_ENTRIES;
+    this.revisionedJournalReplayGraceMs =
+      opts.revisionedJournalReplayGraceMs ?? REVISIONED_JOURNAL_REPLAY_GRACE_MS;
     const stage = store.getState().stage;
     this.domain = {
       stageId: stage?.id ?? null,
       activeWhiteboardId: stage?.whiteboard?.[0]?.id ?? null,
       revision: 0,
-      open: readOpen(),
+      open: this.readOpen(),
       whiteboardFingerprint: fingerprintWhiteboards(stage?.whiteboard),
     };
   }
 
   configureOpenReader(readOpen: () => boolean): void {
-    this.readOpen = readOpen;
+    this.fallbackReadOpen = readOpen;
     if (this.transactionActive) return;
     const open = readOpen();
     if (open === this.domain.open) return;
     // Configuration happens once while wiring the default stores. It is an
     // initial hydration, not a user-visible mutation.
     this.domain = { ...this.domain, open };
+  }
+
+  configureOpenStore(openStore: WhiteboardAuthorityOpenStore): void {
+    this.openStore = openStore;
+    this.configureOpenReader(() => openStore.getState().whiteboardOpen);
+  }
+
+  configureAuthenticatedTargetValidator(
+    validator: (target: RevisionedWhiteboardAuthenticatedTarget) => boolean,
+  ): void {
+    this.validateAuthenticatedTarget = validator;
   }
 
   querySnapshot(): WhiteboardAuthorityQueryResult<WhiteboardAuthoritySnapshot> {
@@ -283,10 +542,20 @@ export class WhiteboardEnvironmentAuthority {
       };
     }
 
+    if (opts.expected && opts.expected.stageId !== this.domain.stageId) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_TARGET_CHANGED,
+        changed: false,
+        mutationMayHaveCommitted: false,
+        snapshot: publicSnapshot(this.domain),
+        errors: [`${opts.label}: expected stage is no longer active`],
+      };
+    }
+
     if (
       opts.expected &&
-      (opts.expected.stageId !== this.domain.stageId ||
-        opts.expected.activeWhiteboardId !== this.domain.activeWhiteboardId ||
+      (opts.expected.activeWhiteboardId !== this.domain.activeWhiteboardId ||
         opts.expected.revision !== this.domain.revision)
     ) {
       return {
@@ -360,6 +629,270 @@ export class WhiteboardEnvironmentAuthority {
     return { ok: true, changed, snapshot: publicSnapshot(nextDomain) };
   }
 
+  /**
+   * Internal v2 mutation seam. The observation capability has already been
+   * consumed by the request-scoped Runtime before this browser-owned method is
+   * called. Planning, CAS, writes, post-state verification, revisioning and the
+   * bounded replay receipt all happen synchronously under one Authority lock.
+   */
+  transactRevisioned(
+    opts: WhiteboardAuthorityRevisionedMutationOptions,
+  ): WhiteboardAuthorityRevisionedMutationResult {
+    if (
+      !isRevisionedWhiteboardMutationIdentity({
+        executionId: opts.executionId,
+        requestDigest: opts.requestDigest,
+        toolName: opts.toolName,
+        expectedBinding: opts.expected,
+      }) ||
+      !isRevisionedWhiteboardAuthenticatedTarget(opts.authenticatedTarget) ||
+      !Number.isFinite(opts.deadlineAt) ||
+      !isRevisionedPlan(opts.plan)
+    ) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_MUTATION_REQUEST_INVALID,
+        errors: [`${opts.label}: revisioned mutation identity is invalid`],
+      };
+    }
+    const plan = immutableCanonicalSnapshot(opts.plan);
+    const identity = immutableCanonicalSnapshot<RevisionedJournalIdentity>({
+      executionId: opts.executionId,
+      requestDigest: opts.requestDigest,
+      toolName: opts.toolName,
+      expected: opts.expected,
+      authenticatedTarget: opts.authenticatedTarget,
+      deadlineAt: opts.deadlineAt,
+    });
+
+    this.cleanupRevisionedJournal();
+    const replay = this.revisionedJournal.get(identity.executionId);
+    if (replay) {
+      if (journalIdentitiesEqual(replay.identity, identity)) {
+        return { ok: true, replayed: true, receipt: replay.receipt };
+      }
+      const current = this.binding(this.domain);
+      return {
+        ok: true,
+        replayed: false,
+        receipt: {
+          protocolVersion: REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
+          outcome: 'rejected',
+          executionId: identity.executionId,
+          requestDigest: identity.requestDigest,
+          toolName: identity.toolName,
+          previousBinding: current,
+          currentBinding: current,
+          changed: false,
+          mutationMayHaveCommitted: false,
+          error: { code: 'EXECUTION_ID_CONFLICT' },
+        },
+      };
+    }
+
+    if (this.now() >= identity.deadlineAt) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_DEADLINE_EXCEEDED,
+        errors: [`${opts.label}: revisioned mutation deadline has expired`],
+      };
+    }
+
+    if (this.revisionedJournal.size >= this.maxRevisionedJournalEntries) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_JOURNAL_CAPACITY_EXCEEDED,
+        errors: [`${opts.label}: revisioned mutation journal is at capacity`],
+      };
+    }
+
+    if (this.transactionActive) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_RESOURCE_BUSY,
+        errors: [`${opts.label}: whiteboard transaction already active`],
+      };
+    }
+
+    const beforeDomain = this.domain;
+    const beforeBinding = this.binding(beforeDomain);
+    const actualBefore = this.captureActualDomain(beforeDomain.revision, beforeDomain);
+    if (!this.domainMatchesCommitted(actualBefore)) {
+      const receipt = this.rejectedReceipt(
+        identity,
+        beforeBinding,
+        beforeBinding,
+        'WHITEBOARD_AUTHORITY_BYPASS_DETECTED',
+      );
+      return {
+        ok: true,
+        replayed: false,
+        receipt: this.rememberRevisioned(identity, receipt),
+      };
+    }
+
+    this.transactionActive = true;
+    let receipt: RevisionedWhiteboardAuthorityReceipt;
+    try {
+      let targetIsCurrent = false;
+      try {
+        targetIsCurrent = this.validateAuthenticatedTarget?.(identity.authenticatedTarget) === true;
+      } catch {
+        targetIsCurrent = false;
+      }
+
+      if (!targetIsCurrent) {
+        receipt = this.rejectedReceipt(
+          identity,
+          beforeBinding,
+          beforeBinding,
+          'AUTHENTICATED_TARGET_CHANGED',
+        );
+      } else if (identity.expected.stageId !== this.domain.stageId) {
+        receipt = this.rejectedReceipt(identity, beforeBinding, beforeBinding, 'TARGET_CHANGED');
+      } else if (
+        identity.expected.whiteboardId !== this.domain.activeWhiteboardId ||
+        identity.expected.revision !== this.domain.revision
+      ) {
+        receipt = this.rejectedReceipt(identity, beforeBinding, beforeBinding, 'STALE_STATE');
+      } else if (!plan.ok) {
+        receipt = this.rejectedReceipt(
+          identity,
+          beforeBinding,
+          beforeBinding,
+          'TARGET_PRECONDITION_FAILED',
+        );
+      } else {
+        const errors: string[] = [];
+        let plannedDomain: Omit<WhiteboardDomainSnapshot, 'revision'> | null = null;
+        let nextStage: Stage | null = null;
+        let nonWhiteboardFingerprint: string | null = null;
+        try {
+          const currentStage = this.store.getState().stage;
+          if (!currentStage || currentStage.id !== beforeDomain.stageId) {
+            throw new Error('Authoritative Stage is unavailable after CAS');
+          }
+          nonWhiteboardFingerprint = fingerprintNonWhiteboardStage(currentStage);
+          const plannedStage: Stage = {
+            ...currentStage,
+            whiteboard: mutableCanonicalSnapshot<Whiteboard[]>(plan.nextWhiteboards),
+          };
+          nextStage = plannedStage;
+          plannedDomain = {
+            stageId: currentStage.id,
+            activeWhiteboardId: selectActiveId(
+              plannedStage,
+              beforeDomain,
+              plan.preferredActiveWhiteboardId,
+            ),
+            open: plan.nextOpen,
+            whiteboardFingerprint: fingerprintWhiteboards(plannedStage.whiteboard),
+          };
+        } catch (error) {
+          errors.push(`plan: ${stringifyError(error)}`);
+        }
+
+        if (plannedDomain && nextStage && nonWhiteboardFingerprint) {
+          try {
+            this.store.setState({ stage: nextStage });
+          } catch (error) {
+            errors.push(`stage-write: ${stringifyError(error)}`);
+          }
+          try {
+            this.writeOpen(plan.nextOpen);
+          } catch (error) {
+            errors.push(`open-write: ${stringifyError(error)}`);
+          }
+
+          const stage = this.store.getState().stage;
+          const activeWhiteboardId = selectActiveId(
+            stage,
+            this.domain,
+            plan.preferredActiveWhiteboardId,
+          );
+          const nextFingerprint = fingerprintWhiteboards(stage?.whiteboard);
+          const nextOpen = this.readOpen();
+          const changed =
+            stage?.id !== beforeDomain.stageId ||
+            activeWhiteboardId !== beforeDomain.activeWhiteboardId ||
+            nextOpen !== beforeDomain.open ||
+            nextFingerprint !== beforeDomain.whiteboardFingerprint;
+          const nextDomain: WhiteboardDomainSnapshot = {
+            stageId: stage?.id ?? null,
+            activeWhiteboardId,
+            revision: changed ? beforeDomain.revision + 1 : beforeDomain.revision,
+            open: nextOpen,
+            whiteboardFingerprint: nextFingerprint,
+          };
+          this.domain = nextDomain;
+          const currentBinding = this.binding(nextDomain);
+
+          if (
+            stage?.id !== plannedDomain.stageId ||
+            !stage ||
+            fingerprintNonWhiteboardStage(stage) !== nonWhiteboardFingerprint ||
+            activeWhiteboardId !== plannedDomain.activeWhiteboardId ||
+            nextOpen !== plannedDomain.open ||
+            nextFingerprint !== plannedDomain.whiteboardFingerprint
+          ) {
+            errors.push('postcondition: applied state does not match the declarative plan');
+          }
+
+          for (const listener of this.listeners) {
+            try {
+              listener();
+            } catch (error) {
+              errors.push(`authority-listener: ${stringifyError(error)}`);
+            }
+          }
+
+          if (errors.length > 0) {
+            receipt = this.uncertainReceipt(identity, beforeBinding, currentBinding, changed);
+          } else {
+            const committedReceipt = {
+              protocolVersion: REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
+              outcome: 'committed',
+              executionId: identity.executionId,
+              requestDigest: identity.requestDigest,
+              toolName: identity.toolName,
+              previousBinding: beforeBinding,
+              currentBinding,
+              changed,
+              mutationMayHaveCommitted: false,
+              delta: revisionedDomainDelta(beforeDomain, nextDomain),
+              postcondition: revisionedDomainPostcondition(nextDomain),
+            } satisfies RevisionedWhiteboardCommittedReceipt;
+            const committedReceiptBytes = revisionedWhiteboardWireBytes(committedReceipt);
+            receipt =
+              committedReceiptBytes !== null &&
+              committedReceiptBytes <= MAX_REVISIONED_WHITEBOARD_RECEIPT_BYTES &&
+              isRevisionedWhiteboardAuthorityReceipt(committedReceipt)
+                ? committedReceipt
+                : this.uncertainReceipt(identity, beforeBinding, currentBinding, changed);
+          }
+        } else {
+          receipt = this.rejectedReceipt(
+            identity,
+            beforeBinding,
+            beforeBinding,
+            'TARGET_PRECONDITION_FAILED',
+          );
+        }
+      }
+
+      receipt = this.rememberRevisioned(identity, receipt);
+    } finally {
+      this.transactionActive = false;
+    }
+
+    return { ok: true, replayed: false, receipt };
+  }
+
+  getRevisionedJournalSizeForTests(): number {
+    this.cleanupRevisionedJournal();
+    return this.revisionedJournal.size;
+  }
+
   private captureActualDomain(
     revision: number,
     previous: WhiteboardAuthoritySnapshot,
@@ -382,6 +915,98 @@ export class WhiteboardEnvironmentAuthority {
       actual.whiteboardFingerprint === this.domain.whiteboardFingerprint
     );
   }
+
+  private binding(domain: WhiteboardDomainSnapshot): RevisionedWhiteboardEnvironmentBinding {
+    return {
+      stageId: domain.stageId,
+      whiteboardId: domain.activeWhiteboardId,
+      revision: domain.revision,
+    };
+  }
+
+  private rejectedReceipt(
+    opts: Pick<
+      WhiteboardAuthorityRevisionedMutationOptions,
+      'executionId' | 'requestDigest' | 'toolName'
+    >,
+    previousBinding: RevisionedWhiteboardEnvironmentBinding,
+    currentBinding: RevisionedWhiteboardEnvironmentBinding,
+    code: RevisionedWhiteboardRejectedReceipt['error']['code'],
+  ): RevisionedWhiteboardRejectedReceipt {
+    return {
+      protocolVersion: REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
+      outcome: 'rejected',
+      executionId: opts.executionId,
+      requestDigest: opts.requestDigest,
+      toolName: opts.toolName,
+      previousBinding,
+      currentBinding,
+      changed: false,
+      mutationMayHaveCommitted: false,
+      error: { code },
+    };
+  }
+
+  private uncertainReceipt(
+    opts: Pick<
+      WhiteboardAuthorityRevisionedMutationOptions,
+      'executionId' | 'requestDigest' | 'toolName'
+    >,
+    previousBinding: RevisionedWhiteboardEnvironmentBinding,
+    currentBinding: RevisionedWhiteboardEnvironmentBinding,
+    changed: boolean,
+  ): RevisionedWhiteboardUncertainReceipt {
+    return {
+      protocolVersion: REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
+      outcome: 'uncertain',
+      executionId: opts.executionId,
+      requestDigest: opts.requestDigest,
+      toolName: opts.toolName,
+      previousBinding,
+      currentBinding,
+      changed,
+      mutationMayHaveCommitted: true,
+      error: { code: 'POSTCONDITION_UNCERTAIN' },
+    };
+  }
+
+  private rememberRevisioned(
+    identity: RevisionedJournalIdentity,
+    receipt: RevisionedWhiteboardAuthorityReceipt,
+  ): RevisionedWhiteboardAuthorityReceipt {
+    const identitySnapshot = immutableCanonicalSnapshot(identity);
+    const receiptSnapshot = verifyRevisionedWhiteboardAuthorityReceipt(receipt);
+    if (!receiptSnapshot) {
+      throw new Error('Revisioned whiteboard journal receipt is not wire-safe');
+    }
+    this.revisionedJournal.set(identitySnapshot.executionId, {
+      identity: identitySnapshot,
+      receipt: receiptSnapshot,
+      expiresAt: identity.deadlineAt + this.revisionedJournalReplayGraceMs,
+    });
+    return receiptSnapshot;
+  }
+
+  private cleanupRevisionedJournal(): void {
+    const current = this.now();
+    for (const [executionId, entry] of this.revisionedJournal) {
+      if (entry.expiresAt <= current) this.revisionedJournal.delete(executionId);
+    }
+  }
+
+  private readOpen(): boolean {
+    return this.openStore?.getState().whiteboardOpen ?? this.fallbackReadOpen();
+  }
+
+  private writeOpen(open: boolean): void {
+    if (!this.openStore) {
+      if (open !== this.readOpen()) {
+        throw new Error('Whiteboard open store is not configured');
+      }
+      return;
+    }
+    this.openStore.setState({ whiteboardOpen: open });
+  }
 }
 
 const authorities = new WeakMap<object, WhiteboardEnvironmentAuthority>();
@@ -400,10 +1025,10 @@ export function getWhiteboardEnvironmentAuthority(
 
 export function registerDefaultWhiteboardEnvironmentAuthority(
   store: WhiteboardAuthorityStore,
-  readOpen: () => boolean,
+  openStore: WhiteboardAuthorityOpenStore,
 ): WhiteboardEnvironmentAuthority {
   const authority = getWhiteboardEnvironmentAuthority(store);
-  authority.configureOpenReader(readOpen);
+  authority.configureOpenStore(openStore);
   defaultAuthority = authority;
   return authority;
 }

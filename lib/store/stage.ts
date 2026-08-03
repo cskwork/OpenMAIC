@@ -233,6 +233,7 @@ export function clearStoreForDeletedStage(
   // read-side isStageDeleted re-checks before its store writes, not by token
   // invalidation.
   const authority = getDefaultWhiteboardEnvironmentAuthority();
+  const clear = () => useStageStore.setState((state) => clearedStageState(state));
   let result: WhiteboardAuthorityTransactionResult | undefined;
   if (authority) {
     result = authority.transact({
@@ -240,12 +241,12 @@ export function clearStoreForDeletedStage(
       writes: [
         {
           label: 'stage.clearDeleted',
-          write: () => useStageStore.setState((state) => clearedStageState(state)),
+          write: clear,
         },
       ],
     });
   } else {
-    useStageStore.setState((state) => clearedStageState(state));
+    clear();
   }
   if (result && !result.ok && !result.mutationMayHaveCommitted) {
     log.error('Deleted stage eviction was rejected by Whiteboard Authority:', result);
@@ -679,7 +680,20 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
   setStageAgents: (configs) => {
     const stage = get().stage;
     if (!stage) return;
-    set({ stage: { ...stage, generatedAgentConfigs: configs } });
+    const authority = getDefaultWhiteboardEnvironmentAuthority();
+    const commit = () => set({ stage: { ...stage, generatedAgentConfigs: configs } });
+    const result = authority?.transact({
+      label: 'stage.setStageAgents',
+      writes: [{ label: 'stage.generatedAgentConfigs', write: commit }],
+    });
+    if (!authority) commit();
+    if (result && !result.ok && !result.mutationMayHaveCommitted) {
+      log.error('Stage agent update was rejected by Whiteboard Authority:', result);
+      return;
+    }
+    if (result && !result.ok) {
+      log.warn('Stage agent update has uncertain postconditions:', result);
+    }
     // The roster is part of the stage document — persistence rides the shared
     // pending-change scheduler like every other stage mutation. The registry
     // and selection updates below are synchronous in-memory mirrors only.
@@ -1097,10 +1111,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
 
 export const useStageStore = createSelectors(useStageStoreBase);
 
-registerDefaultWhiteboardEnvironmentAuthority(
-  useStageStore,
-  () => useCanvasStore.getState().whiteboardOpen,
-);
+registerDefaultWhiteboardEnvironmentAuthority(useStageStore, useCanvasStore);
 
 // ==================== Debounced Save ====================
 

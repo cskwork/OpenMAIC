@@ -52,6 +52,10 @@ import {
   buildNativeWhiteboardTextTool,
 } from './native-whiteboard';
 import { NativeWhiteboardCodeState } from './native-whiteboard-code-state';
+import {
+  NATIVE_WHITEBOARD_MUTATION_TOOL_NAMES,
+  type NativeWhiteboardMutationToolName,
+} from './native-whiteboard-inventory';
 import { NativeWhiteboardViewState } from './native-whiteboard-view-state';
 
 const CallAgentParams = Type.Object({
@@ -78,20 +82,7 @@ export function resolveNativeChildCapabilities(opts: {
   maxActionsPerAgent: number;
 }): {
   nativeWhiteboardEnabled: boolean;
-  nativeWhiteboardToolNames: Array<
-    | 'wb_open'
-    | 'wb_close'
-    | 'wb_draw_text'
-    | 'wb_draw_shape'
-    | 'wb_draw_line'
-    | 'wb_draw_latex'
-    | 'wb_draw_table'
-    | 'wb_draw_chart'
-    | 'wb_draw_code'
-    | 'wb_edit_code'
-    | 'wb_delete'
-    | 'wb_clear'
-  >;
+  nativeWhiteboardToolNames: NativeWhiteboardMutationToolName[];
   childWebSearchEnabled: boolean;
 } {
   const nativeWhiteboardEligible =
@@ -100,22 +91,9 @@ export function resolveNativeChildCapabilities(opts: {
     opts.maxActionsPerAgent > 0 &&
     opts.agent.role === 'teacher';
   const nativeWhiteboardToolNames = nativeWhiteboardEligible
-    ? (
-        [
-          'wb_open',
-          'wb_close',
-          'wb_draw_text',
-          'wb_draw_shape',
-          'wb_draw_line',
-          'wb_draw_latex',
-          'wb_draw_table',
-          'wb_draw_chart',
-          'wb_draw_code',
-          'wb_edit_code',
-          'wb_delete',
-          'wb_clear',
-        ] as const
-      ).filter((toolName) => opts.agent.allowedActions.includes(toolName))
+    ? NATIVE_WHITEBOARD_MUTATION_TOOL_NAMES.filter((toolName) =>
+        opts.agent.allowedActions.includes(toolName),
+      )
     : [];
   const nativeWhiteboardEnabled = nativeWhiteboardToolNames.length > 0;
   return {

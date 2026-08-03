@@ -483,7 +483,21 @@ export function commitMigratedAgentConfigsToStore(
 ): void {
   const state = useStageStore.getState();
   if (state.stage?.id !== stageId) return;
-  useStageStore.setState({ stage: { ...state.stage, generatedAgentConfigs: configs } });
+  const authority = getDefaultWhiteboardEnvironmentAuthority();
+  const commit = () =>
+    useStageStore.setState({ stage: { ...state.stage!, generatedAgentConfigs: configs } });
+  const result = authority?.transact({
+    label: 'classroom.commitMigratedAgentConfigs',
+    writes: [{ label: 'stage.generatedAgentConfigs', write: commit }],
+  });
+  if (!authority) commit();
+  if (result && !result.ok && !result.mutationMayHaveCommitted) {
+    log.error('Migrated agent config commit was rejected by Whiteboard Authority:', result);
+    return;
+  }
+  if (result && !result.ok) {
+    log.warn('Migrated agent config commit has uncertain postconditions:', result);
+  }
   markStagePersistenceDirty([{ kind: 'stage' }]);
 }
 

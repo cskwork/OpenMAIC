@@ -3,7 +3,27 @@ import path from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
-const PRODUCTION_ROOTS = ['lib', 'components'] as const;
+const PRODUCTION_ROOTS = [
+  'app',
+  'components',
+  'eval',
+  'lib',
+  'packages',
+  'render-service',
+] as const;
+const NON_PRODUCTION_ROOTS = new Set([
+  '.codegraph',
+  '.git',
+  '.github',
+  '.next',
+  'assets',
+  'data',
+  'e2e',
+  'node_modules',
+  'public',
+  'scripts',
+  'tests',
+]);
 
 function sourceFiles(root: string): string[] {
   const result: string[] = [];
@@ -73,7 +93,8 @@ function mutationKind(call: ts.CallExpression, aliases: ReadonlySet<string>): st
   const argument = call.arguments[0];
   if (
     ts.isPropertyAccessExpression(call.expression) &&
-    call.expression.expression.getText().includes('useStageStore')
+    call.expression.expression.getText().includes('useStageStore') &&
+    containsObjectProperty(argument, new Set(['stage']))
   ) {
     return 'whole-stage-write';
   }
@@ -185,6 +206,20 @@ function activeSelectorInventory(source: string, fileName = 'fixture.ts'): strin
       record(node, 'first-board-selector');
     }
     if (
+      ts.isElementAccessExpression(node) &&
+      node.argumentExpression &&
+      ts.isBinaryExpression(node.argumentExpression) &&
+      node.argumentExpression.operatorToken.kind === ts.SyntaxKind.MinusToken &&
+      ts.isPropertyAccessExpression(node.argumentExpression.left) &&
+      node.argumentExpression.left.name.text === 'length' &&
+      node.argumentExpression.left.expression.getText() === node.expression.getText() &&
+      ts.isNumericLiteral(node.argumentExpression.right) &&
+      node.argumentExpression.right.text === '1' &&
+      isWhiteboardCollection(node.expression, aliases)
+    ) {
+      record(node, 'last-board-selector');
+    }
+    if (
       ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&
       node.expression.name.text === 'at' &&
@@ -221,7 +256,154 @@ function productionInventory(collector: (source: string, fileName: string) => st
   return results.sort();
 }
 
+function enclosingWriterOwner(node: ts.Node): {
+  owner?: ts.Node;
+  helperName?: string;
+} {
+  let current: ts.Node | undefined = node.parent;
+  let helperName: string | undefined;
+  while (current) {
+    if (ts.isFunctionLike(current)) {
+      if (
+        (ts.isArrowFunction(current) || ts.isFunctionExpression(current)) &&
+        ts.isPropertyAssignment(current.parent) &&
+        propertyNameText(current.parent.name) === 'write'
+      ) {
+        current = current.parent.parent;
+        continue;
+      }
+      if (
+        (ts.isArrowFunction(current) || ts.isFunctionExpression(current)) &&
+        ts.isVariableDeclaration(current.parent)
+      ) {
+        if (ts.isIdentifier(current.parent.name)) helperName ??= current.parent.name.text;
+        current = current.parent.parent;
+        continue;
+      }
+      return { owner: current, helperName };
+    }
+    current = current.parent;
+  }
+  return { helperName };
+}
+
+function transactionCallForWriteProperty(
+  property: ts.PropertyAssignment,
+): ts.CallExpression | null {
+  const element = property.parent;
+  if (!ts.isObjectLiteralExpression(element)) return null;
+  const array = element.parent;
+  if (!ts.isArrayLiteralExpression(array)) return null;
+  const writes = array.parent;
+  if (
+    !ts.isPropertyAssignment(writes) ||
+    propertyNameText(writes.name) !== 'writes' ||
+    writes.initializer !== array
+  ) {
+    return null;
+  }
+  const config = writes.parent;
+  if (!ts.isObjectLiteralExpression(config)) return null;
+  const call = config.parent;
+  if (
+    !ts.isCallExpression(call) ||
+    call.arguments[0] !== config ||
+    !ts.isPropertyAccessExpression(call.expression) ||
+    (call.expression.name.text !== 'transact' && call.expression.name.text !== 'transactRevisioned')
+  ) {
+    return null;
+  }
+  return call;
+}
+
+function lexicalOwner(node: ts.Node): ts.Node {
+  let current: ts.Node | undefined = node.parent;
+  while (current && !ts.isFunctionLike(current) && !ts.isSourceFile(current)) {
+    current = current.parent;
+  }
+  return current ?? node.getSourceFile();
+}
+
+function writerBelongsToAuthorityAdapter(node: ts.Node): boolean {
+  let current: ts.Node | undefined = node.parent;
+  while (current) {
+    if (
+      (ts.isArrowFunction(current) || ts.isFunctionExpression(current)) &&
+      ts.isPropertyAssignment(current.parent) &&
+      propertyNameText(current.parent.name) === 'write' &&
+      current.parent.initializer === current
+    ) {
+      return transactionCallForWriteProperty(current.parent) !== null;
+    }
+    current = current.parent;
+  }
+
+  const { owner, helperName } = enclosingWriterOwner(node);
+  if (!owner || !helperName) return false;
+  const scope = lexicalOwner(owner);
+  let approved = false;
+  const visit = (current: ts.Node) => {
+    if (approved) return;
+    if (
+      ts.isPropertyAssignment(current) &&
+      propertyNameText(current.name) === 'write' &&
+      ts.isIdentifier(current.initializer) &&
+      current.initializer.text === helperName &&
+      transactionCallForWriteProperty(current) !== null
+    ) {
+      approved = true;
+      return;
+    }
+    ts.forEachChild(current, visit);
+  };
+  visit(scope);
+  return approved;
+}
+
+function unapprovedWriterInventory(source: string, fileName = 'fixture.ts'): string[] {
+  const sourceFile = parseSource(source, fileName);
+  const aliases = collectWhiteboardAliases(sourceFile);
+  const results: string[] = [];
+  const inspect = (node: ts.CallExpression | ts.BinaryExpression, kind: string) => {
+    if (writerBelongsToAuthorityAdapter(node)) return;
+    const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+    results.push(`${fileName}:${line}:${kind}`);
+  };
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node)) {
+      const kind = mutationKind(node, aliases);
+      if (kind) inspect(node, kind);
+    }
+    if (ts.isBinaryExpression(node)) {
+      const kind = assignmentMutationKind(node);
+      if (kind) inspect(node, kind);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return results;
+}
+
 describe('whiteboard Authority writer inventory', () => {
+  it('scans every current source root that imports the Stage or Canvas stores', () => {
+    const uncoveredRoots: string[] = [];
+    const covered = new Set<string>(PRODUCTION_ROOTS);
+    for (const entry of fs.readdirSync(process.cwd(), { withFileTypes: true })) {
+      if (
+        !entry.isDirectory() ||
+        NON_PRODUCTION_ROOTS.has(entry.name) ||
+        entry.name.startsWith('.')
+      ) {
+        continue;
+      }
+      const importsDomainStore = sourceFiles(path.join(process.cwd(), entry.name)).some((file) =>
+        /@\/lib\/store\/(?:stage|canvas)/u.test(fs.readFileSync(file, 'utf8')),
+      );
+      if (importsDomainStore && !covered.has(entry.name)) uncoveredRoots.push(entry.name);
+    }
+    expect(uncoveredRoots).toEqual([]);
+  });
+
   it('keeps canonical active-board selection inside the Authority module', () => {
     expect(productionInventory(activeSelectorInventory)).toEqual([]);
   });
@@ -235,13 +417,20 @@ describe('whiteboard Authority writer inventory', () => {
           'const active = alias[0];',
           'const { whiteboard: destructured } = stage;',
           'const other = destructured[0];',
+          'const last = alias[alias.length - 1];',
         ].join('\n'),
       ),
-    ).toEqual(['fixture.ts:3:first-board-selector', 'fixture.ts:5:first-board-selector']);
+    ).toEqual([
+      'fixture.ts:3:first-board-selector',
+      'fixture.ts:5:first-board-selector',
+      'fixture.ts:6:last-board-selector',
+    ]);
   });
 
   it('keeps an exact AST inventory of reviewed raw whiteboard-domain writer callsites', () => {
     expect(productionInventory(rawWriterInventory)).toEqual([
+      'eval/whiteboard-layout/state-manager.ts:62:visibility-write',
+      'eval/whiteboard-layout/state-manager.ts:66:whole-stage-write',
       'lib/api/stage-api-mode.ts:104:whole-stage-write',
       'lib/api/stage-api-whiteboard.ts:119:whiteboard-write',
       'lib/api/stage-api-whiteboard.ts:148:whiteboard-write',
@@ -250,18 +439,15 @@ describe('whiteboard Authority writer inventory', () => {
       'lib/api/stage-api-whiteboard.ts:301:whiteboard-write',
       'lib/api/stage-api-whiteboard.ts:63:whiteboard-write',
       'lib/classroom/load-classroom.ts:275:whole-stage-write',
-      'lib/classroom/load-classroom.ts:486:whole-stage-write',
-      'lib/store/canvas.ts:356:visibility-write',
-      'lib/store/canvas.ts:361:visibility-write',
-      'lib/store/canvas.ts:492:visibility-write',
-      'lib/store/stage.ts:1029:whole-stage-write',
-      'lib/store/stage.ts:1078:whole-stage-write',
-      'lib/store/stage.ts:1152:whole-stage-write',
-      'lib/store/stage.ts:243:whole-stage-write',
-      'lib/store/stage.ts:248:whole-stage-write',
-      'lib/store/stage.ts:517:whole-stage-write',
-      'lib/store/stage.ts:682:whole-stage-write',
-      'lib/store/stage.ts:955:whole-stage-write',
+      'lib/classroom/load-classroom.ts:488:whole-stage-write',
+      'lib/store/canvas.ts:354:visibility-write',
+      'lib/store/canvas.ts:493:visibility-write',
+      'lib/store/stage.ts:1043:whole-stage-write',
+      'lib/store/stage.ts:1092:whole-stage-write',
+      'lib/store/stage.ts:236:whole-stage-write',
+      'lib/store/stage.ts:518:whole-stage-write',
+      'lib/store/stage.ts:684:whole-stage-write',
+      'lib/store/stage.ts:969:whole-stage-write',
     ]);
   });
 
@@ -309,5 +495,46 @@ describe('whiteboard Authority writer inventory', () => {
         requiredBoundary,
       );
     }
+  });
+
+  it('associates every raw writer with its enclosing Authority adapter', () => {
+    expect(productionInventory(unapprovedWriterInventory)).toEqual([]);
+  });
+
+  it('does not accept an unrelated file-level Authority call as writer authorization', () => {
+    expect(
+      unapprovedWriterInventory(
+        [
+          'function approved() { authority.transact({ writes: [] }); }',
+          'function bypass() { useStageStore.setState({ stage: replacement }); }',
+        ].join('\n'),
+      ),
+    ).toEqual(['fixture.ts:2:whole-stage-write']);
+  });
+
+  it('does not accept an unrelated transaction in the same function', () => {
+    expect(
+      unapprovedWriterInventory(
+        [
+          'function mixed() {',
+          '  authority.transact({ writes: [] });',
+          '  useStageStore.setState({ stage: replacement });',
+          '}',
+        ].join('\n'),
+      ),
+    ).toEqual(['fixture.ts:3:whole-stage-write']);
+  });
+
+  it('does not authorize a writer in a non-write transaction property', () => {
+    expect(
+      unapprovedWriterInventory(
+        [
+          'authority.transact({',
+          '  label: useStageStore.setState({ stage: replacement }),',
+          '  writes: [],',
+          '});',
+        ].join('\n'),
+      ),
+    ).toEqual(['fixture.ts:2:whole-stage-write']);
   });
 });
