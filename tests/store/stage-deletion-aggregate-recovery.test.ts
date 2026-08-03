@@ -102,6 +102,7 @@ import { deleteStageData } from '@/lib/utils/stage-storage';
 import { isStageDeleted, unmarkStageDeleted } from '@/lib/utils/deleted-stages';
 import { saveCurrentScene } from '@/lib/document-store';
 import type { Scene, Stage } from '@/lib/types/stage';
+import { setStageStoreStateThroughAuthority } from '@/tests/helpers/whiteboard-authority';
 
 let stageCounter = 0;
 let stageId: string;
@@ -128,7 +129,7 @@ beforeEach(() => {
   stageCounter += 1;
   stageId = `stage-agg-${stageCounter}`;
   useStageStore.getState().clearStore();
-  useStageStore.setState({
+  setStageStoreStateThroughAuthority({
     stage: makeStage(stageId),
     scenes: [makeScene('scene-1', stageId)],
     currentSceneId: 'scene-1',
@@ -157,7 +158,7 @@ describe('failed-deletion recovery of direct aggregate saves', () => {
     });
     // The setGenerationComplete path: flag flips in memory, then a direct
     // aggregate save carries it (completion barrier and scenes together).
-    useStageStore.setState({ generationComplete: true });
+    setStageStoreStateThroughAuthority({ generationComplete: true });
     const inFlightSave = useStageStore.getState().saveToStorage();
 
     // The deletion fails before deleteDocument removed anything; its failure
@@ -212,7 +213,7 @@ describe('failed-deletion recovery of direct aggregate saves', () => {
   });
 
   it('does not re-mark anything when the deletion succeeds (control)', async () => {
-    useStageStore.setState({ generationComplete: true });
+    setStageStoreStateThroughAuthority({ generationComplete: true });
 
     await deleteStageData(stageId);
 

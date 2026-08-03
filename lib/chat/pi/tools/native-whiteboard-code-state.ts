@@ -8,6 +8,7 @@ import {
   renderCodeLines,
 } from '@/lib/orchestration/summarizers/code-line-budget';
 import type { StatelessChatRequest } from '@/lib/types/chat';
+import { canonicalActiveWhiteboard } from '@/lib/store/whiteboard-environment-authority';
 import { isPromptSafeWhiteboardIdentifier } from './native-whiteboard-view-state';
 
 function cloneState(state: WhiteboardEditableCodeState): WhiteboardEditableCodeState {
@@ -54,7 +55,7 @@ export class NativeWhiteboardCodeState {
   private readonly codeByElementId = new Map<string, WhiteboardEditableCodeState>();
 
   constructor(body: StatelessChatRequest) {
-    const latestWhiteboard = body.storeState.stage?.whiteboard?.at(-1);
+    const latestWhiteboard = canonicalActiveWhiteboard(body.storeState.stage);
     this.whiteboardId = isPromptSafeWhiteboardIdentifier(latestWhiteboard?.id)
       ? latestWhiteboard.id
       : undefined;

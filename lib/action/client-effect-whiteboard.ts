@@ -65,6 +65,7 @@ import {
   type WhiteboardElementType,
 } from '@/lib/agent/runtime/client-effect-contract';
 import type { WhiteboardSnapshotReceipt } from '@/lib/store/whiteboard-history';
+import { getActiveWhiteboardForStore } from '@/lib/store/whiteboard-environment-authority';
 import type {
   ChartData,
   ChartType,
@@ -262,7 +263,7 @@ export function prepareNativeWhiteboardOpenTarget(
   bindingVersion = 1,
 ): { targetBinding: AcceptedTargetBinding; created: boolean } {
   assertStageAndScene(store, target);
-  const created = !store.getState().stage?.whiteboard?.at(-1);
+  const created = !getActiveWhiteboardForStore(store);
   const targetBinding = prepareNativeWhiteboardTarget(store, target, bindingVersion);
   return { targetBinding, created };
 }
@@ -311,7 +312,7 @@ export function verifyNativeWhiteboardOpenEffect(opts: {
 }): WhiteboardOpenCommittedObservation {
   throwIfAborted(opts.signal);
   assertStageAndScene(opts.store, opts.targetBinding);
-  const latestWhiteboard = opts.store.getState().stage?.whiteboard?.at(-1);
+  const latestWhiteboard = getActiveWhiteboardForStore(opts.store);
   if (!latestWhiteboard || latestWhiteboard.id !== opts.targetBinding.whiteboardId) {
     throw new Error('CLIENT_EFFECT_WHITEBOARD_MISMATCH');
   }
@@ -337,8 +338,7 @@ export function prepareNativeExistingWhiteboardTarget(
   if (typeof expectedWhiteboardId !== 'string' || !expectedWhiteboardId) {
     throw new Error('CLIENT_EFFECT_CODE_EDIT_WHITEBOARD_ID_INVALID');
   }
-  const whiteboards = store.getState().stage?.whiteboard;
-  const latestWhiteboard = whiteboards?.at(-1);
+  const latestWhiteboard = getActiveWhiteboardForStore(store);
   if (!latestWhiteboard || latestWhiteboard.id !== expectedWhiteboardId) {
     throw new Error('CLIENT_EFFECT_CODE_EDIT_WHITEBOARD_MISMATCH');
   }
@@ -362,7 +362,7 @@ export function prepareNativeWhiteboardDeleteTarget(
   if (typeof expectedWhiteboardId !== 'string' || !expectedWhiteboardId) {
     throw new Error('CLIENT_EFFECT_DELETE_WHITEBOARD_ID_INVALID');
   }
-  const latestWhiteboard = store.getState().stage?.whiteboard?.at(-1);
+  const latestWhiteboard = getActiveWhiteboardForStore(store);
   if (!latestWhiteboard || latestWhiteboard.id !== expectedWhiteboardId) {
     throw new Error('CLIENT_EFFECT_DELETE_WHITEBOARD_MISMATCH');
   }
@@ -386,7 +386,7 @@ export function prepareNativeWhiteboardClearTarget(
   if (!isPromptSafeWhiteboardIdentifier(expectedWhiteboardId)) {
     throw new Error('CLIENT_EFFECT_CLEAR_WHITEBOARD_ID_INVALID');
   }
-  const latestWhiteboard = store.getState().stage?.whiteboard?.at(-1);
+  const latestWhiteboard = getActiveWhiteboardForStore(store);
   if (!latestWhiteboard || latestWhiteboard.id !== expectedWhiteboardId) {
     throw new Error('CLIENT_EFFECT_CLEAR_WHITEBOARD_MISMATCH');
   }
@@ -415,7 +415,7 @@ export function verifyNativeWhiteboardClearNoOp(opts: {
 }): WhiteboardClearCommittedObservation {
   throwIfAborted(opts.signal);
   assertStageAndScene(opts.store, opts.targetBinding);
-  const latest = opts.store.getState().stage?.whiteboard?.at(-1);
+  const latest = getActiveWhiteboardForStore(opts.store);
   if (
     !latest ||
     latest.id !== opts.targetBinding.whiteboardId ||
@@ -446,7 +446,7 @@ export async function captureNativeWhiteboardClearState(opts: {
 }): Promise<NativeWhiteboardClearCapture> {
   throwIfAborted(opts.signal);
   assertStageAndScene(opts.store, opts.targetBinding);
-  const latest = opts.store.getState().stage?.whiteboard?.at(-1);
+  const latest = getActiveWhiteboardForStore(opts.store);
   if (!latest || latest.id !== opts.targetBinding.whiteboardId) {
     throw new Error('CLIENT_EFFECT_CLEAR_WHITEBOARD_MISMATCH');
   }
@@ -490,7 +490,7 @@ export function commitNativeWhiteboardClearEffect(opts: {
 }): WhiteboardClearCommittedObservation {
   throwIfAborted(opts.signal);
   assertStageAndScene(opts.store, opts.targetBinding);
-  const latest = opts.store.getState().stage?.whiteboard?.at(-1);
+  const latest = getActiveWhiteboardForStore(opts.store);
   if (!latest || latest.id !== opts.targetBinding.whiteboardId) {
     throw new Error('CLIENT_EFFECT_CLEAR_WHITEBOARD_MISMATCH');
   }
@@ -510,7 +510,7 @@ export function commitNativeWhiteboardClearEffect(opts: {
   );
   if (!updated.success)
     throw new Error(updated.error || 'CLIENT_EFFECT_WHITEBOARD_MUTATION_FAILED');
-  const after = opts.store.getState().stage?.whiteboard?.at(-1);
+  const after = getActiveWhiteboardForStore(opts.store);
   if (
     !after ||
     after.id !== opts.targetBinding.whiteboardId ||
@@ -573,7 +573,7 @@ export function executeNativeWhiteboardDeleteEffect(opts: {
   // synchronous. No await may separate them, otherwise a later binding could
   // be deleted after the accepted target changes.
   assertStageAndScene(opts.store, opts.targetBinding);
-  const latestWhiteboard = opts.store.getState().stage?.whiteboard?.at(-1);
+  const latestWhiteboard = getActiveWhiteboardForStore(opts.store);
   if (!latestWhiteboard || latestWhiteboard.id !== opts.expectedWhiteboardId) {
     throw new Error('CLIENT_EFFECT_DELETE_WHITEBOARD_MISMATCH');
   }
@@ -2115,7 +2115,7 @@ function readEditableCodeElement(opts: {
   if (opts.targetBinding.whiteboardId !== opts.expectedWhiteboardId) {
     throw new Error('CLIENT_EFFECT_CODE_EDIT_WHITEBOARD_MISMATCH');
   }
-  const latestWhiteboard = opts.store.getState().stage?.whiteboard?.at(-1);
+  const latestWhiteboard = getActiveWhiteboardForStore(opts.store);
   if (!latestWhiteboard || latestWhiteboard.id !== opts.expectedWhiteboardId) {
     throw new Error('CLIENT_EFFECT_CODE_EDIT_WHITEBOARD_MISMATCH');
   }

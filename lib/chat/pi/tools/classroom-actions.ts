@@ -5,6 +5,7 @@ import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import { getEffectiveActions } from '@/lib/orchestration/tool-schemas';
 import type { WhiteboardActionRecord } from '@/lib/orchestration/types';
 import type { StatelessChatRequest } from '@/lib/types/chat';
+import { canonicalActiveWhiteboard } from '@/lib/store/whiteboard-environment-authority';
 import type { SendEvent } from '../types';
 
 const SpotlightParams = Type.Object({
@@ -173,15 +174,13 @@ const WbEditCodeParams = Type.Union([
 type WbEditCodeParams = Static<typeof WbEditCodeParams>;
 
 function getInitialWhiteboardElementCount(body: StatelessChatRequest): number {
-  const whiteboards = body.storeState.stage?.whiteboard;
-  const latestWhiteboard = Array.isArray(whiteboards) ? whiteboards[whiteboards.length - 1] : null;
+  const latestWhiteboard = canonicalActiveWhiteboard(body.storeState.stage);
   const elements = latestWhiteboard?.elements;
   return Array.isArray(elements) ? elements.length : 0;
 }
 
 function getInitialWhiteboardElementIds(body: StatelessChatRequest): Set<string> {
-  const whiteboards = body.storeState.stage?.whiteboard;
-  const latestWhiteboard = Array.isArray(whiteboards) ? whiteboards[whiteboards.length - 1] : null;
+  const latestWhiteboard = canonicalActiveWhiteboard(body.storeState.stage);
   const elements = latestWhiteboard?.elements;
   if (!Array.isArray(elements)) return new Set();
 
@@ -197,8 +196,7 @@ function getInitialWhiteboardElementIds(body: StatelessChatRequest): Set<string>
 }
 
 function getInitialWhiteboardCodeLineIds(body: StatelessChatRequest): Map<string, Set<string>> {
-  const whiteboards = body.storeState.stage?.whiteboard;
-  const latestWhiteboard = Array.isArray(whiteboards) ? whiteboards[whiteboards.length - 1] : null;
+  const latestWhiteboard = canonicalActiveWhiteboard(body.storeState.stage);
   const elements = latestWhiteboard?.elements;
   if (!Array.isArray(elements)) return new Map();
 

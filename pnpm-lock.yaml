@@ -110,6 +110,9 @@ importers:
       '@napi-rs/canvas':
         specifier: ^0.1.88
         version: 0.1.96
+      '@noble/hashes':
+        specifier: 1.8.0
+        version: 1.8.0
       '@openmaic/dsl':
         specifier: workspace:*
         version: link:packages/@openmaic/dsl

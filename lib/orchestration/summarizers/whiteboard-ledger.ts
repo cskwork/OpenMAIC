@@ -1,6 +1,7 @@
 import type { StatelessChatRequest } from '@/lib/types/chat';
 import type { WhiteboardActionRecord } from '../types';
 import { createCodeRenderBudget, renderCodeLines } from './code-line-budget';
+import { canonicalActiveWhiteboard } from '@/lib/store/whiteboard-environment-authority';
 
 interface VirtualWhiteboardElement {
   agentName: string;
@@ -34,8 +35,7 @@ function getInitialWhiteboardElements(
   storeState: StatelessChatRequest['storeState'],
   jsonSafeElementIds: boolean,
 ): VirtualWhiteboardElement[] {
-  const whiteboards = storeState.stage?.whiteboard;
-  const latestWhiteboard = Array.isArray(whiteboards) ? whiteboards.at(-1) : null;
+  const latestWhiteboard = canonicalActiveWhiteboard(storeState.stage);
   const source = latestWhiteboard?.elements;
   if (!Array.isArray(source)) return [];
 

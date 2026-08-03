@@ -57,6 +57,7 @@ import { applyHydratedClassroomFallbackScenes } from '@/lib/classroom/pbl-fallba
 import { markStageDeleted, unmarkStageDeleted } from '@/lib/utils/deleted-stages';
 import type { Scene, Stage } from '@/lib/types/stage';
 import type { SceneOutline } from '@/lib/types/generation';
+import { setStageStoreStateThroughAuthority } from '@/tests/helpers/whiteboard-authority';
 
 function makeStage(id = 'stage-1'): Stage {
   return { id, name: 'Test stage', createdAt: 1, updatedAt: 1 };
@@ -115,7 +116,7 @@ function applyFallbackToStageStore(stageId: string, token: StageSceneLoadToken, 
     hydrateScenes: async () => scenes,
     applyStageAndScenes: (stage, hydrated) => {
       useStageStore.getState().setStage(stage);
-      useStageStore.setState({
+      setStageStoreStateThroughAuthority({
         scenes: hydrated,
         currentSceneId: hydrated[0]?.id ?? null,
         mode: 'playback',
@@ -156,7 +157,7 @@ describe('generationComplete', () => {
   });
 
   it('setGenerationComplete(true) flips the flag and persists it alongside outlines', async () => {
-    useStageStore.setState({
+    setStageStoreStateThroughAuthority({
       stage: makeStage(),
       scenes: [makeSlideScene('final', 1)],
       outlines: [makeOutline(1), makeOutline(2)],
@@ -180,7 +181,7 @@ describe('generationComplete', () => {
   });
 
   it('ordinary autosave carries the authoritative outline snapshot', async () => {
-    useStageStore.setState({
+    setStageStoreStateThroughAuthority({
       stage: makeStage(),
       scenes: [makeSlideScene('scene', 1)],
       outlines: [makeOutline(1)],
@@ -203,7 +204,7 @@ describe('generationComplete', () => {
   // so the flag must not reach IndexedDB before the scenes do — else a reload
   // would trust the flag and drop the unsaved final slide.
   it('flushes scenes before persisting the completion flag', async () => {
-    useStageStore.setState({ stage: makeStage(), outlines: [makeOutline(1)] });
+    setStageStoreStateThroughAuthority({ stage: makeStage(), outlines: [makeOutline(1)] });
     saveStageDataMock.mockClear();
     stageOutlinesPut.mockClear();
 
@@ -218,7 +219,7 @@ describe('generationComplete', () => {
   });
 
   it('does not persist the completion flag when the scene flush fails', async () => {
-    useStageStore.setState({ stage: makeStage(), outlines: [makeOutline(1)] });
+    setStageStoreStateThroughAuthority({ stage: makeStage(), outlines: [makeOutline(1)] });
     saveStageDataMock.mockRejectedValueOnce(new Error('disk full'));
     stageOutlinesPut.mockClear();
 
@@ -232,7 +233,7 @@ describe('generationComplete', () => {
 
   it('starting a new stage resets generationComplete to false', () => {
     vi.useFakeTimers();
-    useStageStore.setState({ generationComplete: true });
+    setStageStoreStateThroughAuthority({ generationComplete: true });
     useStageStore.getState().setStage(makeStage());
     expect(useStageStore.getState().generationComplete).toBe(false);
   });
@@ -247,7 +248,7 @@ describe('generationComplete', () => {
     });
 
     it('marks complete when deleting from a fully-materialized deck whose flag was unset', () => {
-      useStageStore.setState({
+      setStageStoreStateThroughAuthority({
         stage: makeStage(),
         scenes: [makeSlideScene('a', 1), makeSlideScene('b', 2), makeSlideScene('c', 3)],
         outlines: [makeOutline(1), makeOutline(2), makeOutline(3)],
@@ -261,7 +262,7 @@ describe('generationComplete', () => {
     });
 
     it('does not mark complete when deleting from a still-incomplete deck', () => {
-      useStageStore.setState({
+      setStageStoreStateThroughAuthority({
         stage: makeStage(),
         scenes: [makeSlideScene('a', 1), makeSlideScene('b', 2)], // outline order 3 not materialized
         outlines: [makeOutline(1), makeOutline(2), makeOutline(3)],
@@ -274,7 +275,7 @@ describe('generationComplete', () => {
     });
 
     it('keeps generationComplete true when deleting from an already-complete deck', () => {
-      useStageStore.setState({
+      setStageStoreStateThroughAuthority({
         stage: makeStage(),
         scenes: [makeSlideScene('a', 1), makeSlideScene('b', 2)],
         outlines: [makeOutline(1), makeOutline(2)],
@@ -289,7 +290,7 @@ describe('generationComplete', () => {
 
   describe('markGenerationCompleteIfDone', () => {
     it('marks complete when every outline has a scene and none failed', () => {
-      useStageStore.setState({
+      setStageStoreStateThroughAuthority({
         stage: makeStage(),
         scenes: [makeSlideScene('a', 1), makeSlideScene('b', 2)],
         outlines: [makeOutline(1), makeOutline(2)],
@@ -301,7 +302,7 @@ describe('generationComplete', () => {
     });
 
     it('does not mark complete while an outline is still unmaterialized', () => {
-      useStageStore.setState({
+      setStageStoreStateThroughAuthority({
         stage: makeStage(),
         scenes: [makeSlideScene('a', 1)],
         outlines: [makeOutline(1), makeOutline(2)],
@@ -313,7 +314,7 @@ describe('generationComplete', () => {
     });
 
     it('does not mark complete while an outline is still failed', () => {
-      useStageStore.setState({
+      setStageStoreStateThroughAuthority({
         stage: makeStage(),
         scenes: [makeSlideScene('a', 1), makeSlideScene('b', 2)],
         outlines: [makeOutline(1), makeOutline(2)],
@@ -395,7 +396,7 @@ describe('generationComplete', () => {
   });
 
   it('does not infer completion for a legacy deck while an outline is failed', async () => {
-    useStageStore.setState({ stage: makeStage(), failedOutlines: [makeOutline(2)] });
+    setStageStoreStateThroughAuthority({ stage: makeStage(), failedOutlines: [makeOutline(2)] });
     loadStageDataMock.mockResolvedValue({
       stage: makeStage(),
       scenes: [makeSlideScene('a', 1), makeSlideScene('b', 2)],
@@ -414,7 +415,7 @@ describe('generationComplete', () => {
   });
 
   it('does not let failed outlines from another stage block legacy completion inference', async () => {
-    useStageStore.setState({
+    setStageStoreStateThroughAuthority({
       stage: { ...makeStage(), id: 'other-stage' },
       failedOutlines: [makeOutline(2)],
     });
@@ -482,7 +483,7 @@ describe('generationComplete', () => {
 
     const load = useStageStore.getState().loadFromStorage('stage-1');
     await vi.waitFor(() => expect(hydratePBLScenesFromRuntimeMock).toHaveBeenCalled());
-    useStageStore.setState({
+    setStageStoreStateThroughAuthority({
       stage: makeStage(),
       scenes: [freshScene],
       currentSceneId: 'fresh',
@@ -519,7 +520,7 @@ describe('generationComplete', () => {
     const load = useStageStore.getState().loadFromStorage('stage-a');
     await vi.waitFor(() => expect(hydratePBLScenesFromRuntimeMock).toHaveBeenCalled());
     useStageStore.getState().setStage(makeStage('stage-b'));
-    useStageStore.setState({ scenes: [freshScene], currentSceneId: 'fresh-b' });
+    setStageStoreStateThroughAuthority({ scenes: [freshScene], currentSceneId: 'fresh-b' });
     resolveHydration([diskScene]);
     await load;
 
@@ -529,7 +530,7 @@ describe('generationComplete', () => {
   });
 
   it('keeps the later overlapping storage load when the older hydration resolves first', async () => {
-    useStageStore.setState({
+    setStageStoreStateThroughAuthority({
       stage: makeStage('stage-b'),
       scenes: [makeSlideScene('resident-b', 1, 'stage-b')],
       currentSceneId: 'resident-b',
@@ -569,7 +570,7 @@ describe('generationComplete', () => {
   });
 
   it('keeps the later overlapping storage load when the newer hydration resolves first', async () => {
-    useStageStore.setState({
+    setStageStoreStateThroughAuthority({
       stage: makeStage('stage-b'),
       scenes: [makeSlideScene('resident-b', 1, 'stage-b')],
       currentSceneId: 'resident-b',
@@ -609,7 +610,7 @@ describe('generationComplete', () => {
   });
 
   it('lets a later classroom fallback apply beat an earlier storage load', async () => {
-    useStageStore.setState({
+    setStageStoreStateThroughAuthority({
       stage: makeStage('stage-b'),
       scenes: [makeSlideScene('resident-b', 1, 'stage-b')],
       currentSceneId: 'resident-b',
@@ -643,7 +644,7 @@ describe('generationComplete', () => {
         }),
       applyStageAndScenes: (stage, scenes) => {
         useStageStore.getState().setStage(stage);
-        useStageStore.setState({
+        setStageStoreStateThroughAuthority({
           scenes,
           currentSceneId: scenes[0]?.id ?? null,
           mode: 'playback',
@@ -782,7 +783,7 @@ describe('generationComplete', () => {
   it('does not let failed outlines from another stage block legacy completion inference', async () => {
     const diskScene = makeSlideScene('disk-a', 1, 'stage-a');
     const residentScene = makeSlideScene('resident-b', 1, 'stage-b');
-    useStageStore.setState({
+    setStageStoreStateThroughAuthority({
       stage: makeStage('stage-b'),
       scenes: [residentScene],
       failedOutlines: [makeOutline(99)],

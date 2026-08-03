@@ -27,6 +27,12 @@ import {
 } from '@/lib/utils/deleted-stages';
 import { loadStageData, saveStageDataIncremental } from '@/lib/utils/stage-storage';
 import type { GeneratedAgentConfig, Scene, Stage } from '@/lib/types/stage';
+import { setStageStoreStateThroughAuthority } from '@/tests/helpers/whiteboard-authority';
+import {
+  WHITEBOARD_AUTHORITY_RESOURCE_BUSY,
+  getDefaultWhiteboardEnvironmentAuthority,
+  type WhiteboardAuthorityTransactionResult,
+} from '@/lib/store/whiteboard-environment-authority';
 
 // The store flush path imports stage-storage dynamically; mock it so a pending
 // mark scheduled by commitMigratedAgentConfigsToStore can never reach a real
@@ -156,6 +162,75 @@ beforeEach(() => {
 });
 
 describe('runClassroomLoad', () => {
+  it('returns RESOURCE_BUSY from server hydration without reviving or replacing the stage', () => {
+    useStageStore.getState().clearStore();
+    applyClassroomStageAndScenes(makeStage('stage-current'), [], { persist: false });
+    markStageDeleted('stage-replacement');
+    const authority = getDefaultWhiteboardEnvironmentAuthority()!;
+    let nestedResult: WhiteboardAuthorityTransactionResult | undefined;
+
+    try {
+      const outer = authority.transact({
+        label: 'test.classroom-adapter-reentrancy',
+        writes: [
+          {
+            label: 'nested-server-hydration',
+            write: () => {
+              nestedResult = applyClassroomStageAndScenes(makeStage('stage-replacement'), [], {
+                persist: false,
+              });
+            },
+          },
+        ],
+      });
+
+      expect(nestedResult).toMatchObject({
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_RESOURCE_BUSY,
+        mutationMayHaveCommitted: false,
+      });
+      expect(outer).toMatchObject({ ok: true, changed: false });
+      expect(useStageStore.getState().stage?.id).toBe('stage-current');
+      expect(isStageDeleted('stage-replacement')).toBe(true);
+    } finally {
+      unmarkStageDeleted('stage-replacement');
+      useStageStore.getState().clearStore();
+    }
+  });
+
+  it('returns RESOURCE_BUSY from deleted-stage eviction without reporting a clear', () => {
+    useStageStore.getState().clearStore();
+    applyClassroomStageAndScenes(makeStage('stage-delete-busy'), [], { persist: false });
+    markStageDeleted('stage-delete-busy');
+    const authority = getDefaultWhiteboardEnvironmentAuthority()!;
+    let nestedResult: WhiteboardAuthorityTransactionResult | undefined;
+
+    try {
+      const outer = authority.transact({
+        label: 'test.deleted-stage-adapter-reentrancy',
+        writes: [
+          {
+            label: 'nested-stage-eviction',
+            write: () => {
+              nestedResult = clearStoreForDeletedStage('stage-delete-busy');
+            },
+          },
+        ],
+      });
+
+      expect(nestedResult).toMatchObject({
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_RESOURCE_BUSY,
+        mutationMayHaveCommitted: false,
+      });
+      expect(outer).toMatchObject({ ok: true, changed: false });
+      expect(useStageStore.getState().stage?.id).toBe('stage-delete-busy');
+    } finally {
+      unmarkStageDeleted('stage-delete-busy');
+      useStageStore.getState().clearStore();
+    }
+  });
+
   it('keeps the current load token valid when fallback scenes are committed', () => {
     useStageStore.getState().clearStore();
     const loadToken = claimStageSceneLoadToken();
@@ -578,7 +653,7 @@ describe('runClassroomLoad', () => {
   });
 
   it('resets caller-bound chat authority when fallback replaces the classroom', () => {
-    useStageStore.setState({
+    setStageStoreStateThroughAuthority({
       stage: makeStage('stage-old'),
       chats: [],
       chatSnapshot: { sessions: [], restoreMarker: 'chat-restore-marker:stage-old:marker' },
@@ -1036,13 +1111,13 @@ describe('mergeLegacyAgentFallbacks', () => {
 describe('commitMigratedAgentConfigsToStore', () => {
   it('commits onto the matching stage and leaves a different stage untouched', () => {
     const configs = [makeAgentConfig('agent-a')];
-    useStageStore.setState({ stage: makeStage('stage-a') });
+    setStageStoreStateThroughAuthority({ stage: makeStage('stage-a') });
 
     commitMigratedAgentConfigsToStore('stage-a', configs);
     expect(useStageStore.getState().stage?.generatedAgentConfigs).toEqual(configs);
 
     // Simulate a classroom switch racing the commit: the stale commit no-ops.
-    useStageStore.setState({ stage: makeStage('stage-b') });
+    setStageStoreStateThroughAuthority({ stage: makeStage('stage-b') });
     commitMigratedAgentConfigsToStore('stage-a', [makeAgentConfig('stale')]);
     expect(useStageStore.getState().stage?.id).toBe('stage-b');
     expect(useStageStore.getState().stage?.generatedAgentConfigs).toBeUndefined();

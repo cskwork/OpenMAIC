@@ -61,6 +61,7 @@
     "@langchain/langgraph": "^1.1.1",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@napi-rs/canvas": "^0.1.88",
+    "@noble/hashes": "1.8.0",
     "@openmaic/dsl": "workspace:*",
     "@openmaic/importer": "workspace:*",
     "@openmaic/renderer": "workspace:*",

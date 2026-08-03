@@ -8,6 +8,7 @@ import {
   type WhiteboardOpenCommittedObservation,
 } from '@/lib/agent/runtime/client-effect-contract';
 import type { StatelessChatRequest } from '@/lib/types/chat';
+import { canonicalActiveWhiteboard } from '@/lib/store/whiteboard-environment-authority';
 
 export { isPromptSafeWhiteboardIdentifier } from '@/lib/agent/runtime/client-effect-contract';
 
@@ -38,7 +39,7 @@ export class NativeWhiteboardViewState {
     private readonly onBindingChanged?: (whiteboardId: string | undefined) => void,
   ) {
     this.open = body.storeState.whiteboardOpen === true;
-    const latestWhiteboard = body.storeState.stage?.whiteboard?.at(-1);
+    const latestWhiteboard = canonicalActiveWhiteboard(body.storeState.stage);
     if (!latestWhiteboard) {
       this.whiteboardId = undefined;
       this.entityTrusted = true;

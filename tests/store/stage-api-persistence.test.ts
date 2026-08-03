@@ -14,6 +14,7 @@ vi.mock('@/lib/utils/stage-storage', () => ({
 
 import { createStageAPI } from '@/lib/api/stage-api';
 import { flushStageSave, useStageStore } from '@/lib/store/stage';
+import { setStageStoreStateThroughAuthority } from '@/tests/helpers/whiteboard-authority';
 import type { Scene, Stage } from '@/lib/types/stage';
 
 const stage: Stage = {
@@ -50,7 +51,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   incrementalSave.mockReset().mockResolvedValue({ failedChanges: [] });
   useStageStore.getState().clearStore();
-  useStageStore.setState({
+  setStageStoreStateThroughAuthority({
     stage,
     scenes: [scene],
     currentSceneId: 'scene-1',
@@ -105,7 +106,7 @@ describe('Stage API persistence injection', () => {
       const source = fs.readFileSync(path.join(apiDir, file), 'utf8');
       expect(source, `${file} must remain covered by this inventory`).toContain('store.setState(');
       expect(composition, `${factory} must receive the persistence wrapper`).toContain(
-        `${factory}(persistenceStore)`,
+        `${factory}(persistenceStore`,
       );
     }
     expect(composition).toContain('markStagePersistenceDirty(changes)');

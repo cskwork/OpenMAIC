@@ -8,7 +8,7 @@ import {
   type NativeWbDrawTextInput,
 } from '@/lib/action/client-effect-whiteboard';
 import { digestVisibleTextV1 } from '@/lib/agent/runtime/client-effect-contract';
-import type { StageStore } from '@/lib/api/stage-api';
+import { createStageAPI, type StageStore } from '@/lib/api/stage-api';
 
 function createStore(): StageStore {
   let state = {
@@ -106,14 +106,9 @@ describe('native wb_draw_text client effect', () => {
   it('writes to the accepted whiteboard instead of a newer whiteboard', async () => {
     const store = createStore();
     const binding = prepareNativeWhiteboardTarget(store, target);
-    store.getState().stage?.whiteboard?.push({
-      id: 'newer-whiteboard',
-      viewportSize: 1000,
-      viewportRatio: 16 / 9,
-      elements: [],
-      background: { type: 'solid', color: '#fff' },
-      animations: [],
-    });
+    const created = createStageAPI(store).whiteboard.create();
+    expect(created.success).toBe(true);
+    const newerWhiteboardId = created.data!.id;
 
     await executeNativeWhiteboardTextEffect({
       store,
@@ -127,7 +122,7 @@ describe('native wb_draw_text client effect', () => {
       whiteboards?.find((candidate) => candidate.id === binding.whiteboardId)?.elements,
     ).toHaveLength(1);
     expect(
-      whiteboards?.find((candidate) => candidate.id === 'newer-whiteboard')?.elements,
+      whiteboards?.find((candidate) => candidate.id === newerWhiteboardId)?.elements,
     ).toHaveLength(0);
   });
 
@@ -437,14 +432,7 @@ describe('native wb_open client effect', () => {
   it('fails closed if a newer whiteboard replaced the accepted target', () => {
     const store = createStore();
     const prepared = prepareNativeWhiteboardOpenTarget(store, target);
-    store.getState().stage?.whiteboard?.push({
-      id: 'newer-whiteboard',
-      viewportSize: 1000,
-      viewportRatio: 16 / 9,
-      elements: [],
-      background: { type: 'solid', color: '#fff' },
-      animations: [],
-    });
+    expect(createStageAPI(store).whiteboard.create().success).toBe(true);
 
     expect(() =>
       verifyNativeWhiteboardOpenEffect({

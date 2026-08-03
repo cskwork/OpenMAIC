@@ -55,6 +55,7 @@ import {
 import { saveStageData, saveStageDataIncremental } from '@/lib/utils/stage-storage';
 import type { Stage } from '@/lib/types/stage';
 import type { GeneratedAgentConfig } from '@/lib/types/stage';
+import { setStageStoreStateThroughAuthority } from '@/tests/helpers/whiteboard-authority';
 
 function makeStage(): Stage {
   return {
@@ -85,7 +86,7 @@ beforeEach(() => {
   settingsState.agentMode = 'auto';
   settingsState.selectedAgentIds = [];
   settingsState.agentSelectionIsUserSet = false;
-  useStageStore.setState({
+  setStageStoreStateThroughAuthority({
     stage: makeStage(),
     scenes: [],
     currentSceneId: null,
@@ -110,7 +111,7 @@ describe('setStageAgents', () => {
   });
 
   it('is a no-op when stage is null', () => {
-    useStageStore.setState({ stage: null });
+    setStageStoreStateThroughAuthority({ stage: null });
     expect(() => {
       useStageStore.getState().setStageAgents([makeAgentConfig('x')]);
     }).not.toThrow();
@@ -122,7 +123,7 @@ describe('setStageAgents', () => {
       ...makeStage(),
       generatedAgentConfigs: [makeAgentConfig('old')],
     };
-    useStageStore.setState({ stage: stageWithAgents });
+    setStageStoreStateThroughAuthority({ stage: stageWithAgents });
     const newConfigs = [makeAgentConfig('new1'), makeAgentConfig('new2')];
     useStageStore.getState().setStageAgents(newConfigs);
     expect(useStageStore.getState().stage?.generatedAgentConfigs).toEqual(newConfigs);
@@ -191,7 +192,7 @@ describe('setStageAgents selection provenance', () => {
     // Mirrors restoreAgentSelection's `length > 0` gate: an empty user-set
     // selection is invalid there, so it must not be written here either —
     // otherwise the classroom runs with zero agents until a reload heals it.
-    useStageStore.setState({
+    setStageStoreStateThroughAuthority({
       stage: {
         ...makeStage(),
         generatedAgentConfigs: [
@@ -218,7 +219,7 @@ describe('setStageAgents selection provenance', () => {
     // The AgentBar auto toggle snapshots the entire roster as a "user-set"
     // selection. That intent is "everyone", so a roster addition must include
     // the newcomer instead of freezing the old snapshot forever.
-    useStageStore.setState({
+    setStageStoreStateThroughAuthority({
       stage: {
         ...makeStage(),
         generatedAgentConfigs: [makeAgentConfig('a1'), makeAgentConfig('a2')],
@@ -238,7 +239,7 @@ describe('setStageAgents selection provenance', () => {
   });
 
   it('does not auto-select newcomers when the user-set selection was a genuine subset of the roster', () => {
-    useStageStore.setState({
+    setStageStoreStateThroughAuthority({
       stage: {
         ...makeStage(),
         generatedAgentConfigs: [makeAgentConfig('a1'), makeAgentConfig('a2')],
@@ -293,7 +294,7 @@ describe('setStageAgents persistence (document scheduler)', () => {
       ...makeStage(),
       generatedAgentConfigs: [makeAgentConfig('a1')],
     };
-    useStageStore.setState({ stage: stageWithAgents, scenes: [] });
+    setStageStoreStateThroughAuthority({ stage: stageWithAgents, scenes: [] });
     useStageStore.getState().setCurrentSceneId('scene-42');
 
     await vi.advanceTimersByTimeAsync(500);
@@ -470,7 +471,7 @@ describe('setStageAgents persistence (document scheduler)', () => {
       ...makeStage(),
       generatedAgentConfigs: [makeAgentConfig('b1')],
     };
-    useStageStore.setState({ stage: stageWithAgents });
+    setStageStoreStateThroughAuthority({ stage: stageWithAgents });
     await useStageStore.getState().saveToStorage();
 
     expect(saveStageData).toHaveBeenCalledOnce();

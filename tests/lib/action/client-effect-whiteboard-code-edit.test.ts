@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PPTCodeElement } from '@openmaic/dsl';
-import type { StageStore } from '@/lib/api/stage-api';
+import { createStageAPI, type StageStore } from '@/lib/api/stage-api';
 import {
   executeNativeWhiteboardCodeEditEffect,
   prepareNativeExistingWhiteboardTarget,
@@ -357,20 +357,7 @@ describe('native wb_edit_code client effect', () => {
 
   it('does not create or switch whiteboards when the exact request-start board is missing', () => {
     const store = createStore();
-    const stage = store.getState().stage!;
-    store.setState({
-      stage: {
-        ...stage,
-        whiteboard: [
-          ...(stage.whiteboard ?? []),
-          {
-            ...stage.whiteboard![0],
-            id: 'whiteboard-2',
-            elements: [],
-          },
-        ],
-      },
-    });
+    expect(createStageAPI(store).whiteboard.create().success).toBe(true);
 
     expect(() => prepareNativeExistingWhiteboardTarget(store, target, 'whiteboard-1')).toThrow(
       'CLIENT_EFFECT_CODE_EDIT_WHITEBOARD_MISMATCH',

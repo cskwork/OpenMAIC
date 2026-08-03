@@ -21,6 +21,7 @@ import { useStageStore } from '@/lib/store';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useSoftCloseCountdown } from '@/components/chat/use-soft-close-countdown';
+import { canonicalActiveWhiteboard } from '@/lib/store/whiteboard-environment-authority';
 
 export interface CanvasToolbarProps {
   readonly currentSceneIndex: number;
@@ -123,7 +124,7 @@ export function CanvasToolbar({
   const showPlayPause = !isLiveSession;
 
   const whiteboardElementCount = useStageStore(
-    (s) => s.stage?.whiteboard?.[0]?.elements?.length || 0,
+    (s) => canonicalActiveWhiteboard(s.stage)?.elements?.length || 0,
   );
 
   // Volume slider hover state

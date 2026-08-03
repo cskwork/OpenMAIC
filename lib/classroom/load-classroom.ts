@@ -16,6 +16,11 @@ import {
 import type { MediaFileRecord } from '@/lib/utils/database';
 import { unmarkStageDeleted } from '@/lib/utils/deleted-stages';
 import type { GeneratedAgentConfig, Scene, Stage } from '@/lib/types/stage';
+import { getDefaultWhiteboardEnvironmentAuthority } from '@/lib/store/whiteboard-environment-authority';
+import type { WhiteboardAuthorityTransactionResult } from '@/lib/store/whiteboard-environment-authority';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('ClassroomLoad');
 
 export interface ClassroomPayload {
   stage: Stage;
@@ -251,32 +256,49 @@ export function applyClassroomStageAndScenes(
     chats?: ChatSession[];
     chatSnapshot?: ChatStorageSnapshot;
   } = {},
-): void {
+): WhiteboardAuthorityTransactionResult | undefined {
   // Explicit document (re)creation point: deletion only removes client-side
   // data, so revisiting the classroom URL restores the server copy under the
-  // SAME id. Lift any same-session deleted flag before the store write, or
-  // every subsequent edit of the restored classroom would be silently dropped
-  // until a reload. This is a deliberate restore, not an in-flight flush —
+  // SAME id. Lift any same-session deleted flag only after the Authority
+  // confirms that the replacement committed; otherwise a BUSY/BYPASS rejection
+  // would revive a classroom whose store state was never restored. This is a
+  // deliberate restore, not an in-flight flush —
   // exactly the distinction `deleted-stages.ts` requires. The deletion EPOCH
   // stays bumped: a pre-delete flush still in flight remains permanently
   // stale and cannot overwrite the restored document, while the
   // `saveToStorage` below (and every later edit) captures the current epoch
   // and persists normally.
-  unmarkStageDeleted(stage.id);
   const nextScenes = [...scenes];
-  useStageStore.setState((state) => ({
-    stage,
-    scenes: nextScenes,
-    currentSceneId: nextScenes[0]?.id ?? null,
-    chats: options.chats ?? [],
-    chatSnapshot: options.chatSnapshot ?? { sessions: [], restoreMarker: null },
-    generationComplete: false,
-    generationEpoch: state.generationEpoch + 1,
-    mode: 'playback',
-  }));
+  const authority = getDefaultWhiteboardEnvironmentAuthority();
+  const canonicalStage = authority?.canonicalizeStageReplacement(stage) ?? stage;
+  const hydrate = () =>
+    useStageStore.setState((state) => ({
+      stage: canonicalStage,
+      scenes: nextScenes,
+      currentSceneId: nextScenes[0]?.id ?? null,
+      chats: options.chats ?? [],
+      chatSnapshot: options.chatSnapshot ?? { sessions: [], restoreMarker: null },
+      generationComplete: false,
+      generationEpoch: state.generationEpoch + 1,
+      mode: 'playback',
+    }));
+  const result = authority?.transact({
+    label: 'classroom.applyServerSnapshot',
+    writes: [{ label: 'stage.hydrateServerSnapshot', write: hydrate }],
+  });
+  if (!authority) hydrate();
+  if (result && !result.ok && !result.mutationMayHaveCommitted) {
+    log.error('Classroom hydration was rejected by Whiteboard Authority:', result);
+    return result;
+  }
+  if (result && !result.ok) {
+    log.warn('Classroom hydration committed with uncertain postconditions:', result);
+  }
+  unmarkStageDeleted(stage.id);
   if (options.persist !== false) {
     void useStageStore.getState().saveToStorage();
   }
+  return result;
 }
 
 export async function loadRestoredMediaTasksFromDB(

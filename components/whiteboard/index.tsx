@@ -12,6 +12,7 @@ import { useWhiteboardHistoryStore } from '@/lib/store/whiteboard-history';
 import { createStageAPI } from '@/lib/api/stage-api';
 import { toast } from 'sonner';
 import { useI18n } from '@/lib/hooks/use-i18n';
+import { canonicalActiveWhiteboard } from '@/lib/store/whiteboard-environment-authority';
 
 interface WhiteboardProps {
   readonly isOpen: boolean;
@@ -32,7 +33,7 @@ export function Whiteboard({ isOpen, onClose }: WhiteboardProps) {
   const snapshotCount = useWhiteboardHistoryStore((s) => s.snapshots.length);
 
   // Get element count for indicator
-  const whiteboard = stage?.whiteboard?.[0];
+  const whiteboard = canonicalActiveWhiteboard(stage);
   const elementCount = whiteboard?.elements?.length || 0;
 
   const stageAPI = createStageAPI(useStageStore);

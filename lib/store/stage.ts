@@ -28,6 +28,11 @@ import {
   stageDeletionEpoch,
   stageDeletionSettled,
 } from '@/lib/utils/deleted-stages';
+import {
+  getDefaultWhiteboardEnvironmentAuthority,
+  registerDefaultWhiteboardEnvironmentAuthority,
+} from './whiteboard-environment-authority';
+import type { WhiteboardAuthorityTransactionResult } from './whiteboard-environment-authority';
 
 const log = createLogger('StageStore');
 
@@ -211,7 +216,9 @@ function clearedStageState(state: Pick<StageState, 'generationEpoch'>) {
  * back-button-to-a-deleted-classroom trap). No-ops when the store has since
  * moved to another stage.
  */
-export function clearStoreForDeletedStage(stageId: string): void {
+export function clearStoreForDeletedStage(
+  stageId: string,
+): WhiteboardAuthorityTransactionResult | undefined {
   if (useStageStore.getState().stage?.id !== stageId) return;
   // Re-check the deleted flag at eviction time: if a same-id restore
   // completed (and unmarked the deletion) inside the cascade-tail window,
@@ -225,9 +232,31 @@ export function clearStoreForDeletedStage(stageId: string): void {
   // Ghost re-materialization by an in-flight load is prevented by the
   // read-side isStageDeleted re-checks before its store writes, not by token
   // invalidation.
+  const authority = getDefaultWhiteboardEnvironmentAuthority();
+  let result: WhiteboardAuthorityTransactionResult | undefined;
+  if (authority) {
+    result = authority.transact({
+      label: 'stage.clearStoreForDeletedStage',
+      writes: [
+        {
+          label: 'stage.clearDeleted',
+          write: () => useStageStore.setState((state) => clearedStageState(state)),
+        },
+      ],
+    });
+  } else {
+    useStageStore.setState((state) => clearedStageState(state));
+  }
+  if (result && !result.ok && !result.mutationMayHaveCommitted) {
+    log.error('Deleted stage eviction was rejected by Whiteboard Authority:', result);
+    return result;
+  }
+  if (result && !result.ok) {
+    log.warn('Deleted stage eviction committed with uncertain postconditions:', result);
+  }
   resetPendingChanges();
-  useStageStore.setState((state) => clearedStageState(state));
   log.info('Evicted deleted stage from the store:', stageId);
+  return result;
 }
 
 export function claimStageSceneLoadToken(): StageSceneLoadToken {
@@ -291,7 +320,7 @@ interface StageState {
   failedOutlines: SceneOutline[];
 
   // Actions
-  setStage: (stage: Stage) => void;
+  setStage: (stage: Stage) => WhiteboardAuthorityTransactionResult | undefined;
   setScenes: (scenes: Scene[]) => void;
   addScene: (scene: Scene) => void;
   insertSceneAfter: (anchorSceneId: string, scene: Scene) => void;
@@ -322,7 +351,7 @@ interface StageState {
   // Storage
   saveToStorage: () => Promise<boolean>;
   loadFromStorage: (stageId: string, loadToken?: StageSceneLoadToken) => Promise<void>;
-  clearStore: () => void;
+  clearStore: () => WhiteboardAuthorityTransactionResult | undefined;
 }
 
 function isDeckComplete({
@@ -428,73 +457,89 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
 
   // Actions
   setStage: (stage) => {
-    claimStageSceneLoadToken();
+    const authority = getDefaultWhiteboardEnvironmentAuthority();
+    const canonicalStage = authority?.canonicalizeStageReplacement(stage) ?? stage;
     const departingState = get();
-    if (
-      departingState.stage?.id &&
-      pendingStageId === departingState.stage.id &&
-      pendingChanges.size > 0
-    ) {
-      const departingStageId = departingState.stage.id;
+    const departingStageId = departingState.stage?.id;
+    let persistDepartingStage: (() => void) | undefined;
+    if (departingStageId && pendingStageId === departingStageId && pendingChanges.size > 0) {
       const departingDirty = new Map(pendingChanges);
       const departingSnapshot = persistenceSnapshot(departingState);
       // The deletion epoch travels with the snapshot: a deletion during the
       // retry window permanently invalidates both attempts, even if a
       // same-id restore lands before the retry fires.
       const departingEpoch = stageDeletionEpoch(departingStageId);
-      /**
-       * Navigation is intentionally not a durability barrier. The immutable
-       * departing snapshot is attempted immediately, retried once after a
-       * short delay, then logged and dropped so it cannot leak into the next
-       * document or block navigation indefinitely.
-       */
-      void (async () => {
-        let lastFailedKeys = new Set<string>();
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          try {
-            const result = await persistDirtySnapshot(
-              departingStageId,
-              departingDirty,
-              departingSnapshot,
-              departingEpoch,
-            );
-            // A fenced drop has nothing to retry: the deletion epoch outlives
-            // any restore, so the retry would be dropped identically. This
-            // departing snapshot is NOT covered by the deletion path's
-            // failed-delete restore (that restore is scoped to the pending
-            // map and an in-flight flush round, which this dirt already
-            // left) — on a failed delete it is fenced and dropped, an
-            // accepted consequence of navigation not being a durability
-            // barrier.
-            if (result === 'stale-dropped') return;
-            lastFailedKeys = result;
-            if (lastFailedKeys.size === 0) return;
-          } catch (error) {
-            if (attempt === 1) throw error;
+      persistDepartingStage = () => {
+        /**
+         * Navigation is intentionally not a durability barrier. The immutable
+         * departing snapshot is attempted immediately, retried once after a
+         * short delay, then logged and dropped so it cannot leak into the next
+         * document or block navigation indefinitely.
+         */
+        void (async () => {
+          let lastFailedKeys = new Set<string>();
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            try {
+              const result = await persistDirtySnapshot(
+                departingStageId,
+                departingDirty,
+                departingSnapshot,
+                departingEpoch,
+              );
+              // A fenced drop has nothing to retry: the deletion epoch outlives
+              // any restore, so the retry would be dropped identically. This
+              // departing snapshot is NOT covered by the deletion path's
+              // failed-delete restore (that restore is scoped to the pending
+              // map and an in-flight flush round, which this dirt already
+              // left) — on a failed delete it is fenced and dropped, an
+              // accepted consequence of navigation not being a durability
+              // barrier.
+              if (result === 'stale-dropped') return;
+              lastFailedKeys = result;
+              if (lastFailedKeys.size === 0) return;
+            } catch (error) {
+              if (attempt === 1) throw error;
+            }
+            await delay(DEPARTING_STAGE_RETRY_DELAY_MS);
           }
-          await delay(DEPARTING_STAGE_RETRY_DELAY_MS);
-        }
-        log.warn(
-          `Departing stage ${departingStageId} dropped failed changes after one retry: ${[...lastFailedKeys].join(', ')}`,
-        );
-      })().catch((error) => {
-        log.error(
-          `Failed to flush departing stage ${departingStageId} after one retry; changes were dropped:`,
-          error,
-        );
-      });
+          log.warn(
+            `Departing stage ${departingStageId} dropped failed changes after one retry: ${[...lastFailedKeys].join(', ')}`,
+          );
+        })().catch((error) => {
+          log.error(
+            `Failed to flush departing stage ${departingStageId} after one retry; changes were dropped:`,
+            error,
+          );
+        });
+      };
     }
-    resetPendingChanges(stage.id);
-    set((s) => ({
-      stage,
-      scenes: [],
-      currentSceneId: null,
-      chats: [],
-      chatSnapshot: { sessions: [], restoreMarker: null },
-      generationComplete: false,
-      generationEpoch: s.generationEpoch + 1,
-    }));
-    markPendingChanges(stage.id, { kind: 'structure' }, { kind: 'stage' });
+    const replaceStage = () =>
+      set((s) => ({
+        stage: canonicalStage,
+        scenes: [],
+        currentSceneId: null,
+        chats: [],
+        chatSnapshot: { sessions: [], restoreMarker: null },
+        generationComplete: false,
+        generationEpoch: s.generationEpoch + 1,
+      }));
+    const result = authority?.transact({
+      label: 'stage.setStage',
+      writes: [{ label: 'stage.replace', write: replaceStage }],
+    });
+    if (!authority) replaceStage();
+    if (result && !result.ok && !result.mutationMayHaveCommitted) {
+      log.error('Stage replacement was rejected by Whiteboard Authority:', result);
+      return result;
+    }
+    if (result && !result.ok) {
+      log.warn('Stage replacement committed with uncertain postconditions:', result);
+    }
+    claimStageSceneLoadToken();
+    persistDepartingStage?.();
+    resetPendingChanges(canonicalStage.id);
+    markPendingChanges(canonicalStage.id, { kind: 'structure' }, { kind: 'stage' });
+    return result;
   },
 
   setScenes: (scenes) => {
@@ -906,7 +951,20 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
             log.info('Warm stage is deleted; discarding ghost and reloading:', stageId);
             if (get().stage?.id === stageId) {
               resetPendingChanges();
-              set((s) => clearedStageState(s));
+              const authority = getDefaultWhiteboardEnvironmentAuthority();
+              const clear = () => set((s) => clearedStageState(s));
+              const result = authority?.transact({
+                label: 'stage.loadFromStorage.clearDeletedGhost',
+                writes: [{ label: 'stage.clearGhost', write: clear }],
+              });
+              if (!authority) clear();
+              if (result && !result.ok && !result.mutationMayHaveCommitted) {
+                log.error('Deleted ghost clear was rejected by Whiteboard Authority:', result);
+                return;
+              }
+              if (result && !result.ok) {
+                log.warn('Deleted ghost clear committed with uncertain postconditions:', result);
+              }
             }
           }
         }
@@ -965,29 +1023,44 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
             scenes: migrated,
             failedOutlines,
           });
-        set({
-          stage: data.stage,
-          scenes: migrated,
-          currentSceneId: data.currentSceneId,
-          chats: data.chats,
-          chatSnapshot: data.chatSnapshot ?? { sessions: [], restoreMarker: undefined },
-          outlines,
-          generationComplete,
-          // Compute generatingOutlines from persisted outlines minus completed
-          // scenes. Once generation is complete the deck is frozen for editing,
-          // so an orphaned outline (e.g. from a deleted slide) must NOT surface
-          // as a pending placeholder or drive resume regeneration.
-          generatingOutlines: generationComplete
-            ? []
-            : outlines.filter((o) => !migrated.some((s) => s.order === o.order)),
-          // `mode` is transient UI state, not persisted with the stage.
-          // Reset to 'playback' on every load so SPA navigation between
-          // classrooms doesn't carry Pro-mode state across — e.g. user
-          // enters edit in A, navigates to B → B was inheriting
-          // mode='edit'. Refresh already reset via initial store value;
-          // this normalises the SPA path to match.
-          mode: 'playback',
+        const authority = getDefaultWhiteboardEnvironmentAuthority();
+        const canonicalStage = authority?.canonicalizeStageReplacement(data.stage) ?? data.stage;
+        const hydrate = () =>
+          set({
+            stage: canonicalStage,
+            scenes: migrated,
+            currentSceneId: data.currentSceneId,
+            chats: data.chats,
+            chatSnapshot: data.chatSnapshot ?? { sessions: [], restoreMarker: undefined },
+            outlines,
+            generationComplete,
+            // Compute generatingOutlines from persisted outlines minus completed
+            // scenes. Once generation is complete the deck is frozen for editing,
+            // so an orphaned outline (e.g. from a deleted slide) must NOT surface
+            // as a pending placeholder or drive resume regeneration.
+            generatingOutlines: generationComplete
+              ? []
+              : outlines.filter((o) => !migrated.some((s) => s.order === o.order)),
+            // `mode` is transient UI state, not persisted with the stage.
+            // Reset to 'playback' on every load so SPA navigation between
+            // classrooms doesn't carry Pro-mode state across — e.g. user
+            // enters edit in A, navigates to B → B was inheriting
+            // mode='edit'. Refresh already reset via initial store value;
+            // this normalises the SPA path to match.
+            mode: 'playback',
+          });
+        const result = authority?.transact({
+          label: 'stage.loadFromStorage.hydrate',
+          writes: [{ label: 'stage.hydrate', write: hydrate }],
         });
+        if (!authority) hydrate();
+        if (result && !result.ok && !result.mutationMayHaveCommitted) {
+          log.error('Stage hydration was rejected by Whiteboard Authority:', result);
+          return;
+        }
+        if (result && !result.ok) {
+          log.warn('Stage hydration committed with uncertain postconditions:', result);
+        }
         resetPendingChanges(stageId);
         if (generationComplete && !persistedComplete) void get().saveToStorage();
         log.info('Loaded from storage:', stageId);
@@ -1001,14 +1074,33 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
   },
 
   clearStore: () => {
+    const authority = getDefaultWhiteboardEnvironmentAuthority();
+    const clear = () => set((s) => clearedStageState(s));
+    const result = authority?.transact({
+      label: 'stage.clearStore',
+      writes: [{ label: 'stage.clear', write: clear }],
+    });
+    if (!authority) clear();
+    if (result && !result.ok && !result.mutationMayHaveCommitted) {
+      log.error('Store clear was rejected by Whiteboard Authority:', result);
+      return result;
+    }
+    if (result && !result.ok) {
+      log.warn('Store clear committed with uncertain postconditions:', result);
+    }
     claimStageSceneLoadToken();
     resetPendingChanges();
-    set((s) => clearedStageState(s));
     log.info('Store cleared');
+    return result;
   },
 }));
 
 export const useStageStore = createSelectors(useStageStoreBase);
+
+registerDefaultWhiteboardEnvironmentAuthority(
+  useStageStore,
+  () => useCanvasStore.getState().whiteboardOpen,
+);
 
 // ==================== Debounced Save ====================
 

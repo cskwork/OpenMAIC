@@ -4,6 +4,11 @@ import type { TextAttrs } from '@/lib/prosemirror/utils';
 import { defaultRichTextAttrs } from '@/lib/prosemirror/utils';
 import type { TextFormatPainter, ShapeFormatPainter, CreatingElement } from '@/lib/types/edit';
 import type { PercentageGeometry } from '@/lib/types/action';
+import { createLogger } from '@/lib/logger';
+import { getDefaultWhiteboardEnvironmentAuthority } from './whiteboard-environment-authority';
+import type { WhiteboardAuthorityTransactionResult } from './whiteboard-environment-authority';
+
+const log = createLogger('CanvasStore');
 
 /**
  * Spotlight options
@@ -158,7 +163,7 @@ interface CanvasState {
   pauseVideo: () => void;
 
   // ----- Whiteboard -----
-  setWhiteboardOpen: (open: boolean) => void;
+  setWhiteboardOpen: (open: boolean) => WhiteboardAuthorityTransactionResult | undefined;
   setWhiteboardClearing: (clearing: boolean) => void;
 
   // ----- Other -----
@@ -185,7 +190,7 @@ interface CanvasState {
   clearAllEffects: () => void;
 
   // ----- Batch operations -----
-  resetCanvasState: () => void; // Reset Canvas state (used when switching scenes)
+  resetCanvasState: () => WhiteboardAuthorityTransactionResult | undefined; // Reset Canvas state (used when switching scenes)
 }
 
 // ==================== Initial State ====================
@@ -345,7 +350,21 @@ const useCanvasStoreBase = create<CanvasState>((set, get) => ({
 
   // ===== Whiteboard Actions =====
 
-  setWhiteboardOpen: (open) => set({ whiteboardOpen: open }),
+  setWhiteboardOpen: (open) => {
+    const authority = getDefaultWhiteboardEnvironmentAuthority();
+    if (!authority) {
+      set({ whiteboardOpen: open });
+      return;
+    }
+    const result = authority.transact({
+      label: 'canvas.setWhiteboardOpen',
+      writes: [{ label: 'canvas.whiteboardOpen', write: () => set({ whiteboardOpen: open }) }],
+    });
+    if (!result.ok) {
+      log.error('Whiteboard visibility transaction did not settle cleanly:', result);
+    }
+    return result;
+  },
   setWhiteboardClearing: (clearing) => set({ whiteboardClearing: clearing }),
 
   // ===== Other Actions =====
@@ -469,12 +488,26 @@ const useCanvasStoreBase = create<CanvasState>((set, get) => ({
   // ===== Batch Operations =====
 
   resetCanvasState: () => {
-    set({
-      ...initialState,
-      // Preserve viewport settings
-      viewportSize: get().viewportSize,
-      viewportRatio: get().viewportRatio,
+    const reset = () =>
+      set({
+        ...initialState,
+        // Preserve viewport settings
+        viewportSize: get().viewportSize,
+        viewportRatio: get().viewportRatio,
+      });
+    const authority = getDefaultWhiteboardEnvironmentAuthority();
+    if (!authority) {
+      reset();
+      return;
+    }
+    const result = authority.transact({
+      label: 'canvas.resetCanvasState',
+      writes: [{ label: 'canvas.reset', write: reset }],
     });
+    if (!result.ok) {
+      log.error('Canvas reset transaction did not settle cleanly:', result);
+    }
+    return result;
   },
 }));
 

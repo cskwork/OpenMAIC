@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { StageStore } from '@/lib/api/stage-api';
+import { createStageAPI, type StageStore } from '@/lib/api/stage-api';
 import { BrowserClientEffectRuntime } from '@/lib/agent/client/client-effect-runtime';
 import {
   CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION,
@@ -239,8 +239,16 @@ describe('BrowserClientEffectRuntime wb_clear', () => {
       ensureWhiteboardVisible: async () => {},
       setWhiteboardClearing: (clearing) => {
         if (clearing) {
-          const element = store.getState().stage!.whiteboard![0].elements[0];
-          if (element.type === 'text') element.content = '<p>changed</p>';
+          const board = store.getState().stage!.whiteboard![0];
+          const element = board.elements[0];
+          if (element.type === 'text') {
+            expect(
+              createStageAPI(store).whiteboard.updateElement(
+                { ...element, content: '<p>changed</p>' },
+                board.id,
+              ).success,
+            ).toBe(true);
+          }
         }
       },
       pushExactWhiteboardSnapshot: pushExact,

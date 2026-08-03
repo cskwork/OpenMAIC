@@ -12,6 +12,7 @@ vi.mock('@/lib/utils/stage-storage', () => ({
 }));
 
 import { flushStageSave, restorePendingStageChanges, useStageStore } from '@/lib/store/stage';
+import { setStageStoreStateThroughAuthority } from '@/tests/helpers/whiteboard-authority';
 import type { ChatSession } from '@/lib/types/chat';
 import type { Scene, Stage } from '@/lib/types/stage';
 
@@ -50,7 +51,7 @@ beforeEach(() => {
   fullSave.mockReset().mockResolvedValue(undefined);
   incrementalSave.mockReset().mockResolvedValue(undefined);
   useStageStore.getState().clearStore();
-  useStageStore.setState({
+  setStageStoreStateThroughAuthority({
     stage: stage(),
     scenes: [scene('scene-1'), scene('scene-2')],
     currentSceneId: 'scene-1',

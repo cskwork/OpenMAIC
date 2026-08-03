@@ -16,6 +16,7 @@ import { useCanvasStore } from '@/lib/store/canvas';
 import { ScreenElement } from '@/components/slide-renderer/Editor/ScreenElement';
 import type { PPTElement } from '@openmaic/dsl';
 import { useI18n } from '@/lib/hooks/use-i18n';
+import { canonicalActiveWhiteboard } from '@/lib/store/whiteboard-environment-authority';
 
 export type WhiteboardCanvasHandle = {
   resetView: () => void;
@@ -397,7 +398,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasHandle, WhiteboardCan
     const containerRef = useRef<HTMLDivElement>(null);
     const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
-    const whiteboard = stage?.whiteboard?.[0];
+    const whiteboard = canonicalActiveWhiteboard(stage);
     const rawElements = whiteboard?.elements;
     const elements = useMemo(() => rawElements ?? [], [rawElements]);
 

@@ -9,6 +9,16 @@ import type { Whiteboard } from '@/lib/types/stage';
 import type { PPTElement } from '@openmaic/dsl';
 import type { StageStore, APIResult } from './stage-api-types';
 import { generateId } from './stage-api-defaults';
+import {
+  getWhiteboardEnvironmentAuthority,
+  type WhiteboardEnvironmentAuthority,
+} from '@/lib/store/whiteboard-environment-authority';
+
+function authorityError(
+  result: Exclude<ReturnType<WhiteboardEnvironmentAuthority['transact']>, { ok: true }>,
+): string {
+  return `${result.code}: ${result.errors.join('; ')}`;
+}
 
 /**
  * Create the whiteboard management API
@@ -16,7 +26,10 @@ import { generateId } from './stage-api-defaults';
  * @param store - Zustand store instance
  * @returns Whiteboard namespace API
  */
-export function createWhiteboardAPI(store: StageStore) {
+export function createWhiteboardAPI(
+  store: StageStore,
+  authority = getWhiteboardEnvironmentAuthority(store),
+) {
   const whiteboardAPI = {
     /**
      * Create a whiteboard
@@ -38,11 +51,22 @@ export function createWhiteboardAPI(store: StageStore) {
           animations: [],
         };
         const whiteboardList = state.stage?.whiteboard
-          ? [...state.stage.whiteboard, whiteboard]
+          ? [whiteboard, ...state.stage.whiteboard]
           : [whiteboard];
-        store.setState({
-          stage: { ...state.stage, whiteboard: whiteboardList },
+        const result = authority.transact({
+          label: 'stage-api.whiteboard.create',
+          preferredActiveWhiteboardId: whiteboard.id,
+          writes: [
+            {
+              label: 'stage.whiteboard.create',
+              write: () =>
+                store.setState({
+                  stage: { ...state.stage, whiteboard: whiteboardList },
+                }),
+            },
+          ],
         });
+        if (!result.ok) return { success: false, error: authorityError(result) };
         return { success: true, data: whiteboard };
       } catch (error) {
         return { success: false, error: String(error) };
@@ -60,7 +84,11 @@ export function createWhiteboardAPI(store: StageStore) {
         if (!state.stage?.whiteboard || state.stage.whiteboard.length === 0) {
           return whiteboardAPI.create();
         }
-        return { success: true, data: state.stage.whiteboard.at(-1) };
+        const active = authority.queryActiveWhiteboard();
+        if (!active.ok) {
+          return { success: false, error: `${active.code}: ${active.errors.join('; ')}` };
+        }
+        return { success: true, data: active.value ?? undefined };
       } catch (error) {
         return { success: false, error: String(error) };
       }
@@ -82,9 +110,19 @@ export function createWhiteboardAPI(store: StageStore) {
         const whiteboardList = state.stage!.whiteboard!.map((wb) =>
           wb.id === whiteboardId ? newWhiteboard : wb,
         );
-        store.setState({
-          stage: { ...state.stage, whiteboard: whiteboardList },
+        const result = authority.transact({
+          label: 'stage-api.whiteboard.update',
+          writes: [
+            {
+              label: 'stage.whiteboard.update',
+              write: () =>
+                store.setState({
+                  stage: { ...state.stage, whiteboard: whiteboardList },
+                }),
+            },
+          ],
         });
+        if (!result.ok) return { success: false, error: authorityError(result) };
         return { success: true, data: true };
       } catch (error) {
         return { success: false, error: String(error) };
@@ -101,9 +139,19 @@ export function createWhiteboardAPI(store: StageStore) {
       try {
         const state = store.getState();
         const whiteboardList = state.stage!.whiteboard!.filter((wb) => wb.id !== whiteboardId);
-        store.setState({
-          stage: { ...state.stage, whiteboard: whiteboardList },
+        const result = authority.transact({
+          label: 'stage-api.whiteboard.delete',
+          writes: [
+            {
+              label: 'stage.whiteboard.delete',
+              write: () =>
+                store.setState({
+                  stage: { ...state.stage, whiteboard: whiteboardList },
+                }),
+            },
+          ],
         });
+        if (!result.ok) return { success: false, error: authorityError(result) };
         return { success: true, data: true };
       } catch (error) {
         return { success: false, error: String(error) };
@@ -168,9 +216,19 @@ export function createWhiteboardAPI(store: StageStore) {
         const whiteboardList = state.stage!.whiteboard!.map((wb) =>
           wb.id === whiteboardId ? newWhiteboard : wb,
         );
-        store.setState({
-          stage: { ...state.stage, whiteboard: whiteboardList },
+        const result = authority.transact({
+          label: 'stage-api.whiteboard.addElement',
+          writes: [
+            {
+              label: 'stage.whiteboard.addElement',
+              write: () =>
+                store.setState({
+                  stage: { ...state.stage, whiteboard: whiteboardList },
+                }),
+            },
+          ],
         });
+        if (!result.ok) return { success: false, error: authorityError(result) };
         return { success: true, data: true };
       } catch (error) {
         return { success: false, error: String(error) };
@@ -196,9 +254,19 @@ export function createWhiteboardAPI(store: StageStore) {
         const whiteboardList = state.stage!.whiteboard!.map((wb) =>
           wb.id === whiteboardId ? newWhiteboard : wb,
         );
-        store.setState({
-          stage: { ...state.stage, whiteboard: whiteboardList },
+        const result = authority.transact({
+          label: 'stage-api.whiteboard.deleteElement',
+          writes: [
+            {
+              label: 'stage.whiteboard.deleteElement',
+              write: () =>
+                store.setState({
+                  stage: { ...state.stage, whiteboard: whiteboardList },
+                }),
+            },
+          ],
         });
+        if (!result.ok) return { success: false, error: authorityError(result) };
         return { success: true, data: true };
       } catch (error) {
         return { success: false, error: String(error) };
@@ -224,9 +292,19 @@ export function createWhiteboardAPI(store: StageStore) {
         const whiteboardList = state.stage!.whiteboard!.map((wb) =>
           wb.id === whiteboardId ? newWhiteboard : wb,
         );
-        store.setState({
-          stage: { ...state.stage, whiteboard: whiteboardList },
+        const result = authority.transact({
+          label: 'stage-api.whiteboard.updateElement',
+          writes: [
+            {
+              label: 'stage.whiteboard.updateElement',
+              write: () =>
+                store.setState({
+                  stage: { ...state.stage, whiteboard: whiteboardList },
+                }),
+            },
+          ],
         });
+        if (!result.ok) return { success: false, error: authorityError(result) };
         return { success: true, data: true };
       } catch (error) {
         return { success: false, error: String(error) };

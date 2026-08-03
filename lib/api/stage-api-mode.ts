@@ -6,6 +6,7 @@
 
 import type { Stage, StageMode } from '@/lib/types/stage';
 import type { StageStore, APIResult } from './stage-api-types';
+import { getWhiteboardEnvironmentAuthority } from '@/lib/store/whiteboard-environment-authority';
 
 /**
  * Create the mode management API
@@ -51,7 +52,10 @@ export function createModeAPI(store: StageStore) {
  * @param store - Zustand store instance
  * @returns Stage namespace API
  */
-export function createStageMetaAPI(store: StageStore) {
+export function createStageMetaAPI(
+  store: StageStore,
+  authority = getWhiteboardEnvironmentAuthority(store),
+) {
   return {
     /**
      * Get Stage info
@@ -86,13 +90,24 @@ export function createStageMetaAPI(store: StageStore) {
           return { success: false, error: 'No stage' };
         }
 
-        const newStage = {
+        const newStage = authority.canonicalizeStageReplacement({
           ...state.stage,
           ...updates,
           updatedAt: Date.now(),
-        };
+        });
 
-        store.setState({ stage: newStage });
+        const result = authority.transact({
+          label: 'stage-api.stage.update',
+          writes: [
+            {
+              label: 'stage.meta.update',
+              write: () => store.setState({ stage: newStage }),
+            },
+          ],
+        });
+        if (!result.ok) {
+          return { success: false, error: `${result.code}: ${result.errors.join('; ')}` };
+        }
 
         return { success: true, data: true };
       } catch (error) {

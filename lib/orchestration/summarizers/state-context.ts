@@ -1,6 +1,7 @@
 import type { StatelessChatRequest } from '@/lib/types/chat';
 import { buildWhiteboardConflicts } from './whiteboard-conflicts';
 import { type CodeLine, createCodeRenderBudget, renderCodeLines } from './code-line-budget';
+import { canonicalActiveWhiteboard } from '@/lib/store/whiteboard-environment-authority';
 
 // ==================== Element Summarization ====================
 
@@ -267,12 +268,13 @@ export function buildStateContext(
     );
   }
 
-  // Whiteboard content (last whiteboard in the stage)
+  // Whiteboard content (canonical active whiteboard is first in the stage)
   if (stage?.whiteboard && stage.whiteboard.length > 0) {
-    const lastWb = stage.whiteboard[stage.whiteboard.length - 1];
-    const wbElements = lastWb.elements || [];
+    const activeWb = canonicalActiveWhiteboard(stage);
+    if (!activeWb) return lines.join('\n');
+    const wbElements = activeWb.elements || [];
     lines.push(
-      `Whiteboard (last of ${stage.whiteboard.length}, ${wbElements.length} elements):\n${summarizeElements(
+      `Whiteboard (active of ${stage.whiteboard.length}, ${wbElements.length} elements):\n${summarizeElements(
         wbElements,
         'newest-first',
         { includeIds: options.includeWhiteboardElementIds !== false },

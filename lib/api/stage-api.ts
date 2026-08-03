@@ -66,6 +66,7 @@ import { createModeAPI, createStageMetaAPI } from './stage-api-mode';
 import type { StageStore } from './stage-api-types';
 import { markStagePersistenceDirty, useStageStore } from '@/lib/store/stage';
 import type { PendingChange } from '@/lib/utils/stage-storage';
+import { getWhiteboardEnvironmentAuthority } from '@/lib/store/whiteboard-environment-authority';
 
 function persistenceChangesForSetState(
   before: ReturnType<StageStore['getState']>,
@@ -104,9 +105,15 @@ function withProductionPersistence(store: StageStore): StageStore {
     ...store,
     setState(partial) {
       const before = store.getState();
-      store.setState(partial);
-      const changes = persistenceChangesForSetState(before, store.getState());
-      if (changes.length > 0) markStagePersistenceDirty(changes);
+      try {
+        store.setState(partial);
+      } finally {
+        // Zustand applies state before synchronously notifying subscribers. A
+        // subscriber exception must not leave a committed whiteboard write
+        // unmarked for persistence.
+        const changes = persistenceChangesForSetState(before, store.getState());
+        if (changes.length > 0) markStagePersistenceDirty(changes);
+      }
     },
   };
 }
@@ -123,14 +130,15 @@ export function createStageAPI(store: StageStore) {
   // All namespaces receive the same guarded injection boundary. New API
   // modules cannot bypass persistence by adding another raw setState call.
   const persistenceStore = withProductionPersistence(store);
+  const whiteboardAuthority = getWhiteboardEnvironmentAuthority(store);
   return {
     scene: createSceneAPI(persistenceStore),
     navigation: createNavigationAPI(persistenceStore),
     element: createElementAPI(persistenceStore),
     canvas: createCanvasAPI(persistenceStore),
-    whiteboard: createWhiteboardAPI(persistenceStore),
+    whiteboard: createWhiteboardAPI(persistenceStore, whiteboardAuthority),
     mode: createModeAPI(persistenceStore),
-    stage: createStageMetaAPI(persistenceStore),
+    stage: createStageMetaAPI(persistenceStore, whiteboardAuthority),
   };
 }
 
