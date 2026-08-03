@@ -148,9 +148,10 @@ jobs:
           fi
           echo "Tracked repository files match the commit being released."
 
-      # Seal the checked build before any repository test code runs. The tests
-      # below may mutate the worktree, but the tarballs they smoke-test and the
-      # publish job receives are already fixed at this point.
+      # Seal the checked build before any repository test code runs. Uploading
+      # immediately after packing makes the publish input immutable before the
+      # tests or smoke test can write to their local copies. `needs: validate`
+      # still prevents publication unless every later validation step passes.
       #
       # Pack each package exactly once. pnpm resolves workspace:^ in the packed
       # manifest, while the config form suppresses prepack and prepare (pnpm
@@ -168,6 +169,22 @@ jobs:
             echo "::endgroup::"
           done
           node scripts/verify-package-artifacts.mjs --write "$RELEASE_ARTIFACTS"
+
+      - name: Verify freshly packed release artifacts
+        env:
+          RELEASE_ARTIFACTS: ${{ runner.temp }}/openmaic-package-tarballs
+        run: node scripts/verify-package-artifacts.mjs "$RELEASE_ARTIFACTS"
+
+      # actions/upload-artifact v4 artifacts cannot be modified after upload.
+      # Tests below keep using the same local tarballs, while `publish` receives
+      # this already-uploaded snapshot only after the whole validate job passes.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: openmaic-package-tarballs-${{ github.sha }}
+          path: ${{ runner.temp }}/openmaic-package-tarballs
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
 
       # storage runs separately, under the json reporter, so that the run leaves
       # a record of WHICH suites executed. STORAGE_PG_CONTRACT_REQUIRED only
@@ -199,19 +216,6 @@ jobs:
         env:
           RELEASE_ARTIFACTS: ${{ runner.temp }}/openmaic-package-tarballs
         run: pnpm test:package-tarballs -- "$RELEASE_ARTIFACTS"
-
-      - name: Verify and upload the validated artifacts
-        env:
-          RELEASE_ARTIFACTS: ${{ runner.temp }}/openmaic-package-tarballs
-        run: node scripts/verify-package-artifacts.mjs "$RELEASE_ARTIFACTS"
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: openmaic-package-tarballs-${{ github.sha }}
-          path: ${{ runner.temp }}/openmaic-package-tarballs
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 7
 
   # The only job that can reach NPM_TOKEN. It is separate so the environment,
   # and therefore the token, is never attached to a run that is merely
@@ -335,8 +339,8 @@ jobs:
           # Anchor the validated digests in this shell before any repository
           # script runs with the npm token. A child process can alter files,
           # but it cannot rewrite its parent shell's scalar.
-          node scripts/verify-package-artifacts.mjs "$RELEASE_ARTIFACTS"
           trusted_digests="$(< "$RELEASE_ARTIFACTS/SHA256SUMS")"
+          node scripts/verify-package-artifacts.mjs "$RELEASE_ARTIFACTS"
 
           node scripts/check-package-version-bumps.mjs --release
           for pkg in dsl storage renderer importer; do
