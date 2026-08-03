@@ -14,7 +14,7 @@ services:
         - NEXT_PUBLIC_ENABLE_VIDEO_EXPORT=${NEXT_PUBLIC_ENABLE_VIDEO_EXPORT:-}
         - NEXT_PUBLIC_ENABLE_PPTX_IMPORT=${NEXT_PUBLIC_ENABLE_PPTX_IMPORT:-}
     ports:
-      - "3000:3000"
+      - '3000:3000'
     env_file:
       - .env.local
     environment:
@@ -48,7 +48,7 @@ services:
       # before using the stack outside a local trusted environment.
       - POSTGRES_PASSWORD=${PERSISTENCE_POSTGRES_PASSWORD:-openmaic-dev}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U openmaic -d openmaic"]
+      test: ['CMD-SHELL', 'pg_isready -U openmaic -d openmaic']
       interval: 5s
       timeout: 5s
       retries: 10
@@ -75,7 +75,7 @@ services:
     profiles:
       - video-export
     expose:
-      - "9000"
+      - '9000'
     # Required for the entrypoint's iptables egress lockdown. Without it the
     # service still boots, but logs a warning and does NOT block Chromium egress.
     cap_add:
@@ -93,8 +93,28 @@ services:
       # API, not hardware rasterization — beginFrame falls back gracefully if the
       # host lacks a GPU.
       - PRODUCER_BROWSER_GPU_MODE=hardware
-      # Tune for the host; each concurrent render drives a full Chromium + FFmpeg.
-      - RENDER_MAX_CONCURRENCY=2
+      # The 4 GiB cgroup limit would otherwise trigger producer's <=8 GiB
+      # low-memory profile, which silently forces screenshot capture + one worker
+      # and nullifies the beginFrame setting above. This latency profile was
+      # measured below 2 GiB peak on the 720p reference fixture; keep one render
+      # and one extraction active so the 4 GiB boundary remains meaningful.
+      - PRODUCER_LOW_MEMORY_MODE=false
+      - RENDER_MAX_CONCURRENCY=1
+      - RENDER_MAX_CONCURRENT_EXTRACTIONS=1
+      # Producer's browser pool shares a Chromium compositor across capture
+      # sessions. Independent browsers made four-worker capture ~3.5x faster on
+      # the reference fixture, at the cost of additional bounded memory.
+      - PRODUCER_ENABLE_BROWSER_POOL=false
+      # RenderManager also passes this value explicitly as job.config.workers, so
+      # producer's minimum-parallel threshold cannot silently change 1 -> 2.
+      - PRODUCER_MAX_WORKERS=4
+      # A 10+ minute composition can assign a >300s frame range to each worker;
+      # leave enough CDP headroom to finish instead of falling back 4 -> 2.
+      - PRODUCER_PUPPETEER_PROTOCOL_TIMEOUT_MS=900000
+      # OpenMAIC's long slide exports currently exhaust producer's 15s static
+      # verification budget and disable dedup anyway. Skip that guaranteed-lost
+      # startup cost until the verifier can share/scale its plan across workers.
+      - HF_STATIC_DEDUP=false
       # In this default topology the app is exposed directly and does NOT set
       # TRUST_PROXY_HEADERS, so every caller collapses to one identity. A
       # per-identity limit would then throttle the whole deployment to a single
@@ -106,6 +126,9 @@ services:
     # heavy, and extraction is capped separately (RENDER_MAX_CONCURRENT_EXTRACTIONS).
     # Raise for higher RENDER_MAX_CONCURRENCY / larger classrooms.
     mem_limit: 4g
+    # Four independent Chromium instances need more than Docker's 64 MiB default
+    # shared-memory mount. This is a ceiling, not eager allocation.
+    shm_size: 2gb
     networks:
       - render
     restart: unless-stopped

@@ -28,13 +28,15 @@ const MB = 1024 * 1024;
 export const config = {
   port: intEnv('PORT', 9000),
   /** Renders that execute simultaneously; extras queue FIFO. */
-  maxConcurrency: intEnv('RENDER_MAX_CONCURRENCY', 2),
+  maxConcurrency: intEnv('RENDER_MAX_CONCURRENCY', 1),
   /**
    * Archives extracted simultaneously. Extraction holds the expanded archive in
    * memory, so this bounds the RAM multiplier (≈ this × maxExpandedBytes) even
    * when many jobs are admitted at once. Defaults to the render concurrency.
    */
-  maxConcurrentExtractions: intEnv('RENDER_MAX_CONCURRENT_EXTRACTIONS', 2),
+  maxConcurrentExtractions: intEnv('RENDER_MAX_CONCURRENT_EXTRACTIONS', 1),
+  /** Explicit per-job producer workers; passing this avoids producer auto-minimum surprises. */
+  producerWorkers: intEnv('PRODUCER_MAX_WORKERS', 4),
   /** Active (queued+running) jobs allowed per client identity. 0 disables the guard. */
   maxJobsPerUser: intEnvAllowZero('RENDER_MAX_JOBS_PER_USER', 1),
   /** Max jobs allowed in the system (queued+running) before new submits are rejected. */

@@ -38,7 +38,7 @@ FROM base AS runner
 # Non-root: Chromium must run with --no-sandbox in a container, so drop privileges.
 RUN groupadd --system --gid 1001 render \
   && useradd --system --uid 1001 --gid render --home-dir /app render \
-  && mkdir -p /tmp/openmaic-renders \
+  && mkdir -p /tmp/openmaic-renders /app/.cache \
   && chown -R render:render /app /tmp/openmaic-renders
 
 COPY --from=deps /app/node_modules ./node_modules
@@ -48,7 +48,9 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 ENV PORT=9000 \
-    PRODUCER_TMP_PROJECT_DIR=/tmp/openmaic-renders
+    PRODUCER_TMP_PROJECT_DIR=/tmp/openmaic-renders \
+    HOME=/app \
+    XDG_CACHE_HOME=/app/.cache
 
 # NOTE: we intentionally do NOT set `USER render` here. The container starts as
 # root so the entrypoint can install the iptables egress lockdown (needs
