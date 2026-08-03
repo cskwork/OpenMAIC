@@ -4,11 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  INTERNAL_DEPENDENTS,
-  OPENMAIC_PACKAGES,
-  readManifest,
-} from './openmaic-packages.mjs';
+import { INTERNAL_DEPENDENTS, OPENMAIC_PACKAGES, readManifest } from './openmaic-packages.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const artifactDirectoryArgument = process.argv[2];

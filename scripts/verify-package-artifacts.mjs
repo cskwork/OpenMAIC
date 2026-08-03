@@ -26,7 +26,9 @@ function sha256(path) {
 }
 
 function readPackedManifest(path) {
-  return JSON.parse(execFileSync('tar', ['-xzOf', path, 'package/package.json'], { encoding: 'utf8' }));
+  return JSON.parse(
+    execFileSync('tar', ['-xzOf', path, 'package/package.json'], { encoding: 'utf8' }),
+  );
 }
 
 function assertArtifactSet(directory, expected, includeDigests) {
@@ -41,12 +43,19 @@ function assertArtifactSet(directory, expected, includeDigests) {
   );
   for (const entry of entries) {
     const path = join(directory, entry.name);
-    assert(entry.isFile() && !lstatSync(path).isSymbolicLink(), `${entry.name} must be a regular file`);
+    assert(
+      entry.isFile() && !lstatSync(path).isSymbolicLink(),
+      `${entry.name} must be a regular file`,
+    );
   }
 
   for (const artifact of expected) {
     const manifest = readPackedManifest(join(directory, artifact.filename));
-    assert.equal(manifest.name, artifact.name, `${artifact.filename} contains package ${manifest.name}`);
+    assert.equal(
+      manifest.name,
+      artifact.name,
+      `${artifact.filename} contains package ${manifest.name}`,
+    );
     assert.equal(
       manifest.version,
       artifact.version,
@@ -83,7 +92,11 @@ function verifyDigests(directory, expected) {
   );
 
   for (const { filename } of expected) {
-    assert.equal(sha256(join(directory, filename)), recorded.get(filename), `${filename} failed SHA-256 verification`);
+    assert.equal(
+      sha256(join(directory, filename)),
+      recorded.get(filename),
+      `${filename} failed SHA-256 verification`,
+    );
   }
   console.log(`Verified SHA-256 digests for ${expected.length} package tarballs.`);
 }
@@ -91,7 +104,10 @@ function verifyDigests(directory, expected) {
 const args = process.argv.slice(2);
 const write = args[0] === '--write';
 const directoryArgument = args[write ? 1 : 0];
-assert(directoryArgument, `Usage: node ${basename(process.argv[1])} [--write] <artifact-directory>`);
+assert(
+  directoryArgument,
+  `Usage: node ${basename(process.argv[1])} [--write] <artifact-directory>`,
+);
 assert.equal(args.length, write ? 2 : 1, 'Unexpected command-line arguments');
 
 const directory = resolve(root, directoryArgument);
