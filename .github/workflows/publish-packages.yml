@@ -334,12 +334,9 @@ jobs:
           set -euo pipefail
           # Anchor the validated digests in this shell before any repository
           # script runs with the npm token. A child process can alter files,
-          # but it cannot rewrite its parent shell's associative array.
+          # but it cannot rewrite its parent shell's scalar.
           node scripts/verify-package-artifacts.mjs "$RELEASE_ARTIFACTS"
-          declare -A trusted_digests
-          while read -r digest filename; do
-            trusted_digests["$filename"]="$digest"
-          done < "$RELEASE_ARTIFACTS/SHA256SUMS"
+          trusted_digests="$(< "$RELEASE_ARTIFACTS/SHA256SUMS")"
 
           node scripts/check-package-version-bumps.mjs --release
           for pkg in dsl storage renderer importer; do
@@ -355,7 +352,10 @@ jobs:
             fi
             filename="openmaic-$pkg-$version.tgz"
             tarball="$RELEASE_ARTIFACTS/$filename"
-            expected_digest="${trusted_digests[$filename]:-}"
+            expected_digest="$(
+              printf '%s\n' "$trusted_digests" | awk -v filename="$filename" \
+                '$2 == filename { print $1 }'
+            )"
             if [ -z "$expected_digest" ]; then
               echo "::error::$filename has no validated SHA-256 digest."
               exit 1
