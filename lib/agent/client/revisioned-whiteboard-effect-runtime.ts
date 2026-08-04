@@ -157,6 +157,21 @@ export class BrowserRevisionedWhiteboardEffectRuntime {
             ...mutationInput,
             intent: delivery.intent,
           });
+        case 'wb_draw_latex':
+          return authority.transactRevisionedDrawLatex({
+            ...mutationInput,
+            intent: delivery.intent,
+          });
+        case 'wb_draw_table':
+          return authority.transactRevisionedDrawTable({
+            ...mutationInput,
+            intent: delivery.intent,
+          });
+        case 'wb_draw_chart':
+          return authority.transactRevisionedDrawChart({
+            ...mutationInput,
+            intent: delivery.intent,
+          });
       }
     })();
     if (!result.ok) throw new Error(result.code);

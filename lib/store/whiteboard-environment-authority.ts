@@ -6,8 +6,11 @@ import {
   isRevisionedWhiteboardAuthorityReceipt,
   isRevisionedWhiteboardAuthenticatedTarget,
   isRevisionedWhiteboardMutationIdentity,
+  createRevisionedDrawChartDigests,
+  createRevisionedDrawLatexDigests,
   createRevisionedDrawLineDigests,
   createRevisionedDrawShapeDigests,
+  createRevisionedDrawTableDigests,
   createRevisionedDrawTextDigests,
   revisionedWhiteboardWireBytes,
   verifyRevisionedWhiteboardAuthorityReceipt,
@@ -29,29 +32,58 @@ import {
   type RevisionedDrawLineIntent,
   type RevisionedDrawLineDelta,
   type RevisionedDrawLinePostcondition,
+  type RevisionedDrawLatexIntent,
+  type RevisionedDrawLatexDelta,
+  type RevisionedDrawLatexPostcondition,
+  type RevisionedDrawTableIntent,
+  type RevisionedDrawTableDelta,
+  type RevisionedDrawTablePostcondition,
+  type RevisionedDrawChartIntent,
+  type RevisionedDrawChartDelta,
+  type RevisionedDrawChartPostcondition,
 } from '@/lib/agent/runtime/revisioned-whiteboard-contract';
 import {
   deriveRevisionedElementId,
   deriveRevisionedWhiteboardId,
   digestRevisionedValue,
+  digestRevisionedWhiteboardTableStateV2Sync,
   digestVisibleTextV1Sync,
+  digestWhiteboardChartV1Sync,
+  digestWhiteboardLatexHtmlV1Sync,
+  digestWhiteboardLatexV1Sync,
   digestWhiteboardLineV1Sync,
   digestWhiteboardShapeV1Sync,
 } from '@/lib/agent/runtime/revisioned-whiteboard-digest';
 import {
+  CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_LATEX_RENDER_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  normalizeWhiteboardChartV1,
+  normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
+  normalizeWhiteboardTableV1,
+  type WhiteboardChartSpec,
+  type WhiteboardLatexSpec,
   type WhiteboardLineSpec,
   type WhiteboardShapeSpec,
+  type WhiteboardTableSpec,
 } from '@/lib/agent/runtime/client-effect-contract';
+import { createWhiteboardChartElement } from '@/lib/action/whiteboard-charts';
+import {
+  createWhiteboardLatexElement,
+  renderNativeWhiteboardLatexHtmlV1,
+} from '@/lib/action/whiteboard-latex';
 import { createWhiteboardLineElement } from '@/lib/action/whiteboard-lines';
 import { WHITEBOARD_SHAPE_PATHS } from '@/lib/action/whiteboard-shapes';
+import { createWhiteboardTableElement } from '@/lib/action/whiteboard-tables';
 import type { Stage, Whiteboard } from '@/lib/types/stage';
 import type { StageStore } from '@/lib/api/stage-api-types';
-import type { PPTElement } from '@openmaic/dsl';
+import type { PPTChartElement, PPTElement, PPTLatexElement, PPTTableElement } from '@openmaic/dsl';
 
 export const WHITEBOARD_AUTHORITY_RESOURCE_BUSY = 'CLIENT_EFFECT_RESOURCE_BUSY';
 export const WHITEBOARD_AUTHORITY_UNCERTAIN = 'POSTCONDITION_UNCERTAIN';
@@ -191,10 +223,43 @@ export interface WhiteboardAuthorityRevisionedDrawLineOptions {
   intent: RevisionedDrawLineIntent;
 }
 
+export interface WhiteboardAuthorityRevisionedDrawLatexOptions {
+  executionId: string;
+  requestDigest: string;
+  expected: RevisionedWhiteboardBinding;
+  authenticatedTarget: RevisionedWhiteboardAuthenticatedTarget;
+  deadlineAt: number;
+  intentDigest: string;
+  intent: RevisionedDrawLatexIntent;
+}
+
+export interface WhiteboardAuthorityRevisionedDrawTableOptions {
+  executionId: string;
+  requestDigest: string;
+  expected: RevisionedWhiteboardBinding;
+  authenticatedTarget: RevisionedWhiteboardAuthenticatedTarget;
+  deadlineAt: number;
+  intentDigest: string;
+  intent: RevisionedDrawTableIntent;
+}
+
+export interface WhiteboardAuthorityRevisionedDrawChartOptions {
+  executionId: string;
+  requestDigest: string;
+  expected: RevisionedWhiteboardBinding;
+  authenticatedTarget: RevisionedWhiteboardAuthenticatedTarget;
+  deadlineAt: number;
+  intentDigest: string;
+  intent: RevisionedDrawChartIntent;
+}
+
 type WhiteboardAuthorityRevisionedDrawElementOptions =
   | (WhiteboardAuthorityRevisionedDrawTextOptions & { toolName: 'wb_draw_text' })
   | (WhiteboardAuthorityRevisionedDrawShapeOptions & { toolName: 'wb_draw_shape' })
-  | (WhiteboardAuthorityRevisionedDrawLineOptions & { toolName: 'wb_draw_line' });
+  | (WhiteboardAuthorityRevisionedDrawLineOptions & { toolName: 'wb_draw_line' })
+  | (WhiteboardAuthorityRevisionedDrawLatexOptions & { toolName: 'wb_draw_latex' })
+  | (WhiteboardAuthorityRevisionedDrawTableOptions & { toolName: 'wb_draw_table' })
+  | (WhiteboardAuthorityRevisionedDrawChartOptions & { toolName: 'wb_draw_chart' });
 
 export type WhiteboardAuthorityRevisionedMutationResult =
   | {
@@ -476,21 +541,60 @@ function createRevisionedTextElement(
   } as PPTElement;
 }
 
-type RevisionedDrawElementPlan = Readonly<{
+type RevisionedDrawElementPlanBase = Readonly<{
   element: PPTElement;
   stableElementId: string;
-  elementType: 'text' | 'shape' | 'line';
-  normalizationVersion:
-    | typeof CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION
-    | typeof CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION
-    | typeof CLIENT_EFFECT_LINE_NORMALIZATION_VERSION;
-  observedDigest: string;
 }>;
+
+type RevisionedDrawElementPlan =
+  | (RevisionedDrawElementPlanBase & {
+      toolName: 'wb_draw_text';
+      elementType: 'text';
+      normalizationVersion: typeof CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION;
+      observedDigest: string;
+    })
+  | (RevisionedDrawElementPlanBase & {
+      toolName: 'wb_draw_shape';
+      elementType: 'shape';
+      normalizationVersion: typeof CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION;
+      observedDigest: string;
+    })
+  | (RevisionedDrawElementPlanBase & {
+      toolName: 'wb_draw_line';
+      elementType: 'line';
+      normalizationVersion: typeof CLIENT_EFFECT_LINE_NORMALIZATION_VERSION;
+      observedDigest: string;
+    })
+  | (RevisionedDrawElementPlanBase & {
+      toolName: 'wb_draw_latex';
+      elementType: 'latex';
+      normalizationVersion: typeof CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION;
+      renderVersion: typeof CLIENT_EFFECT_LATEX_RENDER_VERSION;
+      observedFormulaDigest: string;
+      observedHtmlDigest: string;
+    })
+  | (RevisionedDrawElementPlanBase & {
+      toolName: 'wb_draw_table';
+      elementType: 'table';
+      normalizationVersion: typeof CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION;
+      observedTableDigest: string;
+    })
+  | (RevisionedDrawElementPlanBase & {
+      toolName: 'wb_draw_chart';
+      elementType: 'chart';
+      normalizationVersion: typeof CLIENT_EFFECT_CHART_NORMALIZATION_VERSION;
+      observedChartDigest: string;
+    });
 
 function createRevisionedDrawElementPlan(
   opts: WhiteboardAuthorityRevisionedDrawElementOptions,
   normalizedIntent: Readonly<
-    RevisionedDrawTextIntent | RevisionedDrawShapeIntent | RevisionedDrawLineIntent
+    | RevisionedDrawTextIntent
+    | RevisionedDrawShapeIntent
+    | RevisionedDrawLineIntent
+    | RevisionedDrawLatexIntent
+    | RevisionedDrawTableIntent
+    | RevisionedDrawChartIntent
   >,
 ): RevisionedDrawElementPlan {
   const stableElementId = deriveRevisionedElementId(opts.executionId);
@@ -499,6 +603,7 @@ function createRevisionedDrawElementPlan(
       const intent = normalizedIntent as Readonly<RevisionedDrawTextIntent>;
       const observedDigest = digestVisibleTextV1Sync(intent.content);
       return Object.freeze({
+        toolName: opts.toolName,
         element: createRevisionedTextElement(opts.executionId, intent, observedDigest),
         stableElementId,
         elementType: 'text' as const,
@@ -511,6 +616,7 @@ function createRevisionedDrawElementPlan(
       const spec: WhiteboardShapeSpec = normalizeWhiteboardShapeV1(intent);
       const observedDigest = digestWhiteboardShapeV1Sync(spec);
       return Object.freeze({
+        toolName: opts.toolName,
         element: {
           id: stableElementId,
           type: 'shape',
@@ -539,6 +645,7 @@ function createRevisionedDrawElementPlan(
       const spec: WhiteboardLineSpec = normalizeWhiteboardLineV1(intent);
       const observedDigest = digestWhiteboardLineV1Sync(spec);
       return Object.freeze({
+        toolName: opts.toolName,
         element: {
           ...createWhiteboardLineElement({
             id: stableElementId,
@@ -561,6 +668,95 @@ function createRevisionedDrawElementPlan(
         observedDigest,
       });
     }
+    case 'wb_draw_latex': {
+      const intent = normalizedIntent as Readonly<RevisionedDrawLatexIntent>;
+      const spec: WhiteboardLatexSpec = normalizeWhiteboardLatexV1(intent);
+      const html = renderNativeWhiteboardLatexHtmlV1(spec.latex);
+      const observedFormulaDigest = digestWhiteboardLatexV1Sync(spec);
+      const observedHtmlDigest = digestWhiteboardLatexHtmlV1Sync(html);
+      return Object.freeze({
+        toolName: opts.toolName,
+        element: {
+          ...createWhiteboardLatexElement({
+            id: stableElementId,
+            latex: spec.latex,
+            x: spec.bounds.x,
+            y: spec.bounds.y,
+            width: spec.bounds.width,
+            height: spec.bounds.height,
+            color: spec.color,
+            html,
+          }),
+          clientEffectExecutionId: opts.executionId,
+          clientEffectFormulaDigest: observedFormulaDigest,
+          clientEffectHtmlDigest: observedHtmlDigest,
+          clientEffectNormalizationVersion: CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
+          clientEffectRenderVersion: CLIENT_EFFECT_LATEX_RENDER_VERSION,
+        } as PPTElement,
+        stableElementId,
+        elementType: 'latex' as const,
+        normalizationVersion: CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
+        renderVersion: CLIENT_EFFECT_LATEX_RENDER_VERSION,
+        observedFormulaDigest,
+        observedHtmlDigest,
+      });
+    }
+    case 'wb_draw_table': {
+      const intent = normalizedIntent as Readonly<RevisionedDrawTableIntent>;
+      const spec: WhiteboardTableSpec = normalizeWhiteboardTableV1(intent);
+      const tableElement = createWhiteboardTableElement({
+        id: stableElementId,
+        x: spec.bounds.x,
+        y: spec.bounds.y,
+        width: spec.bounds.width,
+        height: spec.bounds.height,
+        data: spec.data,
+        outline: spec.outline,
+        theme: spec.theme ? { color: spec.theme.color } : undefined,
+      });
+      if (!tableElement) throw new Error('REVISIONED_WHITEBOARD_TABLE_INTENT_INVALID');
+      const observedTableDigest = digestRevisionedWhiteboardTableStateV2Sync(tableElement);
+      return Object.freeze({
+        toolName: opts.toolName,
+        element: {
+          ...tableElement,
+          clientEffectExecutionId: opts.executionId,
+          clientEffectTableDigest: observedTableDigest,
+          clientEffectNormalizationVersion: CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
+        } as PPTElement,
+        stableElementId,
+        elementType: 'table' as const,
+        normalizationVersion: CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
+        observedTableDigest,
+      });
+    }
+    case 'wb_draw_chart': {
+      const intent = normalizedIntent as Readonly<RevisionedDrawChartIntent>;
+      const spec: WhiteboardChartSpec = normalizeWhiteboardChartV1(intent);
+      const observedChartDigest = digestWhiteboardChartV1Sync(spec);
+      return Object.freeze({
+        toolName: opts.toolName,
+        element: {
+          ...createWhiteboardChartElement({
+            id: stableElementId,
+            chartType: spec.chartType,
+            x: spec.bounds.x,
+            y: spec.bounds.y,
+            width: spec.bounds.width,
+            height: spec.bounds.height,
+            data: spec.data,
+            themeColors: spec.themeColors,
+          }),
+          clientEffectExecutionId: opts.executionId,
+          clientEffectChartDigest: observedChartDigest,
+          clientEffectNormalizationVersion: CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+        } as PPTElement,
+        stableElementId,
+        elementType: 'chart' as const,
+        normalizationVersion: CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+        observedChartDigest,
+      });
+    }
   }
 }
 
@@ -576,6 +772,11 @@ function revisionedDrawMetadataMatches(
     clientEffectContentDigest?: string;
     clientEffectShapeDigest?: string;
     clientEffectLineDigest?: string;
+    clientEffectFormulaDigest?: string;
+    clientEffectHtmlDigest?: string;
+    clientEffectRenderVersion?: string;
+    clientEffectTableDigest?: string;
+    clientEffectChartDigest?: string;
   };
   if (
     metadata.clientEffectExecutionId !== opts.executionId ||
@@ -583,24 +784,90 @@ function revisionedDrawMetadataMatches(
   ) {
     return false;
   }
-  switch (opts.toolName) {
+  switch (plan.toolName) {
     case 'wb_draw_text':
       return metadata.clientEffectContentDigest === plan.observedDigest;
     case 'wb_draw_shape':
       return metadata.clientEffectShapeDigest === plan.observedDigest;
     case 'wb_draw_line':
       return metadata.clientEffectLineDigest === plan.observedDigest;
+    case 'wb_draw_latex': {
+      const element = observed as PPTLatexElement;
+      try {
+        const spec = normalizeWhiteboardLatexV1({
+          latex: element.latex,
+          x: element.left,
+          y: element.top,
+          width: element.width,
+          height: element.height,
+          color: element.color,
+        });
+        return (
+          element.rotate === 0 &&
+          element.fixedRatio === true &&
+          metadata.clientEffectRenderVersion === plan.renderVersion &&
+          metadata.clientEffectFormulaDigest === plan.observedFormulaDigest &&
+          metadata.clientEffectHtmlDigest === plan.observedHtmlDigest &&
+          digestWhiteboardLatexV1Sync(spec) === plan.observedFormulaDigest &&
+          element.html === renderNativeWhiteboardLatexHtmlV1(spec.latex) &&
+          digestWhiteboardLatexHtmlV1Sync(element.html) === plan.observedHtmlDigest
+        );
+      } catch {
+        return false;
+      }
+    }
+    case 'wb_draw_table':
+      try {
+        return (
+          metadata.clientEffectTableDigest === plan.observedTableDigest &&
+          digestRevisionedWhiteboardTableStateV2Sync(observed as PPTTableElement) ===
+            plan.observedTableDigest
+        );
+      } catch {
+        return false;
+      }
+    case 'wb_draw_chart': {
+      const element = observed as PPTChartElement;
+      try {
+        const spec = normalizeWhiteboardChartV1({
+          chartType: element.chartType,
+          x: element.left,
+          y: element.top,
+          width: element.width,
+          height: element.height,
+          data: element.data,
+          themeColors: element.themeColors,
+        });
+        return (
+          element.rotate === 0 &&
+          element.fill === undefined &&
+          element.options === undefined &&
+          element.outline === undefined &&
+          element.textColor === undefined &&
+          element.lineColor === undefined &&
+          metadata.clientEffectChartDigest === plan.observedChartDigest &&
+          digestWhiteboardChartV1Sync(spec) === plan.observedChartDigest
+        );
+      } catch {
+        return false;
+      }
+    }
   }
 }
 
 function revisionedDrawDelta(
-  opts: WhiteboardAuthorityRevisionedDrawElementOptions,
   plan: RevisionedDrawElementPlan,
   whiteboardId: string,
   createdWhiteboard: boolean,
   visibilityChanged: boolean,
   elementCountBefore: number,
-): RevisionedDrawTextDelta | RevisionedDrawShapeDelta | RevisionedDrawLineDelta {
+):
+  | RevisionedDrawTextDelta
+  | RevisionedDrawShapeDelta
+  | RevisionedDrawLineDelta
+  | RevisionedDrawLatexDelta
+  | RevisionedDrawTableDelta
+  | RevisionedDrawChartDelta {
   const common = {
     normalizationVersion: plan.normalizationVersion,
     whiteboardId,
@@ -610,31 +877,39 @@ function revisionedDrawDelta(
     elementCountBefore,
     elementCountAfter: elementCountBefore + 1,
   };
-  switch (opts.toolName) {
+  switch (plan.toolName) {
     case 'wb_draw_text':
       return { kind: 'whiteboard_text_created_v2', ...common } as RevisionedDrawTextDelta;
     case 'wb_draw_shape':
       return { kind: 'whiteboard_shape_created_v2', ...common } as RevisionedDrawShapeDelta;
     case 'wb_draw_line':
       return { kind: 'whiteboard_line_created_v2', ...common } as RevisionedDrawLineDelta;
+    case 'wb_draw_latex':
+      return { kind: 'whiteboard_latex_created_v2', ...common } as RevisionedDrawLatexDelta;
+    case 'wb_draw_table':
+      return { kind: 'whiteboard_table_created_v2', ...common } as RevisionedDrawTableDelta;
+    case 'wb_draw_chart':
+      return { kind: 'whiteboard_chart_created_v2', ...common } as RevisionedDrawChartDelta;
   }
 }
 
 function revisionedDrawPostcondition(
-  opts: WhiteboardAuthorityRevisionedDrawElementOptions,
   plan: RevisionedDrawElementPlan,
   whiteboardId: string,
 ):
   | RevisionedDrawTextPostcondition
   | RevisionedDrawShapePostcondition
-  | RevisionedDrawLinePostcondition {
+  | RevisionedDrawLinePostcondition
+  | RevisionedDrawLatexPostcondition
+  | RevisionedDrawTablePostcondition
+  | RevisionedDrawChartPostcondition {
   const common = {
     normalizationVersion: plan.normalizationVersion,
     whiteboardId,
     stableElementId: plan.stableElementId,
     matchingElementCount: 1 as const,
   };
-  switch (opts.toolName) {
+  switch (plan.toolName) {
     case 'wb_draw_text':
       return {
         kind: 'whiteboard_text_exists_v2',
@@ -656,6 +931,29 @@ function revisionedDrawPostcondition(
         elementType: 'line',
         observedLineDigest: plan.observedDigest,
       } as RevisionedDrawLinePostcondition;
+    case 'wb_draw_latex':
+      return {
+        kind: 'whiteboard_latex_exists_v2',
+        ...common,
+        renderVersion: plan.renderVersion,
+        elementType: 'latex',
+        observedFormulaDigest: plan.observedFormulaDigest,
+        observedHtmlDigest: plan.observedHtmlDigest,
+      } as RevisionedDrawLatexPostcondition;
+    case 'wb_draw_table':
+      return {
+        kind: 'whiteboard_table_exists_v2',
+        ...common,
+        elementType: 'table',
+        observedTableDigest: plan.observedTableDigest,
+      } as RevisionedDrawTablePostcondition;
+    case 'wb_draw_chart':
+      return {
+        kind: 'whiteboard_chart_exists_v2',
+        ...common,
+        elementType: 'chart',
+        observedChartDigest: plan.observedChartDigest,
+      } as RevisionedDrawChartPostcondition;
   }
 }
 
@@ -1214,6 +1512,24 @@ export class WhiteboardEnvironmentAuthority {
     return this.transactRevisionedDrawElement({ ...opts, toolName: 'wb_draw_line' });
   }
 
+  transactRevisionedDrawLatex(
+    opts: WhiteboardAuthorityRevisionedDrawLatexOptions,
+  ): WhiteboardAuthorityRevisionedMutationResult {
+    return this.transactRevisionedDrawElement({ ...opts, toolName: 'wb_draw_latex' });
+  }
+
+  transactRevisionedDrawTable(
+    opts: WhiteboardAuthorityRevisionedDrawTableOptions,
+  ): WhiteboardAuthorityRevisionedMutationResult {
+    return this.transactRevisionedDrawElement({ ...opts, toolName: 'wb_draw_table' });
+  }
+
+  transactRevisionedDrawChart(
+    opts: WhiteboardAuthorityRevisionedDrawChartOptions,
+  ): WhiteboardAuthorityRevisionedMutationResult {
+    return this.transactRevisionedDrawElement({ ...opts, toolName: 'wb_draw_chart' });
+  }
+
   private transactRevisionedDrawElement(
     opts: WhiteboardAuthorityRevisionedDrawElementOptions,
   ): WhiteboardAuthorityRevisionedMutationResult {
@@ -1231,6 +1547,12 @@ export class WhiteboardEnvironmentAuthority {
           return createRevisionedDrawShapeDigests({ ...digestInput, intent: opts.intent });
         case 'wb_draw_line':
           return createRevisionedDrawLineDigests({ ...digestInput, intent: opts.intent });
+        case 'wb_draw_latex':
+          return createRevisionedDrawLatexDigests({ ...digestInput, intent: opts.intent });
+        case 'wb_draw_table':
+          return createRevisionedDrawTableDigests({ ...digestInput, intent: opts.intent });
+        case 'wb_draw_chart':
+          return createRevisionedDrawChartDigests({ ...digestInput, intent: opts.intent });
       }
     })();
     if (
@@ -1253,7 +1575,18 @@ export class WhiteboardEnvironmentAuthority {
       };
     }
     const normalizedIntent = digests.normalizedIntent;
-    const drawPlan = createRevisionedDrawElementPlan(opts, normalizedIntent);
+    let drawPlan: RevisionedDrawElementPlan;
+    try {
+      drawPlan = createRevisionedDrawElementPlan(opts, normalizedIntent);
+    } catch (error) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_MUTATION_REQUEST_INVALID,
+        errors: [
+          opts.toolName + '.v2: ' + (error instanceof Error ? error.message : 'draw plan invalid'),
+        ],
+      };
+    }
     const identity = immutableCanonicalSnapshot<RevisionedJournalIdentity>({
       executionId: opts.executionId,
       requestDigest: opts.requestDigest,
@@ -1449,14 +1782,13 @@ export class WhiteboardEnvironmentAuthority {
             receipt = this.uncertainReceipt(identity, beforeBinding, currentBinding, changed);
           } else {
             const delta = revisionedDrawDelta(
-              opts,
               drawPlan,
               expectedWhiteboardId,
               createdWhiteboard,
               visibilityChanged,
               beforeElementCount,
             );
-            const postcondition = revisionedDrawPostcondition(opts, drawPlan, expectedWhiteboardId);
+            const postcondition = revisionedDrawPostcondition(drawPlan, expectedWhiteboardId);
             const committedReceipt = {
               protocolVersion: REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
               outcome: 'committed',

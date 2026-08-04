@@ -1,13 +1,22 @@
 import {
+  CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_LATEX_RENDER_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  normalizeWhiteboardChartV1,
+  normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardRendererColorV1,
   normalizeWhiteboardShapeV1,
+  normalizeWhiteboardTableIntentV1,
+  type WhiteboardChartSpec,
   type WhiteboardLineMarker,
   type WhiteboardLineStyle,
   type WhiteboardShapeKind,
+  type WhiteboardTableOutline,
 } from './client-effect-contract';
 import {
   deriveRevisionedWhiteboardId,
@@ -96,6 +105,35 @@ export type RevisionedDrawLineIntent = {
   points?: [WhiteboardLineMarker, WhiteboardLineMarker];
 };
 
+export type RevisionedDrawLatexIntent = {
+  latex: string;
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  color?: string;
+};
+
+export type RevisionedDrawTableIntent = {
+  data: string[][];
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  outline?: WhiteboardTableOutline;
+  theme?: { color: string };
+};
+
+export type RevisionedDrawChartIntent = {
+  chartType: WhiteboardChartSpec['chartType'];
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  data: WhiteboardChartSpec['data'];
+  themeColors?: string[];
+};
+
 export type RevisionedDrawTextExpectedDescriptor = {
   kind: 'wb_draw_text_v2';
   intentDigest: string;
@@ -117,10 +155,35 @@ export type RevisionedDrawLineExpectedDescriptor = {
   expectedLineDigest: string;
 };
 
+export type RevisionedDrawLatexExpectedDescriptor = {
+  kind: 'wb_draw_latex_v2';
+  intentDigest: string;
+  stableElementId: string;
+  expectedFormulaDigest: string;
+  expectedHtmlDigest: string;
+};
+
+export type RevisionedDrawTableExpectedDescriptor = {
+  kind: 'wb_draw_table_v2';
+  intentDigest: string;
+  stableElementId: string;
+  expectedTableDigest: string;
+};
+
+export type RevisionedDrawChartExpectedDescriptor = {
+  kind: 'wb_draw_chart_v2';
+  intentDigest: string;
+  stableElementId: string;
+  expectedChartDigest: string;
+};
+
 export type RevisionedWhiteboardExpectedDescriptor =
   | RevisionedDrawTextExpectedDescriptor
   | RevisionedDrawShapeExpectedDescriptor
-  | RevisionedDrawLineExpectedDescriptor;
+  | RevisionedDrawLineExpectedDescriptor
+  | RevisionedDrawLatexExpectedDescriptor
+  | RevisionedDrawTableExpectedDescriptor
+  | RevisionedDrawChartExpectedDescriptor;
 
 export type RevisionedDrawTextDelta = {
   kind: 'whiteboard_text_created_v2';
@@ -185,6 +248,71 @@ export type RevisionedDrawLinePostcondition = {
   matchingElementCount: 1;
 };
 
+export type RevisionedDrawLatexDelta = {
+  kind: 'whiteboard_latex_created_v2';
+  normalizationVersion: typeof CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION;
+  whiteboardId: string;
+  stableElementId: string;
+  createdWhiteboard: boolean;
+  visibilityChanged: boolean;
+  elementCountBefore: number;
+  elementCountAfter: number;
+};
+
+export type RevisionedDrawLatexPostcondition = {
+  kind: 'whiteboard_latex_exists_v2';
+  normalizationVersion: typeof CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION;
+  renderVersion: typeof CLIENT_EFFECT_LATEX_RENDER_VERSION;
+  whiteboardId: string;
+  stableElementId: string;
+  elementType: 'latex';
+  observedFormulaDigest: string;
+  observedHtmlDigest: string;
+  matchingElementCount: 1;
+};
+
+export type RevisionedDrawTableDelta = {
+  kind: 'whiteboard_table_created_v2';
+  normalizationVersion: typeof CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION;
+  whiteboardId: string;
+  stableElementId: string;
+  createdWhiteboard: boolean;
+  visibilityChanged: boolean;
+  elementCountBefore: number;
+  elementCountAfter: number;
+};
+
+export type RevisionedDrawTablePostcondition = {
+  kind: 'whiteboard_table_exists_v2';
+  normalizationVersion: typeof CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION;
+  whiteboardId: string;
+  stableElementId: string;
+  elementType: 'table';
+  observedTableDigest: string;
+  matchingElementCount: 1;
+};
+
+export type RevisionedDrawChartDelta = {
+  kind: 'whiteboard_chart_created_v2';
+  normalizationVersion: typeof CLIENT_EFFECT_CHART_NORMALIZATION_VERSION;
+  whiteboardId: string;
+  stableElementId: string;
+  createdWhiteboard: boolean;
+  visibilityChanged: boolean;
+  elementCountBefore: number;
+  elementCountAfter: number;
+};
+
+export type RevisionedDrawChartPostcondition = {
+  kind: 'whiteboard_chart_exists_v2';
+  normalizationVersion: typeof CLIENT_EFFECT_CHART_NORMALIZATION_VERSION;
+  whiteboardId: string;
+  stableElementId: string;
+  elementType: 'chart';
+  observedChartDigest: string;
+  matchingElementCount: 1;
+};
+
 export type RevisionedDrawTextRequestDigestInput = {
   executionId: string;
   expectedBinding: RevisionedWhiteboardBinding;
@@ -208,10 +336,25 @@ export type RevisionedDrawLineRequestDigestInput = RevisionedWhiteboardRequestDi
   intent: RevisionedDrawLineIntent;
 };
 
+export type RevisionedDrawLatexRequestDigestInput = RevisionedWhiteboardRequestDigestBase & {
+  intent: RevisionedDrawLatexIntent;
+};
+
+export type RevisionedDrawTableRequestDigestInput = RevisionedWhiteboardRequestDigestBase & {
+  intent: RevisionedDrawTableIntent;
+};
+
+export type RevisionedDrawChartRequestDigestInput = RevisionedWhiteboardRequestDigestBase & {
+  intent: RevisionedDrawChartIntent;
+};
+
 export type RevisionedWhiteboardMutationDigestInput =
   | (RevisionedDrawTextRequestDigestInput & { toolName: 'wb_draw_text' })
   | (RevisionedDrawShapeRequestDigestInput & { toolName: 'wb_draw_shape' })
-  | (RevisionedDrawLineRequestDigestInput & { toolName: 'wb_draw_line' });
+  | (RevisionedDrawLineRequestDigestInput & { toolName: 'wb_draw_line' })
+  | (RevisionedDrawLatexRequestDigestInput & { toolName: 'wb_draw_latex' })
+  | (RevisionedDrawTableRequestDigestInput & { toolName: 'wb_draw_table' })
+  | (RevisionedDrawChartRequestDigestInput & { toolName: 'wb_draw_chart' });
 
 type RevisionedWhiteboardEffectDeliveryBase = {
   protocolVersion: typeof REVISIONED_WHITEBOARD_PROTOCOL_VERSION;
@@ -238,10 +381,28 @@ export type RevisionedDrawLineEffectDelivery = RevisionedWhiteboardEffectDeliver
   intent: RevisionedDrawLineIntent;
 };
 
+export type RevisionedDrawLatexEffectDelivery = RevisionedWhiteboardEffectDeliveryBase & {
+  toolName: 'wb_draw_latex';
+  intent: RevisionedDrawLatexIntent;
+};
+
+export type RevisionedDrawTableEffectDelivery = RevisionedWhiteboardEffectDeliveryBase & {
+  toolName: 'wb_draw_table';
+  intent: RevisionedDrawTableIntent;
+};
+
+export type RevisionedDrawChartEffectDelivery = RevisionedWhiteboardEffectDeliveryBase & {
+  toolName: 'wb_draw_chart';
+  intent: RevisionedDrawChartIntent;
+};
+
 export type RevisionedWhiteboardEffectDelivery =
   | RevisionedDrawTextEffectDelivery
   | RevisionedDrawShapeEffectDelivery
-  | RevisionedDrawLineEffectDelivery;
+  | RevisionedDrawLineEffectDelivery
+  | RevisionedDrawLatexEffectDelivery
+  | RevisionedDrawTableEffectDelivery
+  | RevisionedDrawChartEffectDelivery;
 
 export type RevisionedWhiteboardRejectedCode =
   | 'AUTHENTICATED_TARGET_CHANGED'
@@ -516,10 +677,127 @@ export function normalizeRevisionedDrawLineIntent(
   }
 }
 
+export function normalizeRevisionedDrawLatexIntent(
+  value: unknown,
+): Readonly<RevisionedDrawLatexIntent> | null {
+  if (!isRecord(value)) return null;
+  const allowed = new Set(['latex', 'x', 'y', 'width', 'height', 'color']);
+  if (
+    !Object.keys(value).every((key) => allowed.has(key)) ||
+    !Object.prototype.hasOwnProperty.call(value, 'latex') ||
+    !Object.prototype.hasOwnProperty.call(value, 'x') ||
+    !Object.prototype.hasOwnProperty.call(value, 'y')
+  ) {
+    return null;
+  }
+  try {
+    const normalized = normalizeWhiteboardLatexV1({
+      latex: value.latex,
+      x: value.x,
+      y: value.y,
+      width: value.width,
+      height: value.height,
+      color: value.color,
+    });
+    return immutableJsonSnapshot({
+      latex: normalized.latex,
+      x: normalized.bounds.x,
+      y: normalized.bounds.y,
+      width: normalized.bounds.width,
+      height: normalized.bounds.height,
+      color: normalized.color,
+    });
+  } catch {
+    return null;
+  }
+}
+
+export function normalizeRevisionedDrawTableIntent(
+  value: unknown,
+): Readonly<RevisionedDrawTableIntent> | null {
+  if (!isRecord(value)) return null;
+  const allowed = new Set(['data', 'x', 'y', 'width', 'height', 'outline', 'theme']);
+  if (
+    !Object.keys(value).every((key) => allowed.has(key)) ||
+    !Object.prototype.hasOwnProperty.call(value, 'data') ||
+    !Object.prototype.hasOwnProperty.call(value, 'x') ||
+    !Object.prototype.hasOwnProperty.call(value, 'y') ||
+    !Object.prototype.hasOwnProperty.call(value, 'width') ||
+    !Object.prototype.hasOwnProperty.call(value, 'height')
+  ) {
+    return null;
+  }
+  try {
+    const normalized = normalizeWhiteboardTableIntentV1({
+      data: value.data,
+      x: value.x,
+      y: value.y,
+      width: value.width,
+      height: value.height,
+      outline: value.outline,
+      theme: value.theme,
+    });
+    return immutableJsonSnapshot({
+      data: normalized.data,
+      x: normalized.bounds.x,
+      y: normalized.bounds.y,
+      width: normalized.bounds.width,
+      height: normalized.bounds.height,
+      outline: normalized.outline,
+      ...(normalized.theme ? { theme: normalized.theme } : {}),
+    });
+  } catch {
+    return null;
+  }
+}
+
+export function normalizeRevisionedDrawChartIntent(
+  value: unknown,
+): Readonly<RevisionedDrawChartIntent> | null {
+  if (!isRecord(value)) return null;
+  const allowed = new Set(['chartType', 'x', 'y', 'width', 'height', 'data', 'themeColors']);
+  if (
+    !Object.keys(value).every((key) => allowed.has(key)) ||
+    !Object.prototype.hasOwnProperty.call(value, 'chartType') ||
+    !Object.prototype.hasOwnProperty.call(value, 'x') ||
+    !Object.prototype.hasOwnProperty.call(value, 'y') ||
+    !Object.prototype.hasOwnProperty.call(value, 'width') ||
+    !Object.prototype.hasOwnProperty.call(value, 'height') ||
+    !Object.prototype.hasOwnProperty.call(value, 'data')
+  ) {
+    return null;
+  }
+  try {
+    const normalized = normalizeWhiteboardChartV1({
+      chartType: value.chartType,
+      x: value.x,
+      y: value.y,
+      width: value.width,
+      height: value.height,
+      data: value.data,
+      themeColors: value.themeColors,
+    });
+    return immutableJsonSnapshot({
+      chartType: normalized.chartType,
+      x: normalized.bounds.x,
+      y: normalized.bounds.y,
+      width: normalized.bounds.width,
+      height: normalized.bounds.height,
+      data: normalized.data,
+      themeColors: normalized.themeColors,
+    });
+  } catch {
+    return null;
+  }
+}
+
 type ImplementedRevisionedWhiteboardIntent =
   | RevisionedDrawTextIntent
   | RevisionedDrawShapeIntent
-  | RevisionedDrawLineIntent;
+  | RevisionedDrawLineIntent
+  | RevisionedDrawLatexIntent
+  | RevisionedDrawTableIntent
+  | RevisionedDrawChartIntent;
 
 function normalizeRevisionedWhiteboardMutationIntent(
   toolName: RevisionedWhiteboardMutationDigestInput['toolName'],
@@ -532,6 +810,12 @@ function normalizeRevisionedWhiteboardMutationIntent(
       return normalizeRevisionedDrawShapeIntent(value);
     case 'wb_draw_line':
       return normalizeRevisionedDrawLineIntent(value);
+    case 'wb_draw_latex':
+      return normalizeRevisionedDrawLatexIntent(value);
+    case 'wb_draw_table':
+      return normalizeRevisionedDrawTableIntent(value);
+    case 'wb_draw_chart':
+      return normalizeRevisionedDrawChartIntent(value);
   }
 }
 
@@ -622,6 +906,60 @@ export function createRevisionedDrawLineDigests(input: RevisionedDrawLineRequest
     : null;
 }
 
+export function createRevisionedDrawLatexDigests(input: RevisionedDrawLatexRequestDigestInput): {
+  normalizedIntent: Readonly<RevisionedDrawLatexIntent>;
+  intentDigest: string;
+  requestDigest: string;
+} | null {
+  const result = createRevisionedWhiteboardMutationDigests({
+    ...input,
+    toolName: 'wb_draw_latex',
+  });
+  return result
+    ? {
+        normalizedIntent: result.normalizedIntent as Readonly<RevisionedDrawLatexIntent>,
+        intentDigest: result.intentDigest,
+        requestDigest: result.requestDigest,
+      }
+    : null;
+}
+
+export function createRevisionedDrawTableDigests(input: RevisionedDrawTableRequestDigestInput): {
+  normalizedIntent: Readonly<RevisionedDrawTableIntent>;
+  intentDigest: string;
+  requestDigest: string;
+} | null {
+  const result = createRevisionedWhiteboardMutationDigests({
+    ...input,
+    toolName: 'wb_draw_table',
+  });
+  return result
+    ? {
+        normalizedIntent: result.normalizedIntent as Readonly<RevisionedDrawTableIntent>,
+        intentDigest: result.intentDigest,
+        requestDigest: result.requestDigest,
+      }
+    : null;
+}
+
+export function createRevisionedDrawChartDigests(input: RevisionedDrawChartRequestDigestInput): {
+  normalizedIntent: Readonly<RevisionedDrawChartIntent>;
+  intentDigest: string;
+  requestDigest: string;
+} | null {
+  const result = createRevisionedWhiteboardMutationDigests({
+    ...input,
+    toolName: 'wb_draw_chart',
+  });
+  return result
+    ? {
+        normalizedIntent: result.normalizedIntent as Readonly<RevisionedDrawChartIntent>,
+        intentDigest: result.intentDigest,
+        requestDigest: result.requestDigest,
+      }
+    : null;
+}
+
 export function createRevisionedWhiteboardEffectDeliveryDigests(
   delivery: RevisionedWhiteboardEffectDelivery,
 ) {
@@ -638,6 +976,12 @@ export function createRevisionedWhiteboardEffectDeliveryDigests(
       return createRevisionedDrawShapeDigests({ ...common, intent: delivery.intent });
     case 'wb_draw_line':
       return createRevisionedDrawLineDigests({ ...common, intent: delivery.intent });
+    case 'wb_draw_latex':
+      return createRevisionedDrawLatexDigests({ ...common, intent: delivery.intent });
+    case 'wb_draw_table':
+      return createRevisionedDrawTableDigests({ ...common, intent: delivery.intent });
+    case 'wb_draw_chart':
+      return createRevisionedDrawChartDigests({ ...common, intent: delivery.intent });
   }
 }
 
@@ -904,6 +1248,28 @@ export function isRevisionedWhiteboardExpectedDescriptor(
         hasExactKeys(value, ['kind', 'intentDigest', 'stableElementId', 'expectedLineDigest']) &&
         isSha256Digest(value.expectedLineDigest)
       );
+    case 'wb_draw_latex_v2':
+      return (
+        hasExactKeys(value, [
+          'kind',
+          'intentDigest',
+          'stableElementId',
+          'expectedFormulaDigest',
+          'expectedHtmlDigest',
+        ]) &&
+        isSha256Digest(value.expectedFormulaDigest) &&
+        isSha256Digest(value.expectedHtmlDigest)
+      );
+    case 'wb_draw_table_v2':
+      return (
+        hasExactKeys(value, ['kind', 'intentDigest', 'stableElementId', 'expectedTableDigest']) &&
+        isSha256Digest(value.expectedTableDigest)
+      );
+    case 'wb_draw_chart_v2':
+      return (
+        hasExactKeys(value, ['kind', 'intentDigest', 'stableElementId', 'expectedChartDigest']) &&
+        isSha256Digest(value.expectedChartDigest)
+      );
     default:
       return false;
   }
@@ -915,7 +1281,10 @@ function isRevisionedDrawDelta(
   kind:
     | RevisionedDrawTextDelta['kind']
     | RevisionedDrawShapeDelta['kind']
-    | RevisionedDrawLineDelta['kind'],
+    | RevisionedDrawLineDelta['kind']
+    | RevisionedDrawLatexDelta['kind']
+    | RevisionedDrawTableDelta['kind']
+    | RevisionedDrawChartDelta['kind'],
   normalizationVersion: string,
 ): boolean {
   return (
@@ -1090,6 +1459,143 @@ export function isRevisionedDrawLineCommittedReceipt(
   );
 }
 
+export function isRevisionedDrawLatexCommittedReceipt(
+  receipt: ShapeValidatedRevisionedWhiteboardReceipt,
+  expected: RevisionedDrawLatexExpectedDescriptor,
+): receipt is ShapeValidatedRevisionedWhiteboardReceipt & RevisionedWhiteboardCommittedReceipt {
+  if (
+    receipt.outcome !== 'committed' ||
+    receipt.toolName !== 'wb_draw_latex' ||
+    receipt.changed !== true ||
+    receipt.mutationMayHaveCommitted !== false ||
+    !isRecord(receipt.delta) ||
+    !isRecord(receipt.postcondition)
+  ) {
+    return false;
+  }
+  const delta = receipt.delta;
+  const postcondition = receipt.postcondition;
+  return (
+    isRevisionedDrawDelta(
+      delta,
+      expected,
+      'whiteboard_latex_created_v2',
+      CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
+    ) &&
+    hasExactKeys(postcondition, [
+      'kind',
+      'normalizationVersion',
+      'renderVersion',
+      'whiteboardId',
+      'stableElementId',
+      'elementType',
+      'observedFormulaDigest',
+      'observedHtmlDigest',
+      'matchingElementCount',
+    ]) &&
+    postcondition.kind === 'whiteboard_latex_exists_v2' &&
+    postcondition.normalizationVersion === CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION &&
+    postcondition.renderVersion === CLIENT_EFFECT_LATEX_RENDER_VERSION &&
+    postcondition.whiteboardId === delta.whiteboardId &&
+    postcondition.stableElementId === expected.stableElementId &&
+    postcondition.elementType === 'latex' &&
+    postcondition.observedFormulaDigest === expected.expectedFormulaDigest &&
+    postcondition.observedHtmlDigest === expected.expectedHtmlDigest &&
+    isSha256Digest(postcondition.observedFormulaDigest) &&
+    isSha256Digest(postcondition.observedHtmlDigest) &&
+    postcondition.matchingElementCount === 1 &&
+    hasRevisionedDrawBindingInvariants(receipt, delta)
+  );
+}
+
+export function isRevisionedDrawTableCommittedReceipt(
+  receipt: ShapeValidatedRevisionedWhiteboardReceipt,
+  expected: RevisionedDrawTableExpectedDescriptor,
+): receipt is ShapeValidatedRevisionedWhiteboardReceipt & RevisionedWhiteboardCommittedReceipt {
+  if (
+    receipt.outcome !== 'committed' ||
+    receipt.toolName !== 'wb_draw_table' ||
+    receipt.changed !== true ||
+    receipt.mutationMayHaveCommitted !== false ||
+    !isRecord(receipt.delta) ||
+    !isRecord(receipt.postcondition)
+  ) {
+    return false;
+  }
+  const delta = receipt.delta;
+  const postcondition = receipt.postcondition;
+  return (
+    isRevisionedDrawDelta(
+      delta,
+      expected,
+      'whiteboard_table_created_v2',
+      CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
+    ) &&
+    hasExactKeys(postcondition, [
+      'kind',
+      'normalizationVersion',
+      'whiteboardId',
+      'stableElementId',
+      'elementType',
+      'observedTableDigest',
+      'matchingElementCount',
+    ]) &&
+    postcondition.kind === 'whiteboard_table_exists_v2' &&
+    postcondition.normalizationVersion === CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION &&
+    postcondition.whiteboardId === delta.whiteboardId &&
+    postcondition.stableElementId === expected.stableElementId &&
+    postcondition.elementType === 'table' &&
+    postcondition.observedTableDigest === expected.expectedTableDigest &&
+    isSha256Digest(postcondition.observedTableDigest) &&
+    postcondition.matchingElementCount === 1 &&
+    hasRevisionedDrawBindingInvariants(receipt, delta)
+  );
+}
+
+export function isRevisionedDrawChartCommittedReceipt(
+  receipt: ShapeValidatedRevisionedWhiteboardReceipt,
+  expected: RevisionedDrawChartExpectedDescriptor,
+): receipt is ShapeValidatedRevisionedWhiteboardReceipt & RevisionedWhiteboardCommittedReceipt {
+  if (
+    receipt.outcome !== 'committed' ||
+    receipt.toolName !== 'wb_draw_chart' ||
+    receipt.changed !== true ||
+    receipt.mutationMayHaveCommitted !== false ||
+    !isRecord(receipt.delta) ||
+    !isRecord(receipt.postcondition)
+  ) {
+    return false;
+  }
+  const delta = receipt.delta;
+  const postcondition = receipt.postcondition;
+  return (
+    isRevisionedDrawDelta(
+      delta,
+      expected,
+      'whiteboard_chart_created_v2',
+      CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+    ) &&
+    hasExactKeys(postcondition, [
+      'kind',
+      'normalizationVersion',
+      'whiteboardId',
+      'stableElementId',
+      'elementType',
+      'observedChartDigest',
+      'matchingElementCount',
+    ]) &&
+    postcondition.kind === 'whiteboard_chart_exists_v2' &&
+    postcondition.normalizationVersion === CLIENT_EFFECT_CHART_NORMALIZATION_VERSION &&
+    postcondition.whiteboardId === delta.whiteboardId &&
+    postcondition.stableElementId === expected.stableElementId &&
+    postcondition.elementType === 'chart' &&
+    postcondition.observedChartDigest === expected.expectedChartDigest &&
+    isSha256Digest(postcondition.observedChartDigest) &&
+    postcondition.matchingElementCount === 1 &&
+    hasRevisionedDrawBindingInvariants(receipt, delta)
+  );
+}
+
 export function isRevisionedWhiteboardCommittedReceiptForExpected(
   receipt: ShapeValidatedRevisionedWhiteboardReceipt,
   expected: RevisionedWhiteboardExpectedDescriptor,
@@ -1101,6 +1607,12 @@ export function isRevisionedWhiteboardCommittedReceiptForExpected(
       return isRevisionedDrawShapeCommittedReceipt(receipt, expected);
     case 'wb_draw_line_v2':
       return isRevisionedDrawLineCommittedReceipt(receipt, expected);
+    case 'wb_draw_latex_v2':
+      return isRevisionedDrawLatexCommittedReceipt(receipt, expected);
+    case 'wb_draw_table_v2':
+      return isRevisionedDrawTableCommittedReceipt(receipt, expected);
+    case 'wb_draw_chart_v2':
+      return isRevisionedDrawChartCommittedReceipt(receipt, expected);
   }
 }
 
@@ -1123,7 +1635,10 @@ export function isRevisionedWhiteboardEffectDelivery(
     value.protocolVersion !== REVISIONED_WHITEBOARD_PROTOCOL_VERSION ||
     (value.toolName !== 'wb_draw_text' &&
       value.toolName !== 'wb_draw_shape' &&
-      value.toolName !== 'wb_draw_line') ||
+      value.toolName !== 'wb_draw_line' &&
+      value.toolName !== 'wb_draw_latex' &&
+      value.toolName !== 'wb_draw_table' &&
+      value.toolName !== 'wb_draw_chart') ||
     !isSafeId(value.executionId) ||
     !isRequestDigest(value.requestDigest) ||
     !isBinding(value.expectedBinding) ||

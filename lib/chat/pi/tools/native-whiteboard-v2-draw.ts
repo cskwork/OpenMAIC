@@ -2,13 +2,22 @@ import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type, type Static, type TSchema } from 'typebox';
 import {
   REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
+  createRevisionedDrawChartDigests,
+  createRevisionedDrawLatexDigests,
   createRevisionedDrawLineDigests,
   createRevisionedDrawShapeDigests,
+  createRevisionedDrawTableDigests,
   createRevisionedDrawTextDigests,
+  type RevisionedDrawChartExpectedDescriptor,
+  type RevisionedDrawChartIntent,
+  type RevisionedDrawLatexExpectedDescriptor,
+  type RevisionedDrawLatexIntent,
   type RevisionedDrawLineExpectedDescriptor,
   type RevisionedDrawLineIntent,
   type RevisionedDrawShapeExpectedDescriptor,
   type RevisionedDrawShapeIntent,
+  type RevisionedDrawTableExpectedDescriptor,
+  type RevisionedDrawTableIntent,
   type RevisionedDrawTextExpectedDescriptor,
   type RevisionedDrawTextIntent,
   type RevisionedWhiteboardBinding,
@@ -16,14 +25,23 @@ import {
 } from '@/lib/agent/runtime/revisioned-whiteboard-contract';
 import {
   deriveRevisionedElementId,
+  digestRevisionedWhiteboardTableStateV2Sync,
   digestVisibleTextV1Sync,
+  digestWhiteboardChartV1Sync,
+  digestWhiteboardLatexHtmlV1Sync,
+  digestWhiteboardLatexV1Sync,
   digestWhiteboardLineV1Sync,
   digestWhiteboardShapeV1Sync,
 } from '@/lib/agent/runtime/revisioned-whiteboard-digest';
 import {
+  normalizeWhiteboardChartV1,
+  normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
+  normalizeWhiteboardTableV1,
 } from '@/lib/agent/runtime/client-effect-contract';
+import { renderNativeWhiteboardLatexHtmlV1 } from '@/lib/action/whiteboard-latex';
+import { createWhiteboardTableElement } from '@/lib/action/whiteboard-tables';
 import {
   piRevisionedWhiteboardCoordinator,
   type RegisteredRevisionedMutation,
@@ -102,15 +120,132 @@ const RevisionedDrawLineParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const RevisionedDrawLatexParamsSchema = Type.Object(
+  {
+    observationToken: SafeId(256),
+    expectedWhiteboardId: Type.Union([SafeId(512), Type.Null()]),
+    expectedRevision: Type.Integer({ minimum: 0 }),
+    latex: Type.String({ minLength: 1, maxLength: 2_000 }),
+    x: Type.Number({ minimum: 0, maximum: 999 }),
+    y: Type.Number({ minimum: 0, maximum: 562 }),
+    width: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 1000 })),
+    height: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 563 })),
+    color: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+  },
+  { additionalProperties: false },
+);
+
+const RevisionedDrawTableParamsSchema = Type.Object(
+  {
+    observationToken: SafeId(256),
+    expectedWhiteboardId: Type.Union([SafeId(512), Type.Null()]),
+    expectedRevision: Type.Integer({ minimum: 0 }),
+    data: Type.Array(
+      Type.Array(Type.String({ maxLength: 256 }), {
+        minItems: 1,
+        maxItems: 8,
+      }),
+      { minItems: 1, maxItems: 12 },
+    ),
+    x: Type.Number({ minimum: 0, maximum: 999 }),
+    y: Type.Number({ minimum: 0, maximum: 562 }),
+    width: Type.Number({ exclusiveMinimum: 0, maximum: 1000 }),
+    height: Type.Number({ exclusiveMinimum: 0, maximum: 563 }),
+    outline: Type.Optional(
+      Type.Object(
+        {
+          width: Type.Number({ minimum: 0, maximum: 20 }),
+          style: Type.Union([Type.Literal('solid'), Type.Literal('dashed')]),
+          color: Type.String({ minLength: 1, maxLength: 64 }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    theme: Type.Optional(
+      Type.Object(
+        { color: Type.String({ minLength: 1, maxLength: 64 }) },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const RevisionedChartType = Type.Union([
+  Type.Literal('bar'),
+  Type.Literal('column'),
+  Type.Literal('line'),
+  Type.Literal('pie'),
+  Type.Literal('ring'),
+  Type.Literal('area'),
+  Type.Literal('radar'),
+  Type.Literal('scatter'),
+]);
+
+const RevisionedDrawChartParamsSchema = Type.Object(
+  {
+    observationToken: SafeId(256),
+    expectedWhiteboardId: Type.Union([SafeId(512), Type.Null()]),
+    expectedRevision: Type.Integer({ minimum: 0 }),
+    chartType: RevisionedChartType,
+    x: Type.Number({ minimum: 0, maximum: 999 }),
+    y: Type.Number({ minimum: 0, maximum: 562 }),
+    width: Type.Number({ exclusiveMinimum: 0, maximum: 1000 }),
+    height: Type.Number({ exclusiveMinimum: 0, maximum: 563 }),
+    data: Type.Object(
+      {
+        labels: Type.Array(Type.String({ minLength: 1, maxLength: 80 }), {
+          minItems: 1,
+          maxItems: 64,
+        }),
+        legends: Type.Array(Type.String({ minLength: 1, maxLength: 80 }), {
+          minItems: 1,
+          maxItems: 8,
+        }),
+        series: Type.Array(
+          Type.Array(
+            Type.Number({
+              minimum: -1_000_000_000_000,
+              maximum: 1_000_000_000_000,
+            }),
+            { minItems: 1, maxItems: 64 },
+          ),
+          { minItems: 1, maxItems: 8 },
+        ),
+      },
+      { additionalProperties: false },
+    ),
+    themeColors: Type.Optional(
+      Type.Array(Type.String({ minLength: 1, maxLength: 64 }), {
+        minItems: 1,
+        maxItems: 10,
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 export type RevisionedDrawTextParams = Static<typeof RevisionedDrawTextParamsSchema>;
 export type RevisionedDrawShapeParams = Static<typeof RevisionedDrawShapeParamsSchema>;
 export type RevisionedDrawLineParams = Static<typeof RevisionedDrawLineParamsSchema>;
+export type RevisionedDrawLatexParams = Static<typeof RevisionedDrawLatexParamsSchema>;
+export type RevisionedDrawTableParams = Static<typeof RevisionedDrawTableParamsSchema>;
+export type RevisionedDrawChartParams = Static<typeof RevisionedDrawChartParamsSchema>;
 
-type RevisionedDrawToolName = 'wb_draw_text' | 'wb_draw_shape' | 'wb_draw_line';
+type RevisionedDrawToolName =
+  | 'wb_draw_text'
+  | 'wb_draw_shape'
+  | 'wb_draw_line'
+  | 'wb_draw_latex'
+  | 'wb_draw_table'
+  | 'wb_draw_chart';
 type RevisionedDrawParams =
   | RevisionedDrawTextParams
   | RevisionedDrawShapeParams
-  | RevisionedDrawLineParams;
+  | RevisionedDrawLineParams
+  | RevisionedDrawLatexParams
+  | RevisionedDrawTableParams
+  | RevisionedDrawChartParams;
 
 type PreparedRevisionedDraw =
   | {
@@ -133,6 +268,27 @@ type PreparedRevisionedDraw =
       intentDigest: string;
       requestDigest: string;
       expected: RevisionedDrawLineExpectedDescriptor;
+    }
+  | {
+      toolName: 'wb_draw_latex';
+      intent: Readonly<RevisionedDrawLatexIntent>;
+      intentDigest: string;
+      requestDigest: string;
+      expected: RevisionedDrawLatexExpectedDescriptor;
+    }
+  | {
+      toolName: 'wb_draw_table';
+      intent: Readonly<RevisionedDrawTableIntent>;
+      intentDigest: string;
+      requestDigest: string;
+      expected: RevisionedDrawTableExpectedDescriptor;
+    }
+  | {
+      toolName: 'wb_draw_chart';
+      intent: Readonly<RevisionedDrawChartIntent>;
+      intentDigest: string;
+      requestDigest: string;
+      expected: RevisionedDrawChartExpectedDescriptor;
     };
 
 export interface InternalRevisionedDrawToolOptions {
@@ -216,6 +372,41 @@ function rawIntent(toolName: RevisionedDrawToolName, params: RevisionedDrawParam
           : {}),
       } satisfies RevisionedDrawLineIntent;
     }
+    case 'wb_draw_latex': {
+      const input = params as RevisionedDrawLatexParams;
+      return {
+        latex: input.latex,
+        x: input.x,
+        y: input.y,
+        ...(input.width !== undefined ? { width: input.width } : {}),
+        ...(input.height !== undefined ? { height: input.height } : {}),
+        ...(input.color !== undefined ? { color: input.color } : {}),
+      } satisfies RevisionedDrawLatexIntent;
+    }
+    case 'wb_draw_table': {
+      const input = params as RevisionedDrawTableParams;
+      return {
+        data: input.data,
+        x: input.x,
+        y: input.y,
+        width: input.width,
+        height: input.height,
+        ...(input.outline !== undefined ? { outline: input.outline } : {}),
+        ...(input.theme !== undefined ? { theme: input.theme } : {}),
+      } satisfies RevisionedDrawTableIntent;
+    }
+    case 'wb_draw_chart': {
+      const input = params as RevisionedDrawChartParams;
+      return {
+        chartType: input.chartType,
+        x: input.x,
+        y: input.y,
+        width: input.width,
+        height: input.height,
+        data: input.data,
+        ...(input.themeColors !== undefined ? { themeColors: input.themeColors } : {}),
+      } satisfies RevisionedDrawChartIntent;
+    }
   }
 }
 
@@ -293,6 +484,91 @@ function prepareRevisionedDraw(input: {
         }),
       };
     }
+    case 'wb_draw_latex': {
+      const digests = createRevisionedDrawLatexDigests({
+        ...input,
+        intent: rawIntent(input.toolName, input.params) as RevisionedDrawLatexIntent,
+      });
+      if (!digests) return null;
+      try {
+        const spec = normalizeWhiteboardLatexV1(digests.normalizedIntent);
+        const html = renderNativeWhiteboardLatexHtmlV1(spec.latex);
+        return {
+          toolName: input.toolName,
+          intent: digests.normalizedIntent,
+          intentDigest: digests.intentDigest,
+          requestDigest: digests.requestDigest,
+          expected: Object.freeze({
+            kind: 'wb_draw_latex_v2',
+            intentDigest: digests.intentDigest,
+            stableElementId,
+            expectedFormulaDigest: digestWhiteboardLatexV1Sync(spec),
+            expectedHtmlDigest: digestWhiteboardLatexHtmlV1Sync(html),
+          }),
+        };
+      } catch {
+        return null;
+      }
+    }
+    case 'wb_draw_table': {
+      const digests = createRevisionedDrawTableDigests({
+        ...input,
+        intent: rawIntent(input.toolName, input.params) as RevisionedDrawTableIntent,
+      });
+      if (!digests) return null;
+      try {
+        const spec = normalizeWhiteboardTableV1(digests.normalizedIntent);
+        const element = createWhiteboardTableElement({
+          id: stableElementId,
+          x: spec.bounds.x,
+          y: spec.bounds.y,
+          width: spec.bounds.width,
+          height: spec.bounds.height,
+          data: spec.data,
+          outline: spec.outline,
+          theme: spec.theme ? { color: spec.theme.color } : undefined,
+        });
+        if (!element) return null;
+        return {
+          toolName: input.toolName,
+          intent: digests.normalizedIntent,
+          intentDigest: digests.intentDigest,
+          requestDigest: digests.requestDigest,
+          expected: Object.freeze({
+            kind: 'wb_draw_table_v2',
+            intentDigest: digests.intentDigest,
+            stableElementId,
+            expectedTableDigest: digestRevisionedWhiteboardTableStateV2Sync(element),
+          }),
+        };
+      } catch {
+        return null;
+      }
+    }
+    case 'wb_draw_chart': {
+      const digests = createRevisionedDrawChartDigests({
+        ...input,
+        intent: rawIntent(input.toolName, input.params) as RevisionedDrawChartIntent,
+      });
+      if (!digests) return null;
+      try {
+        const spec = normalizeWhiteboardChartV1(digests.normalizedIntent);
+        return {
+          toolName: input.toolName,
+          intent: digests.normalizedIntent,
+          intentDigest: digests.intentDigest,
+          requestDigest: digests.requestDigest,
+          expected: Object.freeze({
+            kind: 'wb_draw_chart_v2',
+            intentDigest: digests.intentDigest,
+            stableElementId,
+            expectedChartDigest: digestWhiteboardChartV1Sync(spec),
+          }),
+        };
+      } catch {
+        return null;
+      }
+    }
   }
 }
 
@@ -316,6 +592,27 @@ function deliveryFor(
         intent: prepared.intent,
       };
     case 'wb_draw_line':
+      return {
+        ...common,
+        toolName: prepared.toolName,
+        requestDigest: prepared.requestDigest,
+        intent: prepared.intent,
+      };
+    case 'wb_draw_latex':
+      return {
+        ...common,
+        toolName: prepared.toolName,
+        requestDigest: prepared.requestDigest,
+        intent: prepared.intent,
+      };
+    case 'wb_draw_table':
+      return {
+        ...common,
+        toolName: prepared.toolName,
+        requestDigest: prepared.requestDigest,
+        intent: prepared.intent,
+      };
+    case 'wb_draw_chart':
       return {
         ...common,
         toolName: prepared.toolName,
@@ -570,5 +867,50 @@ export function buildInternalRevisionedWhiteboardDrawLineTool(
       parameters: RevisionedDrawLineParamsSchema,
     }),
     handler: createHandler(opts, 'wb_draw_line'),
+  };
+}
+
+export function buildInternalRevisionedWhiteboardDrawLatexTool(
+  opts: InternalRevisionedDrawToolOptions,
+): InternalRevisionedDrawToolBundle<typeof RevisionedDrawLatexParamsSchema> {
+  return {
+    tool: tool({
+      name: 'wb_draw_latex',
+      label: 'Draw revisioned whiteboard formula',
+      description:
+        'Internal revisioned LaTeX draw. Use a fresh wb_read binding token and refetch after STALE_STATE.',
+      parameters: RevisionedDrawLatexParamsSchema,
+    }),
+    handler: createHandler(opts, 'wb_draw_latex'),
+  };
+}
+
+export function buildInternalRevisionedWhiteboardDrawTableTool(
+  opts: InternalRevisionedDrawToolOptions,
+): InternalRevisionedDrawToolBundle<typeof RevisionedDrawTableParamsSchema> {
+  return {
+    tool: tool({
+      name: 'wb_draw_table',
+      label: 'Draw revisioned whiteboard table',
+      description:
+        'Internal revisioned table draw. Use a fresh wb_read binding token and refetch after STALE_STATE.',
+      parameters: RevisionedDrawTableParamsSchema,
+    }),
+    handler: createHandler(opts, 'wb_draw_table'),
+  };
+}
+
+export function buildInternalRevisionedWhiteboardDrawChartTool(
+  opts: InternalRevisionedDrawToolOptions,
+): InternalRevisionedDrawToolBundle<typeof RevisionedDrawChartParamsSchema> {
+  return {
+    tool: tool({
+      name: 'wb_draw_chart',
+      label: 'Draw revisioned whiteboard chart',
+      description:
+        'Internal revisioned chart draw. Use a fresh wb_read binding token and refetch after STALE_STATE.',
+      parameters: RevisionedDrawChartParamsSchema,
+    }),
+    handler: createHandler(opts, 'wb_draw_chart'),
   };
 }

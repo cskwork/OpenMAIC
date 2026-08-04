@@ -393,6 +393,17 @@ export interface WhiteboardTableTheme {
   colFooter: false;
 }
 
+/**
+ * Canonical model-facing Table intent. Cell text is normalized but deliberately
+ * not HTML-escaped; the renderer spec below performs that transformation once.
+ */
+export interface WhiteboardTableIntentV1 {
+  data: string[][];
+  bounds: WhiteboardTableBounds;
+  outline: WhiteboardTableOutline;
+  theme?: { color: string };
+}
+
 export interface WhiteboardTableSpec {
   data: string[][];
   bounds: WhiteboardTableBounds;
@@ -1017,7 +1028,7 @@ const WHITEBOARD_TABLE_MAX_CELLS = 96;
 const WHITEBOARD_TABLE_MAX_CELL_CHARACTERS = 256;
 const WHITEBOARD_TABLE_MAX_RAW_BYTES = 12 * 1024;
 
-function normalizeWhiteboardTableCell(value: unknown): string {
+function normalizeWhiteboardTableCellSource(value: unknown): string {
   if (typeof value !== 'string' || value.length > WHITEBOARD_TABLE_MAX_CELL_CHARACTERS) {
     throw new Error('CLIENT_EFFECT_TABLE_CELL_INVALID');
   }
@@ -1028,10 +1039,10 @@ function normalizeWhiteboardTableCell(value: unknown): string {
   if (/[\u0000-\u0009\u000b-\u001f\u007f]/.test(normalized)) {
     throw new Error('CLIENT_EFFECT_TABLE_CELL_INVALID');
   }
-  return escapeWhiteboardTableCellText(normalized);
+  return normalized;
 }
 
-export function normalizeWhiteboardTableV1(input: {
+export function normalizeWhiteboardTableIntentV1(input: {
   data: unknown;
   x: unknown;
   y: unknown;
@@ -1039,7 +1050,7 @@ export function normalizeWhiteboardTableV1(input: {
   height: unknown;
   outline?: unknown;
   theme?: unknown;
-}): WhiteboardTableSpec {
+}): WhiteboardTableIntentV1 {
   if (
     !Array.isArray(input.data) ||
     input.data.length === 0 ||
@@ -1058,7 +1069,7 @@ export function normalizeWhiteboardTableV1(input: {
   ) {
     throw new Error('CLIENT_EFFECT_TABLE_DIMENSIONS_INVALID');
   }
-  const data = input.data.map((row) => row.map(normalizeWhiteboardTableCell));
+  const data = input.data.map((row) => row.map(normalizeWhiteboardTableCellSource));
 
   const { x, y, width, height } = input;
   if (
@@ -1120,7 +1131,7 @@ export function normalizeWhiteboardTableV1(input: {
     };
   }
 
-  let theme: WhiteboardTableTheme | undefined;
+  let theme: { color: string } | undefined;
   if (input.theme !== undefined) {
     if (!input.theme || typeof input.theme !== 'object' || Array.isArray(input.theme)) {
       throw new Error('CLIENT_EFFECT_TABLE_THEME_INVALID');
@@ -1136,10 +1147,6 @@ export function normalizeWhiteboardTableV1(input: {
     }
     theme = {
       color: rawTheme.color.trim(),
-      rowHeader: true,
-      rowFooter: false,
-      colHeader: false,
-      colFooter: false,
     };
   }
 
@@ -1148,7 +1155,36 @@ export function normalizeWhiteboardTableV1(input: {
     bounds,
     outline,
     ...(theme ? { theme } : {}),
-    colWidths: Array(firstRow.length).fill(1 / firstRow.length) as number[],
+  };
+}
+
+export function normalizeWhiteboardTableV1(input: {
+  data: unknown;
+  x: unknown;
+  y: unknown;
+  width: unknown;
+  height: unknown;
+  outline?: unknown;
+  theme?: unknown;
+}): WhiteboardTableSpec {
+  const intent = normalizeWhiteboardTableIntentV1(input);
+  const columns = intent.data[0].length;
+  return {
+    data: intent.data.map((row) => row.map(escapeWhiteboardTableCellText)),
+    bounds: intent.bounds,
+    outline: intent.outline,
+    ...(intent.theme
+      ? {
+          theme: {
+            color: intent.theme.color,
+            rowHeader: true,
+            rowFooter: false,
+            colHeader: false,
+            colFooter: false,
+          },
+        }
+      : {}),
+    colWidths: Array(columns).fill(1 / columns) as number[],
     cellMinHeight: 36,
   };
 }
