@@ -31,8 +31,9 @@ import {
 import {
   getDefaultWhiteboardEnvironmentAuthority,
   registerDefaultWhiteboardEnvironmentAuthority,
+  type WhiteboardAuthorityTransactionResult,
 } from './whiteboard-environment-authority';
-import type { WhiteboardAuthorityTransactionResult } from './whiteboard-environment-authority';
+import { useWhiteboardHistoryStore } from './whiteboard-history';
 
 const log = createLogger('StageStore');
 
@@ -1111,7 +1112,11 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
 
 export const useStageStore = createSelectors(useStageStoreBase);
 
-registerDefaultWhiteboardEnvironmentAuthority(useStageStore, useCanvasStore);
+registerDefaultWhiteboardEnvironmentAuthority(
+  useStageStore,
+  useCanvasStore,
+  useWhiteboardHistoryStore,
+);
 
 // ==================== Debounced Save ====================
 

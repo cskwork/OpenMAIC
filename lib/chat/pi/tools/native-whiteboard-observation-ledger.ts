@@ -121,11 +121,26 @@ export type BindingOnlyCapabilityMintResult =
   | { ok: true; bundle: BindingOnlyCapabilityBundle; replayed: boolean }
   | { ok: false; code: 'OBSERVATION_CAPABILITY_LIMIT'; replayed: boolean };
 
-type CapabilityBundleKind = 'binding_only' | 'draw_element' | 'draw_code' | 'edit_code';
+export type ClearCapabilityBundle = Readonly<{
+  bindingObservationToken: string;
+  membershipObservationToken: string;
+}>;
+
+export type ClearCapabilityMintResult =
+  | { ok: true; bundle: ClearCapabilityBundle; replayed: boolean }
+  | { ok: false; code: 'OBSERVATION_CAPABILITY_LIMIT'; replayed: boolean };
+
+type CapabilityBundleKind =
+  | 'binding_only'
+  | 'draw_element'
+  | 'draw_code'
+  | 'edit_code'
+  | 'clear_empty';
 type FixedCapabilityBundle = Readonly<{
   bindingObservationToken: string;
   targetObservationToken?: string;
   codeObservationToken?: string;
+  membershipObservationToken?: string;
 }>;
 type FixedCapabilityMintResult =
   | { ok: true; bundle: FixedCapabilityBundle; replayed: boolean }
@@ -241,7 +256,9 @@ export class NativeWhiteboardObservationLedger {
       input.expected.kind === 'wb_open_v2' ||
       input.expected.kind === 'wb_close_v2' ||
       input.expected.kind === 'wb_draw_code_v2' ||
-      input.expected.kind === 'wb_edit_code_v2'
+      input.expected.kind === 'wb_edit_code_v2' ||
+      input.expected.kind === 'wb_delete_v2' ||
+      input.expected.kind === 'wb_clear_v2'
     ) {
       return null;
     }
@@ -304,6 +321,33 @@ export class NativeWhiteboardObservationLedger {
     }) as CodeEditCapabilityMintResult | null;
   }
 
+  mintDeleteCapabilityBundle(input: {
+    authenticatedReceipt: CoordinatorAuthenticatedRevisionedWhiteboardReceipt;
+    expected: RevisionedWhiteboardExpectedDescriptor;
+  }): BindingOnlyCapabilityMintResult | null {
+    if (input.expected.kind !== 'wb_delete_v2') return null;
+    return this.mintCapabilityBundle({
+      ...input,
+      bundleKind: 'binding_only',
+      coverages: [['bindingObservationToken', { kind: 'binding' }]],
+    }) as BindingOnlyCapabilityMintResult | null;
+  }
+
+  mintClearCapabilityBundle(input: {
+    authenticatedReceipt: CoordinatorAuthenticatedRevisionedWhiteboardReceipt;
+    expected: RevisionedWhiteboardExpectedDescriptor;
+  }): ClearCapabilityMintResult | null {
+    if (input.expected.kind !== 'wb_clear_v2') return null;
+    return this.mintCapabilityBundle({
+      ...input,
+      bundleKind: 'clear_empty',
+      coverages: [
+        ['bindingObservationToken', { kind: 'binding' }],
+        ['membershipObservationToken', { kind: 'membership', complete: true }],
+      ],
+    }) as ClearCapabilityMintResult | null;
+  }
+
   private mintCapabilityBundle(input: {
     authenticatedReceipt: CoordinatorAuthenticatedRevisionedWhiteboardReceipt;
     expected: RevisionedWhiteboardExpectedDescriptor;
@@ -318,7 +362,9 @@ export class NativeWhiteboardObservationLedger {
     if (
       deadlineAt <= this.now() ||
       receipt.currentBinding.stageId === null ||
-      (receipt.currentBinding.whiteboardId === null && input.bundleKind !== 'binding_only') ||
+      (receipt.currentBinding.whiteboardId === null &&
+        input.bundleKind !== 'binding_only' &&
+        input.bundleKind !== 'clear_empty') ||
       !isRevisionedWhiteboardCommittedReceiptForExpected(receipt, input.expected)
     ) {
       return null;

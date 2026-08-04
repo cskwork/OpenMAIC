@@ -156,6 +156,8 @@ const exactToolByDescriptorKind = {
   wb_draw_chart_v2: 'wb_draw_chart',
   wb_draw_code_v2: 'wb_draw_code',
   wb_edit_code_v2: 'wb_edit_code',
+  wb_delete_v2: 'wb_delete',
+  wb_clear_v2: 'wb_clear',
 } as const satisfies Record<
   RevisionedWhiteboardExpectedDescriptor['kind'],
   RevisionedWhiteboardMutationToolName

@@ -115,10 +115,15 @@ describe('Stage 3A shared observation ledger', () => {
         sceneId: 'scene-1',
         executionId: 'execution-1',
         requestDigest,
-        toolName: 'wb_clear',
+        toolName: 'wb_close',
         expectedBinding: { stageId: 'stage-1', whiteboardId: null, revision: 0 },
         deadlineAt: Date.now() + 10_000,
         requiredCoverage: { kind: 'binding' },
+        intentDigest: `sha256:${'d'.repeat(64)}`,
+        expectedMutation: {
+          kind: 'wb_close_v2',
+          intentDigest: `sha256:${'d'.repeat(64)}`,
+        },
       }),
     ).toThrow('REVISIONED_WHITEBOARD_COORDINATOR_CAPACITY_EXCEEDED');
     expect(ledger.getClaimForTests(token)).toBeDefined();
@@ -148,10 +153,15 @@ describe('Stage 3A shared observation ledger', () => {
       sceneId: 'scene-1',
       executionId: 'execution-1',
       requestDigest,
-      toolName: 'wb_clear',
+      toolName: 'wb_close',
       expectedBinding,
       deadlineAt,
       requiredCoverage: { kind: 'binding' },
+      intentDigest: `sha256:${'d'.repeat(64)}`,
+      expectedMutation: {
+        kind: 'wb_close_v2',
+        intentDigest: `sha256:${'d'.repeat(64)}`,
+      },
     });
     expect(registration).toMatchObject({ ok: true });
     if (!registration.ok) throw new Error('Expected mutation authorization.');
@@ -167,10 +177,15 @@ describe('Stage 3A shared observation ledger', () => {
         sceneId: 'scene-1',
         executionId: 'execution-retry',
         requestDigest,
-        toolName: 'wb_clear',
+        toolName: 'wb_close',
         expectedBinding,
         deadlineAt: Date.now() + 10_000,
         requiredCoverage: { kind: 'binding' },
+        intentDigest: `sha256:${'d'.repeat(64)}`,
+        expectedMutation: {
+          kind: 'wb_close_v2',
+          intentDigest: `sha256:${'d'.repeat(64)}`,
+        },
       }),
     ).toEqual({ ok: false, code: 'OBSERVATION_CAPABILITY_INVALID' });
 
@@ -179,13 +194,23 @@ describe('Stage 3A shared observation ledger', () => {
       outcome: 'committed',
       executionId: 'execution-1',
       requestDigest,
-      toolName: 'wb_clear',
+      toolName: 'wb_close',
       previousBinding: expectedBinding,
-      currentBinding: { stageId: 'stage-1', whiteboardId: 'whiteboard-1', revision: 1 },
+      currentBinding: { stageId: 'stage-1', whiteboardId: null, revision: 1 },
       changed: true,
       mutationMayHaveCommitted: false,
-      delta: { created: true },
-      postcondition: { open: true },
+      delta: {
+        kind: 'whiteboard_closed_v2',
+        previousOpen: true,
+        currentOpen: false,
+        visibilityChanged: true,
+      },
+      postcondition: {
+        kind: 'whiteboard_visibility_observed_v2',
+        boardState: 'no_board',
+        whiteboardId: null,
+        observedOpen: false,
+      },
     });
     if (!receipt || receipt.outcome !== 'committed') throw new Error('Expected committed receipt.');
     expect(

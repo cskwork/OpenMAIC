@@ -442,12 +442,12 @@ describe('whiteboard Authority writer inventory', () => {
       'lib/classroom/load-classroom.ts:488:whole-stage-write',
       'lib/store/canvas.ts:354:visibility-write',
       'lib/store/canvas.ts:493:visibility-write',
-      'lib/store/stage.ts:1043:whole-stage-write',
-      'lib/store/stage.ts:1092:whole-stage-write',
-      'lib/store/stage.ts:236:whole-stage-write',
-      'lib/store/stage.ts:518:whole-stage-write',
-      'lib/store/stage.ts:684:whole-stage-write',
-      'lib/store/stage.ts:969:whole-stage-write',
+      'lib/store/stage.ts:1044:whole-stage-write',
+      'lib/store/stage.ts:1093:whole-stage-write',
+      'lib/store/stage.ts:237:whole-stage-write',
+      'lib/store/stage.ts:519:whole-stage-write',
+      'lib/store/stage.ts:685:whole-stage-write',
+      'lib/store/stage.ts:970:whole-stage-write',
     ]);
   });
 

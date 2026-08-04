@@ -14,6 +14,8 @@ import {
 import { RevisionedWhiteboardCoordinator } from '@/lib/agent/runtime/revisioned-whiteboard-coordinator';
 
 const requestDigest = `sha256:${'a'.repeat(64)}`;
+const intentDigest = `sha256:${'d'.repeat(64)}`;
+const observationAuthorizationDigest = `sha256:${'e'.repeat(64)}`;
 const binding = { stageId: 'stage-1', whiteboardId: null, revision: 3 } as const;
 const authenticatedTarget = {
   childInvocationId: 'child-1',
@@ -26,10 +28,13 @@ function registration(deadlineAt = Date.now() + 10_000) {
   return {
     executionId: 'execution-1',
     requestDigest,
-    toolName: 'wb_clear' as const,
+    toolName: 'wb_close' as const,
     expectedBinding: binding,
     authenticatedTarget,
     deadlineAt,
+    intentDigest,
+    observationAuthorizationDigest,
+    expectedMutation: { kind: 'wb_close_v2' as const, intentDigest },
   };
 }
 
@@ -46,17 +51,23 @@ function committed(changed = true): RevisionedWhiteboardAuthorityReceipt {
     outcome: 'committed',
     executionId: 'execution-1',
     requestDigest,
-    toolName: 'wb_clear',
+    toolName: 'wb_close',
     previousBinding: binding,
-    currentBinding: {
-      stageId: 'stage-1',
-      whiteboardId: changed ? 'whiteboard-1' : null,
-      revision: changed ? 4 : 3,
-    },
+    currentBinding: { stageId: 'stage-1', whiteboardId: null, revision: changed ? 4 : 3 },
     changed,
     mutationMayHaveCommitted: false,
-    delta: changed ? { createdElementId: 'element-1' } : {},
-    postcondition: { kind: 'text_exists', matchingElementCount: changed ? 1 : 0 },
+    delta: {
+      kind: 'whiteboard_closed_v2',
+      previousOpen: changed,
+      currentOpen: false,
+      visibilityChanged: changed,
+    },
+    postcondition: {
+      kind: 'whiteboard_visibility_observed_v2',
+      boardState: 'no_board',
+      whiteboardId: null,
+      observedOpen: false,
+    },
   };
 }
 
@@ -147,10 +158,13 @@ describe('revisioned whiteboard wire contract', () => {
     const input = {
       executionId: 'execution-1',
       requestDigest,
-      toolName: 'wb_clear' as const,
+      toolName: 'wb_close' as const,
       expectedBinding,
       authenticatedTarget: target,
       deadlineAt: Date.now() + 10_000,
+      intentDigest,
+      observationAuthorizationDigest,
+      expectedMutation: { kind: 'wb_close_v2' as const, intentDigest },
     };
     coordinator.register(input);
 
@@ -236,7 +250,7 @@ describe('RevisionedWhiteboardCoordinator', () => {
         outcome: 'rejected',
         executionId: 'execution-1',
         requestDigest,
-        toolName: 'wb_clear',
+        toolName: 'wb_close',
         previousBinding: { stageId: 'stage-1', whiteboardId: null, revision: 5 },
         currentBinding: { stageId: 'stage-1', whiteboardId: null, revision: 5 },
         changed: false,
@@ -329,7 +343,7 @@ describe('RevisionedWhiteboardCoordinator', () => {
           outcome: 'rejected',
           executionId: 'execution-1',
           requestDigest,
-          toolName: 'wb_clear',
+          toolName: 'wb_close',
           previousBinding: { stageId: 'stage-z', whiteboardId: 'wb-z', revision: 99 },
           currentBinding: { stageId: 'stage-z', whiteboardId: 'wb-z', revision: 99 },
           changed: false,
@@ -353,7 +367,7 @@ describe('RevisionedWhiteboardCoordinator', () => {
           outcome: 'uncertain',
           executionId: 'execution-1',
           requestDigest,
-          toolName: 'wb_clear',
+          toolName: 'wb_close',
           previousBinding: binding,
           currentBinding: { ...binding, revision: 9 },
           changed: true,
@@ -396,7 +410,7 @@ describe('RevisionedWhiteboardCoordinator', () => {
           outcome: 'rejected',
           executionId: 'execution-1',
           requestDigest,
-          toolName: 'wb_clear',
+          toolName: 'wb_close',
           previousBinding: diagnostic,
           currentBinding: diagnostic,
           changed: false,
@@ -427,7 +441,7 @@ describe('RevisionedWhiteboardCoordinator', () => {
           outcome: 'rejected',
           executionId: 'execution-1',
           requestDigest,
-          toolName: 'wb_clear',
+          toolName: 'wb_close',
           previousBinding: { stageId: 'stage-2', whiteboardId: 'wb-2', revision: 0 },
           currentBinding: { stageId: 'stage-2', whiteboardId: 'wb-2', revision: 0 },
           changed: false,

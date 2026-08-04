@@ -14,6 +14,8 @@ import {
   createRevisionedDrawTableDigests,
   createRevisionedDrawTextDigests,
   createRevisionedEditCodeDigests,
+  createRevisionedDeleteDigests,
+  createRevisionedClearDigests,
   createRevisionedOpenDigests,
   createRevisionedCloseDigests,
   revisionedWhiteboardWireBytes,
@@ -51,6 +53,12 @@ import {
   type RevisionedEditCodeIntent,
   type RevisionedEditCodeDelta,
   type RevisionedEditCodePostcondition,
+  type RevisionedDeleteIntent,
+  type RevisionedDeleteDelta,
+  type RevisionedDeletePostcondition,
+  type RevisionedClearIntent,
+  type RevisionedClearDelta,
+  type RevisionedClearPostcondition,
   type RevisionedWhiteboardLifecycleIntent,
   type RevisionedOpenDelta,
   type RevisionedCloseDelta,
@@ -71,13 +79,16 @@ import {
   digestWhiteboardLineV1Sync,
   digestWhiteboardShapeV1Sync,
   digestWhiteboardContentV1Sync,
+  digestWhiteboardMembershipV1Sync,
   editableCodeStateFromElementV1,
   revisionedCodeEditLineIdPrefix,
 } from '@/lib/agent/runtime/revisioned-whiteboard-digest';
 import {
   CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION,
   CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
   CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_DELETE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_RENDER_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
@@ -85,7 +96,10 @@ import {
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
   CLIENT_EFFECT_EMPTY_WHITEBOARD_CONTENT_DIGEST_V1,
+  CLIENT_EFFECT_WHITEBOARD_MEMBERSHIP_VERSION,
   CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION,
+  CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST,
+  isWhiteboardElementType,
   normalizeWhiteboardChartV1,
   normalizeWhiteboardCodeV1,
   normalizeWhiteboardLatexV1,
@@ -118,6 +132,7 @@ import type {
   PPTLatexElement,
   PPTTableElement,
 } from '@openmaic/dsl';
+import type { WhiteboardSnapshotReceipt } from '@/lib/store/whiteboard-history';
 
 export const WHITEBOARD_AUTHORITY_RESOURCE_BUSY = 'CLIENT_EFFECT_RESOURCE_BUSY';
 export const WHITEBOARD_AUTHORITY_UNCERTAIN = 'POSTCONDITION_UNCERTAIN';
@@ -189,6 +204,15 @@ interface WhiteboardAuthorityStore {
 interface WhiteboardAuthorityOpenStore {
   getState(): { whiteboardOpen: boolean };
   setState(partial: { whiteboardOpen: boolean }): void;
+}
+
+export interface WhiteboardAuthorityHistoryStore {
+  getState(): {
+    pushExactSnapshot: (
+      elements: PPTElement[],
+      boardContentDigest: string,
+    ) => WhiteboardSnapshotReceipt;
+  };
 }
 
 export type WhiteboardAuthorityRevisionedPlan =
@@ -305,6 +329,26 @@ export interface WhiteboardAuthorityRevisionedEditCodeOptions {
   deadlineAt: number;
   intentDigest: string;
   intent: RevisionedEditCodeIntent;
+}
+
+export interface WhiteboardAuthorityRevisionedDeleteOptions {
+  executionId: string;
+  requestDigest: string;
+  expected: RevisionedWhiteboardBinding;
+  authenticatedTarget: RevisionedWhiteboardAuthenticatedTarget;
+  deadlineAt: number;
+  intentDigest: string;
+  intent: RevisionedDeleteIntent;
+}
+
+export interface WhiteboardAuthorityRevisionedClearOptions {
+  executionId: string;
+  requestDigest: string;
+  expected: RevisionedWhiteboardBinding;
+  authenticatedTarget: RevisionedWhiteboardAuthenticatedTarget;
+  deadlineAt: number;
+  intentDigest: string;
+  intent: RevisionedClearIntent;
 }
 
 export interface WhiteboardAuthorityRevisionedLifecycleOptions {
@@ -540,6 +584,24 @@ function publicSnapshot(domain: WhiteboardDomainSnapshot): WhiteboardAuthoritySn
 
 function stringifyError(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+}
+
+function isExactHistoryReceipt(
+  value: unknown,
+  expectedDigest: string,
+): value is WhiteboardSnapshotReceipt {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).length === 3 &&
+    Object.prototype.hasOwnProperty.call(record, 'snapshotIndex') &&
+    Object.prototype.hasOwnProperty.call(record, 'boardContentDigest') &&
+    Object.prototype.hasOwnProperty.call(record, 'inserted') &&
+    Number.isSafeInteger(record.snapshotIndex) &&
+    (record.snapshotIndex as number) >= 0 &&
+    record.boardContentDigest === expectedDigest &&
+    typeof record.inserted === 'boolean'
+  );
 }
 
 function revisionedBindingsEqual(
@@ -1138,6 +1200,7 @@ export class WhiteboardEnvironmentAuthority {
   private readonly listeners = new Set<() => void>();
   private readonly revisionedJournal = new Map<string, RevisionedJournalEntry>();
   private authenticatedTargetRegistry: RevisionedWhiteboardTargetRegistryLookup | null = null;
+  private historyStore: WhiteboardAuthorityHistoryStore | null;
   private readonly now: () => number;
   private readonly maxRevisionedJournalEntries: number;
   private readonly revisionedJournalReplayGraceMs: number;
@@ -1149,10 +1212,12 @@ export class WhiteboardEnvironmentAuthority {
       now?: () => number;
       maxRevisionedJournalEntries?: number;
       revisionedJournalReplayGraceMs?: number;
+      historyStore?: WhiteboardAuthorityHistoryStore;
     } = {},
   ) {
     this.store = store;
     this.openStore = null;
+    this.historyStore = opts.historyStore ?? null;
     this.fallbackReadOpen = readOpen;
     this.now = opts.now ?? Date.now;
     this.maxRevisionedJournalEntries =
@@ -1189,6 +1254,13 @@ export class WhiteboardEnvironmentAuthority {
       throw new Error('REVISIONED_WHITEBOARD_TARGET_REGISTRY_CONFLICT');
     }
     this.authenticatedTargetRegistry = registry;
+  }
+
+  configureHistoryStore(historyStore: WhiteboardAuthorityHistoryStore): void {
+    if (this.historyStore && this.historyStore !== historyStore) {
+      throw new Error('REVISIONED_WHITEBOARD_HISTORY_STORE_CONFLICT');
+    }
+    this.historyStore = historyStore;
   }
 
   querySnapshot(): WhiteboardAuthorityQueryResult<WhiteboardAuthoritySnapshot> {
@@ -2686,6 +2758,707 @@ export class WhiteboardEnvironmentAuthority {
     return { ok: true, replayed: false, receipt };
   }
 
+  transactRevisionedDelete(
+    opts: WhiteboardAuthorityRevisionedDeleteOptions,
+  ): WhiteboardAuthorityRevisionedMutationResult {
+    const digests = createRevisionedDeleteDigests({
+      executionId: opts.executionId,
+      expectedBinding: opts.expected,
+      authenticatedTarget: opts.authenticatedTarget,
+      deadlineAt: opts.deadlineAt,
+      intent: opts.intent,
+    });
+    if (
+      !digests ||
+      digests.requestDigest !== opts.requestDigest ||
+      digests.intentDigest !== opts.intentDigest ||
+      opts.expected.whiteboardId === null ||
+      !isRevisionedWhiteboardMutationIdentity({
+        executionId: opts.executionId,
+        requestDigest: opts.requestDigest,
+        toolName: 'wb_delete',
+        expectedBinding: opts.expected,
+      }) ||
+      !isRevisionedWhiteboardAuthenticatedTarget(opts.authenticatedTarget) ||
+      !Number.isFinite(opts.deadlineAt)
+    ) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_MUTATION_REQUEST_INVALID,
+        errors: ['wb_delete.v2: revisioned delete request is invalid'],
+      };
+    }
+    const intent = digests.normalizedIntent;
+    const identity = immutableCanonicalSnapshot<RevisionedJournalIdentity>({
+      executionId: opts.executionId,
+      requestDigest: opts.requestDigest,
+      toolName: 'wb_delete',
+      expected: opts.expected,
+      authenticatedTarget: opts.authenticatedTarget,
+      deadlineAt: opts.deadlineAt,
+    });
+
+    this.cleanupRevisionedJournal();
+    const replay = this.revisionedJournal.get(identity.executionId);
+    if (replay) {
+      if (journalIdentitiesEqual(replay.identity, identity)) {
+        return { ok: true, replayed: true, receipt: replay.receipt };
+      }
+      const current = this.binding(this.domain);
+      return {
+        ok: true,
+        replayed: false,
+        receipt: this.rejectedReceipt(identity, current, current, 'EXECUTION_ID_CONFLICT'),
+      };
+    }
+    if (this.now() >= identity.deadlineAt) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_DEADLINE_EXCEEDED,
+        errors: ['wb_delete.v2: revisioned mutation deadline has expired'],
+      };
+    }
+    if (this.revisionedJournal.size >= this.maxRevisionedJournalEntries) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_JOURNAL_CAPACITY_EXCEEDED,
+        errors: ['wb_delete.v2: revisioned mutation journal is at capacity'],
+      };
+    }
+    if (this.transactionActive) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_RESOURCE_BUSY,
+        errors: ['wb_delete.v2: whiteboard transaction already active'],
+      };
+    }
+
+    const beforeDomain = this.domain;
+    const beforeBinding = this.binding(beforeDomain);
+    const actualBefore = this.captureActualDomain(beforeDomain.revision, beforeDomain);
+    const authorityStateIsCurrent = this.domainMatchesCommitted(actualBefore);
+
+    this.transactionActive = true;
+    let receipt: RevisionedWhiteboardAuthorityReceipt;
+    try {
+      let targetIsCurrent = false;
+      try {
+        targetIsCurrent =
+          this.authenticatedTargetRegistry?.validateAndConsume({
+            executionId: identity.executionId,
+            requestDigest: identity.requestDigest,
+            intentDigest: opts.intentDigest,
+            authenticatedTarget: identity.authenticatedTarget,
+            expectedStageId: identity.expected.stageId,
+            deadlineAt: identity.deadlineAt,
+          }) === true;
+      } catch {
+        targetIsCurrent = false;
+      }
+
+      if (!authorityStateIsCurrent) {
+        receipt = this.rejectedReceipt(
+          identity,
+          beforeBinding,
+          beforeBinding,
+          'WHITEBOARD_AUTHORITY_BYPASS_DETECTED',
+        );
+      } else if (identity.expected.stageId !== this.domain.stageId) {
+        receipt = this.rejectedReceipt(identity, beforeBinding, beforeBinding, 'TARGET_CHANGED');
+      } else if (!targetIsCurrent) {
+        receipt = this.rejectedReceipt(
+          identity,
+          beforeBinding,
+          beforeBinding,
+          'AUTHENTICATED_TARGET_CHANGED',
+        );
+      } else if (
+        identity.expected.whiteboardId !== this.domain.activeWhiteboardId ||
+        identity.expected.revision !== this.domain.revision
+      ) {
+        receipt = this.rejectedReceipt(identity, beforeBinding, beforeBinding, 'STALE_STATE');
+      } else {
+        const currentStage = this.store.getState().stage;
+        const currentWhiteboards = currentStage?.whiteboard ?? [];
+        const boardMatches = currentWhiteboards.filter(
+          ({ id }) => id === identity.expected.whiteboardId,
+        );
+        const activeWhiteboard = boardMatches[0];
+        const elementMatches =
+          activeWhiteboard?.elements.filter(({ id }) => id === intent.elementId) ?? [];
+        const element = elementMatches[0];
+        if (
+          !currentStage ||
+          currentStage.id !== beforeDomain.stageId ||
+          boardMatches.length !== 1 ||
+          elementMatches.length !== 1 ||
+          !element ||
+          !isWhiteboardElementType(element.type)
+        ) {
+          receipt = this.rejectedReceipt(
+            identity,
+            beforeBinding,
+            beforeBinding,
+            'TARGET_PRECONDITION_FAILED',
+          );
+        } else {
+          const errors: string[] = [];
+          const beforeElementCount = activeWhiteboard.elements.length;
+          const targetWhiteboard = {
+            ...activeWhiteboard,
+            elements: activeWhiteboard.elements.filter((candidate) => candidate !== element),
+          };
+          const nextWhiteboards = currentWhiteboards.map((board) =>
+            board === activeWhiteboard ? targetWhiteboard : board,
+          );
+          const nonWhiteboardFingerprint = fingerprintNonWhiteboardStage(currentStage);
+          const expectedWhiteboardFingerprint = fingerprintWhiteboards(nextWhiteboards);
+          const visibilityChanged = !beforeDomain.open;
+
+          try {
+            this.store.setState({
+              stage: {
+                ...currentStage,
+                whiteboard: mutableCanonicalSnapshot<Whiteboard[]>(nextWhiteboards),
+              },
+            });
+          } catch (error) {
+            errors.push(`stage-write: ${stringifyError(error)}`);
+          }
+          if (visibilityChanged) {
+            try {
+              this.writeOpen(true);
+            } catch (error) {
+              errors.push(`open-write: ${stringifyError(error)}`);
+            }
+          }
+
+          const stageAfter = this.store.getState().stage;
+          const activeWhiteboardId = selectActiveId(
+            stageAfter,
+            beforeDomain,
+            identity.expected.whiteboardId,
+          );
+          const whiteboardFingerprint = fingerprintWhiteboards(stageAfter?.whiteboard);
+          const openAfter = this.readOpen();
+          const changed =
+            stageAfter?.id !== beforeDomain.stageId ||
+            activeWhiteboardId !== beforeDomain.activeWhiteboardId ||
+            openAfter !== beforeDomain.open ||
+            whiteboardFingerprint !== beforeDomain.whiteboardFingerprint;
+          const nextDomain: WhiteboardDomainSnapshot = {
+            stageId: stageAfter?.id ?? null,
+            activeWhiteboardId,
+            revision: changed ? beforeDomain.revision + 1 : beforeDomain.revision,
+            open: openAfter,
+            whiteboardFingerprint,
+          };
+          this.domain = nextDomain;
+          const currentBinding = this.binding(nextDomain);
+          const boardAfterMatches =
+            stageAfter?.whiteboard?.filter(({ id }) => id === identity.expected.whiteboardId) ?? [];
+          const boardAfter = boardAfterMatches[0];
+          const afterMatches =
+            boardAfter?.elements.filter(({ id }) => id === intent.elementId) ?? [];
+
+          if (
+            !stageAfter ||
+            stageAfter.id !== currentStage.id ||
+            fingerprintNonWhiteboardStage(stageAfter) !== nonWhiteboardFingerprint ||
+            whiteboardFingerprint !== expectedWhiteboardFingerprint ||
+            activeWhiteboardId !== identity.expected.whiteboardId ||
+            !openAfter ||
+            !changed ||
+            boardAfterMatches.length !== 1 ||
+            boardAfter?.elements.length !== beforeElementCount - 1 ||
+            afterMatches.length !== 0
+          ) {
+            errors.push('postcondition: wb_delete state does not match the Authority intent');
+          }
+
+          if (changed) {
+            for (const listener of this.listeners) {
+              try {
+                listener();
+              } catch (error) {
+                errors.push(`authority-listener: ${stringifyError(error)}`);
+              }
+            }
+          }
+
+          if (errors.length > 0) {
+            receipt = this.uncertainReceipt(identity, beforeBinding, currentBinding, changed);
+          } else {
+            const delta: RevisionedDeleteDelta = {
+              kind: 'whiteboard_element_deleted_v2',
+              normalizationVersion: CLIENT_EFFECT_DELETE_NORMALIZATION_VERSION,
+              whiteboardId: identity.expected.whiteboardId!,
+              stableElementId: intent.elementId,
+              observedElementType: element.type,
+              visibilityChanged,
+              elementCountBefore: beforeElementCount,
+              elementCountAfter: beforeElementCount - 1,
+            };
+            const postcondition: RevisionedDeletePostcondition = {
+              kind: 'whiteboard_element_absent_v2',
+              normalizationVersion: CLIENT_EFFECT_DELETE_NORMALIZATION_VERSION,
+              whiteboardId: identity.expected.whiteboardId!,
+              stableElementId: intent.elementId,
+              observedElementType: element.type,
+              matchingElementCountBefore: 1,
+              matchingElementCountAfter: 0,
+            };
+            const committedReceipt = {
+              protocolVersion: REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
+              outcome: 'committed',
+              executionId: identity.executionId,
+              requestDigest: identity.requestDigest,
+              toolName: 'wb_delete',
+              previousBinding: beforeBinding,
+              currentBinding,
+              changed: true,
+              mutationMayHaveCommitted: false,
+              delta,
+              postcondition,
+            } satisfies RevisionedWhiteboardCommittedReceipt;
+            const committedReceiptBytes = revisionedWhiteboardWireBytes(committedReceipt);
+            receipt =
+              committedReceiptBytes !== null &&
+              committedReceiptBytes <= MAX_REVISIONED_WHITEBOARD_RECEIPT_BYTES &&
+              isRevisionedWhiteboardAuthorityReceipt(committedReceipt)
+                ? committedReceipt
+                : this.uncertainReceipt(identity, beforeBinding, currentBinding, changed);
+          }
+        }
+      }
+      receipt = this.rememberRevisioned(identity, receipt);
+    } finally {
+      this.transactionActive = false;
+    }
+    return { ok: true, replayed: false, receipt };
+  }
+
+  transactRevisionedClear(
+    opts: WhiteboardAuthorityRevisionedClearOptions,
+  ): WhiteboardAuthorityRevisionedMutationResult {
+    const digests = createRevisionedClearDigests({
+      executionId: opts.executionId,
+      expectedBinding: opts.expected,
+      authenticatedTarget: opts.authenticatedTarget,
+      deadlineAt: opts.deadlineAt,
+      intent: opts.intent,
+    });
+    if (
+      !digests ||
+      digests.requestDigest !== opts.requestDigest ||
+      digests.intentDigest !== opts.intentDigest ||
+      !isRevisionedWhiteboardMutationIdentity({
+        executionId: opts.executionId,
+        requestDigest: opts.requestDigest,
+        toolName: 'wb_clear',
+        expectedBinding: opts.expected,
+      }) ||
+      !isRevisionedWhiteboardAuthenticatedTarget(opts.authenticatedTarget) ||
+      !Number.isFinite(opts.deadlineAt)
+    ) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_MUTATION_REQUEST_INVALID,
+        errors: ['wb_clear.v2: revisioned clear request is invalid'],
+      };
+    }
+    const identity = immutableCanonicalSnapshot<RevisionedJournalIdentity>({
+      executionId: opts.executionId,
+      requestDigest: opts.requestDigest,
+      toolName: 'wb_clear',
+      expected: opts.expected,
+      authenticatedTarget: opts.authenticatedTarget,
+      deadlineAt: opts.deadlineAt,
+    });
+
+    this.cleanupRevisionedJournal();
+    const replay = this.revisionedJournal.get(identity.executionId);
+    if (replay) {
+      if (journalIdentitiesEqual(replay.identity, identity)) {
+        return { ok: true, replayed: true, receipt: replay.receipt };
+      }
+      const current = this.binding(this.domain);
+      return {
+        ok: true,
+        replayed: false,
+        receipt: this.rejectedReceipt(identity, current, current, 'EXECUTION_ID_CONFLICT'),
+      };
+    }
+    if (this.now() >= identity.deadlineAt) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_DEADLINE_EXCEEDED,
+        errors: ['wb_clear.v2: revisioned mutation deadline has expired'],
+      };
+    }
+    if (this.revisionedJournal.size >= this.maxRevisionedJournalEntries) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_JOURNAL_CAPACITY_EXCEEDED,
+        errors: ['wb_clear.v2: revisioned mutation journal is at capacity'],
+      };
+    }
+    if (this.transactionActive) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_RESOURCE_BUSY,
+        errors: ['wb_clear.v2: whiteboard transaction already active'],
+      };
+    }
+
+    const beforeDomain = this.domain;
+    const beforeBinding = this.binding(beforeDomain);
+    const actualBefore = this.captureActualDomain(beforeDomain.revision, beforeDomain);
+    const authorityStateIsCurrent = this.domainMatchesCommitted(actualBefore);
+
+    this.transactionActive = true;
+    let receipt: RevisionedWhiteboardAuthorityReceipt;
+    try {
+      let targetIsCurrent = false;
+      try {
+        targetIsCurrent =
+          this.authenticatedTargetRegistry?.validateAndConsume({
+            executionId: identity.executionId,
+            requestDigest: identity.requestDigest,
+            intentDigest: opts.intentDigest,
+            authenticatedTarget: identity.authenticatedTarget,
+            expectedStageId: identity.expected.stageId,
+            deadlineAt: identity.deadlineAt,
+          }) === true;
+      } catch {
+        targetIsCurrent = false;
+      }
+
+      if (!authorityStateIsCurrent) {
+        receipt = this.rejectedReceipt(
+          identity,
+          beforeBinding,
+          beforeBinding,
+          'WHITEBOARD_AUTHORITY_BYPASS_DETECTED',
+        );
+      } else if (identity.expected.stageId !== this.domain.stageId) {
+        receipt = this.rejectedReceipt(identity, beforeBinding, beforeBinding, 'TARGET_CHANGED');
+      } else if (!targetIsCurrent) {
+        receipt = this.rejectedReceipt(
+          identity,
+          beforeBinding,
+          beforeBinding,
+          'AUTHENTICATED_TARGET_CHANGED',
+        );
+      } else if (
+        identity.expected.whiteboardId !== this.domain.activeWhiteboardId ||
+        identity.expected.revision !== this.domain.revision
+      ) {
+        receipt = this.rejectedReceipt(identity, beforeBinding, beforeBinding, 'STALE_STATE');
+      } else {
+        const currentStage = this.store.getState().stage;
+        const currentWhiteboards = currentStage?.whiteboard ?? [];
+        const boardMatches = identity.expected.whiteboardId
+          ? currentWhiteboards.filter(({ id }) => id === identity.expected.whiteboardId)
+          : [];
+        const activeWhiteboard = boardMatches[0];
+        let membershipBefore: Array<{ id: string; type: PPTElement['type'] }> = [];
+        let membershipDigestBefore: string | null = null;
+        let boardContentDigestBefore: string | null = null;
+        let targetValid = Boolean(currentStage && currentStage.id === beforeDomain.stageId);
+        try {
+          if (identity.expected.whiteboardId === null) {
+            targetValid = targetValid && currentWhiteboards.length === 0;
+          } else {
+            targetValid = targetValid && boardMatches.length === 1 && Boolean(activeWhiteboard);
+            if (targetValid && activeWhiteboard) {
+              membershipBefore = activeWhiteboard.elements.map((element) => {
+                if (!isWhiteboardElementType(element.type)) {
+                  throw new Error('REVISIONED_WHITEBOARD_CLEAR_ELEMENT_TYPE_INVALID');
+                }
+                return { id: element.id, type: element.type };
+              });
+              if (new Set(membershipBefore.map(({ id }) => id)).size !== membershipBefore.length) {
+                throw new Error('REVISIONED_WHITEBOARD_CLEAR_DUPLICATE_ELEMENT_ID');
+              }
+              membershipDigestBefore = digestWhiteboardMembershipV1Sync(membershipBefore);
+              boardContentDigestBefore = digestWhiteboardContentV1Sync(activeWhiteboard.elements);
+            }
+          }
+        } catch {
+          targetValid = false;
+        }
+
+        if (!targetValid) {
+          receipt = this.rejectedReceipt(
+            identity,
+            beforeBinding,
+            beforeBinding,
+            'TARGET_PRECONDITION_FAILED',
+          );
+        } else if (!activeWhiteboard) {
+          const delta: RevisionedClearDelta = {
+            kind: 'whiteboard_cleared_v2',
+            normalizationVersion: CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION,
+            boardState: 'no_board',
+            whiteboardId: null,
+            cleared: false,
+            visibilityChanged: false,
+            elementCountBefore: 0,
+            elementCountAfter: 0,
+          };
+          const postcondition: RevisionedClearPostcondition = {
+            kind: 'whiteboard_membership_empty_v2',
+            normalizationVersion: CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION,
+            membershipNormalizationVersion: CLIENT_EFFECT_WHITEBOARD_MEMBERSHIP_VERSION,
+            boardState: 'no_board',
+            whiteboardId: null,
+            observedOpen: beforeDomain.open,
+            elementCountAfter: 0,
+            observedMembershipDigestAfter: CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST,
+          };
+          receipt = {
+            protocolVersion: REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
+            outcome: 'committed',
+            executionId: identity.executionId,
+            requestDigest: identity.requestDigest,
+            toolName: 'wb_clear',
+            previousBinding: beforeBinding,
+            currentBinding: beforeBinding,
+            changed: false,
+            mutationMayHaveCommitted: false,
+            delta,
+            postcondition,
+          } satisfies RevisionedWhiteboardCommittedReceipt;
+        } else if (activeWhiteboard.elements.length === 0) {
+          if (
+            membershipDigestBefore !== CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST ||
+            boardContentDigestBefore !== CLIENT_EFFECT_EMPTY_WHITEBOARD_CONTENT_DIGEST_V1
+          ) {
+            receipt = this.rejectedReceipt(
+              identity,
+              beforeBinding,
+              beforeBinding,
+              'TARGET_PRECONDITION_FAILED',
+            );
+          } else {
+            const delta: RevisionedClearDelta = {
+              kind: 'whiteboard_cleared_v2',
+              normalizationVersion: CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION,
+              boardState: 'preserved_empty',
+              whiteboardId: activeWhiteboard.id,
+              cleared: false,
+              visibilityChanged: false,
+              elementCountBefore: 0,
+              elementCountAfter: 0,
+            };
+            const postcondition: RevisionedClearPostcondition = {
+              kind: 'whiteboard_membership_empty_v2',
+              normalizationVersion: CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION,
+              membershipNormalizationVersion: CLIENT_EFFECT_WHITEBOARD_MEMBERSHIP_VERSION,
+              boardContentNormalizationVersion: CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION,
+              boardState: 'preserved_empty',
+              whiteboardId: activeWhiteboard.id,
+              observedOpen: beforeDomain.open,
+              elementCountBefore: 0,
+              elementCountAfter: 0,
+              observedMembershipDigestBefore: CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST,
+              observedMembershipDigestAfter: CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST,
+              observedBoardContentDigestAfter: CLIENT_EFFECT_EMPTY_WHITEBOARD_CONTENT_DIGEST_V1,
+            };
+            receipt = {
+              protocolVersion: REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
+              outcome: 'committed',
+              executionId: identity.executionId,
+              requestDigest: identity.requestDigest,
+              toolName: 'wb_clear',
+              previousBinding: beforeBinding,
+              currentBinding: beforeBinding,
+              changed: false,
+              mutationMayHaveCommitted: false,
+              delta,
+              postcondition,
+            } satisfies RevisionedWhiteboardCommittedReceipt;
+          }
+        } else if (!this.historyStore) {
+          receipt = this.rejectedReceipt(
+            identity,
+            beforeBinding,
+            beforeBinding,
+            'TARGET_PRECONDITION_FAILED',
+          );
+        } else {
+          const beforeElements = mutableCanonicalSnapshot<PPTElement[]>(activeWhiteboard.elements);
+          let historyReceipt: WhiteboardSnapshotReceipt | null = null;
+          try {
+            const candidate = this.historyStore
+              .getState()
+              .pushExactSnapshot(beforeElements, boardContentDigestBefore!);
+            if (isExactHistoryReceipt(candidate, boardContentDigestBefore!)) {
+              historyReceipt = candidate;
+            }
+          } catch {
+            historyReceipt = null;
+          }
+
+          if (!historyReceipt) {
+            receipt = this.uncertainReceipt(identity, beforeBinding, beforeBinding, false);
+          } else {
+            const errors: string[] = [];
+            const beforeElementCount = activeWhiteboard.elements.length;
+            const targetWhiteboard = { ...activeWhiteboard, elements: [] };
+            const nextWhiteboards = currentWhiteboards.map((board) =>
+              board === activeWhiteboard ? targetWhiteboard : board,
+            );
+            const nonWhiteboardFingerprint = fingerprintNonWhiteboardStage(currentStage!);
+            const expectedWhiteboardFingerprint = fingerprintWhiteboards(nextWhiteboards);
+            const visibilityChanged = !beforeDomain.open;
+
+            try {
+              this.store.setState({
+                stage: {
+                  ...currentStage!,
+                  whiteboard: mutableCanonicalSnapshot<Whiteboard[]>(nextWhiteboards),
+                },
+              });
+            } catch (error) {
+              errors.push(`stage-write: ${stringifyError(error)}`);
+            }
+            if (visibilityChanged) {
+              try {
+                this.writeOpen(true);
+              } catch (error) {
+                errors.push(`open-write: ${stringifyError(error)}`);
+              }
+            }
+
+            const stageAfter = this.store.getState().stage;
+            const activeWhiteboardId = selectActiveId(
+              stageAfter,
+              beforeDomain,
+              identity.expected.whiteboardId,
+            );
+            const whiteboardFingerprint = fingerprintWhiteboards(stageAfter?.whiteboard);
+            const openAfter = this.readOpen();
+            const changed =
+              stageAfter?.id !== beforeDomain.stageId ||
+              activeWhiteboardId !== beforeDomain.activeWhiteboardId ||
+              openAfter !== beforeDomain.open ||
+              whiteboardFingerprint !== beforeDomain.whiteboardFingerprint;
+            const nextDomain: WhiteboardDomainSnapshot = {
+              stageId: stageAfter?.id ?? null,
+              activeWhiteboardId,
+              revision: changed ? beforeDomain.revision + 1 : beforeDomain.revision,
+              open: openAfter,
+              whiteboardFingerprint,
+            };
+            this.domain = nextDomain;
+            const currentBinding = this.binding(nextDomain);
+            const boardAfterMatches =
+              stageAfter?.whiteboard?.filter(({ id }) => id === identity.expected.whiteboardId) ??
+              [];
+            const boardAfter = boardAfterMatches[0];
+            let membershipDigestAfter: string | null = null;
+            let boardContentDigestAfter: string | null = null;
+            try {
+              if (boardAfter) {
+                membershipDigestAfter = digestWhiteboardMembershipV1Sync(
+                  boardAfter.elements.map((element) => ({ id: element.id, type: element.type })),
+                );
+                boardContentDigestAfter = digestWhiteboardContentV1Sync(boardAfter.elements);
+              }
+            } catch {
+              membershipDigestAfter = null;
+              boardContentDigestAfter = null;
+            }
+
+            if (
+              !stageAfter ||
+              stageAfter.id !== currentStage!.id ||
+              fingerprintNonWhiteboardStage(stageAfter) !== nonWhiteboardFingerprint ||
+              whiteboardFingerprint !== expectedWhiteboardFingerprint ||
+              activeWhiteboardId !== identity.expected.whiteboardId ||
+              !openAfter ||
+              !changed ||
+              boardAfterMatches.length !== 1 ||
+              boardAfter?.elements.length !== 0 ||
+              membershipDigestAfter !== CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST ||
+              boardContentDigestAfter !== CLIENT_EFFECT_EMPTY_WHITEBOARD_CONTENT_DIGEST_V1
+            ) {
+              errors.push('postcondition: wb_clear state does not match the Authority intent');
+            }
+
+            if (changed) {
+              for (const listener of this.listeners) {
+                try {
+                  listener();
+                } catch (error) {
+                  errors.push(`authority-listener: ${stringifyError(error)}`);
+                }
+              }
+            }
+
+            if (errors.length > 0) {
+              receipt = this.uncertainReceipt(identity, beforeBinding, currentBinding, changed);
+            } else {
+              const delta: RevisionedClearDelta = {
+                kind: 'whiteboard_cleared_v2',
+                normalizationVersion: CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION,
+                boardState: 'cleared_existing',
+                whiteboardId: activeWhiteboard.id,
+                cleared: true,
+                visibilityChanged,
+                elementCountBefore: beforeElementCount,
+                elementCountAfter: 0,
+              };
+              const postcondition: RevisionedClearPostcondition = {
+                kind: 'whiteboard_membership_empty_v2',
+                normalizationVersion: CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION,
+                membershipNormalizationVersion: CLIENT_EFFECT_WHITEBOARD_MEMBERSHIP_VERSION,
+                boardContentNormalizationVersion: CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION,
+                boardState: 'cleared_existing',
+                whiteboardId: activeWhiteboard.id,
+                observedOpen: true,
+                elementCountBefore: beforeElementCount,
+                elementCountAfter: 0,
+                observedMembershipDigestBefore: membershipDigestBefore!,
+                observedMembershipDigestAfter: CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST,
+                boardContentDigestBefore: boardContentDigestBefore!,
+                observedBoardContentDigestAfter: CLIENT_EFFECT_EMPTY_WHITEBOARD_CONTENT_DIGEST_V1,
+                historySnapshotDigest: historyReceipt.boardContentDigest,
+                historyDisposition: historyReceipt.inserted ? 'inserted' : 'existing',
+              };
+              const committedReceipt = {
+                protocolVersion: REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
+                outcome: 'committed',
+                executionId: identity.executionId,
+                requestDigest: identity.requestDigest,
+                toolName: 'wb_clear',
+                previousBinding: beforeBinding,
+                currentBinding,
+                changed: true,
+                mutationMayHaveCommitted: false,
+                delta,
+                postcondition,
+              } satisfies RevisionedWhiteboardCommittedReceipt;
+              const committedReceiptBytes = revisionedWhiteboardWireBytes(committedReceipt);
+              receipt =
+                committedReceiptBytes !== null &&
+                committedReceiptBytes <= MAX_REVISIONED_WHITEBOARD_RECEIPT_BYTES &&
+                isRevisionedWhiteboardAuthorityReceipt(committedReceipt)
+                  ? committedReceipt
+                  : this.uncertainReceipt(identity, beforeBinding, currentBinding, changed);
+            }
+          }
+        }
+      }
+      receipt = this.rememberRevisioned(identity, receipt);
+    } finally {
+      this.transactionActive = false;
+    }
+    return { ok: true, replayed: false, receipt };
+  }
+
   getRevisionedJournalSizeForTests(): number {
     this.cleanupRevisionedJournal();
     return this.revisionedJournal.size;
@@ -2824,9 +3597,11 @@ export function getWhiteboardEnvironmentAuthority(
 export function registerDefaultWhiteboardEnvironmentAuthority(
   store: WhiteboardAuthorityStore,
   openStore: WhiteboardAuthorityOpenStore,
+  historyStore?: WhiteboardAuthorityHistoryStore,
 ): WhiteboardEnvironmentAuthority {
   const authority = getWhiteboardEnvironmentAuthority(store);
   authority.configureOpenStore(openStore);
+  if (historyStore) authority.configureHistoryStore(historyStore);
   defaultAuthority = authority;
   return authority;
 }

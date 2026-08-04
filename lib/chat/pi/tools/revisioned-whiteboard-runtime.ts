@@ -175,4 +175,28 @@ export class RevisionedWhiteboardMutationRuntime {
       expected: input.expected,
     });
   }
+
+  mintDeleteBundle(input: {
+    executionId: string;
+    expected: RevisionedWhiteboardExpectedDescriptor;
+  }) {
+    const terminal = this.coordinator.getTerminal(input.executionId);
+    if (!terminal?.authenticatedReceipt) return null;
+    return this.observationLedger.mintDeleteCapabilityBundle({
+      authenticatedReceipt: terminal.authenticatedReceipt,
+      expected: input.expected,
+    });
+  }
+
+  mintClearBundle(input: {
+    executionId: string;
+    expected: RevisionedWhiteboardExpectedDescriptor;
+  }) {
+    const terminal = this.coordinator.getTerminal(input.executionId);
+    if (!terminal?.authenticatedReceipt) return null;
+    return this.observationLedger.mintClearCapabilityBundle({
+      authenticatedReceipt: terminal.authenticatedReceipt,
+      expected: input.expected,
+    });
+  }
 }

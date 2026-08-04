@@ -11,6 +11,7 @@ import {
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
   canonicalizeWhiteboardContentV1,
+  canonicalizeWhiteboardMembershipV1,
   assertWhiteboardChartSpecV1,
   assertWhiteboardCodeSpecV1,
   assertWhiteboardEditableCodeStateV1,
@@ -91,6 +92,12 @@ export function digestOpaqueRevisionedToken(token: string): string {
 
 export function digestWhiteboardContentV1Sync(elements: PPTElement[]): string {
   return `sha256:${bytesToHex(sha256(utf8ToBytes(canonicalizeWhiteboardContentV1(elements))))}`;
+}
+
+export function digestWhiteboardMembershipV1Sync(
+  elements: Parameters<typeof canonicalizeWhiteboardMembershipV1>[0],
+): string {
+  return `sha256:${bytesToHex(sha256(utf8ToBytes(canonicalizeWhiteboardMembershipV1(elements))))}`;
 }
 
 export function digestVisibleTextV1Sync(value: string): string {

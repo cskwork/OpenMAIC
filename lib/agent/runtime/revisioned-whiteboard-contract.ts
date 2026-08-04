@@ -1,7 +1,9 @@
 import {
   CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION,
   CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
   CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_DELETE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_EMPTY_WHITEBOARD_CONTENT_DIGEST_V1,
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_RENDER_VERSION,
@@ -9,7 +11,10 @@ import {
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_WHITEBOARD_MEMBERSHIP_VERSION,
   CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION,
+  CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST,
+  isWhiteboardElementType,
   normalizeWhiteboardChartV1,
   normalizeWhiteboardCodeEditIntentV1,
   normalizeWhiteboardCodeV1,
@@ -20,6 +25,7 @@ import {
   normalizeWhiteboardTableIntentV1,
   type WhiteboardChartSpec,
   type WhiteboardCodeEditIntent,
+  type WhiteboardElementType,
   type WhiteboardLineMarker,
   type WhiteboardLineStyle,
   type WhiteboardShapeKind,
@@ -155,6 +161,12 @@ export type RevisionedDrawCodeIntent = {
 
 export type RevisionedEditCodeIntent = WhiteboardCodeEditIntent;
 
+export type RevisionedDeleteIntent = {
+  elementId: string;
+};
+
+export type RevisionedClearIntent = Record<string, never>;
+
 export type RevisionedWhiteboardLifecycleIntent = Record<string, never>;
 
 export type RevisionedOpenExpectedDescriptor = {
@@ -225,6 +237,17 @@ export type RevisionedEditCodeExpectedDescriptor = {
   expectedNewLineIds: string[];
 };
 
+export type RevisionedDeleteExpectedDescriptor = {
+  kind: 'wb_delete_v2';
+  intentDigest: string;
+  stableElementId: string;
+};
+
+export type RevisionedClearExpectedDescriptor = {
+  kind: 'wb_clear_v2';
+  intentDigest: string;
+};
+
 export type RevisionedWhiteboardExpectedDescriptor =
   | RevisionedOpenExpectedDescriptor
   | RevisionedCloseExpectedDescriptor
@@ -235,7 +258,9 @@ export type RevisionedWhiteboardExpectedDescriptor =
   | RevisionedDrawTableExpectedDescriptor
   | RevisionedDrawChartExpectedDescriptor
   | RevisionedDrawCodeExpectedDescriptor
-  | RevisionedEditCodeExpectedDescriptor;
+  | RevisionedEditCodeExpectedDescriptor
+  | RevisionedDeleteExpectedDescriptor
+  | RevisionedClearExpectedDescriptor;
 
 export type RevisionedOpenDelta = {
   kind: 'whiteboard_opened_v2';
@@ -461,6 +486,102 @@ export type RevisionedEditCodePostcondition = {
   matchingElementCountAfter: 1;
 };
 
+export type RevisionedDeleteDelta = {
+  kind: 'whiteboard_element_deleted_v2';
+  normalizationVersion: typeof CLIENT_EFFECT_DELETE_NORMALIZATION_VERSION;
+  whiteboardId: string;
+  stableElementId: string;
+  observedElementType: WhiteboardElementType;
+  visibilityChanged: boolean;
+  elementCountBefore: number;
+  elementCountAfter: number;
+};
+
+export type RevisionedDeletePostcondition = {
+  kind: 'whiteboard_element_absent_v2';
+  normalizationVersion: typeof CLIENT_EFFECT_DELETE_NORMALIZATION_VERSION;
+  whiteboardId: string;
+  stableElementId: string;
+  observedElementType: WhiteboardElementType;
+  matchingElementCountBefore: 1;
+  matchingElementCountAfter: 0;
+};
+
+export type RevisionedClearDelta =
+  | {
+      kind: 'whiteboard_cleared_v2';
+      normalizationVersion: typeof CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION;
+      boardState: 'no_board';
+      whiteboardId: null;
+      cleared: false;
+      visibilityChanged: false;
+      elementCountBefore: 0;
+      elementCountAfter: 0;
+    }
+  | {
+      kind: 'whiteboard_cleared_v2';
+      normalizationVersion: typeof CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION;
+      boardState: 'preserved_empty';
+      whiteboardId: string;
+      cleared: false;
+      visibilityChanged: false;
+      elementCountBefore: 0;
+      elementCountAfter: 0;
+    }
+  | {
+      kind: 'whiteboard_cleared_v2';
+      normalizationVersion: typeof CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION;
+      boardState: 'cleared_existing';
+      whiteboardId: string;
+      cleared: true;
+      visibilityChanged: boolean;
+      elementCountBefore: number;
+      elementCountAfter: 0;
+    };
+
+export type RevisionedClearPostcondition =
+  | {
+      kind: 'whiteboard_membership_empty_v2';
+      normalizationVersion: typeof CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION;
+      membershipNormalizationVersion: typeof CLIENT_EFFECT_WHITEBOARD_MEMBERSHIP_VERSION;
+      boardState: 'no_board';
+      whiteboardId: null;
+      observedOpen: boolean;
+      elementCountAfter: 0;
+      observedMembershipDigestAfter: typeof CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST;
+    }
+  | {
+      kind: 'whiteboard_membership_empty_v2';
+      normalizationVersion: typeof CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION;
+      membershipNormalizationVersion: typeof CLIENT_EFFECT_WHITEBOARD_MEMBERSHIP_VERSION;
+      boardContentNormalizationVersion: typeof CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION;
+      boardState: 'preserved_empty';
+      whiteboardId: string;
+      observedOpen: boolean;
+      elementCountBefore: 0;
+      elementCountAfter: 0;
+      observedMembershipDigestBefore: typeof CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST;
+      observedMembershipDigestAfter: typeof CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST;
+      observedBoardContentDigestAfter: typeof CLIENT_EFFECT_EMPTY_WHITEBOARD_CONTENT_DIGEST_V1;
+    }
+  | {
+      kind: 'whiteboard_membership_empty_v2';
+      normalizationVersion: typeof CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION;
+      membershipNormalizationVersion: typeof CLIENT_EFFECT_WHITEBOARD_MEMBERSHIP_VERSION;
+      boardContentNormalizationVersion: typeof CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION;
+      boardState: 'cleared_existing';
+      whiteboardId: string;
+      observedOpen: true;
+      elementCountBefore: number;
+      elementCountAfter: 0;
+      observedMembershipDigestBefore: string;
+      observedMembershipDigestAfter: typeof CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST;
+      boardContentDigestBefore: string;
+      observedBoardContentDigestAfter: typeof CLIENT_EFFECT_EMPTY_WHITEBOARD_CONTENT_DIGEST_V1;
+      historySnapshotDigest: string;
+      historyDisposition: 'inserted' | 'existing';
+    };
+
 export type RevisionedDrawTextRequestDigestInput = {
   executionId: string;
   expectedBinding: RevisionedWhiteboardBinding;
@@ -508,6 +629,14 @@ export type RevisionedEditCodeRequestDigestInput = RevisionedWhiteboardRequestDi
   intent: RevisionedEditCodeIntent;
 };
 
+export type RevisionedDeleteRequestDigestInput = RevisionedWhiteboardRequestDigestBase & {
+  intent: RevisionedDeleteIntent;
+};
+
+export type RevisionedClearRequestDigestInput = RevisionedWhiteboardRequestDigestBase & {
+  intent: RevisionedClearIntent;
+};
+
 export type RevisionedWhiteboardMutationDigestInput =
   | (RevisionedLifecycleRequestDigestInput & { toolName: 'wb_open' | 'wb_close' })
   | (RevisionedDrawTextRequestDigestInput & { toolName: 'wb_draw_text' })
@@ -517,7 +646,9 @@ export type RevisionedWhiteboardMutationDigestInput =
   | (RevisionedDrawTableRequestDigestInput & { toolName: 'wb_draw_table' })
   | (RevisionedDrawChartRequestDigestInput & { toolName: 'wb_draw_chart' })
   | (RevisionedDrawCodeRequestDigestInput & { toolName: 'wb_draw_code' })
-  | (RevisionedEditCodeRequestDigestInput & { toolName: 'wb_edit_code' });
+  | (RevisionedEditCodeRequestDigestInput & { toolName: 'wb_edit_code' })
+  | (RevisionedDeleteRequestDigestInput & { toolName: 'wb_delete' })
+  | (RevisionedClearRequestDigestInput & { toolName: 'wb_clear' });
 
 type RevisionedWhiteboardEffectDeliveryBase = {
   protocolVersion: typeof REVISIONED_WHITEBOARD_PROTOCOL_VERSION;
@@ -579,6 +710,16 @@ export type RevisionedEditCodeEffectDelivery = RevisionedWhiteboardEffectDeliver
   intent: RevisionedEditCodeIntent;
 };
 
+export type RevisionedDeleteEffectDelivery = RevisionedWhiteboardEffectDeliveryBase & {
+  toolName: 'wb_delete';
+  intent: RevisionedDeleteIntent;
+};
+
+export type RevisionedClearEffectDelivery = RevisionedWhiteboardEffectDeliveryBase & {
+  toolName: 'wb_clear';
+  intent: RevisionedClearIntent;
+};
+
 export type RevisionedWhiteboardEffectDelivery =
   | RevisionedOpenEffectDelivery
   | RevisionedCloseEffectDelivery
@@ -589,7 +730,9 @@ export type RevisionedWhiteboardEffectDelivery =
   | RevisionedDrawTableEffectDelivery
   | RevisionedDrawChartEffectDelivery
   | RevisionedDrawCodeEffectDelivery
-  | RevisionedEditCodeEffectDelivery;
+  | RevisionedEditCodeEffectDelivery
+  | RevisionedDeleteEffectDelivery
+  | RevisionedClearEffectDelivery;
 
 export type RevisionedWhiteboardRejectedCode =
   | 'AUTHENTICATED_TARGET_CHANGED'
@@ -1060,6 +1203,22 @@ export function normalizeRevisionedWhiteboardLifecycleIntent(
     : null;
 }
 
+export function normalizeRevisionedDeleteIntent(
+  value: unknown,
+): Readonly<RevisionedDeleteIntent> | null {
+  return isRecord(value) && hasExactKeys(value, ['elementId']) && isSafeId(value.elementId)
+    ? Object.freeze({ elementId: value.elementId })
+    : null;
+}
+
+export function normalizeRevisionedClearIntent(
+  value: unknown,
+): Readonly<RevisionedClearIntent> | null {
+  return isRecord(value) && hasExactKeys(value, [])
+    ? (Object.freeze({}) as Readonly<RevisionedClearIntent>)
+    : null;
+}
+
 type ImplementedRevisionedWhiteboardIntent =
   | RevisionedWhiteboardLifecycleIntent
   | RevisionedDrawTextIntent
@@ -1069,7 +1228,9 @@ type ImplementedRevisionedWhiteboardIntent =
   | RevisionedDrawTableIntent
   | RevisionedDrawChartIntent
   | RevisionedDrawCodeIntent
-  | RevisionedEditCodeIntent;
+  | RevisionedEditCodeIntent
+  | RevisionedDeleteIntent
+  | RevisionedClearIntent;
 
 function normalizeRevisionedWhiteboardMutationIntent(
   toolName: RevisionedWhiteboardMutationDigestInput['toolName'],
@@ -1095,6 +1256,10 @@ function normalizeRevisionedWhiteboardMutationIntent(
       return normalizeRevisionedDrawCodeIntent(value);
     case 'wb_edit_code':
       return normalizeRevisionedEditCodeIntent(value);
+    case 'wb_delete':
+      return normalizeRevisionedDeleteIntent(value);
+    case 'wb_clear':
+      return normalizeRevisionedClearIntent(value);
   }
 }
 
@@ -1305,6 +1470,36 @@ export function createRevisionedEditCodeDigests(input: RevisionedEditCodeRequest
     : null;
 }
 
+export function createRevisionedDeleteDigests(input: RevisionedDeleteRequestDigestInput): {
+  normalizedIntent: Readonly<RevisionedDeleteIntent>;
+  intentDigest: string;
+  requestDigest: string;
+} | null {
+  const result = createRevisionedWhiteboardMutationDigests({ ...input, toolName: 'wb_delete' });
+  return result
+    ? {
+        normalizedIntent: result.normalizedIntent as Readonly<RevisionedDeleteIntent>,
+        intentDigest: result.intentDigest,
+        requestDigest: result.requestDigest,
+      }
+    : null;
+}
+
+export function createRevisionedClearDigests(input: RevisionedClearRequestDigestInput): {
+  normalizedIntent: Readonly<RevisionedClearIntent>;
+  intentDigest: string;
+  requestDigest: string;
+} | null {
+  const result = createRevisionedWhiteboardMutationDigests({ ...input, toolName: 'wb_clear' });
+  return result
+    ? {
+        normalizedIntent: result.normalizedIntent as Readonly<RevisionedClearIntent>,
+        intentDigest: result.intentDigest,
+        requestDigest: result.requestDigest,
+      }
+    : null;
+}
+
 export function createRevisionedWhiteboardEffectDeliveryDigests(
   delivery: RevisionedWhiteboardEffectDelivery,
 ) {
@@ -1335,6 +1530,10 @@ export function createRevisionedWhiteboardEffectDeliveryDigests(
       return createRevisionedDrawCodeDigests({ ...common, intent: delivery.intent });
     case 'wb_edit_code':
       return createRevisionedEditCodeDigests({ ...common, intent: delivery.intent });
+    case 'wb_delete':
+      return createRevisionedDeleteDigests({ ...common, intent: delivery.intent });
+    case 'wb_clear':
+      return createRevisionedClearDigests({ ...common, intent: delivery.intent });
   }
 }
 
@@ -1610,6 +1809,9 @@ export function isRevisionedWhiteboardExpectedDescriptor(
   if (value.kind === 'wb_open_v2' || value.kind === 'wb_close_v2') {
     return hasExactKeys(value, ['kind', 'intentDigest']);
   }
+  if (value.kind === 'wb_clear_v2') {
+    return hasExactKeys(value, ['kind', 'intentDigest']);
+  }
   if (!isSafeId(value.stableElementId)) return false;
   switch (value.kind) {
     case 'wb_draw_text_v2':
@@ -1668,6 +1870,8 @@ export function isRevisionedWhiteboardExpectedDescriptor(
         hasExactKeys(value, ['kind', 'intentDigest', 'stableElementId', 'expectedNewLineIds']) &&
         isUniqueLineIdArray(value.expectedNewLineIds)
       );
+    case 'wb_delete_v2':
+      return hasExactKeys(value, ['kind', 'intentDigest', 'stableElementId']);
     default:
       return false;
   }
@@ -1677,7 +1881,9 @@ function isRevisionedDrawDelta(
   value: Record<string, unknown>,
   expected: Exclude<
     RevisionedWhiteboardExpectedDescriptor,
-    RevisionedOpenExpectedDescriptor | RevisionedCloseExpectedDescriptor
+    | RevisionedOpenExpectedDescriptor
+    | RevisionedCloseExpectedDescriptor
+    | RevisionedClearExpectedDescriptor
   >,
   kind:
     | RevisionedDrawTextDelta['kind']
@@ -2137,6 +2343,230 @@ export function isRevisionedEditCodeCommittedReceipt(
   return true;
 }
 
+export function isRevisionedDeleteCommittedReceipt(
+  receipt: ShapeValidatedRevisionedWhiteboardReceipt,
+  expected: RevisionedDeleteExpectedDescriptor,
+): receipt is ShapeValidatedRevisionedWhiteboardReceipt & RevisionedWhiteboardCommittedReceipt {
+  if (
+    receipt.outcome !== 'committed' ||
+    receipt.toolName !== 'wb_delete' ||
+    receipt.changed !== true ||
+    receipt.mutationMayHaveCommitted !== false ||
+    !isRecord(receipt.delta) ||
+    !isRecord(receipt.postcondition)
+  ) {
+    return false;
+  }
+  const delta = receipt.delta;
+  const postcondition = receipt.postcondition;
+  return (
+    hasExactKeys(delta, [
+      'kind',
+      'normalizationVersion',
+      'whiteboardId',
+      'stableElementId',
+      'observedElementType',
+      'visibilityChanged',
+      'elementCountBefore',
+      'elementCountAfter',
+    ]) &&
+    delta.kind === 'whiteboard_element_deleted_v2' &&
+    delta.normalizationVersion === CLIENT_EFFECT_DELETE_NORMALIZATION_VERSION &&
+    isSafeId(delta.whiteboardId) &&
+    delta.stableElementId === expected.stableElementId &&
+    isWhiteboardElementType(delta.observedElementType) &&
+    typeof delta.visibilityChanged === 'boolean' &&
+    isNonNegativeSafeInteger(delta.elementCountBefore) &&
+    delta.elementCountBefore > 0 &&
+    isNonNegativeSafeInteger(delta.elementCountAfter) &&
+    delta.elementCountAfter === delta.elementCountBefore - 1 &&
+    hasExactKeys(postcondition, [
+      'kind',
+      'normalizationVersion',
+      'whiteboardId',
+      'stableElementId',
+      'observedElementType',
+      'matchingElementCountBefore',
+      'matchingElementCountAfter',
+    ]) &&
+    postcondition.kind === 'whiteboard_element_absent_v2' &&
+    postcondition.normalizationVersion === CLIENT_EFFECT_DELETE_NORMALIZATION_VERSION &&
+    postcondition.whiteboardId === delta.whiteboardId &&
+    postcondition.stableElementId === expected.stableElementId &&
+    postcondition.observedElementType === delta.observedElementType &&
+    postcondition.matchingElementCountBefore === 1 &&
+    postcondition.matchingElementCountAfter === 0 &&
+    receipt.previousBinding.stageId === receipt.currentBinding.stageId &&
+    receipt.previousBinding.whiteboardId !== null &&
+    receipt.currentBinding.whiteboardId === receipt.previousBinding.whiteboardId &&
+    receipt.currentBinding.whiteboardId === delta.whiteboardId &&
+    receipt.currentBinding.revision === receipt.previousBinding.revision + 1
+  );
+}
+
+export function isRevisionedClearCommittedReceipt(
+  receipt: ShapeValidatedRevisionedWhiteboardReceipt,
+  _expected: RevisionedClearExpectedDescriptor,
+): receipt is ShapeValidatedRevisionedWhiteboardReceipt & RevisionedWhiteboardCommittedReceipt {
+  if (
+    receipt.outcome !== 'committed' ||
+    receipt.toolName !== 'wb_clear' ||
+    receipt.mutationMayHaveCommitted !== false ||
+    !isRecord(receipt.delta) ||
+    !isRecord(receipt.postcondition) ||
+    receipt.previousBinding.stageId !== receipt.currentBinding.stageId
+  ) {
+    return false;
+  }
+  const delta = receipt.delta;
+  const postcondition = receipt.postcondition;
+  if (
+    delta.kind !== 'whiteboard_cleared_v2' ||
+    delta.normalizationVersion !== CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION ||
+    postcondition.kind !== 'whiteboard_membership_empty_v2' ||
+    postcondition.normalizationVersion !== CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION ||
+    postcondition.membershipNormalizationVersion !== CLIENT_EFFECT_WHITEBOARD_MEMBERSHIP_VERSION ||
+    delta.boardState !== postcondition.boardState ||
+    delta.whiteboardId !== postcondition.whiteboardId ||
+    delta.elementCountAfter !== 0 ||
+    postcondition.elementCountAfter !== 0 ||
+    postcondition.observedMembershipDigestAfter !== CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST
+  ) {
+    return false;
+  }
+
+  switch (delta.boardState) {
+    case 'no_board':
+      return (
+        hasExactKeys(delta, [
+          'kind',
+          'normalizationVersion',
+          'boardState',
+          'whiteboardId',
+          'cleared',
+          'visibilityChanged',
+          'elementCountBefore',
+          'elementCountAfter',
+        ]) &&
+        hasExactKeys(postcondition, [
+          'kind',
+          'normalizationVersion',
+          'membershipNormalizationVersion',
+          'boardState',
+          'whiteboardId',
+          'observedOpen',
+          'elementCountAfter',
+          'observedMembershipDigestAfter',
+        ]) &&
+        delta.whiteboardId === null &&
+        delta.cleared === false &&
+        delta.visibilityChanged === false &&
+        delta.elementCountBefore === 0 &&
+        postcondition.whiteboardId === null &&
+        typeof postcondition.observedOpen === 'boolean' &&
+        receipt.changed === false &&
+        receipt.previousBinding.whiteboardId === null &&
+        receipt.currentBinding.whiteboardId === null &&
+        receipt.currentBinding.revision === receipt.previousBinding.revision
+      );
+    case 'preserved_empty':
+      return (
+        hasExactKeys(delta, [
+          'kind',
+          'normalizationVersion',
+          'boardState',
+          'whiteboardId',
+          'cleared',
+          'visibilityChanged',
+          'elementCountBefore',
+          'elementCountAfter',
+        ]) &&
+        hasExactKeys(postcondition, [
+          'kind',
+          'normalizationVersion',
+          'membershipNormalizationVersion',
+          'boardContentNormalizationVersion',
+          'boardState',
+          'whiteboardId',
+          'observedOpen',
+          'elementCountBefore',
+          'elementCountAfter',
+          'observedMembershipDigestBefore',
+          'observedMembershipDigestAfter',
+          'observedBoardContentDigestAfter',
+        ]) &&
+        isSafeId(delta.whiteboardId) &&
+        delta.cleared === false &&
+        delta.visibilityChanged === false &&
+        delta.elementCountBefore === 0 &&
+        postcondition.boardContentNormalizationVersion ===
+          CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION &&
+        typeof postcondition.observedOpen === 'boolean' &&
+        postcondition.elementCountBefore === 0 &&
+        postcondition.observedMembershipDigestBefore ===
+          CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST &&
+        postcondition.observedBoardContentDigestAfter ===
+          CLIENT_EFFECT_EMPTY_WHITEBOARD_CONTENT_DIGEST_V1 &&
+        receipt.changed === false &&
+        receipt.previousBinding.whiteboardId === delta.whiteboardId &&
+        receipt.currentBinding.whiteboardId === delta.whiteboardId &&
+        receipt.currentBinding.revision === receipt.previousBinding.revision
+      );
+    case 'cleared_existing':
+      return (
+        hasExactKeys(delta, [
+          'kind',
+          'normalizationVersion',
+          'boardState',
+          'whiteboardId',
+          'cleared',
+          'visibilityChanged',
+          'elementCountBefore',
+          'elementCountAfter',
+        ]) &&
+        hasExactKeys(postcondition, [
+          'kind',
+          'normalizationVersion',
+          'membershipNormalizationVersion',
+          'boardContentNormalizationVersion',
+          'boardState',
+          'whiteboardId',
+          'observedOpen',
+          'elementCountBefore',
+          'elementCountAfter',
+          'observedMembershipDigestBefore',
+          'observedMembershipDigestAfter',
+          'boardContentDigestBefore',
+          'observedBoardContentDigestAfter',
+          'historySnapshotDigest',
+          'historyDisposition',
+        ]) &&
+        isSafeId(delta.whiteboardId) &&
+        delta.cleared === true &&
+        typeof delta.visibilityChanged === 'boolean' &&
+        isNonNegativeSafeInteger(delta.elementCountBefore) &&
+        delta.elementCountBefore > 0 &&
+        postcondition.boardContentNormalizationVersion ===
+          CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION &&
+        postcondition.observedOpen === true &&
+        postcondition.elementCountBefore === delta.elementCountBefore &&
+        isSha256Digest(postcondition.observedMembershipDigestBefore) &&
+        isSha256Digest(postcondition.boardContentDigestBefore) &&
+        postcondition.observedBoardContentDigestAfter ===
+          CLIENT_EFFECT_EMPTY_WHITEBOARD_CONTENT_DIGEST_V1 &&
+        postcondition.historySnapshotDigest === postcondition.boardContentDigestBefore &&
+        (postcondition.historyDisposition === 'inserted' ||
+          postcondition.historyDisposition === 'existing') &&
+        receipt.changed === true &&
+        receipt.previousBinding.whiteboardId === delta.whiteboardId &&
+        receipt.currentBinding.whiteboardId === delta.whiteboardId &&
+        receipt.currentBinding.revision === receipt.previousBinding.revision + 1
+      );
+    default:
+      return false;
+  }
+}
+
 function isRevisionedVisibilityPostcondition(
   value: Record<string, unknown>,
   expectedOpen: boolean,
@@ -2299,6 +2729,10 @@ export function isRevisionedWhiteboardCommittedReceiptForExpected(
       return isRevisionedDrawCodeCommittedReceipt(receipt, expected);
     case 'wb_edit_code_v2':
       return isRevisionedEditCodeCommittedReceipt(receipt, expected);
+    case 'wb_delete_v2':
+      return isRevisionedDeleteCommittedReceipt(receipt, expected);
+    case 'wb_clear_v2':
+      return isRevisionedClearCommittedReceipt(receipt, expected);
   }
 }
 
@@ -2328,7 +2762,9 @@ export function isRevisionedWhiteboardEffectDelivery(
       value.toolName !== 'wb_draw_table' &&
       value.toolName !== 'wb_draw_chart' &&
       value.toolName !== 'wb_draw_code' &&
-      value.toolName !== 'wb_edit_code') ||
+      value.toolName !== 'wb_edit_code' &&
+      value.toolName !== 'wb_delete' &&
+      value.toolName !== 'wb_clear') ||
     !isSafeId(value.executionId) ||
     !isRequestDigest(value.requestDigest) ||
     !isBinding(value.expectedBinding) ||

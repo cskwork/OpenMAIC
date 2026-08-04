@@ -192,6 +192,16 @@ export class BrowserRevisionedWhiteboardEffectRuntime {
             ...mutationInput,
             intent: delivery.intent,
           });
+        case 'wb_delete':
+          return authority.transactRevisionedDelete({
+            ...mutationInput,
+            intent: delivery.intent,
+          });
+        case 'wb_clear':
+          return authority.transactRevisionedClear({
+            ...mutationInput,
+            intent: delivery.intent,
+          });
       }
     })();
     if (!result.ok) throw new Error(result.code);
