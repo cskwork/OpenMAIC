@@ -3,6 +3,7 @@ import type {
   RevisionedWhiteboardBinding,
   RevisionedWhiteboardMutationAck,
   RevisionedWhiteboardMutationToolName,
+  RevisionedWhiteboardExpectedDescriptor,
 } from '@/lib/agent/runtime/revisioned-whiteboard-contract';
 import {
   RevisionedWhiteboardCoordinator,
@@ -33,7 +34,7 @@ export interface RevisionedWhiteboardAuthorizationInput {
   deadlineAt: number;
   requiredCoverage: ObservationCoverage;
   intentDigest?: string;
-  expectedDrawText?: import('@/lib/agent/runtime/revisioned-whiteboard-contract').RevisionedDrawTextExpectedDescriptor;
+  expectedMutation?: RevisionedWhiteboardExpectedDescriptor;
 }
 
 /**
@@ -95,7 +96,7 @@ export class RevisionedWhiteboardMutationRuntime {
       deadlineAt: input.deadlineAt,
       observationAuthorizationDigest,
       ...(input.intentDigest ? { intentDigest: input.intentDigest } : {}),
-      ...(input.expectedDrawText ? { expectedDrawText: input.expectedDrawText } : {}),
+      ...(input.expectedMutation ? { expectedMutation: input.expectedMutation } : {}),
     };
     return { claimInput, coordinatorInput };
   }
@@ -127,13 +128,13 @@ export class RevisionedWhiteboardMutationRuntime {
     });
   }
 
-  mintDrawTextBundle(input: {
+  mintDrawElementBundle(input: {
     executionId: string;
-    expected: import('@/lib/agent/runtime/revisioned-whiteboard-contract').RevisionedDrawTextExpectedDescriptor;
+    expected: RevisionedWhiteboardExpectedDescriptor;
   }) {
     const terminal = this.coordinator.getTerminal(input.executionId);
     if (!terminal?.authenticatedReceipt) return null;
-    return this.observationLedger.mintDrawTextCapabilityBundle({
+    return this.observationLedger.mintDrawElementCapabilityBundle({
       authenticatedReceipt: terminal.authenticatedReceipt,
       expected: input.expected,
     });

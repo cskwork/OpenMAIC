@@ -2,7 +2,8 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { nanoid } from 'nanoid';
 import {
   isRevisionedWhiteboardAuthenticatedTarget,
-  isRevisionedDrawTextCommittedReceipt,
+  isRevisionedWhiteboardCommittedReceiptForExpected,
+  isRevisionedWhiteboardExpectedDescriptor,
   isRevisionedWhiteboardMutationAck,
   isRevisionedWhiteboardMutationIdentity,
   verifyRevisionedWhiteboardAuthorityReceipt,
@@ -11,7 +12,7 @@ import {
   type RevisionedWhiteboardEnvironmentBinding,
   type RevisionedWhiteboardMutationAck,
   type RevisionedWhiteboardMutationToolName,
-  type RevisionedDrawTextExpectedDescriptor,
+  type RevisionedWhiteboardExpectedDescriptor,
   type ShapeValidatedRevisionedWhiteboardReceipt,
 } from './revisioned-whiteboard-contract';
 import { digestRevisionedValue } from './revisioned-whiteboard-digest';
@@ -64,7 +65,7 @@ export interface RevisionedWhiteboardCoordinatorRegistration {
   deadlineAt: number;
   intentDigest?: string;
   observationAuthorizationDigest?: string;
-  expectedDrawText?: RevisionedDrawTextExpectedDescriptor;
+  expectedMutation?: RevisionedWhiteboardExpectedDescriptor;
 }
 
 export type PendingRegisteredRevisionedMutation = {
@@ -125,23 +126,6 @@ function isSha256Digest(value: unknown): value is string {
   return typeof value === 'string' && /^sha256:[0-9a-f]{64}$/u.test(value);
 }
 
-function isExpectedDrawTextDescriptor(
-  value: unknown,
-): value is RevisionedDrawTextExpectedDescriptor {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const descriptor = value as Partial<RevisionedDrawTextExpectedDescriptor>;
-  return (
-    Object.keys(value).length === 4 &&
-    descriptor.kind === 'wb_draw_text_v2' &&
-    isSha256Digest(descriptor.intentDigest) &&
-    typeof descriptor.stableElementId === 'string' &&
-    descriptor.stableElementId.length >= 1 &&
-    descriptor.stableElementId.length <= 512 &&
-    !/[\u0000-\u001f\u007f\u2028\u2029]/u.test(descriptor.stableElementId) &&
-    isSha256Digest(descriptor.expectedContentDigest)
-  );
-}
-
 function registrationDigest(input: RevisionedWhiteboardCoordinatorRegistration): string {
   return digestRevisionedValue({
     executionId: input.executionId,
@@ -151,8 +135,34 @@ function registrationDigest(input: RevisionedWhiteboardCoordinatorRegistration):
     expectedBinding: input.expectedBinding,
     authenticatedTarget: input.authenticatedTarget,
     deadlineAt: input.deadlineAt,
-    expectedDrawText: input.expectedDrawText ?? null,
+    expectedMutation: input.expectedMutation ?? null,
   });
+}
+
+/**
+ * A tool enters this map atomically with its exact descriptor and receipt
+ * verifier, before any executable v2 handler can register it. The reverse map
+ * is exhaustive over the descriptor union so adding a descriptor cannot
+ * silently leave committed receipt validation optional.
+ */
+const exactToolByDescriptorKind = {
+  wb_draw_text_v2: 'wb_draw_text',
+  wb_draw_shape_v2: 'wb_draw_shape',
+  wb_draw_line_v2: 'wb_draw_line',
+} as const satisfies Record<
+  RevisionedWhiteboardExpectedDescriptor['kind'],
+  RevisionedWhiteboardMutationToolName
+>;
+
+function toolRequiresExactDescriptor(toolName: RevisionedWhiteboardMutationToolName): boolean {
+  return Object.values(exactToolByDescriptorKind).some((candidate) => candidate === toolName);
+}
+
+function descriptorMatchesTool(
+  descriptor: RevisionedWhiteboardExpectedDescriptor,
+  toolName: RevisionedWhiteboardMutationToolName,
+): boolean {
+  return exactToolByDescriptorKind[descriptor.kind] === toolName;
 }
 
 function acceptedBindingsEqual(
@@ -288,8 +298,8 @@ export class RevisionedWhiteboardCoordinator {
     const acknowledgementToken = this.createToken();
     const expectedBinding = Object.freeze({ ...input.expectedBinding });
     const authenticatedTarget = Object.freeze({ ...input.authenticatedTarget });
-    const expectedDrawText = input.expectedDrawText
-      ? Object.freeze({ ...input.expectedDrawText })
+    const expectedMutation = input.expectedMutation
+      ? Object.freeze({ ...input.expectedMutation })
       : undefined;
     let resolveTerminal!: (terminal: RevisionedWhiteboardTerminal) => void;
     const terminalPromise = new Promise<RevisionedWhiteboardTerminal>((resolve) => {
@@ -306,7 +316,7 @@ export class RevisionedWhiteboardCoordinator {
       ...(input.observationAuthorizationDigest
         ? { observationAuthorizationDigest: input.observationAuthorizationDigest }
         : {}),
-      ...(expectedDrawText ? { expectedDrawText } : {}),
+      ...(expectedMutation ? { expectedMutation } : {}),
       registrationDigest: registrationDigest(input),
       status: 'pending',
       actionChargeTaken: false,
@@ -337,6 +347,7 @@ export class RevisionedWhiteboardCoordinator {
   }
 
   private validateRegistration(input: RevisionedWhiteboardCoordinatorRegistration): void {
+    const requiresExactDescriptor = toolRequiresExactDescriptor(input.toolName);
     if (
       !isRevisionedWhiteboardMutationIdentity({
         executionId: input.executionId,
@@ -349,9 +360,11 @@ export class RevisionedWhiteboardCoordinator {
       (input.intentDigest !== undefined && !isSha256Digest(input.intentDigest)) ||
       (input.observationAuthorizationDigest !== undefined &&
         !isSha256Digest(input.observationAuthorizationDigest)) ||
-      (input.expectedDrawText !== undefined &&
-        (!isExpectedDrawTextDescriptor(input.expectedDrawText) ||
-          input.expectedDrawText.intentDigest !== input.intentDigest ||
+      (requiresExactDescriptor && input.expectedMutation === undefined) ||
+      (input.expectedMutation !== undefined &&
+        (!isRevisionedWhiteboardExpectedDescriptor(input.expectedMutation) ||
+          !descriptorMatchesTool(input.expectedMutation, input.toolName) ||
+          input.expectedMutation.intentDigest !== input.intentDigest ||
           input.observationAuthorizationDigest === undefined))
     ) {
       throw new Error('REVISIONED_WHITEBOARD_REGISTRATION_INVALID');
@@ -426,8 +439,9 @@ export class RevisionedWhiteboardCoordinator {
     if (correlationError) return { kind: 'invalid', reason: correlationError };
     if (
       receipt.outcome === 'committed' &&
-      entry.expectedDrawText &&
-      !isRevisionedDrawTextCommittedReceipt(receipt, entry.expectedDrawText)
+      toolRequiresExactDescriptor(entry.toolName) &&
+      (!entry.expectedMutation ||
+        !isRevisionedWhiteboardCommittedReceiptForExpected(receipt, entry.expectedMutation))
     ) {
       return { kind: 'invalid', reason: 'REVISIONED_WHITEBOARD_DRAW_RECEIPT_INVALID' };
     }

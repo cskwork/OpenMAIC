@@ -3,13 +3,13 @@ import { RevisionedWhiteboardTargetRegistry } from '@/lib/agent/client/revisione
 import {
   REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
   createRevisionedDrawTextDigests,
-  type RevisionedWhiteboardEffectDelivery,
+  type RevisionedDrawTextEffectDelivery,
 } from '@/lib/agent/runtime/revisioned-whiteboard-contract';
 
 function delivery(
   deadlineAt: number,
   executionId = 'execution-1',
-): RevisionedWhiteboardEffectDelivery {
+): RevisionedDrawTextEffectDelivery {
   const expectedBinding = { stageId: 'stage-1', whiteboardId: null, revision: 0 };
   const authenticatedTarget = {
     childInvocationId: 'child-1',

@@ -1,7 +1,7 @@
 import { nanoid } from 'nanoid';
 import {
-  isRevisionedDrawTextCommittedReceipt,
-  type RevisionedDrawTextExpectedDescriptor,
+  isRevisionedWhiteboardCommittedReceiptForExpected,
+  type RevisionedWhiteboardExpectedDescriptor,
   type RevisionedWhiteboardCommittedReceipt,
 } from '@/lib/agent/runtime/revisioned-whiteboard-contract';
 import {
@@ -85,20 +85,20 @@ export interface NativeWhiteboardObservationLedgerOptions {
   maxMintRejectionRecords?: number;
 }
 
-export type DrawTextCapabilityBundle = Readonly<{
+export type DrawElementCapabilityBundle = Readonly<{
   bindingObservationToken: string;
   targetObservationToken: string;
 }>;
 
-export type DrawTextCapabilityMintResult =
-  | { ok: true; bundle: DrawTextCapabilityBundle; replayed: boolean }
+export type DrawElementCapabilityMintResult =
+  | { ok: true; bundle: DrawElementCapabilityBundle; replayed: boolean }
   | { ok: false; code: 'OBSERVATION_CAPABILITY_LIMIT'; replayed: boolean };
 
-type DrawTextMintRecord = {
+type DrawElementMintRecord = {
   receiptDigest: string;
   childInvocationId: string;
   expiresAt: number;
-  result: DrawTextCapabilityMintResult;
+  result: DrawElementCapabilityMintResult;
 };
 
 export function observationCoverageMatches(
@@ -124,8 +124,8 @@ export class NativeWhiteboardObservationLedger {
   private readonly maxClaims: number;
   private readonly maxMintRecords: number;
   private readonly maxMintRejectionRecords: number;
-  private readonly drawTextMintRecords = new Map<string, DrawTextMintRecord>();
-  private readonly drawTextMintRejections = new Map<string, DrawTextMintRecord>();
+  private readonly drawElementMintRecords = new Map<string, DrawElementMintRecord>();
+  private readonly drawElementMintRejections = new Map<string, DrawElementMintRecord>();
 
   constructor(opts: NativeWhiteboardObservationLedgerOptions = {}) {
     this.now = opts.now ?? Date.now;
@@ -195,10 +195,10 @@ export class NativeWhiteboardObservationLedger {
     });
   }
 
-  mintDrawTextCapabilityBundle(input: {
+  mintDrawElementCapabilityBundle(input: {
     authenticatedReceipt: CoordinatorAuthenticatedRevisionedWhiteboardReceipt;
-    expected: RevisionedDrawTextExpectedDescriptor;
-  }): DrawTextCapabilityMintResult | null {
+    expected: RevisionedWhiteboardExpectedDescriptor;
+  }): DrawElementCapabilityMintResult | null {
     this.deleteExpired();
     if (!isCoordinatorAuthenticatedRevisionedWhiteboardReceipt(input.authenticatedReceipt)) {
       return null;
@@ -208,24 +208,24 @@ export class NativeWhiteboardObservationLedger {
       deadlineAt <= this.now() ||
       receipt.currentBinding.stageId === null ||
       receipt.currentBinding.whiteboardId === null ||
-      !isRevisionedDrawTextCommittedReceipt(receipt, input.expected)
+      !isRevisionedWhiteboardCommittedReceiptForExpected(receipt, input.expected)
     ) {
       return null;
     }
     const receiptDigest = digestRevisionedValue(receipt);
-    const existing = this.drawTextMintRecords.get(receipt.executionId);
+    const existing = this.drawElementMintRecords.get(receipt.executionId);
     if (existing) {
       if (existing.receiptDigest !== receiptDigest) return null;
       return existing.result.ok
         ? { ...existing.result, replayed: true }
         : { ...existing.result, replayed: true };
     }
-    const existingRejection = this.drawTextMintRejections.get(receipt.executionId);
+    const existingRejection = this.drawElementMintRejections.get(receipt.executionId);
     if (existingRejection) {
       if (existingRejection.receiptDigest !== receiptDigest) return null;
       return { ok: false, code: 'OBSERVATION_CAPABILITY_LIMIT', replayed: true };
     }
-    if (this.drawTextMintRecords.size >= this.maxMintRecords) {
+    if (this.drawElementMintRecords.size >= this.maxMintRecords) {
       const result = {
         ok: false as const,
         code: 'OBSERVATION_CAPABILITY_LIMIT' as const,
@@ -250,7 +250,7 @@ export class NativeWhiteboardObservationLedger {
       sourceId: receipt.executionId,
       expiresAt: deadlineAt,
     };
-    let result: DrawTextCapabilityMintResult;
+    let result: DrawElementCapabilityMintResult;
     if (this.claims.size + 2 > this.maxClaims) {
       result = { ok: false, code: 'OBSERVATION_CAPABILITY_LIMIT', replayed: false };
     } else {
@@ -282,8 +282,8 @@ export class NativeWhiteboardObservationLedger {
         replayed: false,
       };
     }
-    const recorded = Object.freeze({ ...result }) as DrawTextCapabilityMintResult;
-    this.drawTextMintRecords.set(receipt.executionId, {
+    const recorded = Object.freeze({ ...result }) as DrawElementCapabilityMintResult;
+    this.drawElementMintRecords.set(receipt.executionId, {
       receiptDigest,
       childInvocationId: authenticatedTarget.childInvocationId,
       expiresAt: deadlineAt,
@@ -332,14 +332,14 @@ export class NativeWhiteboardObservationLedger {
     for (const [token, claim] of this.claims) {
       if (claim.childInvocationId === childInvocationId) this.claims.delete(token);
     }
-    for (const [executionId, record] of this.drawTextMintRecords) {
+    for (const [executionId, record] of this.drawElementMintRecords) {
       if (record.childInvocationId === childInvocationId) {
-        this.drawTextMintRecords.delete(executionId);
+        this.drawElementMintRecords.delete(executionId);
       }
     }
-    for (const [executionId, record] of this.drawTextMintRejections) {
+    for (const [executionId, record] of this.drawElementMintRejections) {
       if (record.childInvocationId === childInvocationId) {
-        this.drawTextMintRejections.delete(executionId);
+        this.drawElementMintRejections.delete(executionId);
       }
     }
   }
@@ -359,7 +359,7 @@ export class NativeWhiteboardObservationLedger {
 
   getMintRecordCountForTests(): number {
     this.deleteExpired();
-    return this.drawTextMintRecords.size + this.drawTextMintRejections.size;
+    return this.drawElementMintRecords.size + this.drawElementMintRejections.size;
   }
 
   private deleteExpired(): void {
@@ -367,11 +367,11 @@ export class NativeWhiteboardObservationLedger {
     for (const [token, claim] of this.claims) {
       if (claim.expiresAt <= current) this.claims.delete(token);
     }
-    for (const [executionId, record] of this.drawTextMintRecords) {
-      if (record.expiresAt <= current) this.drawTextMintRecords.delete(executionId);
+    for (const [executionId, record] of this.drawElementMintRecords) {
+      if (record.expiresAt <= current) this.drawElementMintRecords.delete(executionId);
     }
-    for (const [executionId, record] of this.drawTextMintRejections) {
-      if (record.expiresAt <= current) this.drawTextMintRejections.delete(executionId);
+    for (const [executionId, record] of this.drawElementMintRejections) {
+      if (record.expiresAt <= current) this.drawElementMintRejections.delete(executionId);
     }
   }
 
@@ -388,18 +388,18 @@ export class NativeWhiteboardObservationLedger {
     return token;
   }
 
-  private rememberMintRejection(input: DrawTextMintRecord & { executionId: string }): void {
+  private rememberMintRejection(input: DrawElementMintRecord & { executionId: string }): void {
     if (this.maxMintRejectionRecords <= 0) return;
-    this.drawTextMintRejections.set(input.executionId, {
+    this.drawElementMintRejections.set(input.executionId, {
       receiptDigest: input.receiptDigest,
       childInvocationId: input.childInvocationId,
       expiresAt: input.expiresAt,
       result: input.result,
     });
-    while (this.drawTextMintRejections.size > this.maxMintRejectionRecords) {
-      const oldest = this.drawTextMintRejections.keys().next().value;
+    while (this.drawElementMintRejections.size > this.maxMintRejectionRecords) {
+      const oldest = this.drawElementMintRejections.keys().next().value;
       if (typeof oldest !== 'string') break;
-      this.drawTextMintRejections.delete(oldest);
+      this.drawElementMintRejections.delete(oldest);
     }
   }
 

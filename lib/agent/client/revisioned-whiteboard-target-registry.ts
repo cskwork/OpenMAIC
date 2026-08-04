@@ -1,7 +1,7 @@
 'use client';
 
 import {
-  createRevisionedDrawTextDigests,
+  createRevisionedWhiteboardEffectDeliveryDigests,
   isRevisionedWhiteboardEffectDelivery,
   type RevisionedWhiteboardEffectDelivery,
 } from '@/lib/agent/runtime/revisioned-whiteboard-contract';
@@ -46,13 +46,7 @@ export type RevisionedWhiteboardTargetEnvironment = Readonly<{
 
 function claimFromDelivery(delivery: RevisionedWhiteboardEffectDelivery): TargetClaim {
   const snapshot = immutableRevisionedSnapshot(delivery) as RevisionedWhiteboardEffectDelivery;
-  const digests = createRevisionedDrawTextDigests({
-    executionId: snapshot.executionId,
-    expectedBinding: snapshot.expectedBinding,
-    authenticatedTarget: snapshot.authenticatedTarget,
-    deadlineAt: snapshot.deadlineAt,
-    intent: snapshot.intent,
-  });
+  const digests = createRevisionedWhiteboardEffectDeliveryDigests(snapshot);
   if (!digests || digests.requestDigest !== snapshot.requestDigest) {
     throw new Error('REVISIONED_WHITEBOARD_DELIVERY_INVALID');
   }

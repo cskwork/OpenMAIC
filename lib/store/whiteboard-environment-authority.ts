@@ -6,8 +6,9 @@ import {
   isRevisionedWhiteboardAuthorityReceipt,
   isRevisionedWhiteboardAuthenticatedTarget,
   isRevisionedWhiteboardMutationIdentity,
+  createRevisionedDrawLineDigests,
+  createRevisionedDrawShapeDigests,
   createRevisionedDrawTextDigests,
-  normalizeRevisionedDrawTextIntent,
   revisionedWhiteboardWireBytes,
   verifyRevisionedWhiteboardAuthorityReceipt,
   type JsonValue,
@@ -22,14 +23,32 @@ import {
   type RevisionedDrawTextIntent,
   type RevisionedDrawTextDelta,
   type RevisionedDrawTextPostcondition,
+  type RevisionedDrawShapeIntent,
+  type RevisionedDrawShapeDelta,
+  type RevisionedDrawShapePostcondition,
+  type RevisionedDrawLineIntent,
+  type RevisionedDrawLineDelta,
+  type RevisionedDrawLinePostcondition,
 } from '@/lib/agent/runtime/revisioned-whiteboard-contract';
 import {
   deriveRevisionedElementId,
   deriveRevisionedWhiteboardId,
   digestRevisionedValue,
   digestVisibleTextV1Sync,
+  digestWhiteboardLineV1Sync,
+  digestWhiteboardShapeV1Sync,
 } from '@/lib/agent/runtime/revisioned-whiteboard-digest';
-import { CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION } from '@/lib/agent/runtime/client-effect-contract';
+import {
+  CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  normalizeWhiteboardLineV1,
+  normalizeWhiteboardShapeV1,
+  type WhiteboardLineSpec,
+  type WhiteboardShapeSpec,
+} from '@/lib/agent/runtime/client-effect-contract';
+import { createWhiteboardLineElement } from '@/lib/action/whiteboard-lines';
+import { WHITEBOARD_SHAPE_PATHS } from '@/lib/action/whiteboard-shapes';
 import type { Stage, Whiteboard } from '@/lib/types/stage';
 import type { StageStore } from '@/lib/api/stage-api-types';
 import type { PPTElement } from '@openmaic/dsl';
@@ -151,6 +170,31 @@ export interface WhiteboardAuthorityRevisionedDrawTextOptions {
   intentDigest: string;
   intent: RevisionedDrawTextIntent;
 }
+
+export interface WhiteboardAuthorityRevisionedDrawShapeOptions {
+  executionId: string;
+  requestDigest: string;
+  expected: RevisionedWhiteboardBinding;
+  authenticatedTarget: RevisionedWhiteboardAuthenticatedTarget;
+  deadlineAt: number;
+  intentDigest: string;
+  intent: RevisionedDrawShapeIntent;
+}
+
+export interface WhiteboardAuthorityRevisionedDrawLineOptions {
+  executionId: string;
+  requestDigest: string;
+  expected: RevisionedWhiteboardBinding;
+  authenticatedTarget: RevisionedWhiteboardAuthenticatedTarget;
+  deadlineAt: number;
+  intentDigest: string;
+  intent: RevisionedDrawLineIntent;
+}
+
+type WhiteboardAuthorityRevisionedDrawElementOptions =
+  | (WhiteboardAuthorityRevisionedDrawTextOptions & { toolName: 'wb_draw_text' })
+  | (WhiteboardAuthorityRevisionedDrawShapeOptions & { toolName: 'wb_draw_shape' })
+  | (WhiteboardAuthorityRevisionedDrawLineOptions & { toolName: 'wb_draw_line' });
 
 export type WhiteboardAuthorityRevisionedMutationResult =
   | {
@@ -430,6 +474,189 @@ function createRevisionedTextElement(
     clientEffectContentDigest: contentDigest,
     clientEffectNormalizationVersion: CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
   } as PPTElement;
+}
+
+type RevisionedDrawElementPlan = Readonly<{
+  element: PPTElement;
+  stableElementId: string;
+  elementType: 'text' | 'shape' | 'line';
+  normalizationVersion:
+    | typeof CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION
+    | typeof CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION
+    | typeof CLIENT_EFFECT_LINE_NORMALIZATION_VERSION;
+  observedDigest: string;
+}>;
+
+function createRevisionedDrawElementPlan(
+  opts: WhiteboardAuthorityRevisionedDrawElementOptions,
+  normalizedIntent: Readonly<
+    RevisionedDrawTextIntent | RevisionedDrawShapeIntent | RevisionedDrawLineIntent
+  >,
+): RevisionedDrawElementPlan {
+  const stableElementId = deriveRevisionedElementId(opts.executionId);
+  switch (opts.toolName) {
+    case 'wb_draw_text': {
+      const intent = normalizedIntent as Readonly<RevisionedDrawTextIntent>;
+      const observedDigest = digestVisibleTextV1Sync(intent.content);
+      return Object.freeze({
+        element: createRevisionedTextElement(opts.executionId, intent, observedDigest),
+        stableElementId,
+        elementType: 'text' as const,
+        normalizationVersion: CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+        observedDigest,
+      });
+    }
+    case 'wb_draw_shape': {
+      const intent = normalizedIntent as Readonly<RevisionedDrawShapeIntent>;
+      const spec: WhiteboardShapeSpec = normalizeWhiteboardShapeV1(intent);
+      const observedDigest = digestWhiteboardShapeV1Sync(spec);
+      return Object.freeze({
+        element: {
+          id: stableElementId,
+          type: 'shape',
+          viewBox: [1000, 1000] as [number, number],
+          path: WHITEBOARD_SHAPE_PATHS[spec.shape],
+          left: spec.bounds.x,
+          top: spec.bounds.y,
+          width: spec.bounds.width,
+          height: spec.bounds.height,
+          rotate: 0,
+          fill: spec.fillColor,
+          fixedRatio: false,
+          clientEffectExecutionId: opts.executionId,
+          clientEffectShapeDigest: observedDigest,
+          clientEffectShapeKind: spec.shape,
+          clientEffectNormalizationVersion: CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
+        } as PPTElement,
+        stableElementId,
+        elementType: 'shape' as const,
+        normalizationVersion: CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
+        observedDigest,
+      });
+    }
+    case 'wb_draw_line': {
+      const intent = normalizedIntent as Readonly<RevisionedDrawLineIntent>;
+      const spec: WhiteboardLineSpec = normalizeWhiteboardLineV1(intent);
+      const observedDigest = digestWhiteboardLineV1Sync(spec);
+      return Object.freeze({
+        element: {
+          ...createWhiteboardLineElement({
+            id: stableElementId,
+            startX: spec.start.x,
+            startY: spec.start.y,
+            endX: spec.end.x,
+            endY: spec.end.y,
+            color: spec.strokeColor,
+            width: spec.strokeWidth,
+            style: spec.strokeStyle,
+            points: spec.markers,
+          }),
+          clientEffectExecutionId: opts.executionId,
+          clientEffectLineDigest: observedDigest,
+          clientEffectNormalizationVersion: CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
+        } as PPTElement,
+        stableElementId,
+        elementType: 'line' as const,
+        normalizationVersion: CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
+        observedDigest,
+      });
+    }
+  }
+}
+
+function revisionedDrawMetadataMatches(
+  observed: PPTElement | undefined,
+  opts: WhiteboardAuthorityRevisionedDrawElementOptions,
+  plan: RevisionedDrawElementPlan,
+): boolean {
+  if (!observed || observed.type !== plan.elementType) return false;
+  const metadata = observed as PPTElement & {
+    clientEffectExecutionId?: string;
+    clientEffectNormalizationVersion?: string;
+    clientEffectContentDigest?: string;
+    clientEffectShapeDigest?: string;
+    clientEffectLineDigest?: string;
+  };
+  if (
+    metadata.clientEffectExecutionId !== opts.executionId ||
+    metadata.clientEffectNormalizationVersion !== plan.normalizationVersion
+  ) {
+    return false;
+  }
+  switch (opts.toolName) {
+    case 'wb_draw_text':
+      return metadata.clientEffectContentDigest === plan.observedDigest;
+    case 'wb_draw_shape':
+      return metadata.clientEffectShapeDigest === plan.observedDigest;
+    case 'wb_draw_line':
+      return metadata.clientEffectLineDigest === plan.observedDigest;
+  }
+}
+
+function revisionedDrawDelta(
+  opts: WhiteboardAuthorityRevisionedDrawElementOptions,
+  plan: RevisionedDrawElementPlan,
+  whiteboardId: string,
+  createdWhiteboard: boolean,
+  visibilityChanged: boolean,
+  elementCountBefore: number,
+): RevisionedDrawTextDelta | RevisionedDrawShapeDelta | RevisionedDrawLineDelta {
+  const common = {
+    normalizationVersion: plan.normalizationVersion,
+    whiteboardId,
+    stableElementId: plan.stableElementId,
+    createdWhiteboard,
+    visibilityChanged,
+    elementCountBefore,
+    elementCountAfter: elementCountBefore + 1,
+  };
+  switch (opts.toolName) {
+    case 'wb_draw_text':
+      return { kind: 'whiteboard_text_created_v2', ...common } as RevisionedDrawTextDelta;
+    case 'wb_draw_shape':
+      return { kind: 'whiteboard_shape_created_v2', ...common } as RevisionedDrawShapeDelta;
+    case 'wb_draw_line':
+      return { kind: 'whiteboard_line_created_v2', ...common } as RevisionedDrawLineDelta;
+  }
+}
+
+function revisionedDrawPostcondition(
+  opts: WhiteboardAuthorityRevisionedDrawElementOptions,
+  plan: RevisionedDrawElementPlan,
+  whiteboardId: string,
+):
+  | RevisionedDrawTextPostcondition
+  | RevisionedDrawShapePostcondition
+  | RevisionedDrawLinePostcondition {
+  const common = {
+    normalizationVersion: plan.normalizationVersion,
+    whiteboardId,
+    stableElementId: plan.stableElementId,
+    matchingElementCount: 1 as const,
+  };
+  switch (opts.toolName) {
+    case 'wb_draw_text':
+      return {
+        kind: 'whiteboard_text_exists_v2',
+        ...common,
+        elementType: 'text',
+        observedContentDigest: plan.observedDigest,
+      } as RevisionedDrawTextPostcondition;
+    case 'wb_draw_shape':
+      return {
+        kind: 'whiteboard_shape_exists_v2',
+        ...common,
+        elementType: 'shape',
+        observedShapeDigest: plan.observedDigest,
+      } as RevisionedDrawShapePostcondition;
+    case 'wb_draw_line':
+      return {
+        kind: 'whiteboard_line_exists_v2',
+        ...common,
+        elementType: 'line',
+        observedLineDigest: plan.observedDigest,
+      } as RevisionedDrawLinePostcondition;
+  }
 }
 
 function createRevisionedWhiteboard(executionId: string, element: PPTElement): Whiteboard {
@@ -972,13 +1199,40 @@ export class WhiteboardEnvironmentAuthority {
   transactRevisionedDrawText(
     opts: WhiteboardAuthorityRevisionedDrawTextOptions,
   ): WhiteboardAuthorityRevisionedMutationResult {
-    const digests = createRevisionedDrawTextDigests({
+    return this.transactRevisionedDrawElement({ ...opts, toolName: 'wb_draw_text' });
+  }
+
+  transactRevisionedDrawShape(
+    opts: WhiteboardAuthorityRevisionedDrawShapeOptions,
+  ): WhiteboardAuthorityRevisionedMutationResult {
+    return this.transactRevisionedDrawElement({ ...opts, toolName: 'wb_draw_shape' });
+  }
+
+  transactRevisionedDrawLine(
+    opts: WhiteboardAuthorityRevisionedDrawLineOptions,
+  ): WhiteboardAuthorityRevisionedMutationResult {
+    return this.transactRevisionedDrawElement({ ...opts, toolName: 'wb_draw_line' });
+  }
+
+  private transactRevisionedDrawElement(
+    opts: WhiteboardAuthorityRevisionedDrawElementOptions,
+  ): WhiteboardAuthorityRevisionedMutationResult {
+    const digestInput = {
       executionId: opts.executionId,
       expectedBinding: opts.expected,
       authenticatedTarget: opts.authenticatedTarget,
       deadlineAt: opts.deadlineAt,
-      intent: opts.intent,
-    });
+    };
+    const digests = (() => {
+      switch (opts.toolName) {
+        case 'wb_draw_text':
+          return createRevisionedDrawTextDigests({ ...digestInput, intent: opts.intent });
+        case 'wb_draw_shape':
+          return createRevisionedDrawShapeDigests({ ...digestInput, intent: opts.intent });
+        case 'wb_draw_line':
+          return createRevisionedDrawLineDigests({ ...digestInput, intent: opts.intent });
+      }
+    })();
     if (
       !digests ||
       digests.requestDigest !== opts.requestDigest ||
@@ -986,7 +1240,7 @@ export class WhiteboardEnvironmentAuthority {
       !isRevisionedWhiteboardMutationIdentity({
         executionId: opts.executionId,
         requestDigest: opts.requestDigest,
-        toolName: 'wb_draw_text',
+        toolName: opts.toolName,
         expectedBinding: opts.expected,
       }) ||
       !isRevisionedWhiteboardAuthenticatedTarget(opts.authenticatedTarget) ||
@@ -995,14 +1249,15 @@ export class WhiteboardEnvironmentAuthority {
       return {
         ok: false,
         code: WHITEBOARD_AUTHORITY_MUTATION_REQUEST_INVALID,
-        errors: ['wb_draw_text.v2: revisioned draw request is invalid'],
+        errors: [`${opts.toolName}.v2: revisioned draw request is invalid`],
       };
     }
-    const normalizedIntent = normalizeRevisionedDrawTextIntent(digests.normalizedIntent)!;
+    const normalizedIntent = digests.normalizedIntent;
+    const drawPlan = createRevisionedDrawElementPlan(opts, normalizedIntent);
     const identity = immutableCanonicalSnapshot<RevisionedJournalIdentity>({
       executionId: opts.executionId,
       requestDigest: opts.requestDigest,
-      toolName: 'wb_draw_text',
+      toolName: opts.toolName,
       expected: opts.expected,
       authenticatedTarget: opts.authenticatedTarget,
       deadlineAt: opts.deadlineAt,
@@ -1025,21 +1280,21 @@ export class WhiteboardEnvironmentAuthority {
       return {
         ok: false,
         code: WHITEBOARD_AUTHORITY_DEADLINE_EXCEEDED,
-        errors: ['wb_draw_text.v2: revisioned mutation deadline has expired'],
+        errors: [`${opts.toolName}.v2: revisioned mutation deadline has expired`],
       };
     }
     if (this.revisionedJournal.size >= this.maxRevisionedJournalEntries) {
       return {
         ok: false,
         code: WHITEBOARD_AUTHORITY_JOURNAL_CAPACITY_EXCEEDED,
-        errors: ['wb_draw_text.v2: revisioned mutation journal is at capacity'],
+        errors: [`${opts.toolName}.v2: revisioned mutation journal is at capacity`],
       };
     }
     if (this.transactionActive) {
       return {
         ok: false,
         code: WHITEBOARD_AUTHORITY_RESOURCE_BUSY,
-        errors: ['wb_draw_text.v2: whiteboard transaction already active'],
+        errors: [`${opts.toolName}.v2: whiteboard transaction already active`],
       };
     }
 
@@ -1093,14 +1348,13 @@ export class WhiteboardEnvironmentAuthority {
         const activeWhiteboard = identity.expected.whiteboardId
           ? currentWhiteboards.find(({ id }) => id === identity.expected.whiteboardId)
           : null;
-        const stableElementId = deriveRevisionedElementId(identity.executionId);
         const invalidTarget =
           !currentStage ||
           currentStage.id !== beforeDomain.stageId ||
           (identity.expected.whiteboardId === null
             ? currentWhiteboards.length !== 0
             : !activeWhiteboard) ||
-          Boolean(activeWhiteboard?.elements.some(({ id }) => id === stableElementId));
+          Boolean(activeWhiteboard?.elements.some(({ id }) => id === drawPlan.stableElementId));
         if (invalidTarget) {
           receipt = this.rejectedReceipt(
             identity,
@@ -1110,19 +1364,13 @@ export class WhiteboardEnvironmentAuthority {
           );
         } else {
           const errors: string[] = [];
-          const expectedContentDigest = digestVisibleTextV1Sync(normalizedIntent.content);
-          const element = createRevisionedTextElement(
-            identity.executionId,
-            normalizedIntent,
-            expectedContentDigest,
-          );
           const createdWhiteboard = activeWhiteboard === null;
           const targetWhiteboard = activeWhiteboard
             ? {
                 ...activeWhiteboard,
-                elements: [...activeWhiteboard.elements, element],
+                elements: [...activeWhiteboard.elements, drawPlan.element],
               }
-            : createRevisionedWhiteboard(identity.executionId, element);
+            : createRevisionedWhiteboard(identity.executionId, drawPlan.element);
           const beforeElementCount = activeWhiteboard?.elements.length ?? 0;
           const nextWhiteboards = activeWhiteboard
             ? currentWhiteboards.map((board) =>
@@ -1169,14 +1417,9 @@ export class WhiteboardEnvironmentAuthority {
           this.domain = nextDomain;
           const currentBinding = this.binding(nextDomain);
           const boardAfter = stageAfter?.whiteboard?.find(({ id }) => id === expectedWhiteboardId);
-          const matches = boardAfter?.elements.filter(({ id }) => id === stableElementId) ?? [];
-          const observed = matches[0] as
-            | (PPTElement & {
-                clientEffectContentDigest?: string;
-                clientEffectExecutionId?: string;
-                clientEffectNormalizationVersion?: string;
-              })
-            | undefined;
+          const matches =
+            boardAfter?.elements.filter(({ id }) => id === drawPlan.stableElementId) ?? [];
+          const observed = matches[0];
 
           if (
             !stageAfter ||
@@ -1187,12 +1430,11 @@ export class WhiteboardEnvironmentAuthority {
             !openAfter ||
             boardAfter?.elements.length !== beforeElementCount + 1 ||
             matches.length !== 1 ||
-            observed?.type !== 'text' ||
-            observed.clientEffectExecutionId !== identity.executionId ||
-            observed.clientEffectContentDigest !== expectedContentDigest ||
-            observed.clientEffectNormalizationVersion !== CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION
+            !revisionedDrawMetadataMatches(observed, opts, drawPlan)
           ) {
-            errors.push('postcondition: draw text state does not match the Authority intent');
+            errors.push(
+              `postcondition: ${opts.toolName} state does not match the Authority intent`,
+            );
           }
 
           for (const listener of this.listeners) {
@@ -1206,31 +1448,21 @@ export class WhiteboardEnvironmentAuthority {
           if (errors.length > 0) {
             receipt = this.uncertainReceipt(identity, beforeBinding, currentBinding, changed);
           } else {
-            const delta: RevisionedDrawTextDelta = {
-              kind: 'whiteboard_text_created_v2',
-              normalizationVersion: CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
-              whiteboardId: expectedWhiteboardId,
-              stableElementId,
+            const delta = revisionedDrawDelta(
+              opts,
+              drawPlan,
+              expectedWhiteboardId,
               createdWhiteboard,
               visibilityChanged,
-              elementCountBefore: beforeElementCount,
-              elementCountAfter: beforeElementCount + 1,
-            };
-            const postcondition: RevisionedDrawTextPostcondition = {
-              kind: 'whiteboard_text_exists_v2',
-              normalizationVersion: CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
-              whiteboardId: expectedWhiteboardId,
-              stableElementId,
-              elementType: 'text',
-              observedContentDigest: expectedContentDigest,
-              matchingElementCount: 1,
-            };
+              beforeElementCount,
+            );
+            const postcondition = revisionedDrawPostcondition(opts, drawPlan, expectedWhiteboardId);
             const committedReceipt = {
               protocolVersion: REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
               outcome: 'committed',
               executionId: identity.executionId,
               requestDigest: identity.requestDigest,
-              toolName: 'wb_draw_text',
+              toolName: opts.toolName,
               previousBinding: beforeBinding,
               currentBinding,
               changed: true,

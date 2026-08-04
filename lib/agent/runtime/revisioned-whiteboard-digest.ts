@@ -1,8 +1,14 @@
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
 import {
+  CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  normalizeWhiteboardLineV1,
+  normalizeWhiteboardShapeV1,
   normalizeVisibleTextV1,
+  type WhiteboardLineSpec,
+  type WhiteboardShapeSpec,
 } from './client-effect-contract';
 
 function canonicalize(value: unknown, ancestors: Set<object>): unknown {
@@ -67,6 +73,37 @@ export function digestVisibleTextV1Sync(value: string): string {
   const normalized = normalizeVisibleTextV1(value);
   return `sha256:${bytesToHex(
     sha256(utf8ToBytes(`${CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION}\n${normalized}`)),
+  )}`;
+}
+
+export function digestWhiteboardShapeV1Sync(value: WhiteboardShapeSpec): string {
+  const normalized = normalizeWhiteboardShapeV1({
+    shape: value.shape,
+    ...value.bounds,
+    fillColor: value.fillColor,
+  });
+  return `sha256:${bytesToHex(
+    sha256(
+      utf8ToBytes(`${CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION}\n${JSON.stringify(normalized)}`),
+    ),
+  )}`;
+}
+
+export function digestWhiteboardLineV1Sync(value: WhiteboardLineSpec): string {
+  const normalized = normalizeWhiteboardLineV1({
+    startX: value.start.x,
+    startY: value.start.y,
+    endX: value.end.x,
+    endY: value.end.y,
+    color: value.strokeColor,
+    width: value.strokeWidth,
+    style: value.strokeStyle,
+    points: value.markers,
+  });
+  return `sha256:${bytesToHex(
+    sha256(
+      utf8ToBytes(`${CLIENT_EFFECT_LINE_NORMALIZATION_VERSION}\n${JSON.stringify(normalized)}`),
+    ),
   )}`;
 }
 

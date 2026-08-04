@@ -131,7 +131,7 @@ export class BrowserRevisionedWhiteboardEffectRuntime {
 
     // There is intentionally no await between authenticated accepted and this
     // synchronous Authority CAS. The final receipt, not accepted, decides the outcome.
-    const result = authority.transactRevisionedDrawText({
+    const mutationInput = {
       executionId: delivery.executionId,
       requestDigest: delivery.requestDigest,
       expected: delivery.expectedBinding,
@@ -139,7 +139,26 @@ export class BrowserRevisionedWhiteboardEffectRuntime {
       deadlineAt: delivery.deadlineAt,
       intentDigest: digestRevisionedValue(delivery.intent),
       intent: delivery.intent,
-    });
+    };
+    const result = (() => {
+      switch (delivery.toolName) {
+        case 'wb_draw_text':
+          return authority.transactRevisionedDrawText({
+            ...mutationInput,
+            intent: delivery.intent,
+          });
+        case 'wb_draw_shape':
+          return authority.transactRevisionedDrawShape({
+            ...mutationInput,
+            intent: delivery.intent,
+          });
+        case 'wb_draw_line':
+          return authority.transactRevisionedDrawLine({
+            ...mutationInput,
+            intent: delivery.intent,
+          });
+      }
+    })();
     if (!result.ok) throw new Error(result.code);
     const terminalAck = createRevisionedWhiteboardTerminalAck(result.receipt);
     await this.postAck(delivery, terminalAck, undefined, true);

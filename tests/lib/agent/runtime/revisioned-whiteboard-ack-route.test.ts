@@ -10,6 +10,10 @@ import {
   type RevisionedWhiteboardAuthorityReceipt,
 } from '@/lib/agent/runtime/revisioned-whiteboard-contract';
 import { piRevisionedWhiteboardCoordinator } from '@/lib/agent/runtime/revisioned-whiteboard-coordinator';
+import {
+  deriveRevisionedElementId,
+  digestVisibleTextV1Sync,
+} from '@/lib/agent/runtime/revisioned-whiteboard-digest';
 
 const runtimeFlag = 'OPENMAIC_ENABLE_PI_NATIVE_CHILD_RUNTIME';
 const whiteboardFlag = 'OPENMAIC_ENABLE_PI_NATIVE_CHILD_WHITEBOARD';
@@ -40,6 +44,12 @@ function register(deadlineAt = Date.now() + 10_000) {
     deadlineAt,
     intentDigest: digests.intentDigest,
     observationAuthorizationDigest: `sha256:${'b'.repeat(64)}`,
+    expectedMutation: {
+      kind: 'wb_draw_text_v2',
+      intentDigest: digests.intentDigest,
+      stableElementId: deriveRevisionedElementId('execution-1'),
+      expectedContentDigest: digestVisibleTextV1Sync(digests.normalizedIntent.content),
+    },
   });
   if (registered.kind !== 'pending') throw new Error('Expected a pending registration.');
   return { registered, digests, expectedBinding };
