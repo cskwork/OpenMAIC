@@ -93,6 +93,8 @@ services:
       # API, not hardware rasterization — beginFrame falls back gracefully if the
       # host lacks a GPU.
       - PRODUCER_BROWSER_GPU_MODE=hardware
+      - PRODUCER_HEADLESS_SHELL_PATH=/usr/bin/chromium-headless-shell
+      - RENDER_REQUIRE_BEGINFRAME=true
       # The 4 GiB cgroup limit would otherwise trigger producer's <=8 GiB
       # low-memory profile, which silently forces screenshot capture + one worker
       # and nullifies the beginFrame setting above. This latency profile was

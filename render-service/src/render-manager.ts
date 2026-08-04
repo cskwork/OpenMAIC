@@ -45,12 +45,27 @@ export function buildProducerJobConfig(
   options: RenderOptions,
   workers = config.producerWorkers,
 ): RenderConfigInput {
-  return {
+  const producerOptions: RenderConfigInput = {
     fps: options.fps,
     quality: options.quality,
     format: options.format,
-    workers,
   };
+  if (workers !== undefined) producerOptions.workers = workers;
+  return producerOptions;
+}
+
+/** Assert the worker-reported capture mode when the deployment requires beginFrame. */
+export function assertRequiredCaptureMode(
+  captureMode: string | undefined,
+  requireBeginFrame: boolean,
+): void {
+  if (!requireBeginFrame) return;
+  if (captureMode !== 'beginframe') {
+    throw new Error(
+      `Producer did not resolve beginFrame capture (actual=${captureMode ?? 'unknown'}). ` +
+        'Check PRODUCER_HEADLESS_SHELL_PATH and Chromium compatibility.',
+    );
+  }
 }
 
 export class RenderManager {
@@ -220,6 +235,8 @@ export class RenderManager {
         },
         abort.signal,
       );
+
+      assertRequiredCaptureMode(job.perfSummary?.drawElement?.mode, config.requireBeginFrame);
 
       if (abort.signal.aborted) {
         // Deadline overrun is a failure, not a user cancellation.

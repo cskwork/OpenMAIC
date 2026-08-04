@@ -47,14 +47,16 @@ poll, then download. Job ids are opaque.
 | `RENDER_MAX_COMPRESSION_RATIO`           | `200`                       | Max expanded:compressed ratio per entry (ZIP-bomb guard).                                                                                                                                                                                                                                                                                                           |
 | `RENDER_EGRESS_LOCKDOWN`                 | `true`                      | Install the iptables egress lockdown at startup (needs root + `CAP_NET_ADMIN`); **fails closed** — the container exits if the rules can't be applied. Set `false` to run unisolated.                                                                                                                                                                                |
 | `PRODUCER_TMP_PROJECT_DIR`               | `/tmp/openmaic-renders`     | Scratch dir for unzipped projects + outputs.                                                                                                                                                                                                                                                                                                                        |
-| `PRODUCER_BROWSER_GPU_MODE`              | `hardware` (set in Compose) | Capture path selector. Producer's own default is `software`, which force-enables the CPU-bound `Page.captureScreenshot` fallback (~10 fps, all cores pinned). `hardware` keeps Chromium's `HeadlessExperimental.beginFrame` capture active — ~2x throughput at ~half the CPU, pixel-identical static frames. No real GPU required; falls back gracefully if absent. |
+| `PRODUCER_BROWSER_GPU_MODE`              | `hardware` (container)      | Capture path selector. Producer's own default is `software`, which force-enables the CPU-bound `Page.captureScreenshot` fallback (~10 fps, all cores pinned). `hardware` keeps Chromium's `HeadlessExperimental.beginFrame` capture active — ~2x throughput at ~half the CPU, pixel-identical static frames. No real GPU required; falls back gracefully if absent. |
 | `PRODUCER_LOW_MEMORY_MODE`               | `false` (set in Compose)    | Prevents the 4 GiB cgroup limit from silently replacing beginFrame with screenshot capture and pinning the job to one worker. Keep render/extraction concurrency at 1 with this override.                                                                                                                                                                           |
-| `PRODUCER_MAX_WORKERS`                   | `4`                         | Explicit per-job capture workers. The service passes this as `job.config.workers`, so `1` remains one instead of being raised by producer's automatic minimum-parallel threshold.                                                                                                                                                                                   |
+| `PRODUCER_MAX_WORKERS`                   | unset (producer auto-sizing) | Optional explicit per-job capture worker count. When unset, producer 0.7.60 keeps its CPU, memory, low-memory, small-job, and capture-cost guards. The Compose latency profile sets this to `4`; remove the override to restore adaptive sizing.                                                                                                                                 |
 | `PRODUCER_ENABLE_BROWSER_POOL`           | `false` (set in Compose)    | Gives parallel frame workers independent Chromium instances instead of sharing a compositor-bound browser pool. Raises memory use; the 720p reference peaked around 1.6 GiB with four workers.                                                                                                                                                                      |
+| `PRODUCER_HEADLESS_SHELL_PATH`           | `/usr/bin/chromium-headless-shell` (container) | Chromium **headless shell** executable used by producer's beginFrame resolver. Regular Chromium is not equivalent: it may resolve as beginFrame-capable and then reject `HeadlessExperimental.beginFrame`, causing a screenshot fallback.                                                                                                                                |
+| `RENDER_REQUIRE_BEGINFRAME`              | `true` (container)          | Fail startup/jobs unless producer's worker performance data reports exactly `beginframe`. The Compose latency profile enables this to prevent silently falling back to the CPU-bound screenshot path.                                                                                                                                                                 |
 | `PRODUCER_PUPPETEER_PROTOCOL_TIMEOUT_MS` | `900000` (set in Compose)   | CDP timeout headroom for long frame ranges. The producer default of 300 seconds caused long jobs to fall back from four workers to two.                                                                                                                                                                                                                             |
 | `HF_STATIC_DEDUP`                        | `false` (set in Compose)    | Temporary OpenMAIC-export workaround: these long slide compositions currently exhaust producer's 15-second verification budget and disable dedup anyway. Skipping the doomed verification removes the fixed startup cost without changing frames.                                                                                                                   |
 | `RENDER_HOME`                            | `/app`                      | Writable home used after the entrypoint drops privileges. Producer font caches live under `$RENDER_HOME/.cache`, never `/root/.cache`.                                                                                                                                                                                                                              |
-| `PUPPETEER_EXECUTABLE_PATH`              | `/usr/bin/chromium`         | System Chromium (set in the image).                                                                                                                                                                                                                                                                                                                                 |
+| `PUPPETEER_EXECUTABLE_PATH`              | `/usr/bin/chromium-headless-shell` | System Chromium headless shell (set in the image).                                                                                                                                                                                                                                                                                                                   |
 
 Client identity for the per-user guard is taken from the `x-openmaic-client`
 header, which the app's proxy sets. A client-supplied `userId` form field is
@@ -115,15 +117,17 @@ docker compose --profile video-export up --build
 
 ### Standalone (development)
 
-Requires Node ≥ 22, plus Chromium and FFmpeg on `PATH`:
+Requires Node ≥ 22, Chromium's old headless shell, and FFmpeg on `PATH`:
 
 ```bash
 cd render-service
 npm install
-PUPPETEER_EXECUTABLE_PATH=$(which chromium) \
+PUPPETEER_EXECUTABLE_PATH=$(which chromium-headless-shell) \
 PRODUCER_BROWSER_GPU_MODE=hardware \
 PRODUCER_LOW_MEMORY_MODE=false \
 PRODUCER_ENABLE_BROWSER_POOL=false \
+PRODUCER_HEADLESS_SHELL_PATH=$(which chromium-headless-shell) \
+RENDER_REQUIRE_BEGINFRAME=true \
 PRODUCER_MAX_WORKERS=4 \
 PRODUCER_PUPPETEER_PROTOCOL_TIMEOUT_MS=900000 \
 HF_STATIC_DEDUP=false \
@@ -134,6 +138,8 @@ npm start
 
 The default Compose service is a **single-job latency profile**: one admitted
 render, four capture workers, and one independent Chromium instance per worker.
+Compose explicitly sets `PRODUCER_MAX_WORKERS=4`; deployments that omit that
+variable retain producer's resource-aware auto-sizing.
 The 4 GiB memory limit is paired with one extraction at a time and a 2 GiB
 `/dev/shm` ceiling. On the 1280×720 reference export this stayed below 2 GiB
 resident memory while making four-worker capture materially faster than either
@@ -146,6 +152,8 @@ raise service concurrency instead of nesting both forms of parallelism:
 environment:
   - PRODUCER_MAX_WORKERS=1
   - PRODUCER_ENABLE_BROWSER_POOL=false
+  - PRODUCER_HEADLESS_SHELL_PATH=/usr/bin/chromium-headless-shell
+  - RENDER_REQUIRE_BEGINFRAME=true
   - RENDER_MAX_CONCURRENCY=2
   - RENDER_MAX_CONCURRENT_EXTRACTIONS=2
 ```

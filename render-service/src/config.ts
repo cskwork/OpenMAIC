@@ -23,6 +23,13 @@ function intEnvAllowZero(name: string, fallback: number): number {
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
+function optionalPositiveIntEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (!raw) return undefined;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
 const MB = 1024 * 1024;
 
 export const config = {
@@ -35,8 +42,10 @@ export const config = {
    * when many jobs are admitted at once. Defaults to the render concurrency.
    */
   maxConcurrentExtractions: intEnv('RENDER_MAX_CONCURRENT_EXTRACTIONS', 1),
-  /** Explicit per-job producer workers; passing this avoids producer auto-minimum surprises. */
-  producerWorkers: intEnv('PRODUCER_MAX_WORKERS', 4),
+  /** Optional explicit per-job producer workers; unset preserves producer auto-sizing. */
+  producerWorkers: optionalPositiveIntEnv('PRODUCER_MAX_WORKERS'),
+  /** Fail a job if the producer reports that beginFrame was not actually selected. */
+  requireBeginFrame: process.env.RENDER_REQUIRE_BEGINFRAME === 'true',
   /** Active (queued+running) jobs allowed per client identity. 0 disables the guard. */
   maxJobsPerUser: intEnvAllowZero('RENDER_MAX_JOBS_PER_USER', 1),
   /** Max jobs allowed in the system (queued+running) before new submits are rejected. */

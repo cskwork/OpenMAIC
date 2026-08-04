@@ -55,9 +55,9 @@ describe('config maxJobsPerUser', () => {
 });
 
 describe('config producerWorkers', () => {
-  it('defaults to four capture workers for the latency profile', async () => {
+  it('defaults to producer auto-sizing when no explicit override is supplied', async () => {
     delete process.env.PRODUCER_MAX_WORKERS;
-    expect((await loadConfig()).producerWorkers).toBe(4);
+    expect((await loadConfig()).producerWorkers).toBeUndefined();
   });
 
   it('accepts an explicit single-worker profile without silently raising it', async () => {
@@ -65,13 +65,13 @@ describe('config producerWorkers', () => {
     expect((await loadConfig()).producerWorkers).toBe(1);
   });
 
-  it('falls back to four for zero, negative, or non-numeric values', async () => {
+  it('ignores zero, negative, or non-numeric values', async () => {
     process.env.PRODUCER_MAX_WORKERS = '0';
-    expect((await loadConfig()).producerWorkers).toBe(4);
+    expect((await loadConfig()).producerWorkers).toBeUndefined();
     process.env.PRODUCER_MAX_WORKERS = '-2';
-    expect((await loadConfig()).producerWorkers).toBe(4);
+    expect((await loadConfig()).producerWorkers).toBeUndefined();
     process.env.PRODUCER_MAX_WORKERS = 'many';
-    expect((await loadConfig()).producerWorkers).toBe(4);
+    expect((await loadConfig()).producerWorkers).toBeUndefined();
   });
 });
 
