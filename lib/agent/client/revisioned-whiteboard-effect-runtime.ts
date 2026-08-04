@@ -142,6 +142,16 @@ export class BrowserRevisionedWhiteboardEffectRuntime {
     };
     const result = (() => {
       switch (delivery.toolName) {
+        case 'wb_open':
+          return authority.transactRevisionedOpen({
+            ...mutationInput,
+            intent: delivery.intent,
+          });
+        case 'wb_close':
+          return authority.transactRevisionedClose({
+            ...mutationInput,
+            intent: delivery.intent,
+          });
         case 'wb_draw_text':
           return authority.transactRevisionedDrawText({
             ...mutationInput,

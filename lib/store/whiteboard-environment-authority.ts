@@ -14,6 +14,8 @@ import {
   createRevisionedDrawTableDigests,
   createRevisionedDrawTextDigests,
   createRevisionedEditCodeDigests,
+  createRevisionedOpenDigests,
+  createRevisionedCloseDigests,
   revisionedWhiteboardWireBytes,
   verifyRevisionedWhiteboardAuthorityReceipt,
   type JsonValue,
@@ -49,6 +51,10 @@ import {
   type RevisionedEditCodeIntent,
   type RevisionedEditCodeDelta,
   type RevisionedEditCodePostcondition,
+  type RevisionedWhiteboardLifecycleIntent,
+  type RevisionedOpenDelta,
+  type RevisionedCloseDelta,
+  type RevisionedVisibilityPostcondition,
 } from '@/lib/agent/runtime/revisioned-whiteboard-contract';
 import {
   deriveRevisionedCodeEditLineId,
@@ -64,6 +70,7 @@ import {
   digestWhiteboardLatexV1Sync,
   digestWhiteboardLineV1Sync,
   digestWhiteboardShapeV1Sync,
+  digestWhiteboardContentV1Sync,
   editableCodeStateFromElementV1,
   revisionedCodeEditLineIdPrefix,
 } from '@/lib/agent/runtime/revisioned-whiteboard-digest';
@@ -77,6 +84,8 @@ import {
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_EMPTY_WHITEBOARD_CONTENT_DIGEST_V1,
+  CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION,
   normalizeWhiteboardChartV1,
   normalizeWhiteboardCodeV1,
   normalizeWhiteboardLatexV1,
@@ -298,6 +307,16 @@ export interface WhiteboardAuthorityRevisionedEditCodeOptions {
   intent: RevisionedEditCodeIntent;
 }
 
+export interface WhiteboardAuthorityRevisionedLifecycleOptions {
+  executionId: string;
+  requestDigest: string;
+  expected: RevisionedWhiteboardBinding;
+  authenticatedTarget: RevisionedWhiteboardAuthenticatedTarget;
+  deadlineAt: number;
+  intentDigest: string;
+  intent: RevisionedWhiteboardLifecycleIntent;
+}
+
 type WhiteboardAuthorityRevisionedDrawElementOptions =
   | (WhiteboardAuthorityRevisionedDrawTextOptions & { toolName: 'wb_draw_text' })
   | (WhiteboardAuthorityRevisionedDrawShapeOptions & { toolName: 'wb_draw_shape' })
@@ -306,6 +325,11 @@ type WhiteboardAuthorityRevisionedDrawElementOptions =
   | (WhiteboardAuthorityRevisionedDrawTableOptions & { toolName: 'wb_draw_table' })
   | (WhiteboardAuthorityRevisionedDrawChartOptions & { toolName: 'wb_draw_chart' })
   | (WhiteboardAuthorityRevisionedDrawCodeOptions & { toolName: 'wb_draw_code' });
+
+type WhiteboardAuthorityRevisionedLifecycleMutationOptions =
+  WhiteboardAuthorityRevisionedLifecycleOptions & {
+    toolName: 'wb_open' | 'wb_close';
+  };
 
 export type WhiteboardAuthorityRevisionedMutationResult =
   | {
@@ -1087,6 +1111,17 @@ function createRevisionedWhiteboard(executionId: string, element: PPTElement): W
   };
 }
 
+function createEmptyRevisionedWhiteboard(executionId: string): Whiteboard {
+  return {
+    id: deriveRevisionedWhiteboardId(executionId),
+    viewportSize: 1000,
+    viewportRatio: 16 / 9,
+    elements: [],
+    background: { type: 'solid', color: '#ffffff' },
+    animations: [],
+  };
+}
+
 /**
  * Browser-owned whiteboard transaction boundary.
  *
@@ -1610,6 +1645,357 @@ export class WhiteboardEnvironmentAuthority {
       this.transactionActive = false;
     }
 
+    return { ok: true, replayed: false, receipt };
+  }
+
+  transactRevisionedOpen(
+    opts: WhiteboardAuthorityRevisionedLifecycleOptions,
+  ): WhiteboardAuthorityRevisionedMutationResult {
+    return this.transactRevisionedLifecycle({ ...opts, toolName: 'wb_open' });
+  }
+
+  transactRevisionedClose(
+    opts: WhiteboardAuthorityRevisionedLifecycleOptions,
+  ): WhiteboardAuthorityRevisionedMutationResult {
+    return this.transactRevisionedLifecycle({ ...opts, toolName: 'wb_close' });
+  }
+
+  private transactRevisionedLifecycle(
+    opts: WhiteboardAuthorityRevisionedLifecycleMutationOptions,
+  ): WhiteboardAuthorityRevisionedMutationResult {
+    const digestInput = {
+      executionId: opts.executionId,
+      expectedBinding: opts.expected,
+      authenticatedTarget: opts.authenticatedTarget,
+      deadlineAt: opts.deadlineAt,
+      intent: opts.intent,
+    };
+    const digests =
+      opts.toolName === 'wb_open'
+        ? createRevisionedOpenDigests(digestInput)
+        : createRevisionedCloseDigests(digestInput);
+    if (
+      !digests ||
+      digests.requestDigest !== opts.requestDigest ||
+      digests.intentDigest !== opts.intentDigest ||
+      !isRevisionedWhiteboardMutationIdentity({
+        executionId: opts.executionId,
+        requestDigest: opts.requestDigest,
+        toolName: opts.toolName,
+        expectedBinding: opts.expected,
+      }) ||
+      !isRevisionedWhiteboardAuthenticatedTarget(opts.authenticatedTarget) ||
+      !Number.isFinite(opts.deadlineAt)
+    ) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_MUTATION_REQUEST_INVALID,
+        errors: [`${opts.toolName}.v2: revisioned lifecycle request is invalid`],
+      };
+    }
+    const identity = immutableCanonicalSnapshot<RevisionedJournalIdentity>({
+      executionId: opts.executionId,
+      requestDigest: opts.requestDigest,
+      toolName: opts.toolName,
+      expected: opts.expected,
+      authenticatedTarget: opts.authenticatedTarget,
+      deadlineAt: opts.deadlineAt,
+    });
+
+    this.cleanupRevisionedJournal();
+    const replay = this.revisionedJournal.get(identity.executionId);
+    if (replay) {
+      if (journalIdentitiesEqual(replay.identity, identity)) {
+        return { ok: true, replayed: true, receipt: replay.receipt };
+      }
+      const current = this.binding(this.domain);
+      return {
+        ok: true,
+        replayed: false,
+        receipt: this.rejectedReceipt(identity, current, current, 'EXECUTION_ID_CONFLICT'),
+      };
+    }
+    if (this.now() >= identity.deadlineAt) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_DEADLINE_EXCEEDED,
+        errors: [`${opts.toolName}.v2: revisioned mutation deadline has expired`],
+      };
+    }
+    if (this.revisionedJournal.size >= this.maxRevisionedJournalEntries) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_JOURNAL_CAPACITY_EXCEEDED,
+        errors: [`${opts.toolName}.v2: revisioned mutation journal is at capacity`],
+      };
+    }
+    if (this.transactionActive) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_RESOURCE_BUSY,
+        errors: [`${opts.toolName}.v2: whiteboard transaction already active`],
+      };
+    }
+
+    const beforeDomain = this.domain;
+    const beforeBinding = this.binding(beforeDomain);
+    const actualBefore = this.captureActualDomain(beforeDomain.revision, beforeDomain);
+    const authorityStateIsCurrent = this.domainMatchesCommitted(actualBefore);
+
+    this.transactionActive = true;
+    let receipt: RevisionedWhiteboardAuthorityReceipt;
+    try {
+      let targetIsCurrent = false;
+      try {
+        targetIsCurrent =
+          this.authenticatedTargetRegistry?.validateAndConsume({
+            executionId: identity.executionId,
+            requestDigest: identity.requestDigest,
+            intentDigest: opts.intentDigest,
+            authenticatedTarget: identity.authenticatedTarget,
+            expectedStageId: identity.expected.stageId,
+            deadlineAt: identity.deadlineAt,
+          }) === true;
+      } catch {
+        targetIsCurrent = false;
+      }
+
+      if (!authorityStateIsCurrent) {
+        receipt = this.rejectedReceipt(
+          identity,
+          beforeBinding,
+          beforeBinding,
+          'WHITEBOARD_AUTHORITY_BYPASS_DETECTED',
+        );
+      } else if (identity.expected.stageId !== this.domain.stageId) {
+        receipt = this.rejectedReceipt(identity, beforeBinding, beforeBinding, 'TARGET_CHANGED');
+      } else if (!targetIsCurrent) {
+        receipt = this.rejectedReceipt(
+          identity,
+          beforeBinding,
+          beforeBinding,
+          'AUTHENTICATED_TARGET_CHANGED',
+        );
+      } else if (
+        identity.expected.whiteboardId !== this.domain.activeWhiteboardId ||
+        identity.expected.revision !== this.domain.revision
+      ) {
+        receipt = this.rejectedReceipt(identity, beforeBinding, beforeBinding, 'STALE_STATE');
+      } else {
+        const currentStage = this.store.getState().stage;
+        const currentWhiteboards = currentStage?.whiteboard ?? [];
+        const boardMatches = identity.expected.whiteboardId
+          ? currentWhiteboards.filter(({ id }) => id === identity.expected.whiteboardId)
+          : [];
+        const activeWhiteboard = boardMatches[0];
+        let beforeBoardContentDigest: string | null = null;
+        let beforeBoardFingerprint: string | null = null;
+        try {
+          if (activeWhiteboard) {
+            beforeBoardContentDigest = digestWhiteboardContentV1Sync(activeWhiteboard.elements);
+            beforeBoardFingerprint = fingerprintWhiteboards([activeWhiteboard]);
+          }
+        } catch {
+          beforeBoardContentDigest = null;
+          beforeBoardFingerprint = null;
+        }
+        const invalidTarget =
+          !currentStage ||
+          currentStage.id !== beforeDomain.stageId ||
+          (identity.expected.whiteboardId === null
+            ? currentWhiteboards.length !== 0
+            : boardMatches.length !== 1 ||
+              beforeBoardContentDigest === null ||
+              beforeBoardFingerprint === null);
+        if (invalidTarget) {
+          receipt = this.rejectedReceipt(
+            identity,
+            beforeBinding,
+            beforeBinding,
+            'TARGET_PRECONDITION_FAILED',
+          );
+        } else {
+          const errors: string[] = [];
+          const isOpen = opts.toolName === 'wb_open';
+          const created = isOpen && activeWhiteboard === undefined;
+          const createdWhiteboard = created
+            ? createEmptyRevisionedWhiteboard(identity.executionId)
+            : null;
+          const expectedWhiteboards = created ? [createdWhiteboard!] : currentWhiteboards;
+          const expectedWhiteboardId = created
+            ? createdWhiteboard!.id
+            : identity.expected.whiteboardId;
+          const expectedOpen = isOpen;
+          const visibilityChanged = beforeDomain.open !== expectedOpen;
+          const intendedChanged = isOpen ? created || visibilityChanged : visibilityChanged;
+          const nonWhiteboardFingerprint = fingerprintNonWhiteboardStage(currentStage);
+          const expectedWhiteboardFingerprint = fingerprintWhiteboards(expectedWhiteboards);
+
+          if (created) {
+            try {
+              this.store.setState({
+                stage: {
+                  ...currentStage,
+                  whiteboard: mutableCanonicalSnapshot<Whiteboard[]>(expectedWhiteboards),
+                },
+              });
+            } catch (error) {
+              errors.push(`stage-write: ${stringifyError(error)}`);
+            }
+          }
+          if (visibilityChanged) {
+            try {
+              this.writeOpen(expectedOpen);
+            } catch (error) {
+              errors.push(`open-write: ${stringifyError(error)}`);
+            }
+          }
+
+          const stageAfter = this.store.getState().stage;
+          const activeWhiteboardId = selectActiveId(stageAfter, beforeDomain, expectedWhiteboardId);
+          const whiteboardFingerprint = fingerprintWhiteboards(stageAfter?.whiteboard);
+          const openAfter = this.readOpen();
+          const changed =
+            stageAfter?.id !== beforeDomain.stageId ||
+            activeWhiteboardId !== beforeDomain.activeWhiteboardId ||
+            openAfter !== beforeDomain.open ||
+            whiteboardFingerprint !== beforeDomain.whiteboardFingerprint;
+          const nextDomain: WhiteboardDomainSnapshot = {
+            stageId: stageAfter?.id ?? null,
+            activeWhiteboardId,
+            revision: changed ? beforeDomain.revision + 1 : beforeDomain.revision,
+            open: openAfter,
+            whiteboardFingerprint,
+          };
+          this.domain = nextDomain;
+          const currentBinding = this.binding(nextDomain);
+          const boardAfterMatches = expectedWhiteboardId
+            ? (stageAfter?.whiteboard?.filter(({ id }) => id === expectedWhiteboardId) ?? [])
+            : [];
+          const boardAfter = boardAfterMatches[0];
+          let afterBoardContentDigest: string | null = null;
+          let afterBoardFingerprint: string | null = null;
+          try {
+            if (boardAfter) {
+              afterBoardContentDigest = digestWhiteboardContentV1Sync(boardAfter.elements);
+              afterBoardFingerprint = fingerprintWhiteboards([boardAfter]);
+            }
+          } catch {
+            afterBoardContentDigest = null;
+            afterBoardFingerprint = null;
+          }
+
+          const boardPostconditionMatches = created
+            ? boardAfterMatches.length === 1 &&
+              boardAfter?.elements.length === 0 &&
+              afterBoardContentDigest === CLIENT_EFFECT_EMPTY_WHITEBOARD_CONTENT_DIGEST_V1 &&
+              afterBoardFingerprint === fingerprintWhiteboards([createdWhiteboard!])
+            : activeWhiteboard
+              ? boardAfterMatches.length === 1 &&
+                boardAfter?.elements.length === activeWhiteboard.elements.length &&
+                afterBoardContentDigest === beforeBoardContentDigest &&
+                afterBoardFingerprint === beforeBoardFingerprint
+              : boardAfterMatches.length === 0 &&
+                (stageAfter?.whiteboard ?? []).length === 0 &&
+                activeWhiteboardId === null;
+
+          if (
+            !stageAfter ||
+            stageAfter.id !== currentStage.id ||
+            fingerprintNonWhiteboardStage(stageAfter) !== nonWhiteboardFingerprint ||
+            whiteboardFingerprint !== expectedWhiteboardFingerprint ||
+            activeWhiteboardId !== expectedWhiteboardId ||
+            openAfter !== expectedOpen ||
+            changed !== intendedChanged ||
+            !boardPostconditionMatches
+          ) {
+            errors.push(
+              `postcondition: ${opts.toolName} state does not match the Authority intent`,
+            );
+          }
+
+          if (changed) {
+            for (const listener of this.listeners) {
+              try {
+                listener();
+              } catch (error) {
+                errors.push(`authority-listener: ${stringifyError(error)}`);
+              }
+            }
+          }
+
+          if (errors.length > 0) {
+            receipt = this.uncertainReceipt(identity, beforeBinding, currentBinding, changed);
+          } else {
+            const delta: RevisionedOpenDelta | RevisionedCloseDelta = isOpen
+              ? {
+                  kind: 'whiteboard_opened_v2',
+                  previousOpen: beforeDomain.open,
+                  currentOpen: true,
+                  created,
+                  visibilityChanged,
+                }
+              : {
+                  kind: 'whiteboard_closed_v2',
+                  previousOpen: beforeDomain.open,
+                  currentOpen: false,
+                  visibilityChanged,
+                };
+            const postcondition: RevisionedVisibilityPostcondition = created
+              ? {
+                  kind: 'whiteboard_visibility_observed_v2',
+                  boardState: 'created_empty',
+                  normalizationVersion: CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION,
+                  whiteboardId: expectedWhiteboardId!,
+                  observedOpen: true,
+                  elementCountAfter: 0,
+                  boardContentDigestAfter: CLIENT_EFFECT_EMPTY_WHITEBOARD_CONTENT_DIGEST_V1,
+                }
+              : activeWhiteboard
+                ? {
+                    kind: 'whiteboard_visibility_observed_v2',
+                    boardState: 'preserved_existing',
+                    normalizationVersion: CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION,
+                    whiteboardId: activeWhiteboard.id,
+                    observedOpen: expectedOpen,
+                    elementCountBefore: activeWhiteboard.elements.length,
+                    elementCountAfter: boardAfter!.elements.length,
+                    boardContentDigestBefore: beforeBoardContentDigest!,
+                    boardContentDigestAfter: afterBoardContentDigest!,
+                  }
+                : {
+                    kind: 'whiteboard_visibility_observed_v2',
+                    boardState: 'no_board',
+                    whiteboardId: null,
+                    observedOpen: false,
+                  };
+            const committedReceipt = {
+              protocolVersion: REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
+              outcome: 'committed',
+              executionId: identity.executionId,
+              requestDigest: identity.requestDigest,
+              toolName: opts.toolName,
+              previousBinding: beforeBinding,
+              currentBinding,
+              changed,
+              mutationMayHaveCommitted: false,
+              delta,
+              postcondition,
+            } satisfies RevisionedWhiteboardCommittedReceipt;
+            const committedReceiptBytes = revisionedWhiteboardWireBytes(committedReceipt);
+            receipt =
+              committedReceiptBytes !== null &&
+              committedReceiptBytes <= MAX_REVISIONED_WHITEBOARD_RECEIPT_BYTES &&
+              isRevisionedWhiteboardAuthorityReceipt(committedReceipt)
+                ? committedReceipt
+                : this.uncertainReceipt(identity, beforeBinding, currentBinding, changed);
+          }
+        }
+      }
+      receipt = this.rememberRevisioned(identity, receipt);
+    } finally {
+      this.transactionActive = false;
+    }
     return { ok: true, replayed: false, receipt };
   }
 

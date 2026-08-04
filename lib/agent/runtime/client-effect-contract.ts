@@ -89,6 +89,8 @@ export type WhiteboardElementType =
 export const CLIENT_EFFECT_CLEAR_NORMALIZATION_VERSION = 'maic.whiteboard-clear.v1' as const;
 export const CLIENT_EFFECT_WHITEBOARD_MEMBERSHIP_VERSION = 'maic.whiteboard-membership.v1' as const;
 export const CLIENT_EFFECT_WHITEBOARD_CONTENT_VERSION = 'maic.whiteboard-content.v1' as const;
+export const CLIENT_EFFECT_EMPTY_WHITEBOARD_CONTENT_DIGEST_V1 =
+  'sha256:2c71ae6c2e19e4eb3796a6af2d744046bff4087c7b43500226c10d4528e69287' as const;
 
 export const CANONICAL_EMPTY_WHITEBOARD_MEMBERSHIP_DIGEST =
   'sha256:e30d867b451745648162038b847a467dfc7d36998a544fccfb3d6f384af73f01' as const;

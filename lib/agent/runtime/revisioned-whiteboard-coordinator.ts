@@ -146,6 +146,8 @@ function registrationDigest(input: RevisionedWhiteboardCoordinatorRegistration):
  * silently leave committed receipt validation optional.
  */
 const exactToolByDescriptorKind = {
+  wb_open_v2: 'wb_open',
+  wb_close_v2: 'wb_close',
   wb_draw_text_v2: 'wb_draw_text',
   wb_draw_shape_v2: 'wb_draw_shape',
   wb_draw_line_v2: 'wb_draw_line',

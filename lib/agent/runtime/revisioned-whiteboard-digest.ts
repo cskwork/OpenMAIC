@@ -10,6 +10,7 @@ import {
   CLIENT_EFFECT_SHAPE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  canonicalizeWhiteboardContentV1,
   assertWhiteboardChartSpecV1,
   assertWhiteboardCodeSpecV1,
   assertWhiteboardEditableCodeStateV1,
@@ -26,6 +27,7 @@ import {
   type WhiteboardShapeSpec,
 } from './client-effect-contract';
 import type { PPTCodeElement, PPTTableElement } from '@openmaic/dsl';
+import type { PPTElement } from '@openmaic/dsl';
 
 export const REVISIONED_WHITEBOARD_TABLE_STATE_VERSION = 'maic.whiteboard-table-state.v2' as const;
 
@@ -85,6 +87,10 @@ export function immutableRevisionedSnapshot<T>(value: T): Readonly<T> {
 
 export function digestOpaqueRevisionedToken(token: string): string {
   return `sha256:${bytesToHex(sha256(utf8ToBytes(token)))}`;
+}
+
+export function digestWhiteboardContentV1Sync(elements: PPTElement[]): string {
+  return `sha256:${bytesToHex(sha256(utf8ToBytes(canonicalizeWhiteboardContentV1(elements))))}`;
 }
 
 export function digestVisibleTextV1Sync(value: string): string {

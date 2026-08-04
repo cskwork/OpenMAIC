@@ -140,6 +140,18 @@ export class RevisionedWhiteboardMutationRuntime {
     });
   }
 
+  mintBindingOnlyBundle(input: {
+    executionId: string;
+    expected: RevisionedWhiteboardExpectedDescriptor;
+  }) {
+    const terminal = this.coordinator.getTerminal(input.executionId);
+    if (!terminal?.authenticatedReceipt) return null;
+    return this.observationLedger.mintBindingOnlyCapabilityBundle({
+      authenticatedReceipt: terminal.authenticatedReceipt,
+      expected: input.expected,
+    });
+  }
+
   mintCodeDrawBundle(input: {
     executionId: string;
     expected: RevisionedWhiteboardExpectedDescriptor;

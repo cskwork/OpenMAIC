@@ -113,7 +113,15 @@ export type CodeEditCapabilityMintResult =
   | { ok: true; bundle: CodeEditCapabilityBundle; replayed: boolean }
   | { ok: false; code: 'OBSERVATION_CAPABILITY_LIMIT'; replayed: boolean };
 
-type CapabilityBundleKind = 'draw_element' | 'draw_code' | 'edit_code';
+export type BindingOnlyCapabilityBundle = Readonly<{
+  bindingObservationToken: string;
+}>;
+
+export type BindingOnlyCapabilityMintResult =
+  | { ok: true; bundle: BindingOnlyCapabilityBundle; replayed: boolean }
+  | { ok: false; code: 'OBSERVATION_CAPABILITY_LIMIT'; replayed: boolean };
+
+type CapabilityBundleKind = 'binding_only' | 'draw_element' | 'draw_code' | 'edit_code';
 type FixedCapabilityBundle = Readonly<{
   bindingObservationToken: string;
   targetObservationToken?: string;
@@ -229,7 +237,12 @@ export class NativeWhiteboardObservationLedger {
     authenticatedReceipt: CoordinatorAuthenticatedRevisionedWhiteboardReceipt;
     expected: RevisionedWhiteboardExpectedDescriptor;
   }): DrawElementCapabilityMintResult | null {
-    if (input.expected.kind === 'wb_draw_code_v2' || input.expected.kind === 'wb_edit_code_v2') {
+    if (
+      input.expected.kind === 'wb_open_v2' ||
+      input.expected.kind === 'wb_close_v2' ||
+      input.expected.kind === 'wb_draw_code_v2' ||
+      input.expected.kind === 'wb_edit_code_v2'
+    ) {
       return null;
     }
     return this.mintCapabilityBundle({
@@ -240,6 +253,18 @@ export class NativeWhiteboardObservationLedger {
         ['targetObservationToken', { kind: 'element', elementId: input.expected.stableElementId }],
       ],
     }) as DrawElementCapabilityMintResult | null;
+  }
+
+  mintBindingOnlyCapabilityBundle(input: {
+    authenticatedReceipt: CoordinatorAuthenticatedRevisionedWhiteboardReceipt;
+    expected: RevisionedWhiteboardExpectedDescriptor;
+  }): BindingOnlyCapabilityMintResult | null {
+    if (input.expected.kind !== 'wb_open_v2' && input.expected.kind !== 'wb_close_v2') return null;
+    return this.mintCapabilityBundle({
+      ...input,
+      bundleKind: 'binding_only',
+      coverages: [['bindingObservationToken', { kind: 'binding' }]],
+    }) as BindingOnlyCapabilityMintResult | null;
   }
 
   mintCodeDrawCapabilityBundle(input: {
@@ -293,7 +318,7 @@ export class NativeWhiteboardObservationLedger {
     if (
       deadlineAt <= this.now() ||
       receipt.currentBinding.stageId === null ||
-      receipt.currentBinding.whiteboardId === null ||
+      (receipt.currentBinding.whiteboardId === null && input.bundleKind !== 'binding_only') ||
       !isRevisionedWhiteboardCommittedReceiptForExpected(receipt, input.expected)
     ) {
       return null;
