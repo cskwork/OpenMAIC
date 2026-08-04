@@ -172,6 +172,16 @@ export class BrowserRevisionedWhiteboardEffectRuntime {
             ...mutationInput,
             intent: delivery.intent,
           });
+        case 'wb_draw_code':
+          return authority.transactRevisionedDrawCode({
+            ...mutationInput,
+            intent: delivery.intent,
+          });
+        case 'wb_edit_code':
+          return authority.transactRevisionedEditCode({
+            ...mutationInput,
+            intent: delivery.intent,
+          });
       }
     })();
     if (!result.ok) throw new Error(result.code);

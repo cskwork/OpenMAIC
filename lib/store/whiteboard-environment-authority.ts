@@ -7,11 +7,13 @@ import {
   isRevisionedWhiteboardAuthenticatedTarget,
   isRevisionedWhiteboardMutationIdentity,
   createRevisionedDrawChartDigests,
+  createRevisionedDrawCodeDigests,
   createRevisionedDrawLatexDigests,
   createRevisionedDrawLineDigests,
   createRevisionedDrawShapeDigests,
   createRevisionedDrawTableDigests,
   createRevisionedDrawTextDigests,
+  createRevisionedEditCodeDigests,
   revisionedWhiteboardWireBytes,
   verifyRevisionedWhiteboardAuthorityReceipt,
   type JsonValue,
@@ -41,21 +43,34 @@ import {
   type RevisionedDrawChartIntent,
   type RevisionedDrawChartDelta,
   type RevisionedDrawChartPostcondition,
+  type RevisionedDrawCodeIntent,
+  type RevisionedDrawCodeDelta,
+  type RevisionedDrawCodePostcondition,
+  type RevisionedEditCodeIntent,
+  type RevisionedEditCodeDelta,
+  type RevisionedEditCodePostcondition,
 } from '@/lib/agent/runtime/revisioned-whiteboard-contract';
 import {
+  deriveRevisionedCodeEditLineId,
   deriveRevisionedElementId,
   deriveRevisionedWhiteboardId,
   digestRevisionedValue,
   digestRevisionedWhiteboardTableStateV2Sync,
   digestVisibleTextV1Sync,
   digestWhiteboardChartV1Sync,
+  digestWhiteboardCodeV1Sync,
+  digestWhiteboardEditableCodeStateV1Sync,
   digestWhiteboardLatexHtmlV1Sync,
   digestWhiteboardLatexV1Sync,
   digestWhiteboardLineV1Sync,
   digestWhiteboardShapeV1Sync,
+  editableCodeStateFromElementV1,
+  revisionedCodeEditLineIdPrefix,
 } from '@/lib/agent/runtime/revisioned-whiteboard-digest';
 import {
   CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_RENDER_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
@@ -63,17 +78,21 @@ import {
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
   normalizeWhiteboardChartV1,
+  normalizeWhiteboardCodeV1,
   normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
   normalizeWhiteboardTableV1,
+  applyWhiteboardCodeEditV1,
   type WhiteboardChartSpec,
+  type WhiteboardCodeSpec,
   type WhiteboardLatexSpec,
   type WhiteboardLineSpec,
   type WhiteboardShapeSpec,
   type WhiteboardTableSpec,
 } from '@/lib/agent/runtime/client-effect-contract';
 import { createWhiteboardChartElement } from '@/lib/action/whiteboard-charts';
+import { createWhiteboardCodeElement } from '@/lib/action/whiteboard-code';
 import {
   createWhiteboardLatexElement,
   renderNativeWhiteboardLatexHtmlV1,
@@ -83,7 +102,13 @@ import { WHITEBOARD_SHAPE_PATHS } from '@/lib/action/whiteboard-shapes';
 import { createWhiteboardTableElement } from '@/lib/action/whiteboard-tables';
 import type { Stage, Whiteboard } from '@/lib/types/stage';
 import type { StageStore } from '@/lib/api/stage-api-types';
-import type { PPTChartElement, PPTElement, PPTLatexElement, PPTTableElement } from '@openmaic/dsl';
+import type {
+  PPTChartElement,
+  PPTCodeElement,
+  PPTElement,
+  PPTLatexElement,
+  PPTTableElement,
+} from '@openmaic/dsl';
 
 export const WHITEBOARD_AUTHORITY_RESOURCE_BUSY = 'CLIENT_EFFECT_RESOURCE_BUSY';
 export const WHITEBOARD_AUTHORITY_UNCERTAIN = 'POSTCONDITION_UNCERTAIN';
@@ -253,13 +278,34 @@ export interface WhiteboardAuthorityRevisionedDrawChartOptions {
   intent: RevisionedDrawChartIntent;
 }
 
+export interface WhiteboardAuthorityRevisionedDrawCodeOptions {
+  executionId: string;
+  requestDigest: string;
+  expected: RevisionedWhiteboardBinding;
+  authenticatedTarget: RevisionedWhiteboardAuthenticatedTarget;
+  deadlineAt: number;
+  intentDigest: string;
+  intent: RevisionedDrawCodeIntent;
+}
+
+export interface WhiteboardAuthorityRevisionedEditCodeOptions {
+  executionId: string;
+  requestDigest: string;
+  expected: RevisionedWhiteboardBinding;
+  authenticatedTarget: RevisionedWhiteboardAuthenticatedTarget;
+  deadlineAt: number;
+  intentDigest: string;
+  intent: RevisionedEditCodeIntent;
+}
+
 type WhiteboardAuthorityRevisionedDrawElementOptions =
   | (WhiteboardAuthorityRevisionedDrawTextOptions & { toolName: 'wb_draw_text' })
   | (WhiteboardAuthorityRevisionedDrawShapeOptions & { toolName: 'wb_draw_shape' })
   | (WhiteboardAuthorityRevisionedDrawLineOptions & { toolName: 'wb_draw_line' })
   | (WhiteboardAuthorityRevisionedDrawLatexOptions & { toolName: 'wb_draw_latex' })
   | (WhiteboardAuthorityRevisionedDrawTableOptions & { toolName: 'wb_draw_table' })
-  | (WhiteboardAuthorityRevisionedDrawChartOptions & { toolName: 'wb_draw_chart' });
+  | (WhiteboardAuthorityRevisionedDrawChartOptions & { toolName: 'wb_draw_chart' })
+  | (WhiteboardAuthorityRevisionedDrawCodeOptions & { toolName: 'wb_draw_code' });
 
 export type WhiteboardAuthorityRevisionedMutationResult =
   | {
@@ -584,6 +630,13 @@ type RevisionedDrawElementPlan =
       elementType: 'chart';
       normalizationVersion: typeof CLIENT_EFFECT_CHART_NORMALIZATION_VERSION;
       observedChartDigest: string;
+    })
+  | (RevisionedDrawElementPlanBase & {
+      toolName: 'wb_draw_code';
+      elementType: 'code';
+      normalizationVersion: typeof CLIENT_EFFECT_CODE_NORMALIZATION_VERSION;
+      observedCodeDigest: string;
+      orderedLineIds: string[];
     });
 
 function createRevisionedDrawElementPlan(
@@ -595,6 +648,7 @@ function createRevisionedDrawElementPlan(
     | RevisionedDrawLatexIntent
     | RevisionedDrawTableIntent
     | RevisionedDrawChartIntent
+    | RevisionedDrawCodeIntent
   >,
 ): RevisionedDrawElementPlan {
   const stableElementId = deriveRevisionedElementId(opts.executionId);
@@ -757,6 +811,36 @@ function createRevisionedDrawElementPlan(
         observedChartDigest,
       });
     }
+    case 'wb_draw_code': {
+      const intent = normalizedIntent as Readonly<RevisionedDrawCodeIntent>;
+      const spec: WhiteboardCodeSpec = normalizeWhiteboardCodeV1(intent);
+      const observedCodeDigest = digestWhiteboardCodeV1Sync(spec);
+      const orderedLineIds = spec.lines.map((line) => line.id);
+      return Object.freeze({
+        toolName: opts.toolName,
+        element: {
+          ...createWhiteboardCodeElement({
+            id: stableElementId,
+            language: spec.language,
+            code: spec.lines.map((line) => line.content).join('\n'),
+            lineIds: orderedLineIds,
+            x: spec.bounds.x,
+            y: spec.bounds.y,
+            width: spec.bounds.width,
+            height: spec.bounds.height,
+            fileName: spec.fileName,
+          }),
+          clientEffectExecutionId: opts.executionId,
+          clientEffectCodeDigest: observedCodeDigest,
+          clientEffectNormalizationVersion: CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
+        } as PPTElement,
+        stableElementId,
+        elementType: 'code' as const,
+        normalizationVersion: CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
+        observedCodeDigest,
+        orderedLineIds: Object.freeze([...orderedLineIds]) as unknown as string[],
+      });
+    }
   }
 }
 
@@ -777,6 +861,7 @@ function revisionedDrawMetadataMatches(
     clientEffectRenderVersion?: string;
     clientEffectTableDigest?: string;
     clientEffectChartDigest?: string;
+    clientEffectCodeDigest?: string;
   };
   if (
     metadata.clientEffectExecutionId !== opts.executionId ||
@@ -852,6 +937,28 @@ function revisionedDrawMetadataMatches(
         return false;
       }
     }
+    case 'wb_draw_code': {
+      const element = observed as PPTCodeElement;
+      try {
+        const spec = normalizeWhiteboardCodeV1({
+          language: element.language,
+          code: element.lines.map((line) => line.content).join('\n'),
+          x: element.left,
+          y: element.top,
+          width: element.width,
+          height: element.height,
+          fileName: element.fileName,
+        });
+        return (
+          metadata.clientEffectCodeDigest === plan.observedCodeDigest &&
+          digestWhiteboardCodeV1Sync(spec) === plan.observedCodeDigest &&
+          element.lines.every((line, index) => line.id === plan.orderedLineIds[index]) &&
+          element.lines.length === plan.orderedLineIds.length
+        );
+      } catch {
+        return false;
+      }
+    }
   }
 }
 
@@ -867,7 +974,8 @@ function revisionedDrawDelta(
   | RevisionedDrawLineDelta
   | RevisionedDrawLatexDelta
   | RevisionedDrawTableDelta
-  | RevisionedDrawChartDelta {
+  | RevisionedDrawChartDelta
+  | RevisionedDrawCodeDelta {
   const common = {
     normalizationVersion: plan.normalizationVersion,
     whiteboardId,
@@ -890,6 +998,8 @@ function revisionedDrawDelta(
       return { kind: 'whiteboard_table_created_v2', ...common } as RevisionedDrawTableDelta;
     case 'wb_draw_chart':
       return { kind: 'whiteboard_chart_created_v2', ...common } as RevisionedDrawChartDelta;
+    case 'wb_draw_code':
+      return { kind: 'whiteboard_code_created_v2', ...common } as RevisionedDrawCodeDelta;
   }
 }
 
@@ -902,7 +1012,8 @@ function revisionedDrawPostcondition(
   | RevisionedDrawLinePostcondition
   | RevisionedDrawLatexPostcondition
   | RevisionedDrawTablePostcondition
-  | RevisionedDrawChartPostcondition {
+  | RevisionedDrawChartPostcondition
+  | RevisionedDrawCodePostcondition {
   const common = {
     normalizationVersion: plan.normalizationVersion,
     whiteboardId,
@@ -954,6 +1065,14 @@ function revisionedDrawPostcondition(
         elementType: 'chart',
         observedChartDigest: plan.observedChartDigest,
       } as RevisionedDrawChartPostcondition;
+    case 'wb_draw_code':
+      return {
+        kind: 'whiteboard_code_exists_v2',
+        ...common,
+        elementType: 'code',
+        observedCodeDigest: plan.observedCodeDigest,
+        orderedLineIds: [...plan.orderedLineIds],
+      } as RevisionedDrawCodePostcondition;
   }
 }
 
@@ -1530,6 +1649,12 @@ export class WhiteboardEnvironmentAuthority {
     return this.transactRevisionedDrawElement({ ...opts, toolName: 'wb_draw_chart' });
   }
 
+  transactRevisionedDrawCode(
+    opts: WhiteboardAuthorityRevisionedDrawCodeOptions,
+  ): WhiteboardAuthorityRevisionedMutationResult {
+    return this.transactRevisionedDrawElement({ ...opts, toolName: 'wb_draw_code' });
+  }
+
   private transactRevisionedDrawElement(
     opts: WhiteboardAuthorityRevisionedDrawElementOptions,
   ): WhiteboardAuthorityRevisionedMutationResult {
@@ -1553,6 +1678,8 @@ export class WhiteboardEnvironmentAuthority {
           return createRevisionedDrawTableDigests({ ...digestInput, intent: opts.intent });
         case 'wb_draw_chart':
           return createRevisionedDrawChartDigests({ ...digestInput, intent: opts.intent });
+        case 'wb_draw_code':
+          return createRevisionedDrawCodeDigests({ ...digestInput, intent: opts.intent });
       }
     })();
     if (
@@ -1805,6 +1932,359 @@ export class WhiteboardEnvironmentAuthority {
             const committedReceiptBytes = revisionedWhiteboardWireBytes(committedReceipt);
             receipt =
               changed &&
+              committedReceiptBytes !== null &&
+              committedReceiptBytes <= MAX_REVISIONED_WHITEBOARD_RECEIPT_BYTES &&
+              isRevisionedWhiteboardAuthorityReceipt(committedReceipt)
+                ? committedReceipt
+                : this.uncertainReceipt(identity, beforeBinding, currentBinding, changed);
+          }
+        }
+      }
+      receipt = this.rememberRevisioned(identity, receipt);
+    } finally {
+      this.transactionActive = false;
+    }
+    return { ok: true, replayed: false, receipt };
+  }
+
+  transactRevisionedEditCode(
+    opts: WhiteboardAuthorityRevisionedEditCodeOptions,
+  ): WhiteboardAuthorityRevisionedMutationResult {
+    const digests = createRevisionedEditCodeDigests({
+      executionId: opts.executionId,
+      expectedBinding: opts.expected,
+      authenticatedTarget: opts.authenticatedTarget,
+      deadlineAt: opts.deadlineAt,
+      intent: opts.intent,
+    });
+    if (
+      !digests ||
+      digests.requestDigest !== opts.requestDigest ||
+      digests.intentDigest !== opts.intentDigest ||
+      opts.expected.whiteboardId === null ||
+      !isRevisionedWhiteboardMutationIdentity({
+        executionId: opts.executionId,
+        requestDigest: opts.requestDigest,
+        toolName: 'wb_edit_code',
+        expectedBinding: opts.expected,
+      }) ||
+      !isRevisionedWhiteboardAuthenticatedTarget(opts.authenticatedTarget) ||
+      !Number.isFinite(opts.deadlineAt)
+    ) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_MUTATION_REQUEST_INVALID,
+        errors: ['wb_edit_code.v2: revisioned edit request is invalid'],
+      };
+    }
+    const normalizedIntent = digests.normalizedIntent;
+    const identity = immutableCanonicalSnapshot<RevisionedJournalIdentity>({
+      executionId: opts.executionId,
+      requestDigest: opts.requestDigest,
+      toolName: 'wb_edit_code',
+      expected: opts.expected,
+      authenticatedTarget: opts.authenticatedTarget,
+      deadlineAt: opts.deadlineAt,
+    });
+
+    this.cleanupRevisionedJournal();
+    const replay = this.revisionedJournal.get(identity.executionId);
+    if (replay) {
+      if (journalIdentitiesEqual(replay.identity, identity)) {
+        return { ok: true, replayed: true, receipt: replay.receipt };
+      }
+      const current = this.binding(this.domain);
+      return {
+        ok: true,
+        replayed: false,
+        receipt: this.rejectedReceipt(identity, current, current, 'EXECUTION_ID_CONFLICT'),
+      };
+    }
+    if (this.now() >= identity.deadlineAt) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_DEADLINE_EXCEEDED,
+        errors: ['wb_edit_code.v2: revisioned mutation deadline has expired'],
+      };
+    }
+    if (this.revisionedJournal.size >= this.maxRevisionedJournalEntries) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_JOURNAL_CAPACITY_EXCEEDED,
+        errors: ['wb_edit_code.v2: revisioned mutation journal is at capacity'],
+      };
+    }
+    if (this.transactionActive) {
+      return {
+        ok: false,
+        code: WHITEBOARD_AUTHORITY_RESOURCE_BUSY,
+        errors: ['wb_edit_code.v2: whiteboard transaction already active'],
+      };
+    }
+
+    const beforeDomain = this.domain;
+    const beforeBinding = this.binding(beforeDomain);
+    const actualBefore = this.captureActualDomain(beforeDomain.revision, beforeDomain);
+    const authorityStateIsCurrent = this.domainMatchesCommitted(actualBefore);
+
+    this.transactionActive = true;
+    let receipt: RevisionedWhiteboardAuthorityReceipt;
+    try {
+      let targetIsCurrent = false;
+      try {
+        targetIsCurrent =
+          this.authenticatedTargetRegistry?.validateAndConsume({
+            executionId: identity.executionId,
+            requestDigest: identity.requestDigest,
+            intentDigest: opts.intentDigest,
+            authenticatedTarget: identity.authenticatedTarget,
+            expectedStageId: identity.expected.stageId,
+            deadlineAt: identity.deadlineAt,
+          }) === true;
+      } catch {
+        targetIsCurrent = false;
+      }
+
+      if (!authorityStateIsCurrent) {
+        receipt = this.rejectedReceipt(
+          identity,
+          beforeBinding,
+          beforeBinding,
+          'WHITEBOARD_AUTHORITY_BYPASS_DETECTED',
+        );
+      } else if (identity.expected.stageId !== this.domain.stageId) {
+        receipt = this.rejectedReceipt(identity, beforeBinding, beforeBinding, 'TARGET_CHANGED');
+      } else if (!targetIsCurrent) {
+        receipt = this.rejectedReceipt(
+          identity,
+          beforeBinding,
+          beforeBinding,
+          'AUTHENTICATED_TARGET_CHANGED',
+        );
+      } else if (
+        identity.expected.whiteboardId !== this.domain.activeWhiteboardId ||
+        identity.expected.revision !== this.domain.revision
+      ) {
+        receipt = this.rejectedReceipt(identity, beforeBinding, beforeBinding, 'STALE_STATE');
+      } else {
+        const currentStage = this.store.getState().stage;
+        const currentWhiteboards = currentStage?.whiteboard ?? [];
+        const boardMatches = currentWhiteboards.filter(
+          ({ id }) => id === identity.expected.whiteboardId,
+        );
+        const activeWhiteboard = boardMatches[0];
+        const elementMatches =
+          activeWhiteboard?.elements.filter(({ id }) => id === normalizedIntent.elementId) ?? [];
+        const element = elementMatches[0];
+        let beforeState;
+        let transition;
+        try {
+          if (
+            !currentStage ||
+            currentStage.id !== beforeDomain.stageId ||
+            boardMatches.length !== 1 ||
+            elementMatches.length !== 1 ||
+            element?.type !== 'code'
+          ) {
+            throw new Error('REVISIONED_WHITEBOARD_CODE_TARGET_INVALID');
+          }
+          beforeState = editableCodeStateFromElementV1(element as PPTCodeElement);
+          transition = applyWhiteboardCodeEditV1({
+            before: beforeState,
+            intent: normalizedIntent,
+            executionId: identity.executionId,
+            lineIdFactory: deriveRevisionedCodeEditLineId,
+          });
+          const reservedPrefix = revisionedCodeEditLineIdPrefix(identity.executionId);
+          const generatedLineIds = new Set(transition.newLineIds);
+          if (
+            transition.after.lines.some(
+              ({ id }) => id.startsWith(reservedPrefix) && !generatedLineIds.has(id),
+            )
+          ) {
+            throw new Error('REVISIONED_WHITEBOARD_CODE_LINE_NAMESPACE_CONFLICT');
+          }
+        } catch {
+          beforeState = undefined;
+          transition = undefined;
+        }
+        if (!currentStage || !activeWhiteboard || !beforeState || !transition) {
+          receipt = this.rejectedReceipt(
+            identity,
+            beforeBinding,
+            beforeBinding,
+            'TARGET_PRECONDITION_FAILED',
+          );
+        } else {
+          const errors: string[] = [];
+          const observedBeforeCodeDigest = digestWhiteboardEditableCodeStateV1Sync(beforeState);
+          const expectedAfterCodeDigest = digestWhiteboardEditableCodeStateV1Sync(transition.after);
+          const codeChanged = observedBeforeCodeDigest !== expectedAfterCodeDigest;
+          const visibilityChanged = !beforeDomain.open;
+          const intendedChanged = codeChanged || visibilityChanged;
+          const beforeElementCount = activeWhiteboard.elements.length;
+          const updatedElement: PPTCodeElement = {
+            ...(element as PPTCodeElement),
+            language: transition.after.language,
+            lines: transition.after.lines.map((line) => ({ ...line })),
+            fileName: transition.after.fileName,
+            left: transition.after.bounds.x,
+            top: transition.after.bounds.y,
+            width: transition.after.bounds.width,
+            height: transition.after.bounds.height,
+            showLineNumbers: transition.after.showLineNumbers,
+            fontSize: transition.after.fontSize,
+            rotate: transition.after.rotate,
+          };
+          const targetWhiteboard = codeChanged
+            ? {
+                ...activeWhiteboard,
+                elements: activeWhiteboard.elements.map((candidate) =>
+                  candidate === element ? updatedElement : candidate,
+                ),
+              }
+            : activeWhiteboard;
+          const nextWhiteboards = codeChanged
+            ? currentWhiteboards.map((board) =>
+                board === activeWhiteboard ? targetWhiteboard : board,
+              )
+            : currentWhiteboards;
+          const nonWhiteboardFingerprint = fingerprintNonWhiteboardStage(currentStage);
+          const expectedWhiteboardFingerprint = fingerprintWhiteboards(nextWhiteboards);
+
+          if (codeChanged) {
+            try {
+              this.store.setState({
+                stage: {
+                  ...currentStage,
+                  whiteboard: mutableCanonicalSnapshot<Whiteboard[]>(nextWhiteboards),
+                },
+              });
+            } catch (error) {
+              errors.push(`stage-write: ${stringifyError(error)}`);
+            }
+          }
+          if (visibilityChanged) {
+            try {
+              this.writeOpen(true);
+            } catch (error) {
+              errors.push(`open-write: ${stringifyError(error)}`);
+            }
+          }
+
+          const stageAfter = this.store.getState().stage;
+          const activeWhiteboardId = selectActiveId(
+            stageAfter,
+            beforeDomain,
+            identity.expected.whiteboardId,
+          );
+          const whiteboardFingerprint = fingerprintWhiteboards(stageAfter?.whiteboard);
+          const openAfter = this.readOpen();
+          const changed =
+            stageAfter?.id !== beforeDomain.stageId ||
+            activeWhiteboardId !== beforeDomain.activeWhiteboardId ||
+            openAfter !== beforeDomain.open ||
+            whiteboardFingerprint !== beforeDomain.whiteboardFingerprint;
+          const nextDomain: WhiteboardDomainSnapshot = {
+            stageId: stageAfter?.id ?? null,
+            activeWhiteboardId,
+            revision: changed ? beforeDomain.revision + 1 : beforeDomain.revision,
+            open: openAfter,
+            whiteboardFingerprint,
+          };
+          this.domain = nextDomain;
+          const currentBinding = this.binding(nextDomain);
+          const boardAfterMatches =
+            stageAfter?.whiteboard?.filter(({ id }) => id === identity.expected.whiteboardId) ?? [];
+          const boardAfter = boardAfterMatches[0];
+          const afterMatches =
+            boardAfter?.elements.filter(({ id }) => id === normalizedIntent.elementId) ?? [];
+          let observedAfterCodeDigest: string | undefined;
+          let orderedLineIds: string[] | undefined;
+          try {
+            if (afterMatches.length === 1 && afterMatches[0].type === 'code') {
+              const observedAfter = editableCodeStateFromElementV1(
+                afterMatches[0] as PPTCodeElement,
+              );
+              observedAfterCodeDigest = digestWhiteboardEditableCodeStateV1Sync(observedAfter);
+              orderedLineIds = observedAfter.lines.map((line) => line.id);
+            }
+          } catch {
+            observedAfterCodeDigest = undefined;
+            orderedLineIds = undefined;
+          }
+
+          if (
+            !stageAfter ||
+            stageAfter.id !== currentStage.id ||
+            fingerprintNonWhiteboardStage(stageAfter) !== nonWhiteboardFingerprint ||
+            whiteboardFingerprint !== expectedWhiteboardFingerprint ||
+            activeWhiteboardId !== identity.expected.whiteboardId ||
+            !openAfter ||
+            boardAfterMatches.length !== 1 ||
+            boardAfter?.elements.length !== beforeElementCount ||
+            afterMatches.length !== 1 ||
+            afterMatches[0].type !== 'code' ||
+            observedAfterCodeDigest !== expectedAfterCodeDigest ||
+            !orderedLineIds ||
+            JSON.stringify(orderedLineIds) !==
+              JSON.stringify(transition.after.lines.map((line) => line.id)) ||
+            changed !== intendedChanged
+          ) {
+            errors.push('postcondition: wb_edit_code state does not match the Authority intent');
+          }
+
+          if (changed) {
+            for (const listener of this.listeners) {
+              try {
+                listener();
+              } catch (error) {
+                errors.push(`authority-listener: ${stringifyError(error)}`);
+              }
+            }
+          }
+
+          if (errors.length > 0) {
+            receipt = this.uncertainReceipt(identity, beforeBinding, currentBinding, changed);
+          } else {
+            const delta: RevisionedEditCodeDelta = {
+              kind: 'whiteboard_code_edited_v2',
+              normalizationVersion: CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
+              whiteboardId: identity.expected.whiteboardId!,
+              stableElementId: normalizedIntent.elementId,
+              codeChanged,
+              visibilityChanged,
+              newLineIds: [...transition.newLineIds],
+              elementCountBefore: beforeElementCount,
+              elementCountAfter: beforeElementCount,
+            };
+            const postcondition: RevisionedEditCodePostcondition = {
+              kind: 'whiteboard_code_state_observed_v2',
+              normalizationVersion: CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
+              whiteboardId: identity.expected.whiteboardId!,
+              stableElementId: normalizedIntent.elementId,
+              elementType: 'code',
+              observedBeforeCodeDigest,
+              observedAfterCodeDigest: observedAfterCodeDigest!,
+              orderedLineIds: orderedLineIds!,
+              matchingElementCountBefore: 1,
+              matchingElementCountAfter: 1,
+            };
+            const committedReceipt = {
+              protocolVersion: REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
+              outcome: 'committed',
+              executionId: identity.executionId,
+              requestDigest: identity.requestDigest,
+              toolName: 'wb_edit_code',
+              previousBinding: beforeBinding,
+              currentBinding,
+              changed,
+              mutationMayHaveCommitted: false,
+              delta,
+              postcondition,
+            } satisfies RevisionedWhiteboardCommittedReceipt;
+            const committedReceiptBytes = revisionedWhiteboardWireBytes(committedReceipt);
+            receipt =
               committedReceiptBytes !== null &&
               committedReceiptBytes <= MAX_REVISIONED_WHITEBOARD_RECEIPT_BYTES &&
               isRevisionedWhiteboardAuthorityReceipt(committedReceipt)

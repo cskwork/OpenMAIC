@@ -1906,8 +1906,16 @@ function normalizeEditContent(value: string): string[] {
   return lines;
 }
 
-function assertUniqueTargetLineIds(value: unknown, beforeLineIds: ReadonlySet<string>): string[] {
-  if (!Array.isArray(value) || value.length === 0) {
+function hasExactObjectKeys(value: Record<string, unknown>, required: readonly string[]): boolean {
+  const allowed = new Set(required);
+  return (
+    required.every((key) => Object.prototype.hasOwnProperty.call(value, key)) &&
+    Object.keys(value).every((key) => allowed.has(key))
+  );
+}
+
+function normalizeTargetLineIdsSyntax(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > WHITEBOARD_CODE_MAX_LINES) {
     throw new Error('CLIENT_EFFECT_CODE_EDIT_TARGET_INVALID');
   }
   const seen = new Set<string>();
@@ -1918,8 +1926,60 @@ function assertUniqueTargetLineIds(value: unknown, beforeLineIds: ReadonlySet<st
       'CLIENT_EFFECT_CODE_EDIT_TARGET_INVALID',
     );
     if (seen.has(id)) throw new Error('CLIENT_EFFECT_CODE_EDIT_TARGET_DUPLICATE');
-    if (!beforeLineIds.has(id)) throw new Error('CLIENT_EFFECT_CODE_EDIT_LINE_NOT_FOUND');
     seen.add(id);
+    return id;
+  });
+}
+
+export function normalizeWhiteboardCodeEditIntentV1(value: unknown): WhiteboardCodeEditIntent {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('CLIENT_EFFECT_CODE_EDIT_INPUT_INVALID');
+  }
+  const input = value as Record<string, unknown>;
+  const elementId = assertEditableCodeMetadataString(
+    input.elementId,
+    512,
+    'CLIENT_EFFECT_CODE_EDIT_ELEMENT_ID_INVALID',
+  );
+  if (input.operation === 'insert_after' || input.operation === 'insert_before') {
+    if (!hasExactObjectKeys(input, ['elementId', 'operation', 'lineId', 'content'])) {
+      throw new Error('CLIENT_EFFECT_CODE_EDIT_INPUT_INVALID');
+    }
+    const lineId = assertEditableCodeMetadataString(
+      input.lineId,
+      WHITEBOARD_CODE_MAX_LINE_ID_CHARACTERS,
+      'CLIENT_EFFECT_CODE_EDIT_TARGET_INVALID',
+    );
+    const content = normalizeEditContent(input.content as string).join('\n');
+    return { elementId, operation: input.operation, lineId, content };
+  }
+  if (input.operation === 'delete_lines') {
+    if (!hasExactObjectKeys(input, ['elementId', 'operation', 'lineIds'])) {
+      throw new Error('CLIENT_EFFECT_CODE_EDIT_INPUT_INVALID');
+    }
+    return {
+      elementId,
+      operation: input.operation,
+      lineIds: normalizeTargetLineIdsSyntax(input.lineIds),
+    };
+  }
+  if (input.operation === 'replace_lines') {
+    if (!hasExactObjectKeys(input, ['elementId', 'operation', 'lineIds', 'content'])) {
+      throw new Error('CLIENT_EFFECT_CODE_EDIT_INPUT_INVALID');
+    }
+    return {
+      elementId,
+      operation: input.operation,
+      lineIds: normalizeTargetLineIdsSyntax(input.lineIds),
+      content: normalizeEditContent(input.content as string).join('\n'),
+    };
+  }
+  throw new Error('CLIENT_EFFECT_CODE_EDIT_OPERATION_INVALID');
+}
+
+function assertUniqueTargetLineIds(value: unknown, beforeLineIds: ReadonlySet<string>): string[] {
+  return normalizeTargetLineIdsSyntax(value).map((id) => {
+    if (!beforeLineIds.has(id)) throw new Error('CLIENT_EFFECT_CODE_EDIT_LINE_NOT_FOUND');
     return id;
   });
 }
@@ -1937,6 +1997,7 @@ export function applyWhiteboardCodeEditV1(opts: {
   before: WhiteboardEditableCodeState;
   intent: WhiteboardCodeEditIntent;
   executionId: string;
+  lineIdFactory?: (executionId: string, ordinal: number) => string;
 }): {
   after: WhiteboardEditableCodeState;
   newLineIds: string[];
@@ -1969,7 +2030,13 @@ export function applyWhiteboardCodeEditV1(opts: {
     const contentLines = normalizeEditContent(opts.intent.content);
     const insertionIndex = opts.intent.operation === 'insert_after' ? targetIndex + 1 : targetIndex;
     const insertedLines = contentLines.map((content, offset) => {
-      const id = generatedEditLineId(executionId, insertionIndex + offset + 1);
+      const id = opts.lineIdFactory
+        ? assertEditableCodeMetadataString(
+            opts.lineIdFactory(executionId, newLineIds.length + 1),
+            WHITEBOARD_CODE_MAX_LINE_ID_CHARACTERS,
+            'CLIENT_EFFECT_CODE_EDIT_GENERATED_LINE_ID_INVALID',
+          )
+        : generatedEditLineId(executionId, insertionIndex + offset + 1);
       if (beforeLineIds.has(id) || newLineIds.includes(id)) {
         throw new Error('CLIENT_EFFECT_CODE_EDIT_GENERATED_LINE_ID_CONFLICT');
       }
@@ -1993,7 +2060,13 @@ export function applyWhiteboardCodeEditV1(opts: {
     const replacement = contentLines.map((content, offset) => {
       const reusableId = targetIds[offset];
       if (reusableId) return { id: reusableId, content };
-      const id = generatedEditLineId(executionId, insertionIndex + offset + 1);
+      const id = opts.lineIdFactory
+        ? assertEditableCodeMetadataString(
+            opts.lineIdFactory(executionId, newLineIds.length + 1),
+            WHITEBOARD_CODE_MAX_LINE_ID_CHARACTERS,
+            'CLIENT_EFFECT_CODE_EDIT_GENERATED_LINE_ID_INVALID',
+          )
+        : generatedEditLineId(executionId, insertionIndex + offset + 1);
       if (beforeLineIds.has(id) || newLineIds.includes(id)) {
         throw new Error('CLIENT_EFFECT_CODE_EDIT_GENERATED_LINE_ID_CONFLICT');
       }

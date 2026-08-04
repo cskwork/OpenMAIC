@@ -94,11 +94,41 @@ export type DrawElementCapabilityMintResult =
   | { ok: true; bundle: DrawElementCapabilityBundle; replayed: boolean }
   | { ok: false; code: 'OBSERVATION_CAPABILITY_LIMIT'; replayed: boolean };
 
-type DrawElementMintRecord = {
+export type CodeDrawCapabilityBundle = Readonly<{
+  bindingObservationToken: string;
+  targetObservationToken: string;
+  codeObservationToken: string;
+}>;
+
+export type CodeEditCapabilityBundle = Readonly<{
+  bindingObservationToken: string;
+  codeObservationToken: string;
+}>;
+
+export type CodeDrawCapabilityMintResult =
+  | { ok: true; bundle: CodeDrawCapabilityBundle; replayed: boolean }
+  | { ok: false; code: 'OBSERVATION_CAPABILITY_LIMIT'; replayed: boolean };
+
+export type CodeEditCapabilityMintResult =
+  | { ok: true; bundle: CodeEditCapabilityBundle; replayed: boolean }
+  | { ok: false; code: 'OBSERVATION_CAPABILITY_LIMIT'; replayed: boolean };
+
+type CapabilityBundleKind = 'draw_element' | 'draw_code' | 'edit_code';
+type FixedCapabilityBundle = Readonly<{
+  bindingObservationToken: string;
+  targetObservationToken?: string;
+  codeObservationToken?: string;
+}>;
+type FixedCapabilityMintResult =
+  | { ok: true; bundle: FixedCapabilityBundle; replayed: boolean }
+  | { ok: false; code: 'OBSERVATION_CAPABILITY_LIMIT'; replayed: boolean };
+
+type CapabilityMintRecord = {
+  bundleKind: CapabilityBundleKind;
   receiptDigest: string;
   childInvocationId: string;
   expiresAt: number;
-  result: DrawElementCapabilityMintResult;
+  result: FixedCapabilityMintResult;
 };
 
 export function observationCoverageMatches(
@@ -124,8 +154,8 @@ export class NativeWhiteboardObservationLedger {
   private readonly maxClaims: number;
   private readonly maxMintRecords: number;
   private readonly maxMintRejectionRecords: number;
-  private readonly drawElementMintRecords = new Map<string, DrawElementMintRecord>();
-  private readonly drawElementMintRejections = new Map<string, DrawElementMintRecord>();
+  private readonly capabilityMintRecords = new Map<string, CapabilityMintRecord>();
+  private readonly capabilityMintRejections = new Map<string, CapabilityMintRecord>();
 
   constructor(opts: NativeWhiteboardObservationLedgerOptions = {}) {
     this.now = opts.now ?? Date.now;
@@ -199,6 +229,62 @@ export class NativeWhiteboardObservationLedger {
     authenticatedReceipt: CoordinatorAuthenticatedRevisionedWhiteboardReceipt;
     expected: RevisionedWhiteboardExpectedDescriptor;
   }): DrawElementCapabilityMintResult | null {
+    if (input.expected.kind === 'wb_draw_code_v2' || input.expected.kind === 'wb_edit_code_v2') {
+      return null;
+    }
+    return this.mintCapabilityBundle({
+      ...input,
+      bundleKind: 'draw_element',
+      coverages: [
+        ['bindingObservationToken', { kind: 'binding' }],
+        ['targetObservationToken', { kind: 'element', elementId: input.expected.stableElementId }],
+      ],
+    }) as DrawElementCapabilityMintResult | null;
+  }
+
+  mintCodeDrawCapabilityBundle(input: {
+    authenticatedReceipt: CoordinatorAuthenticatedRevisionedWhiteboardReceipt;
+    expected: RevisionedWhiteboardExpectedDescriptor;
+  }): CodeDrawCapabilityMintResult | null {
+    if (input.expected.kind !== 'wb_draw_code_v2') return null;
+    return this.mintCapabilityBundle({
+      ...input,
+      bundleKind: 'draw_code',
+      coverages: [
+        ['bindingObservationToken', { kind: 'binding' }],
+        ['targetObservationToken', { kind: 'element', elementId: input.expected.stableElementId }],
+        [
+          'codeObservationToken',
+          { kind: 'code', elementId: input.expected.stableElementId, complete: true },
+        ],
+      ],
+    }) as CodeDrawCapabilityMintResult | null;
+  }
+
+  mintCodeEditCapabilityBundle(input: {
+    authenticatedReceipt: CoordinatorAuthenticatedRevisionedWhiteboardReceipt;
+    expected: RevisionedWhiteboardExpectedDescriptor;
+  }): CodeEditCapabilityMintResult | null {
+    if (input.expected.kind !== 'wb_edit_code_v2') return null;
+    return this.mintCapabilityBundle({
+      ...input,
+      bundleKind: 'edit_code',
+      coverages: [
+        ['bindingObservationToken', { kind: 'binding' }],
+        [
+          'codeObservationToken',
+          { kind: 'code', elementId: input.expected.stableElementId, complete: true },
+        ],
+      ],
+    }) as CodeEditCapabilityMintResult | null;
+  }
+
+  private mintCapabilityBundle(input: {
+    authenticatedReceipt: CoordinatorAuthenticatedRevisionedWhiteboardReceipt;
+    expected: RevisionedWhiteboardExpectedDescriptor;
+    bundleKind: CapabilityBundleKind;
+    coverages: ReadonlyArray<readonly [keyof FixedCapabilityBundle, ObservationCoverage]>;
+  }): FixedCapabilityMintResult | null {
     this.deleteExpired();
     if (!isCoordinatorAuthenticatedRevisionedWhiteboardReceipt(input.authenticatedReceipt)) {
       return null;
@@ -213,19 +299,26 @@ export class NativeWhiteboardObservationLedger {
       return null;
     }
     const receiptDigest = digestRevisionedValue(receipt);
-    const existing = this.drawElementMintRecords.get(receipt.executionId);
+    const existing = this.capabilityMintRecords.get(receipt.executionId);
     if (existing) {
-      if (existing.receiptDigest !== receiptDigest) return null;
+      if (existing.receiptDigest !== receiptDigest || existing.bundleKind !== input.bundleKind) {
+        return null;
+      }
       return existing.result.ok
         ? { ...existing.result, replayed: true }
         : { ...existing.result, replayed: true };
     }
-    const existingRejection = this.drawElementMintRejections.get(receipt.executionId);
+    const existingRejection = this.capabilityMintRejections.get(receipt.executionId);
     if (existingRejection) {
-      if (existingRejection.receiptDigest !== receiptDigest) return null;
+      if (
+        existingRejection.receiptDigest !== receiptDigest ||
+        existingRejection.bundleKind !== input.bundleKind
+      ) {
+        return null;
+      }
       return { ok: false, code: 'OBSERVATION_CAPABILITY_LIMIT', replayed: true };
     }
-    if (this.drawElementMintRecords.size >= this.maxMintRecords) {
+    if (this.capabilityMintRecords.size >= this.maxMintRecords) {
       const result = {
         ok: false as const,
         code: 'OBSERVATION_CAPABILITY_LIMIT' as const,
@@ -233,6 +326,7 @@ export class NativeWhiteboardObservationLedger {
       };
       this.rememberMintRejection({
         executionId: receipt.executionId,
+        bundleKind: input.bundleKind,
         receiptDigest,
         childInvocationId: authenticatedTarget.childInvocationId,
         expiresAt: deadlineAt,
@@ -250,40 +344,38 @@ export class NativeWhiteboardObservationLedger {
       sourceId: receipt.executionId,
       expiresAt: deadlineAt,
     };
-    let result: DrawElementCapabilityMintResult;
-    if (this.claims.size + 2 > this.maxClaims) {
+    let result: FixedCapabilityMintResult;
+    if (this.claims.size + input.coverages.length > this.maxClaims) {
       result = { ok: false, code: 'OBSERVATION_CAPABILITY_LIMIT', replayed: false };
     } else {
-      const bindingObservationToken = this.nextCapability();
-      const targetObservationToken = this.nextCapability();
+      const tokens = input.coverages.map(() => this.nextCapability());
       if (
-        bindingObservationToken === targetObservationToken ||
-        this.claims.has(bindingObservationToken) ||
-        this.claims.has(targetObservationToken)
+        new Set(tokens).size !== tokens.length ||
+        tokens.some((token) => this.claims.has(token))
       ) {
         throw new Error('OBSERVATION_CAPABILITY_COLLISION');
       }
-      const bindingClaim = Object.freeze({
-        ...base,
-        coverage: Object.freeze({ kind: 'binding' as const }),
+      const bundleEntries: Array<[keyof FixedCapabilityBundle, string]> = [];
+      input.coverages.forEach(([field, coverage], index) => {
+        const token = tokens[index];
+        this.claims.set(
+          token,
+          Object.freeze({
+            ...base,
+            coverage: Object.freeze({ ...coverage }) as ObservationCoverage,
+          }),
+        );
+        bundleEntries.push([field, token]);
       });
-      const targetClaim = Object.freeze({
-        ...base,
-        coverage: Object.freeze({
-          kind: 'element' as const,
-          elementId: input.expected.stableElementId,
-        }),
-      });
-      this.claims.set(bindingObservationToken, bindingClaim);
-      this.claims.set(targetObservationToken, targetClaim);
       result = {
         ok: true,
-        bundle: Object.freeze({ bindingObservationToken, targetObservationToken }),
+        bundle: Object.freeze(Object.fromEntries(bundleEntries)) as FixedCapabilityBundle,
         replayed: false,
       };
     }
-    const recorded = Object.freeze({ ...result }) as DrawElementCapabilityMintResult;
-    this.drawElementMintRecords.set(receipt.executionId, {
+    const recorded = Object.freeze({ ...result }) as FixedCapabilityMintResult;
+    this.capabilityMintRecords.set(receipt.executionId, {
+      bundleKind: input.bundleKind,
       receiptDigest,
       childInvocationId: authenticatedTarget.childInvocationId,
       expiresAt: deadlineAt,
@@ -332,14 +424,14 @@ export class NativeWhiteboardObservationLedger {
     for (const [token, claim] of this.claims) {
       if (claim.childInvocationId === childInvocationId) this.claims.delete(token);
     }
-    for (const [executionId, record] of this.drawElementMintRecords) {
+    for (const [executionId, record] of this.capabilityMintRecords) {
       if (record.childInvocationId === childInvocationId) {
-        this.drawElementMintRecords.delete(executionId);
+        this.capabilityMintRecords.delete(executionId);
       }
     }
-    for (const [executionId, record] of this.drawElementMintRejections) {
+    for (const [executionId, record] of this.capabilityMintRejections) {
       if (record.childInvocationId === childInvocationId) {
-        this.drawElementMintRejections.delete(executionId);
+        this.capabilityMintRejections.delete(executionId);
       }
     }
   }
@@ -359,7 +451,7 @@ export class NativeWhiteboardObservationLedger {
 
   getMintRecordCountForTests(): number {
     this.deleteExpired();
-    return this.drawElementMintRecords.size + this.drawElementMintRejections.size;
+    return this.capabilityMintRecords.size + this.capabilityMintRejections.size;
   }
 
   private deleteExpired(): void {
@@ -367,11 +459,11 @@ export class NativeWhiteboardObservationLedger {
     for (const [token, claim] of this.claims) {
       if (claim.expiresAt <= current) this.claims.delete(token);
     }
-    for (const [executionId, record] of this.drawElementMintRecords) {
-      if (record.expiresAt <= current) this.drawElementMintRecords.delete(executionId);
+    for (const [executionId, record] of this.capabilityMintRecords) {
+      if (record.expiresAt <= current) this.capabilityMintRecords.delete(executionId);
     }
-    for (const [executionId, record] of this.drawElementMintRejections) {
-      if (record.expiresAt <= current) this.drawElementMintRejections.delete(executionId);
+    for (const [executionId, record] of this.capabilityMintRejections) {
+      if (record.expiresAt <= current) this.capabilityMintRejections.delete(executionId);
     }
   }
 
@@ -388,18 +480,19 @@ export class NativeWhiteboardObservationLedger {
     return token;
   }
 
-  private rememberMintRejection(input: DrawElementMintRecord & { executionId: string }): void {
+  private rememberMintRejection(input: CapabilityMintRecord & { executionId: string }): void {
     if (this.maxMintRejectionRecords <= 0) return;
-    this.drawElementMintRejections.set(input.executionId, {
+    this.capabilityMintRejections.set(input.executionId, {
+      bundleKind: input.bundleKind,
       receiptDigest: input.receiptDigest,
       childInvocationId: input.childInvocationId,
       expiresAt: input.expiresAt,
       result: input.result,
     });
-    while (this.drawElementMintRejections.size > this.maxMintRejectionRecords) {
-      const oldest = this.drawElementMintRejections.keys().next().value;
+    while (this.capabilityMintRejections.size > this.maxMintRejectionRecords) {
+      const oldest = this.capabilityMintRejections.keys().next().value;
       if (typeof oldest !== 'string') break;
-      this.drawElementMintRejections.delete(oldest);
+      this.capabilityMintRejections.delete(oldest);
     }
   }
 

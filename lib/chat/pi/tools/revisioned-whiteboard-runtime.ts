@@ -139,4 +139,28 @@ export class RevisionedWhiteboardMutationRuntime {
       expected: input.expected,
     });
   }
+
+  mintCodeDrawBundle(input: {
+    executionId: string;
+    expected: RevisionedWhiteboardExpectedDescriptor;
+  }) {
+    const terminal = this.coordinator.getTerminal(input.executionId);
+    if (!terminal?.authenticatedReceipt) return null;
+    return this.observationLedger.mintCodeDrawCapabilityBundle({
+      authenticatedReceipt: terminal.authenticatedReceipt,
+      expected: input.expected,
+    });
+  }
+
+  mintCodeEditBundle(input: {
+    executionId: string;
+    expected: RevisionedWhiteboardExpectedDescriptor;
+  }) {
+    const terminal = this.coordinator.getTerminal(input.executionId);
+    if (!terminal?.authenticatedReceipt) return null;
+    return this.observationLedger.mintCodeEditCapabilityBundle({
+      authenticatedReceipt: terminal.authenticatedReceipt,
+      expected: input.expected,
+    });
+  }
 }

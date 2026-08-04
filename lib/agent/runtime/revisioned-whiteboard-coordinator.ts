@@ -15,7 +15,7 @@ import {
   type RevisionedWhiteboardExpectedDescriptor,
   type ShapeValidatedRevisionedWhiteboardReceipt,
 } from './revisioned-whiteboard-contract';
-import { digestRevisionedValue } from './revisioned-whiteboard-digest';
+import { digestRevisionedValue, immutableRevisionedSnapshot } from './revisioned-whiteboard-digest';
 
 type RevisionedCoordinatorStatus = 'pending' | 'accepted' | 'committed' | 'rejected' | 'uncertain';
 
@@ -152,6 +152,8 @@ const exactToolByDescriptorKind = {
   wb_draw_latex_v2: 'wb_draw_latex',
   wb_draw_table_v2: 'wb_draw_table',
   wb_draw_chart_v2: 'wb_draw_chart',
+  wb_draw_code_v2: 'wb_draw_code',
+  wb_edit_code_v2: 'wb_edit_code',
 } as const satisfies Record<
   RevisionedWhiteboardExpectedDescriptor['kind'],
   RevisionedWhiteboardMutationToolName
@@ -302,7 +304,9 @@ export class RevisionedWhiteboardCoordinator {
     const expectedBinding = Object.freeze({ ...input.expectedBinding });
     const authenticatedTarget = Object.freeze({ ...input.authenticatedTarget });
     const expectedMutation = input.expectedMutation
-      ? Object.freeze({ ...input.expectedMutation })
+      ? (immutableRevisionedSnapshot(
+          input.expectedMutation,
+        ) as RevisionedWhiteboardExpectedDescriptor)
       : undefined;
     let resolveTerminal!: (terminal: RevisionedWhiteboardTerminal) => void;
     const terminalPromise = new Promise<RevisionedWhiteboardTerminal>((resolve) => {
@@ -320,7 +324,12 @@ export class RevisionedWhiteboardCoordinator {
         ? { observationAuthorizationDigest: input.observationAuthorizationDigest }
         : {}),
       ...(expectedMutation ? { expectedMutation } : {}),
-      registrationDigest: registrationDigest(input),
+      registrationDigest: registrationDigest({
+        ...input,
+        expectedBinding,
+        authenticatedTarget,
+        expectedMutation,
+      }),
       status: 'pending',
       actionChargeTaken: false,
       hardTimer,

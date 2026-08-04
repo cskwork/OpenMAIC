@@ -1,5 +1,7 @@
 import {
   CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_RENDER_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
@@ -7,20 +9,25 @@ import {
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
   normalizeWhiteboardChartV1,
+  normalizeWhiteboardCodeEditIntentV1,
+  normalizeWhiteboardCodeV1,
   normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardRendererColorV1,
   normalizeWhiteboardShapeV1,
   normalizeWhiteboardTableIntentV1,
   type WhiteboardChartSpec,
+  type WhiteboardCodeEditIntent,
   type WhiteboardLineMarker,
   type WhiteboardLineStyle,
   type WhiteboardShapeKind,
   type WhiteboardTableOutline,
 } from './client-effect-contract';
 import {
+  deriveRevisionedCodeEditLineId,
   deriveRevisionedWhiteboardId,
   digestRevisionedValue,
+  revisionedCodeEditLineIdPrefix,
 } from './revisioned-whiteboard-digest';
 
 export const REVISIONED_WHITEBOARD_PROTOCOL_VERSION = 'maic.whiteboard-mutation.v2' as const;
@@ -134,6 +141,18 @@ export type RevisionedDrawChartIntent = {
   themeColors?: string[];
 };
 
+export type RevisionedDrawCodeIntent = {
+  language: string;
+  code: string;
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  fileName?: string;
+};
+
+export type RevisionedEditCodeIntent = WhiteboardCodeEditIntent;
+
 export type RevisionedDrawTextExpectedDescriptor = {
   kind: 'wb_draw_text_v2';
   intentDigest: string;
@@ -177,13 +196,30 @@ export type RevisionedDrawChartExpectedDescriptor = {
   expectedChartDigest: string;
 };
 
+export type RevisionedDrawCodeExpectedDescriptor = {
+  kind: 'wb_draw_code_v2';
+  intentDigest: string;
+  stableElementId: string;
+  expectedCodeDigest: string;
+  expectedLineIds: string[];
+};
+
+export type RevisionedEditCodeExpectedDescriptor = {
+  kind: 'wb_edit_code_v2';
+  intentDigest: string;
+  stableElementId: string;
+  expectedNewLineIds: string[];
+};
+
 export type RevisionedWhiteboardExpectedDescriptor =
   | RevisionedDrawTextExpectedDescriptor
   | RevisionedDrawShapeExpectedDescriptor
   | RevisionedDrawLineExpectedDescriptor
   | RevisionedDrawLatexExpectedDescriptor
   | RevisionedDrawTableExpectedDescriptor
-  | RevisionedDrawChartExpectedDescriptor;
+  | RevisionedDrawChartExpectedDescriptor
+  | RevisionedDrawCodeExpectedDescriptor
+  | RevisionedEditCodeExpectedDescriptor;
 
 export type RevisionedDrawTextDelta = {
   kind: 'whiteboard_text_created_v2';
@@ -313,6 +349,53 @@ export type RevisionedDrawChartPostcondition = {
   matchingElementCount: 1;
 };
 
+export type RevisionedDrawCodeDelta = {
+  kind: 'whiteboard_code_created_v2';
+  normalizationVersion: typeof CLIENT_EFFECT_CODE_NORMALIZATION_VERSION;
+  whiteboardId: string;
+  stableElementId: string;
+  createdWhiteboard: boolean;
+  visibilityChanged: boolean;
+  elementCountBefore: number;
+  elementCountAfter: number;
+};
+
+export type RevisionedDrawCodePostcondition = {
+  kind: 'whiteboard_code_exists_v2';
+  normalizationVersion: typeof CLIENT_EFFECT_CODE_NORMALIZATION_VERSION;
+  whiteboardId: string;
+  stableElementId: string;
+  elementType: 'code';
+  observedCodeDigest: string;
+  orderedLineIds: string[];
+  matchingElementCount: 1;
+};
+
+export type RevisionedEditCodeDelta = {
+  kind: 'whiteboard_code_edited_v2';
+  normalizationVersion: typeof CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION;
+  whiteboardId: string;
+  stableElementId: string;
+  codeChanged: boolean;
+  visibilityChanged: boolean;
+  newLineIds: string[];
+  elementCountBefore: number;
+  elementCountAfter: number;
+};
+
+export type RevisionedEditCodePostcondition = {
+  kind: 'whiteboard_code_state_observed_v2';
+  normalizationVersion: typeof CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION;
+  whiteboardId: string;
+  stableElementId: string;
+  elementType: 'code';
+  observedBeforeCodeDigest: string;
+  observedAfterCodeDigest: string;
+  orderedLineIds: string[];
+  matchingElementCountBefore: 1;
+  matchingElementCountAfter: 1;
+};
+
 export type RevisionedDrawTextRequestDigestInput = {
   executionId: string;
   expectedBinding: RevisionedWhiteboardBinding;
@@ -348,13 +431,23 @@ export type RevisionedDrawChartRequestDigestInput = RevisionedWhiteboardRequestD
   intent: RevisionedDrawChartIntent;
 };
 
+export type RevisionedDrawCodeRequestDigestInput = RevisionedWhiteboardRequestDigestBase & {
+  intent: RevisionedDrawCodeIntent;
+};
+
+export type RevisionedEditCodeRequestDigestInput = RevisionedWhiteboardRequestDigestBase & {
+  intent: RevisionedEditCodeIntent;
+};
+
 export type RevisionedWhiteboardMutationDigestInput =
   | (RevisionedDrawTextRequestDigestInput & { toolName: 'wb_draw_text' })
   | (RevisionedDrawShapeRequestDigestInput & { toolName: 'wb_draw_shape' })
   | (RevisionedDrawLineRequestDigestInput & { toolName: 'wb_draw_line' })
   | (RevisionedDrawLatexRequestDigestInput & { toolName: 'wb_draw_latex' })
   | (RevisionedDrawTableRequestDigestInput & { toolName: 'wb_draw_table' })
-  | (RevisionedDrawChartRequestDigestInput & { toolName: 'wb_draw_chart' });
+  | (RevisionedDrawChartRequestDigestInput & { toolName: 'wb_draw_chart' })
+  | (RevisionedDrawCodeRequestDigestInput & { toolName: 'wb_draw_code' })
+  | (RevisionedEditCodeRequestDigestInput & { toolName: 'wb_edit_code' });
 
 type RevisionedWhiteboardEffectDeliveryBase = {
   protocolVersion: typeof REVISIONED_WHITEBOARD_PROTOCOL_VERSION;
@@ -396,13 +489,25 @@ export type RevisionedDrawChartEffectDelivery = RevisionedWhiteboardEffectDelive
   intent: RevisionedDrawChartIntent;
 };
 
+export type RevisionedDrawCodeEffectDelivery = RevisionedWhiteboardEffectDeliveryBase & {
+  toolName: 'wb_draw_code';
+  intent: RevisionedDrawCodeIntent;
+};
+
+export type RevisionedEditCodeEffectDelivery = RevisionedWhiteboardEffectDeliveryBase & {
+  toolName: 'wb_edit_code';
+  intent: RevisionedEditCodeIntent;
+};
+
 export type RevisionedWhiteboardEffectDelivery =
   | RevisionedDrawTextEffectDelivery
   | RevisionedDrawShapeEffectDelivery
   | RevisionedDrawLineEffectDelivery
   | RevisionedDrawLatexEffectDelivery
   | RevisionedDrawTableEffectDelivery
-  | RevisionedDrawChartEffectDelivery;
+  | RevisionedDrawChartEffectDelivery
+  | RevisionedDrawCodeEffectDelivery
+  | RevisionedEditCodeEffectDelivery;
 
 export type RevisionedWhiteboardRejectedCode =
   | 'AUTHENTICATED_TARGET_CHANGED'
@@ -791,13 +896,89 @@ export function normalizeRevisionedDrawChartIntent(
   }
 }
 
+export function normalizeRevisionedDrawCodeIntent(
+  value: unknown,
+): Readonly<RevisionedDrawCodeIntent> | null {
+  if (!isRecord(value)) return null;
+  const allowed = new Set(['language', 'code', 'x', 'y', 'width', 'height', 'fileName']);
+  if (
+    !Object.keys(value).every((key) => allowed.has(key)) ||
+    !Object.prototype.hasOwnProperty.call(value, 'language') ||
+    !Object.prototype.hasOwnProperty.call(value, 'code') ||
+    !Object.prototype.hasOwnProperty.call(value, 'x') ||
+    !Object.prototype.hasOwnProperty.call(value, 'y')
+  ) {
+    return null;
+  }
+  try {
+    const normalized = normalizeWhiteboardCodeV1({
+      language: value.language,
+      code: value.code,
+      x: value.x,
+      y: value.y,
+      width: value.width,
+      height: value.height,
+      fileName: value.fileName,
+    });
+    return immutableJsonSnapshot({
+      language: normalized.language,
+      code: normalized.lines.map((line) => line.content).join('\n'),
+      x: normalized.bounds.x,
+      y: normalized.bounds.y,
+      width: normalized.bounds.width,
+      height: normalized.bounds.height,
+      ...(normalized.fileName !== undefined ? { fileName: normalized.fileName } : {}),
+    });
+  } catch {
+    return null;
+  }
+}
+
+export function normalizeRevisionedEditCodeIntent(
+  value: unknown,
+): Readonly<RevisionedEditCodeIntent> | null {
+  try {
+    return immutableJsonSnapshot(normalizeWhiteboardCodeEditIntentV1(value));
+  } catch {
+    return null;
+  }
+}
+
+export function expectedRevisionedCodeEditNewLineIds(
+  executionId: string,
+  intent: RevisionedEditCodeIntent,
+): string[] | null {
+  const normalized = normalizeRevisionedEditCodeIntent(intent);
+  if (!normalized || !isSafeId(executionId)) return null;
+  const count = (() => {
+    if (normalized.operation === 'insert_after' || normalized.operation === 'insert_before') {
+      return normalized.content.split('\n').length;
+    }
+    if (normalized.operation === 'replace_lines') {
+      return Math.max(0, normalized.content.split('\n').length - normalized.lineIds.length);
+    }
+    return 0;
+  })();
+  try {
+    return Object.freeze(
+      Array.from({ length: count }, (_, index) =>
+        deriveRevisionedCodeEditLineId(executionId, index + 1),
+      ),
+    ) as unknown as string[];
+  } catch {
+    return null;
+  }
+}
+
 type ImplementedRevisionedWhiteboardIntent =
   | RevisionedDrawTextIntent
   | RevisionedDrawShapeIntent
   | RevisionedDrawLineIntent
   | RevisionedDrawLatexIntent
   | RevisionedDrawTableIntent
-  | RevisionedDrawChartIntent;
+  | RevisionedDrawChartIntent
+  | RevisionedDrawCodeIntent
+  | RevisionedEditCodeIntent;
 
 function normalizeRevisionedWhiteboardMutationIntent(
   toolName: RevisionedWhiteboardMutationDigestInput['toolName'],
@@ -816,6 +997,10 @@ function normalizeRevisionedWhiteboardMutationIntent(
       return normalizeRevisionedDrawTableIntent(value);
     case 'wb_draw_chart':
       return normalizeRevisionedDrawChartIntent(value);
+    case 'wb_draw_code':
+      return normalizeRevisionedDrawCodeIntent(value);
+    case 'wb_edit_code':
+      return normalizeRevisionedEditCodeIntent(value);
   }
 }
 
@@ -960,6 +1145,42 @@ export function createRevisionedDrawChartDigests(input: RevisionedDrawChartReque
     : null;
 }
 
+export function createRevisionedDrawCodeDigests(input: RevisionedDrawCodeRequestDigestInput): {
+  normalizedIntent: Readonly<RevisionedDrawCodeIntent>;
+  intentDigest: string;
+  requestDigest: string;
+} | null {
+  const result = createRevisionedWhiteboardMutationDigests({
+    ...input,
+    toolName: 'wb_draw_code',
+  });
+  return result
+    ? {
+        normalizedIntent: result.normalizedIntent as Readonly<RevisionedDrawCodeIntent>,
+        intentDigest: result.intentDigest,
+        requestDigest: result.requestDigest,
+      }
+    : null;
+}
+
+export function createRevisionedEditCodeDigests(input: RevisionedEditCodeRequestDigestInput): {
+  normalizedIntent: Readonly<RevisionedEditCodeIntent>;
+  intentDigest: string;
+  requestDigest: string;
+} | null {
+  const result = createRevisionedWhiteboardMutationDigests({
+    ...input,
+    toolName: 'wb_edit_code',
+  });
+  return result
+    ? {
+        normalizedIntent: result.normalizedIntent as Readonly<RevisionedEditCodeIntent>,
+        intentDigest: result.intentDigest,
+        requestDigest: result.requestDigest,
+      }
+    : null;
+}
+
 export function createRevisionedWhiteboardEffectDeliveryDigests(
   delivery: RevisionedWhiteboardEffectDelivery,
 ) {
@@ -982,6 +1203,10 @@ export function createRevisionedWhiteboardEffectDeliveryDigests(
       return createRevisionedDrawTableDigests({ ...common, intent: delivery.intent });
     case 'wb_draw_chart':
       return createRevisionedDrawChartDigests({ ...common, intent: delivery.intent });
+    case 'wb_draw_code':
+      return createRevisionedDrawCodeDigests({ ...common, intent: delivery.intent });
+    case 'wb_edit_code':
+      return createRevisionedEditCodeDigests({ ...common, intent: delivery.intent });
   }
 }
 
@@ -1226,6 +1451,28 @@ function isNonNegativeSafeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
+function isSafeLineId(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length >= 1 &&
+    value.length <= 256 &&
+    !/[\u0000-\u001f\u007f\u2028\u2029]/u.test(value)
+  );
+}
+
+function isUniqueLineIdArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= 200 &&
+    value.every(isSafeLineId) &&
+    new Set(value).size === value.length
+  );
+}
+
+function stringArraysEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
 export function isRevisionedWhiteboardExpectedDescriptor(
   value: unknown,
 ): value is RevisionedWhiteboardExpectedDescriptor {
@@ -1270,6 +1517,25 @@ export function isRevisionedWhiteboardExpectedDescriptor(
         hasExactKeys(value, ['kind', 'intentDigest', 'stableElementId', 'expectedChartDigest']) &&
         isSha256Digest(value.expectedChartDigest)
       );
+    case 'wb_draw_code_v2':
+      return (
+        hasExactKeys(value, [
+          'kind',
+          'intentDigest',
+          'stableElementId',
+          'expectedCodeDigest',
+          'expectedLineIds',
+        ]) &&
+        isSha256Digest(value.expectedCodeDigest) &&
+        isUniqueLineIdArray(value.expectedLineIds) &&
+        value.expectedLineIds.length >= 1 &&
+        value.expectedLineIds.every((lineId, index) => lineId === `L${index + 1}`)
+      );
+    case 'wb_edit_code_v2':
+      return (
+        hasExactKeys(value, ['kind', 'intentDigest', 'stableElementId', 'expectedNewLineIds']) &&
+        isUniqueLineIdArray(value.expectedNewLineIds)
+      );
     default:
       return false;
   }
@@ -1284,7 +1550,8 @@ function isRevisionedDrawDelta(
     | RevisionedDrawLineDelta['kind']
     | RevisionedDrawLatexDelta['kind']
     | RevisionedDrawTableDelta['kind']
-    | RevisionedDrawChartDelta['kind'],
+    | RevisionedDrawChartDelta['kind']
+    | RevisionedDrawCodeDelta['kind'],
   normalizationVersion: string,
 ): boolean {
   return (
@@ -1596,6 +1863,145 @@ export function isRevisionedDrawChartCommittedReceipt(
   );
 }
 
+export function isRevisionedDrawCodeCommittedReceipt(
+  receipt: ShapeValidatedRevisionedWhiteboardReceipt,
+  expected: RevisionedDrawCodeExpectedDescriptor,
+): receipt is ShapeValidatedRevisionedWhiteboardReceipt & RevisionedWhiteboardCommittedReceipt {
+  if (
+    receipt.outcome !== 'committed' ||
+    receipt.toolName !== 'wb_draw_code' ||
+    receipt.changed !== true ||
+    receipt.mutationMayHaveCommitted !== false ||
+    !isRecord(receipt.delta) ||
+    !isRecord(receipt.postcondition)
+  ) {
+    return false;
+  }
+  const delta = receipt.delta;
+  const postcondition = receipt.postcondition;
+  return (
+    isRevisionedDrawDelta(
+      delta,
+      expected,
+      'whiteboard_code_created_v2',
+      CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
+    ) &&
+    hasExactKeys(postcondition, [
+      'kind',
+      'normalizationVersion',
+      'whiteboardId',
+      'stableElementId',
+      'elementType',
+      'observedCodeDigest',
+      'orderedLineIds',
+      'matchingElementCount',
+    ]) &&
+    postcondition.kind === 'whiteboard_code_exists_v2' &&
+    postcondition.normalizationVersion === CLIENT_EFFECT_CODE_NORMALIZATION_VERSION &&
+    postcondition.whiteboardId === delta.whiteboardId &&
+    postcondition.stableElementId === expected.stableElementId &&
+    postcondition.elementType === 'code' &&
+    postcondition.observedCodeDigest === expected.expectedCodeDigest &&
+    isSha256Digest(postcondition.observedCodeDigest) &&
+    isUniqueLineIdArray(postcondition.orderedLineIds) &&
+    stringArraysEqual(postcondition.orderedLineIds, expected.expectedLineIds) &&
+    postcondition.matchingElementCount === 1 &&
+    hasRevisionedDrawBindingInvariants(receipt, delta)
+  );
+}
+
+export function isRevisionedEditCodeCommittedReceipt(
+  receipt: ShapeValidatedRevisionedWhiteboardReceipt,
+  expected: RevisionedEditCodeExpectedDescriptor,
+): receipt is ShapeValidatedRevisionedWhiteboardReceipt & RevisionedWhiteboardCommittedReceipt {
+  if (
+    receipt.outcome !== 'committed' ||
+    receipt.toolName !== 'wb_edit_code' ||
+    receipt.mutationMayHaveCommitted !== false ||
+    !isRecord(receipt.delta) ||
+    !isRecord(receipt.postcondition)
+  ) {
+    return false;
+  }
+  const delta = receipt.delta;
+  const postcondition = receipt.postcondition;
+  if (
+    !hasExactKeys(delta, [
+      'kind',
+      'normalizationVersion',
+      'whiteboardId',
+      'stableElementId',
+      'codeChanged',
+      'visibilityChanged',
+      'newLineIds',
+      'elementCountBefore',
+      'elementCountAfter',
+    ]) ||
+    delta.kind !== 'whiteboard_code_edited_v2' ||
+    delta.normalizationVersion !== CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION ||
+    !isSafeId(delta.whiteboardId) ||
+    delta.stableElementId !== expected.stableElementId ||
+    typeof delta.codeChanged !== 'boolean' ||
+    typeof delta.visibilityChanged !== 'boolean' ||
+    !isUniqueLineIdArray(delta.newLineIds) ||
+    !stringArraysEqual(delta.newLineIds, expected.expectedNewLineIds) ||
+    !isNonNegativeSafeInteger(delta.elementCountBefore) ||
+    delta.elementCountAfter !== delta.elementCountBefore ||
+    !hasExactKeys(postcondition, [
+      'kind',
+      'normalizationVersion',
+      'whiteboardId',
+      'stableElementId',
+      'elementType',
+      'observedBeforeCodeDigest',
+      'observedAfterCodeDigest',
+      'orderedLineIds',
+      'matchingElementCountBefore',
+      'matchingElementCountAfter',
+    ]) ||
+    postcondition.kind !== 'whiteboard_code_state_observed_v2' ||
+    postcondition.normalizationVersion !== CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION ||
+    postcondition.whiteboardId !== delta.whiteboardId ||
+    postcondition.stableElementId !== expected.stableElementId ||
+    postcondition.elementType !== 'code' ||
+    !isSha256Digest(postcondition.observedBeforeCodeDigest) ||
+    !isSha256Digest(postcondition.observedAfterCodeDigest) ||
+    !isUniqueLineIdArray(postcondition.orderedLineIds) ||
+    postcondition.matchingElementCountBefore !== 1 ||
+    postcondition.matchingElementCountAfter !== 1
+  ) {
+    return false;
+  }
+  const codeChanged =
+    postcondition.observedBeforeCodeDigest !== postcondition.observedAfterCodeDigest;
+  const expectedPrefix = revisionedCodeEditLineIdPrefix(receipt.executionId);
+  const orderedCounts = new Map<string, number>();
+  for (const lineId of postcondition.orderedLineIds) {
+    orderedCounts.set(lineId, (orderedCounts.get(lineId) ?? 0) + 1);
+    if (lineId.startsWith(expectedPrefix) && !expected.expectedNewLineIds.includes(lineId)) {
+      return false;
+    }
+  }
+  if (
+    expected.expectedNewLineIds.some((lineId) => orderedCounts.get(lineId) !== 1) ||
+    (!codeChanged && expected.expectedNewLineIds.length !== 0) ||
+    delta.codeChanged !== codeChanged ||
+    receipt.changed !== (codeChanged || delta.visibilityChanged) ||
+    receipt.previousBinding.stageId !== receipt.currentBinding.stageId ||
+    receipt.previousBinding.whiteboardId === null ||
+    receipt.currentBinding.whiteboardId !== receipt.previousBinding.whiteboardId ||
+    receipt.currentBinding.whiteboardId !== delta.whiteboardId ||
+    receipt.currentBinding.revision !==
+      receipt.previousBinding.revision + (receipt.changed ? 1 : 0) ||
+    (!receipt.changed &&
+      (receipt.currentBinding.stageId !== receipt.previousBinding.stageId ||
+        receipt.currentBinding.whiteboardId !== receipt.previousBinding.whiteboardId))
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export function isRevisionedWhiteboardCommittedReceiptForExpected(
   receipt: ShapeValidatedRevisionedWhiteboardReceipt,
   expected: RevisionedWhiteboardExpectedDescriptor,
@@ -1613,6 +2019,10 @@ export function isRevisionedWhiteboardCommittedReceiptForExpected(
       return isRevisionedDrawTableCommittedReceipt(receipt, expected);
     case 'wb_draw_chart_v2':
       return isRevisionedDrawChartCommittedReceipt(receipt, expected);
+    case 'wb_draw_code_v2':
+      return isRevisionedDrawCodeCommittedReceipt(receipt, expected);
+    case 'wb_edit_code_v2':
+      return isRevisionedEditCodeCommittedReceipt(receipt, expected);
   }
 }
 
@@ -1638,7 +2048,9 @@ export function isRevisionedWhiteboardEffectDelivery(
       value.toolName !== 'wb_draw_line' &&
       value.toolName !== 'wb_draw_latex' &&
       value.toolName !== 'wb_draw_table' &&
-      value.toolName !== 'wb_draw_chart') ||
+      value.toolName !== 'wb_draw_chart' &&
+      value.toolName !== 'wb_draw_code' &&
+      value.toolName !== 'wb_edit_code') ||
     !isSafeId(value.executionId) ||
     !isRequestDigest(value.requestDigest) ||
     !isBinding(value.expectedBinding) ||

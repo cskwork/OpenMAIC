@@ -2,6 +2,8 @@ import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
 import {
   CLIENT_EFFECT_CHART_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION,
+  CLIENT_EFFECT_CODE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_NORMALIZATION_VERSION,
   CLIENT_EFFECT_LATEX_RENDER_VERSION,
   CLIENT_EFFECT_LINE_NORMALIZATION_VERSION,
@@ -9,17 +11,21 @@ import {
   CLIENT_EFFECT_TABLE_NORMALIZATION_VERSION,
   CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
   assertWhiteboardChartSpecV1,
+  assertWhiteboardCodeSpecV1,
+  assertWhiteboardEditableCodeStateV1,
   assertWhiteboardTableSpecV1,
   normalizeWhiteboardLatexV1,
   normalizeWhiteboardLineV1,
   normalizeWhiteboardShapeV1,
   normalizeVisibleTextV1,
   type WhiteboardChartSpec,
+  type WhiteboardCodeSpec,
+  type WhiteboardEditableCodeState,
   type WhiteboardLatexSpec,
   type WhiteboardLineSpec,
   type WhiteboardShapeSpec,
 } from './client-effect-contract';
-import type { PPTTableElement } from '@openmaic/dsl';
+import type { PPTCodeElement, PPTTableElement } from '@openmaic/dsl';
 
 export const REVISIONED_WHITEBOARD_TABLE_STATE_VERSION = 'maic.whiteboard-table-state.v2' as const;
 
@@ -156,6 +162,67 @@ export function digestWhiteboardChartV1Sync(value: WhiteboardChartSpec): string 
   );
 }
 
+export function digestWhiteboardCodeV1Sync(value: WhiteboardCodeSpec): string {
+  const canonical = assertWhiteboardCodeSpecV1(value);
+  return (
+    'sha256:' +
+    bytesToHex(
+      sha256(
+        utf8ToBytes(CLIENT_EFFECT_CODE_NORMALIZATION_VERSION + '\n' + JSON.stringify(canonical)),
+      ),
+    )
+  );
+}
+
+export function digestWhiteboardEditableCodeStateV1Sync(
+  value: WhiteboardEditableCodeState,
+): string {
+  const canonical = assertWhiteboardEditableCodeStateV1(value);
+  return (
+    'sha256:' +
+    bytesToHex(
+      sha256(
+        utf8ToBytes(
+          CLIENT_EFFECT_CODE_EDIT_NORMALIZATION_VERSION + '\n' + JSON.stringify(canonical),
+        ),
+      ),
+    )
+  );
+}
+
+export function editableCodeStateFromElementV1(
+  element: PPTCodeElement,
+): WhiteboardEditableCodeState {
+  if (
+    element.type !== 'code' ||
+    typeof element.left !== 'number' ||
+    typeof element.top !== 'number' ||
+    typeof element.width !== 'number' ||
+    typeof element.height !== 'number' ||
+    !Array.isArray(element.lines)
+  ) {
+    throw new Error('REVISIONED_WHITEBOARD_CODE_ELEMENT_INVALID');
+  }
+  try {
+    return assertWhiteboardEditableCodeStateV1({
+      language: element.language,
+      lines: element.lines,
+      ...(element.fileName !== undefined ? { fileName: element.fileName } : {}),
+      bounds: {
+        x: element.left,
+        y: element.top,
+        width: element.width,
+        height: element.height,
+      },
+      showLineNumbers: element.showLineNumbers ?? true,
+      fontSize: element.fontSize ?? 14,
+      rotate: element.rotate,
+    });
+  } catch (error) {
+    throw new Error('REVISIONED_WHITEBOARD_CODE_ELEMENT_INVALID', { cause: error });
+  }
+}
+
 export function canonicalRevisionedWhiteboardTableStateV2(element: PPTTableElement) {
   try {
     if (
@@ -267,4 +334,15 @@ export function deriveRevisionedWhiteboardId(executionId: string): string {
 
 export function deriveRevisionedElementId(executionId: string): string {
   return `client-effect-${executionSuffix(executionId)}`;
+}
+
+export function deriveRevisionedCodeEditLineId(executionId: string, ordinal: number): string {
+  if (!Number.isSafeInteger(ordinal) || ordinal < 1 || ordinal > 200) {
+    throw new Error('REVISIONED_WHITEBOARD_CODE_LINE_ORDINAL_INVALID');
+  }
+  return `CE2_${executionSuffix(executionId)}_${ordinal}`;
+}
+
+export function revisionedCodeEditLineIdPrefix(executionId: string): string {
+  return `CE2_${executionSuffix(executionId)}_`;
 }
