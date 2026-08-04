@@ -48,7 +48,10 @@ function whiteboardsOf(value: Stage | null): readonly Whiteboard[] {
   return value?.whiteboard ?? [];
 }
 
-function createAuthority(whiteboards: Whiteboard[] = [whiteboard('wb-a')]) {
+function createAuthority(
+  whiteboards: Whiteboard[] = [whiteboard('wb-a')],
+  targetRegistry = { validateAndConsume: () => true },
+) {
   let open = false;
   const store = createStore<{ stage: Stage | null }>(() => ({
     stage: stage('stage-a', whiteboards),
@@ -60,7 +63,7 @@ function createAuthority(whiteboards: Whiteboard[] = [whiteboard('wb-a')]) {
       open = whiteboardOpen;
     },
   });
-  authority.configureAuthenticatedTargetValidator(() => true);
+  authority.configureAuthenticatedTargetRegistry(targetRegistry);
   return {
     store,
     authority,
@@ -843,7 +846,9 @@ describe('WhiteboardEnvironmentAuthority', () => {
   });
 
   it('revalidates the authenticated delivery target inside the critical section', () => {
-    const { authority, store } = createAuthority();
+    let validateTarget = () => true;
+    const targetRegistry = { validateAndConsume: () => validateTarget() };
+    const { authority, store } = createAuthority([whiteboard('wb-a')], targetRegistry);
     const before = store.getState().stage;
     let validatedWhileLocked = false;
     const expected = { stageId: 'stage-a', whiteboardId: 'wb-a', revision: 0 };
@@ -868,7 +873,7 @@ describe('WhiteboardEnvironmentAuthority', () => {
       deadlineAt: Date.now() + 60_000,
       plan,
     };
-    authority.configureAuthenticatedTargetValidator(() => {
+    validateTarget = () => {
       validatedWhileLocked = authority.isTransactionActive();
       input.executionId = 'execution-mutated';
       input.requestDigest = `sha256:${'f'.repeat(64)}`;
@@ -878,7 +883,7 @@ describe('WhiteboardEnvironmentAuthority', () => {
       plan.nextWhiteboards[0].id = 'caller-mutated';
       plan.nextOpen = false;
       return false;
-    });
+    };
     const result = authority.transactRevisioned(input);
 
     expect(validatedWhileLocked).toBe(true);
@@ -930,7 +935,7 @@ describe('WhiteboardEnvironmentAuthority', () => {
         open = whiteboardOpen;
       },
     });
-    authority.configureAuthenticatedTargetValidator(() => true);
+    authority.configureAuthenticatedTargetRegistry({ validateAndConsume: () => true });
 
     const result = authority.transactRevisioned({
       ...revisionedDelivery(),

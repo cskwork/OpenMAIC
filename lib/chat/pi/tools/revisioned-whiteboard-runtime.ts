@@ -7,6 +7,7 @@ import type {
 import {
   RevisionedWhiteboardCoordinator,
   type RevisionedAckResult,
+  type RegisteredRevisionedMutation,
   type RevisionedWhiteboardTerminal,
 } from '@/lib/agent/runtime/revisioned-whiteboard-coordinator';
 import {
@@ -16,8 +17,24 @@ import {
 } from './native-whiteboard-observation-ledger';
 
 export type RevisionedWhiteboardAuthorizationResult =
-  | { ok: true; acknowledgementToken: string }
+  | { ok: true; registration: RegisteredRevisionedMutation }
   | Extract<ConsumeObservationClaimResult, { ok: false }>;
+
+export interface RevisionedWhiteboardAuthorizationInput {
+  observationToken: string;
+  childInvocationId: string;
+  requestId: string;
+  executionId: string;
+  requestDigest: string;
+  toolName: RevisionedWhiteboardMutationToolName;
+  expectedBinding: RevisionedWhiteboardBinding;
+  sessionId: string;
+  sceneId: string;
+  deadlineAt: number;
+  requiredCoverage: ObservationCoverage;
+  intentDigest?: string;
+  expectedDrawText?: import('@/lib/agent/runtime/revisioned-whiteboard-contract').RevisionedDrawTextExpectedDescriptor;
+}
 
 /**
  * Request-scoped Stage 3A seam. Authorization is consumed before a caller may
@@ -30,49 +47,57 @@ export class RevisionedWhiteboardMutationRuntime {
     readonly coordinator: RevisionedWhiteboardCoordinator = new RevisionedWhiteboardCoordinator(),
   ) {}
 
-  authorizeAndRegister(input: {
-    observationToken: string;
-    childInvocationId: string;
-    requestId: string;
-    executionId: string;
-    requestDigest: string;
-    toolName: RevisionedWhiteboardMutationToolName;
-    expectedBinding: RevisionedWhiteboardBinding;
-    sessionId: string;
-    sceneId: string;
-    deadlineAt: number;
-    requiredCoverage: ObservationCoverage;
-  }): RevisionedWhiteboardAuthorizationResult {
-    const authorization = this.observationLedger.consumeWith(
-      {
-        token: input.observationToken,
-        childInvocationId: input.childInvocationId,
-        requestId: input.requestId,
-        stageId: input.expectedBinding.stageId,
-        whiteboardId: input.expectedBinding.whiteboardId,
-        revision: input.expectedBinding.revision,
-        requiredCoverage: input.requiredCoverage,
-      },
-      () =>
-        this.coordinator.register({
-          executionId: input.executionId,
-          requestDigest: input.requestDigest,
-          toolName: input.toolName,
-          expectedBinding: input.expectedBinding,
-          authenticatedTarget: {
-            childInvocationId: input.childInvocationId,
-            requestId: input.requestId,
-            sessionId: input.sessionId,
-            sceneId: input.sceneId,
-          } satisfies RevisionedWhiteboardAuthenticatedTarget,
-          deadlineAt: input.deadlineAt,
-        }),
+  findAuthorizedReplay(
+    input: RevisionedWhiteboardAuthorizationInput,
+  ): RegisteredRevisionedMutation | null {
+    return this.coordinator.findAuthorizedReplay(this.prepareRegistration(input).coordinatorInput);
+  }
+
+  authorizeAndRegister(
+    input: RevisionedWhiteboardAuthorizationInput,
+  ): RevisionedWhiteboardAuthorizationResult {
+    const { claimInput, coordinatorInput } = this.prepareRegistration(input);
+    const replay = this.coordinator.findAuthorizedReplay(coordinatorInput);
+    if (replay) return { ok: true, registration: replay };
+    const authorization = this.observationLedger.consumeWith(claimInput, () =>
+      this.coordinator.register(coordinatorInput),
     );
     if (!authorization.ok) return authorization;
     return {
       ok: true,
-      acknowledgementToken: authorization.value.acknowledgementToken,
+      registration: authorization.value,
     };
+  }
+
+  private prepareRegistration(input: RevisionedWhiteboardAuthorizationInput) {
+    const claimInput = {
+      token: input.observationToken,
+      childInvocationId: input.childInvocationId,
+      requestId: input.requestId,
+      stageId: input.expectedBinding.stageId,
+      whiteboardId: input.expectedBinding.whiteboardId,
+      revision: input.expectedBinding.revision,
+      requiredCoverage: input.requiredCoverage,
+    } as const;
+    const observationAuthorizationDigest =
+      this.observationLedger.createAuthorizationDigest(claimInput);
+    const coordinatorInput = {
+      executionId: input.executionId,
+      requestDigest: input.requestDigest,
+      toolName: input.toolName,
+      expectedBinding: input.expectedBinding,
+      authenticatedTarget: {
+        childInvocationId: input.childInvocationId,
+        requestId: input.requestId,
+        sessionId: input.sessionId,
+        sceneId: input.sceneId,
+      } satisfies RevisionedWhiteboardAuthenticatedTarget,
+      deadlineAt: input.deadlineAt,
+      observationAuthorizationDigest,
+      ...(input.intentDigest ? { intentDigest: input.intentDigest } : {}),
+      ...(input.expectedDrawText ? { expectedDrawText: input.expectedDrawText } : {}),
+    };
+    return { claimInput, coordinatorInput };
   }
 
   applyAck(
@@ -99,6 +124,18 @@ export class RevisionedWhiteboardMutationRuntime {
     return this.observationLedger.mintFromMutationReceipt({
       authenticatedReceipt: terminal.authenticatedReceipt,
       coverage: input.coverage,
+    });
+  }
+
+  mintDrawTextBundle(input: {
+    executionId: string;
+    expected: import('@/lib/agent/runtime/revisioned-whiteboard-contract').RevisionedDrawTextExpectedDescriptor;
+  }) {
+    const terminal = this.coordinator.getTerminal(input.executionId);
+    if (!terminal?.authenticatedReceipt) return null;
+    return this.observationLedger.mintDrawTextCapabilityBundle({
+      authenticatedReceipt: terminal.authenticatedReceipt,
+      expected: input.expected,
     });
   }
 }

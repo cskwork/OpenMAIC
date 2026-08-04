@@ -1,5 +1,6 @@
 import type { DirectorState } from '@/lib/types/chat';
 import type { ClientEffectDelivery } from '@/lib/agent/runtime/client-effect-contract';
+import type { RevisionedWhiteboardEffectDelivery } from '@/lib/agent/runtime/revisioned-whiteboard-contract';
 
 /**
  * StreamBuffer — unified presentation pacing layer.
@@ -60,6 +61,12 @@ export interface ClientEffectItem {
   delivery: ClientEffectDelivery;
 }
 
+export interface RevisionedClientEffectItem {
+  kind: 'revisioned_client_effect';
+  messageId: string;
+  delivery: RevisionedWhiteboardEffectDelivery;
+}
+
 export interface ThinkingItem {
   kind: 'thinking';
   stage: string;
@@ -94,6 +101,7 @@ export type BufferItem =
   | TextItem
   | ActionItem
   | ClientEffectItem
+  | RevisionedClientEffectItem
   | ThinkingItem
   | CueUserItem
   | DoneItem
@@ -122,6 +130,14 @@ export interface StreamBufferCallbacks {
   ): void | Promise<void>;
   /** Synchronous reservation hook; runs as soon as SSE delivery is queued. */
   onClientEffectQueued?(delivery: ClientEffectDelivery): void;
+  onRevisionedClientEffectReady?(
+    messageId: string,
+    delivery: RevisionedWhiteboardEffectDelivery,
+    signal: AbortSignal,
+  ): void | Promise<void>;
+  onRevisionedClientEffectQueued?(delivery: RevisionedWhiteboardEffectDelivery): void;
+  /** Releases request-scoped browser resources when this buffer is retired. */
+  onDispose?(): void;
   /** Mirrors presentation pause/resume into the active client-effect budget. */
   onPauseChange?(paused: boolean): void | Promise<void>;
   /**
@@ -294,6 +310,16 @@ export class StreamBuffer {
     });
   }
 
+  pushRevisionedClientEffect(
+    messageId: string,
+    delivery: RevisionedWhiteboardEffectDelivery,
+  ): void {
+    if (this._disposed) return;
+    this.cb.onRevisionedClientEffectQueued?.(delivery);
+    this.sealLastText();
+    this.items.push({ kind: 'revisioned_client_effect', messageId, delivery });
+  }
+
   pushThinking(data: { stage: string; agentId?: string }): void {
     if (this._disposed) return;
     this.items.push({ kind: 'thinking', ...data });
@@ -427,6 +453,12 @@ export class StreamBuffer {
             if (this._disposed) return;
             this.cb.onLiveSpeech(null, this.currentAgentId);
             break;
+          case 'revisioned_client_effect':
+            this.currentSegmentText = '';
+            await this.trackRevisionedClientEffect(item);
+            if (this._disposed) return;
+            this.cb.onLiveSpeech(null, this.currentAgentId);
+            break;
           case 'agent_start':
             this.currentAgentId = item.agentId;
             this.currentSegmentText = '';
@@ -483,6 +515,7 @@ export class StreamBuffer {
     // Final cleanup signal
     this.cb.onLiveSpeech(null, null);
     this.cb.onSpeechProgress(null);
+    this.cb.onDispose?.();
   }
 
   /**
@@ -502,6 +535,7 @@ export class StreamBuffer {
     this._drainReject?.(new Error('Buffer shutdown'));
     this._drainResolve = null;
     this._drainReject = null;
+    this.cb.onDispose?.();
   }
 
   // ─── Internals ───────────────────────────────────────────────────
@@ -601,7 +635,9 @@ export class StreamBuffer {
         if (isComplete) {
           this.readIndex++;
           this.charCursor = 0;
-          const nextIsClientEffect = this.items[this.readIndex]?.kind === 'client_effect';
+          const nextKind = this.items[this.readIndex]?.kind;
+          const nextIsClientEffect =
+            nextKind === 'client_effect' || nextKind === 'revisioned_client_effect';
 
           // Fixed pause after text finishes — gives the reader a breathing gap
           // before the next action or agent turn fires.
@@ -658,6 +694,9 @@ export class StreamBuffer {
         break;
       case 'client_effect':
         this.startClientEffect(item);
+        break;
+      case 'revisioned_client_effect':
+        this.startRevisionedClientEffect(item);
         break;
 
       case 'thinking':
@@ -727,6 +766,9 @@ export class StreamBuffer {
           return;
         case 'client_effect':
           this.startClientEffect(next);
+          return;
+        case 'revisioned_client_effect':
+          this.startRevisionedClientEffect(next);
           return;
         case 'thinking':
           this.cb.onThinking(next);
@@ -822,6 +864,40 @@ export class StreamBuffer {
     return trackedCompletion;
   }
 
+  private startRevisionedClientEffect(item: RevisionedClientEffectItem): void {
+    this.currentSegmentText = '';
+    this.cb.onLiveSpeech(null, this.currentAgentId);
+    this.readIndex++;
+    this.charCursor = 0;
+    void this.trackRevisionedClientEffect(item);
+  }
+
+  private trackRevisionedClientEffect(item: RevisionedClientEffectItem): Promise<void> {
+    let completion: Promise<void>;
+    try {
+      if (!this.cb.onRevisionedClientEffectReady) {
+        throw new Error('No revisioned client-effect executor is configured.');
+      }
+      completion = Promise.resolve(
+        this.cb.onRevisionedClientEffectReady(
+          item.messageId,
+          item.delivery,
+          this.lifecycleAbortController.signal,
+        ),
+      );
+    } catch (error) {
+      this.reportRevisionedClientEffectError(item, error);
+      completion = Promise.resolve();
+    }
+    const trackedCompletion = completion
+      .catch((error) => this.reportRevisionedClientEffectError(item, error))
+      .finally(() => {
+        if (this._actionCompletion === trackedCompletion) this._actionCompletion = null;
+      });
+    this._actionCompletion = trackedCompletion;
+    return trackedCompletion;
+  }
+
   private reportActionError(item: ActionItem, error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
     this.cb.onError(`Action ${item.actionName} failed: ${message}`);
@@ -830,5 +906,13 @@ export class StreamBuffer {
   private reportClientEffectError(item: ClientEffectItem, error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
     this.cb.onError(`Client effect ${item.delivery.request.toolName} failed: ${message}`);
+  }
+
+  private reportRevisionedClientEffectError(
+    item: RevisionedClientEffectItem,
+    error: unknown,
+  ): void {
+    const message = error instanceof Error ? error.message : String(error);
+    this.cb.onError(`Revisioned client effect ${item.delivery.toolName} failed: ${message}`);
   }
 }

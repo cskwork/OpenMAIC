@@ -41,6 +41,7 @@ import type { CleanupSource } from '@/lib/playback/auto-resume';
 import { nanoid } from 'nanoid';
 import { BrowserClientEffectRuntime } from '@/lib/agent/client/client-effect-runtime';
 import { BrowserClientQueryRuntime } from '@/lib/agent/client/client-query-runtime';
+import { BrowserRevisionedWhiteboardEffectRuntime } from '@/lib/agent/client/revisioned-whiteboard-effect-runtime';
 import type { ClientQueryDelivery } from '@/lib/agent/runtime/client-query-contract';
 import type {
   ClientEffectDelivery,
@@ -50,6 +51,8 @@ import { WB_OPEN_MS } from '@/lib/choreography/timing';
 
 const log = createLogger('ChatSessions');
 const SOFT_CLOSE_TIMEOUT_MS = 15_000;
+const readRevisionedWhiteboardStageId = () => useStageStore.getState().stage?.id;
+const readRevisionedWhiteboardSceneId = () => useStageStore.getState().currentSceneId;
 
 function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.reject(new DOMException('Operation aborted', 'AbortError'));
@@ -1032,6 +1035,14 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             },
           })
         : null;
+      const revisionedEffectRuntime = requestId
+        ? new BrowserRevisionedWhiteboardEffectRuntime({
+            requestId,
+            sessionId,
+            readCurrentStageId: readRevisionedWhiteboardStageId,
+            readCurrentSceneId: readRevisionedWhiteboardSceneId,
+          })
+        : null;
 
       const buffer = new StreamBuffer(
         {
@@ -1174,6 +1185,21 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
           onClientEffectQueued(delivery: ClientEffectDelivery) {
             effectDeliveries.set(delivery.request.executionId, delivery);
             effectRuntime?.reserve(delivery);
+          },
+
+          async onRevisionedClientEffectReady(_messageId, delivery, signal) {
+            if (!revisionedEffectRuntime) {
+              throw new Error('REVISIONED_WHITEBOARD_EFFECT_RUNTIME_UNAVAILABLE');
+            }
+            await revisionedEffectRuntime.execute(delivery, signal);
+          },
+
+          onRevisionedClientEffectQueued(delivery) {
+            revisionedEffectRuntime?.reserve(delivery);
+          },
+
+          onDispose() {
+            revisionedEffectRuntime?.clear();
           },
 
           onPauseChange(paused: boolean) {
@@ -1337,6 +1363,12 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             if (controller.signal.aborted || !requestId) break;
             if (!currentBuffer) break;
             currentBuffer.pushClientEffect(event.data);
+            break;
+          }
+          case 'revisioned_client_effect': {
+            const targetId = currentMessageId;
+            if (controller.signal.aborted || !requestId || !currentBuffer || !targetId) break;
+            currentBuffer.pushRevisionedClientEffect(targetId, event.data);
             break;
           }
           case 'thinking':

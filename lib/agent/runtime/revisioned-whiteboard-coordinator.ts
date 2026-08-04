@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { nanoid } from 'nanoid';
 import {
   isRevisionedWhiteboardAuthenticatedTarget,
+  isRevisionedDrawTextCommittedReceipt,
   isRevisionedWhiteboardMutationAck,
   isRevisionedWhiteboardMutationIdentity,
   verifyRevisionedWhiteboardAuthorityReceipt,
@@ -10,8 +11,10 @@ import {
   type RevisionedWhiteboardEnvironmentBinding,
   type RevisionedWhiteboardMutationAck,
   type RevisionedWhiteboardMutationToolName,
+  type RevisionedDrawTextExpectedDescriptor,
   type ShapeValidatedRevisionedWhiteboardReceipt,
 } from './revisioned-whiteboard-contract';
+import { digestRevisionedValue } from './revisioned-whiteboard-digest';
 
 type RevisionedCoordinatorStatus = 'pending' | 'accepted' | 'committed' | 'rejected' | 'uncertain';
 
@@ -59,9 +62,28 @@ export interface RevisionedWhiteboardCoordinatorRegistration {
   expectedBinding: RevisionedWhiteboardBinding;
   authenticatedTarget: RevisionedWhiteboardAuthenticatedTarget;
   deadlineAt: number;
+  intentDigest?: string;
+  observationAuthorizationDigest?: string;
+  expectedDrawText?: RevisionedDrawTextExpectedDescriptor;
 }
 
+export type PendingRegisteredRevisionedMutation = {
+  kind: 'pending';
+  acknowledgementToken: string;
+  terminal: Promise<RevisionedWhiteboardTerminal>;
+};
+
+export type SettledRevisionedMutationReplay = {
+  kind: 'settled_replay';
+  terminal: Promise<RevisionedWhiteboardTerminal>;
+};
+
+export type RegisteredRevisionedMutation =
+  | PendingRegisteredRevisionedMutation
+  | SettledRevisionedMutationReplay;
+
 type Entry = RevisionedWhiteboardCoordinatorRegistration & {
+  registrationDigest: string;
   status: RevisionedCoordinatorStatus;
   acceptedBinding?: RevisionedWhiteboardEnvironmentBinding;
   terminal?: RevisionedWhiteboardTerminal;
@@ -69,10 +91,14 @@ type Entry = RevisionedWhiteboardCoordinatorRegistration & {
   actionChargeTaken: boolean;
   hardTimer: ReturnType<typeof setTimeout>;
   acknowledgementToken: string;
+  terminalPromise: Promise<RevisionedWhiteboardTerminal>;
+  resolveTerminal: (terminal: RevisionedWhiteboardTerminal) => void;
 };
 
 type Tombstone = {
   requestDigest: string;
+  registrationDigest: string;
+  observationAuthorizationDigest?: string;
   terminal: RevisionedWhiteboardTerminal;
   terminalAck?: string;
   expiresAt: number;
@@ -95,27 +121,38 @@ function bindingsEqual(
   );
 }
 
-function targetsEqual(
-  left: RevisionedWhiteboardAuthenticatedTarget,
-  right: RevisionedWhiteboardAuthenticatedTarget,
-): boolean {
+function isSha256Digest(value: unknown): value is string {
+  return typeof value === 'string' && /^sha256:[0-9a-f]{64}$/u.test(value);
+}
+
+function isExpectedDrawTextDescriptor(
+  value: unknown,
+): value is RevisionedDrawTextExpectedDescriptor {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const descriptor = value as Partial<RevisionedDrawTextExpectedDescriptor>;
   return (
-    left.childInvocationId === right.childInvocationId &&
-    left.requestId === right.requestId &&
-    left.sessionId === right.sessionId &&
-    left.sceneId === right.sceneId
+    Object.keys(value).length === 4 &&
+    descriptor.kind === 'wb_draw_text_v2' &&
+    isSha256Digest(descriptor.intentDigest) &&
+    typeof descriptor.stableElementId === 'string' &&
+    descriptor.stableElementId.length >= 1 &&
+    descriptor.stableElementId.length <= 512 &&
+    !/[\u0000-\u001f\u007f\u2028\u2029]/u.test(descriptor.stableElementId) &&
+    isSha256Digest(descriptor.expectedContentDigest)
   );
 }
 
-function acceptedBindingMatchesExpected(
-  accepted: Extract<RevisionedWhiteboardMutationAck, { status: 'accepted' }>['targetBinding'],
-  expected: RevisionedWhiteboardBinding,
-): boolean {
-  return (
-    accepted.stageId === expected.stageId &&
-    accepted.whiteboardId === expected.whiteboardId &&
-    accepted.observedRevision === expected.revision
-  );
+function registrationDigest(input: RevisionedWhiteboardCoordinatorRegistration): string {
+  return digestRevisionedValue({
+    executionId: input.executionId,
+    requestDigest: input.requestDigest,
+    intentDigest: input.intentDigest ?? null,
+    toolName: input.toolName,
+    expectedBinding: input.expectedBinding,
+    authenticatedTarget: input.authenticatedTarget,
+    deadlineAt: input.deadlineAt,
+    expectedDrawText: input.expectedDrawText ?? null,
+  });
 }
 
 function acceptedBindingsEqual(
@@ -132,9 +169,13 @@ function acceptedBindingsEqual(
 function receiptCorrelationError(
   receipt: ShapeValidatedRevisionedWhiteboardReceipt,
   accepted: RevisionedWhiteboardEnvironmentBinding,
+  expected: RevisionedWhiteboardBinding,
 ): string | null {
   if (receipt.outcome === 'committed' || receipt.outcome === 'uncertain') {
-    if (!bindingsEqual(receipt.previousBinding, accepted)) {
+    if (
+      !bindingsEqual(receipt.previousBinding, accepted) ||
+      !bindingsEqual(receipt.previousBinding, expected)
+    ) {
       return 'REVISIONED_WHITEBOARD_RECEIPT_TARGET_MISMATCH';
     }
     if (
@@ -160,12 +201,12 @@ function receiptCorrelationError(
     case 'AUTHENTICATED_TARGET_CHANGED':
       return null;
     case 'STALE_STATE':
-      return receipt.previousBinding.stageId === accepted.stageId &&
-        !bindingsEqual(receipt.previousBinding, accepted)
+      return receipt.previousBinding.stageId === expected.stageId &&
+        !bindingsEqual(receipt.previousBinding, expected)
         ? null
         : 'REVISIONED_WHITEBOARD_RECEIPT_TARGET_MISMATCH';
     case 'TARGET_CHANGED':
-      return receipt.previousBinding.stageId !== accepted.stageId
+      return receipt.previousBinding.stageId !== expected.stageId
         ? null
         : 'REVISIONED_WHITEBOARD_RECEIPT_TARGET_MISMATCH';
     case 'EXECUTION_ID_CONFLICT':
@@ -199,42 +240,45 @@ export class RevisionedWhiteboardCoordinator {
     this.createToken = opts.createToken ?? (() => nanoid(32));
   }
 
-  register(input: RevisionedWhiteboardCoordinatorRegistration): {
-    acknowledgementToken: string;
-  } {
+  findAuthorizedReplay(
+    input: RevisionedWhiteboardCoordinatorRegistration,
+  ): RegisteredRevisionedMutation | null {
     this.cleanupExpired();
-    if (
-      !isRevisionedWhiteboardMutationIdentity({
-        executionId: input.executionId,
-        requestDigest: input.requestDigest,
-        toolName: input.toolName,
-        expectedBinding: input.expectedBinding,
-      }) ||
-      !isRevisionedWhiteboardAuthenticatedTarget(input.authenticatedTarget) ||
-      !Number.isFinite(input.deadlineAt)
-    ) {
-      throw new Error('REVISIONED_WHITEBOARD_REGISTRATION_INVALID');
-    }
+    this.validateRegistration(input);
+    const expectedDigest = registrationDigest(input);
     const existing = this.entries.get(input.executionId);
     if (existing) {
       if (
-        existing.requestDigest !== input.requestDigest ||
-        existing.toolName !== input.toolName ||
-        !bindingsEqual(existing.expectedBinding, input.expectedBinding) ||
-        !targetsEqual(existing.authenticatedTarget, input.authenticatedTarget) ||
-        existing.deadlineAt !== input.deadlineAt
+        existing.registrationDigest !== expectedDigest ||
+        existing.observationAuthorizationDigest !== input.observationAuthorizationDigest
       ) {
         throw new Error('REVISIONED_WHITEBOARD_REGISTRATION_CONFLICT');
       }
       if (!existing.terminal && this.now() >= existing.deadlineAt) {
         this.settleDeliveryFailure(existing.executionId);
       }
-      if (existing.terminal) throw new Error('REVISIONED_WHITEBOARD_REGISTRATION_TERMINAL');
-      return { acknowledgementToken: existing.acknowledgementToken };
+      return existing.terminal
+        ? { kind: 'settled_replay', terminal: existing.terminalPromise }
+        : {
+            kind: 'pending',
+            acknowledgementToken: existing.acknowledgementToken,
+            terminal: existing.terminalPromise,
+          };
     }
-    if (this.tombstones.has(input.executionId)) {
+    const tombstone = this.tombstones.get(input.executionId);
+    if (!tombstone) return null;
+    if (
+      tombstone.registrationDigest !== expectedDigest ||
+      tombstone.observationAuthorizationDigest !== input.observationAuthorizationDigest
+    ) {
       throw new Error('REVISIONED_WHITEBOARD_REGISTRATION_CONFLICT');
     }
+    return { kind: 'settled_replay', terminal: Promise.resolve(tombstone.terminal) };
+  }
+
+  register(input: RevisionedWhiteboardCoordinatorRegistration): RegisteredRevisionedMutation {
+    const replay = this.findAuthorizedReplay(input);
+    if (replay) return replay;
     if (this.entries.size >= this.maxEntries) {
       throw new Error('REVISIONED_WHITEBOARD_COORDINATOR_CAPACITY_EXCEEDED');
     }
@@ -244,6 +288,13 @@ export class RevisionedWhiteboardCoordinator {
     const acknowledgementToken = this.createToken();
     const expectedBinding = Object.freeze({ ...input.expectedBinding });
     const authenticatedTarget = Object.freeze({ ...input.authenticatedTarget });
+    const expectedDrawText = input.expectedDrawText
+      ? Object.freeze({ ...input.expectedDrawText })
+      : undefined;
+    let resolveTerminal!: (terminal: RevisionedWhiteboardTerminal) => void;
+    const terminalPromise = new Promise<RevisionedWhiteboardTerminal>((resolve) => {
+      resolveTerminal = resolve;
+    });
     this.entries.set(input.executionId, {
       executionId: input.executionId,
       requestDigest: input.requestDigest,
@@ -251,12 +302,60 @@ export class RevisionedWhiteboardCoordinator {
       expectedBinding,
       authenticatedTarget,
       deadlineAt: input.deadlineAt,
+      ...(input.intentDigest ? { intentDigest: input.intentDigest } : {}),
+      ...(input.observationAuthorizationDigest
+        ? { observationAuthorizationDigest: input.observationAuthorizationDigest }
+        : {}),
+      ...(expectedDrawText ? { expectedDrawText } : {}),
+      registrationDigest: registrationDigest(input),
       status: 'pending',
       actionChargeTaken: false,
       hardTimer,
       acknowledgementToken,
+      terminalPromise,
+      resolveTerminal,
     });
-    return { acknowledgementToken };
+    return { kind: 'pending', acknowledgementToken, terminal: terminalPromise };
+  }
+
+  authorize(
+    executionId: string,
+    acknowledgementToken: string,
+  ): 'authorized' | 'unauthorized' | 'unknown' {
+    this.cleanupExpired();
+    const entry = this.entries.get(executionId);
+    if (entry) {
+      return tokenMatches(acknowledgementToken, entry.acknowledgementToken)
+        ? 'authorized'
+        : 'unauthorized';
+    }
+    const tombstone = this.tombstones.get(executionId);
+    if (!tombstone) return 'unknown';
+    return tokenMatchesDigest(acknowledgementToken, tombstone.acknowledgementTokenDigest)
+      ? 'authorized'
+      : 'unauthorized';
+  }
+
+  private validateRegistration(input: RevisionedWhiteboardCoordinatorRegistration): void {
+    if (
+      !isRevisionedWhiteboardMutationIdentity({
+        executionId: input.executionId,
+        requestDigest: input.requestDigest,
+        toolName: input.toolName,
+        expectedBinding: input.expectedBinding,
+      }) ||
+      !isRevisionedWhiteboardAuthenticatedTarget(input.authenticatedTarget) ||
+      !Number.isFinite(input.deadlineAt) ||
+      (input.intentDigest !== undefined && !isSha256Digest(input.intentDigest)) ||
+      (input.observationAuthorizationDigest !== undefined &&
+        !isSha256Digest(input.observationAuthorizationDigest)) ||
+      (input.expectedDrawText !== undefined &&
+        (!isExpectedDrawTextDescriptor(input.expectedDrawText) ||
+          input.expectedDrawText.intentDigest !== input.intentDigest ||
+          input.observationAuthorizationDigest === undefined))
+    ) {
+      throw new Error('REVISIONED_WHITEBOARD_REGISTRATION_INVALID');
+    }
   }
 
   applyAck(acknowledgementToken: string, value: unknown): RevisionedAckResult {
@@ -291,9 +390,6 @@ export class RevisionedWhiteboardCoordinator {
       if (entry.terminal) {
         return { kind: 'invalid', reason: 'REVISIONED_WHITEBOARD_ACK_AFTER_TERMINAL' };
       }
-      if (!acceptedBindingMatchesExpected(ack.targetBinding, entry.expectedBinding)) {
-        return { kind: 'invalid', reason: 'REVISIONED_WHITEBOARD_ACCEPTED_TARGET_MISMATCH' };
-      }
       if (entry.status === 'accepted') {
         return acceptedBindingsEqual(ack.targetBinding, entry.acceptedBinding!)
           ? { kind: 'duplicate', status: entry.status }
@@ -322,8 +418,19 @@ export class RevisionedWhiteboardCoordinator {
     if (receipt.toolName !== entry.toolName) {
       return { kind: 'invalid', reason: 'REVISIONED_WHITEBOARD_RECEIPT_TOOL_MISMATCH' };
     }
-    const correlationError = receiptCorrelationError(receipt, entry.acceptedBinding);
+    const correlationError = receiptCorrelationError(
+      receipt,
+      entry.acceptedBinding,
+      entry.expectedBinding,
+    );
     if (correlationError) return { kind: 'invalid', reason: correlationError };
+    if (
+      receipt.outcome === 'committed' &&
+      entry.expectedDrawText &&
+      !isRevisionedDrawTextCommittedReceipt(receipt, entry.expectedDrawText)
+    ) {
+      return { kind: 'invalid', reason: 'REVISIONED_WHITEBOARD_DRAW_RECEIPT_INVALID' };
+    }
 
     const actionDisposition =
       receipt.outcome === 'uncertain' || (receipt.outcome === 'committed' && receipt.changed)
@@ -412,6 +519,10 @@ export class RevisionedWhiteboardCoordinator {
     this.entries.delete(executionId);
     this.tombstones.set(executionId, {
       requestDigest: entry.requestDigest,
+      registrationDigest: entry.registrationDigest,
+      ...(entry.observationAuthorizationDigest
+        ? { observationAuthorizationDigest: entry.observationAuthorizationDigest }
+        : {}),
       terminal: entry.terminal,
       terminalAck: entry.terminalAck,
       expiresAt: this.now() + this.replayGraceMs,
@@ -425,6 +536,12 @@ export class RevisionedWhiteboardCoordinator {
     }
   }
 
+  clearForTests(): void {
+    for (const entry of this.entries.values()) clearTimeout(entry.hardTimer);
+    this.entries.clear();
+    this.tombstones.clear();
+  }
+
   private settle(entry: Entry, terminal: RevisionedWhiteboardTerminal, terminalAck?: string): void {
     if (entry.terminal) return;
     clearTimeout(entry.hardTimer);
@@ -432,6 +549,7 @@ export class RevisionedWhiteboardCoordinator {
     entry.status = terminalSnapshot.status;
     entry.terminal = terminalSnapshot;
     entry.terminalAck = terminalAck;
+    entry.resolveTerminal(terminalSnapshot);
   }
 
   private cleanupExpired(): void {
@@ -455,3 +573,11 @@ function tokenMatchesDigest(actual: string, expectedDigest: string): boolean {
   const expectedBytes = Buffer.from(expectedDigest, 'hex');
   return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
 }
+
+const processGlobal = globalThis as typeof globalThis & {
+  __openmaicRevisionedWhiteboardCoordinator?: RevisionedWhiteboardCoordinator;
+};
+
+export const piRevisionedWhiteboardCoordinator =
+  processGlobal.__openmaicRevisionedWhiteboardCoordinator ??
+  (processGlobal.__openmaicRevisionedWhiteboardCoordinator = new RevisionedWhiteboardCoordinator());

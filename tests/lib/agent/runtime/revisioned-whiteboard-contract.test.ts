@@ -3,8 +3,11 @@ import { isClientEffectAck } from '@/lib/agent/runtime/client-effect-contract';
 import {
   MAX_REVISIONED_WHITEBOARD_JSON_DEPTH,
   REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
+  createRevisionedDrawTextDigests,
+  isRevisionedWhiteboardEffectDelivery,
   isRevisionedWhiteboardAuthorityReceipt,
   isRevisionedWhiteboardMutationAck,
+  normalizeRevisionedDrawTextIntent,
   type RevisionedWhiteboardAuthorityReceipt,
   type RevisionedWhiteboardMutationAck,
 } from '@/lib/agent/runtime/revisioned-whiteboard-contract';
@@ -28,6 +31,13 @@ function registration(deadlineAt = Date.now() + 10_000) {
     authenticatedTarget,
     deadlineAt,
   };
+}
+
+function registerPending(coordinator: RevisionedWhiteboardCoordinator, input = registration()) {
+  const registered = coordinator.register(input);
+  expect(registered.kind).toBe('pending');
+  if (registered.kind !== 'pending') throw new Error('Expected a pending registration.');
+  return registered;
 }
 
 function committed(changed = true): RevisionedWhiteboardAuthorityReceipt {
@@ -65,6 +75,51 @@ function accepted(): RevisionedWhiteboardMutationAck {
 }
 
 describe('revisioned whiteboard wire contract', () => {
+  it('canonicalizes strict draw intent and binds every Runtime field into requestDigest', () => {
+    const base = {
+      executionId: 'execution-1',
+      expectedBinding: binding,
+      authenticatedTarget,
+      deadlineAt: 2_000,
+      intent: { content: 'hello', x: 100, y: 120, color: 'red' },
+    };
+    const digests = createRevisionedDrawTextDigests(base)!;
+    expect(digests.normalizedIntent).toMatchObject({ color: '#ff0000' });
+    expect(normalizeRevisionedDrawTextIntent({ ...base.intent, color: 'currentColor' })).toBeNull();
+    expect(normalizeRevisionedDrawTextIntent({ ...base.intent, x: Number.NaN })).toBeNull();
+    expect(
+      normalizeRevisionedDrawTextIntent({ ...base.intent, content: 'bad\u0000text' }),
+    ).toBeNull();
+
+    const variants = [
+      { ...base, executionId: 'execution-2' },
+      { ...base, expectedBinding: { ...binding, revision: 4 } },
+      { ...base, authenticatedTarget: { ...authenticatedTarget, sceneId: 'scene-2' } },
+      { ...base, deadlineAt: 2_001 },
+      { ...base, intent: { ...base.intent, content: 'different' } },
+    ];
+    for (const variant of variants) {
+      expect(createRevisionedDrawTextDigests(variant)?.requestDigest).not.toBe(
+        digests.requestDigest,
+      );
+    }
+    const delivery = {
+      protocolVersion: REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
+      executionId: base.executionId,
+      requestDigest: digests.requestDigest,
+      toolName: 'wb_draw_text',
+      expectedBinding: base.expectedBinding,
+      authenticatedTarget: base.authenticatedTarget,
+      deadlineAt: base.deadlineAt,
+      intent: digests.normalizedIntent,
+      acknowledgementToken: 'ack-token',
+    };
+    expect(isRevisionedWhiteboardEffectDelivery(delivery)).toBe(true);
+    expect(
+      isRevisionedWhiteboardEffectDelivery({ ...delivery, observationToken: 'forbidden' }),
+    ).toBe(false);
+  });
+
   it('accepts an exact nullable accepted binding without changing the v1 ACK contract', () => {
     const ack = accepted();
     expect(isRevisionedWhiteboardMutationAck(ack)).toBe(true);
@@ -155,10 +210,58 @@ describe('revisioned whiteboard wire contract', () => {
 });
 
 describe('RevisionedWhiteboardCoordinator', () => {
+  it('shares pending replay, then returns a token-free settled replay', async () => {
+    const coordinator = new RevisionedWhiteboardCoordinator({ createToken: () => 'ack-token' });
+    const input = {
+      ...registration(),
+      observationAuthorizationDigest: `sha256:${'b'.repeat(64)}`,
+    };
+    const first = registerPending(coordinator, input);
+    const duplicate = coordinator.register(input);
+    expect(duplicate).toMatchObject({ kind: 'pending', acknowledgementToken: 'ack-token' });
+    if (duplicate.kind !== 'pending') throw new Error('Expected pending replay.');
+    expect(duplicate.terminal).toBe(first.terminal);
+
+    coordinator.applyAck('ack-token', {
+      ...accepted(),
+      targetBinding: { stageId: 'stage-1', whiteboardId: null, observedRevision: 4 },
+    });
+    coordinator.applyAck('ack-token', {
+      protocolVersion: REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
+      status: 'effect_rejected',
+      executionId: 'execution-1',
+      requestDigest,
+      receipt: {
+        protocolVersion: REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
+        outcome: 'rejected',
+        executionId: 'execution-1',
+        requestDigest,
+        toolName: 'wb_draw_text',
+        previousBinding: { stageId: 'stage-1', whiteboardId: null, revision: 5 },
+        currentBinding: { stageId: 'stage-1', whiteboardId: null, revision: 5 },
+        changed: false,
+        mutationMayHaveCommitted: false,
+        error: { code: 'STALE_STATE' },
+      },
+    });
+    await expect(first.terminal).resolves.toMatchObject({ status: 'rejected' });
+    coordinator.cleanup('execution-1');
+    const settled = coordinator.register(input);
+    expect(settled.kind).toBe('settled_replay');
+    expect('acknowledgementToken' in settled).toBe(false);
+    await expect(settled.terminal).resolves.toMatchObject({ status: 'rejected' });
+    expect(() =>
+      coordinator.register({
+        ...input,
+        observationAuthorizationDigest: `sha256:${'c'.repeat(64)}`,
+      }),
+    ).toThrow('REVISIONED_WHITEBOARD_REGISTRATION_CONFLICT');
+  });
+
   it('settles committed and transfers one action charge exactly once across replay', () => {
     const coordinator = new RevisionedWhiteboardCoordinator();
     const registered = registration();
-    const { acknowledgementToken } = coordinator.register(registered);
+    const { acknowledgementToken } = registerPending(coordinator, registered);
     const terminalAck = {
       protocolVersion: REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
       status: 'effect_committed',
@@ -198,7 +301,7 @@ describe('RevisionedWhiteboardCoordinator', () => {
 
   it('does not expose an action charge for a verified no-op', () => {
     const coordinator = new RevisionedWhiteboardCoordinator();
-    const { acknowledgementToken } = coordinator.register(registration());
+    const { acknowledgementToken } = registerPending(coordinator);
     coordinator.applyAck(acknowledgementToken, accepted());
     coordinator.applyAck(acknowledgementToken, {
       protocolVersion: REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
@@ -212,7 +315,7 @@ describe('RevisionedWhiteboardCoordinator', () => {
 
   it('enforces outcome-specific rejected and uncertain binding correlation', () => {
     const coordinator = new RevisionedWhiteboardCoordinator();
-    const { acknowledgementToken } = coordinator.register(registration());
+    const { acknowledgementToken } = registerPending(coordinator);
     coordinator.applyAck(acknowledgementToken, accepted());
 
     expect(
@@ -279,7 +382,7 @@ describe('RevisionedWhiteboardCoordinator', () => {
     },
   ])('accepts a correlated $code rejection', ({ code, diagnostic }) => {
     const coordinator = new RevisionedWhiteboardCoordinator();
-    const { acknowledgementToken } = coordinator.register(registration());
+    const { acknowledgementToken } = registerPending(coordinator);
     coordinator.applyAck(acknowledgementToken, accepted());
 
     expect(
@@ -307,7 +410,7 @@ describe('RevisionedWhiteboardCoordinator', () => {
 
   it('keeps accepted A then target/stage B as deterministic rejected with no action charge', () => {
     const coordinator = new RevisionedWhiteboardCoordinator();
-    const { acknowledgementToken } = coordinator.register(registration());
+    const { acknowledgementToken } = registerPending(coordinator);
     expect(coordinator.applyAck(acknowledgementToken, accepted())).toEqual({
       kind: 'applied',
       status: 'accepted',
@@ -343,7 +446,7 @@ describe('RevisionedWhiteboardCoordinator', () => {
 
   it('accounts accepted delivery loss conservatively without fallible callbacks', () => {
     const coordinator = new RevisionedWhiteboardCoordinator();
-    const { acknowledgementToken } = coordinator.register(registration());
+    const { acknowledgementToken } = registerPending(coordinator);
     coordinator.applyAck(acknowledgementToken, accepted());
     expect(coordinator.settleDeliveryFailure('execution-1')).toMatchObject({
       status: 'uncertain',
@@ -353,12 +456,27 @@ describe('RevisionedWhiteboardCoordinator', () => {
     expect(coordinator.takeActionCharge('execution-1')).toBe(false);
   });
 
+  it('settles pre-accepted delivery failure without action and rejects a late accepted ACK', () => {
+    const coordinator = new RevisionedWhiteboardCoordinator();
+    const { acknowledgementToken } = registerPending(coordinator);
+    expect(coordinator.settleDeliveryFailure('execution-1')).toMatchObject({
+      status: 'rejected',
+      mutationMayHaveCommitted: false,
+      actionDisposition: 'none',
+    });
+    expect(coordinator.takeActionCharge('execution-1')).toBe(false);
+    expect(coordinator.applyAck(acknowledgementToken, accepted())).toEqual({
+      kind: 'invalid',
+      reason: 'REVISIONED_WHITEBOARD_ACK_AFTER_TERMINAL',
+    });
+  });
+
   it('uses the absolute deadline even when the timer callback is delayed', () => {
     vi.useFakeTimers();
     try {
       let now = 1_000;
       const coordinator = new RevisionedWhiteboardCoordinator({ now: () => now });
-      const { acknowledgementToken } = coordinator.register(registration(1_100));
+      const { acknowledgementToken } = registerPending(coordinator, registration(1_100));
       coordinator.applyAck(acknowledgementToken, accepted());
       now = 1_100;
       expect(

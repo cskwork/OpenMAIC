@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { StreamBuffer } from '@/lib/buffer/stream-buffer';
 import type { ClientEffectDelivery } from '@/lib/agent/runtime/client-effect-contract';
+import {
+  REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
+  createRevisionedDrawTextDigests,
+  type RevisionedWhiteboardEffectDelivery,
+} from '@/lib/agent/runtime/revisioned-whiteboard-contract';
 import { TOOL_EXECUTION_PROTOCOL_VERSION } from '@/lib/agent/runtime/native-child-contract';
 
 const clientEffectDelivery = {
@@ -41,7 +46,91 @@ const clientEffectDelivery = {
   },
 } satisfies ClientEffectDelivery;
 
+const revisionedExpectedBinding = { stageId: 'stage-1', whiteboardId: null, revision: 0 };
+const revisionedAuthenticatedTarget = {
+  childInvocationId: 'message-1',
+  requestId: 'request-1',
+  sessionId: 'session-1',
+  sceneId: 'scene-1',
+};
+const revisionedIntent = { content: 'hello', x: 100, y: 100 };
+const revisionedDeadline = Date.now() + 60_000;
+const revisionedDigests = createRevisionedDrawTextDigests({
+  executionId: 'revisioned-execution-1',
+  expectedBinding: revisionedExpectedBinding,
+  authenticatedTarget: revisionedAuthenticatedTarget,
+  deadlineAt: revisionedDeadline,
+  intent: revisionedIntent,
+})!;
+const revisionedDelivery = {
+  protocolVersion: REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
+  executionId: 'revisioned-execution-1',
+  requestDigest: revisionedDigests.requestDigest,
+  toolName: 'wb_draw_text',
+  expectedBinding: revisionedExpectedBinding,
+  authenticatedTarget: revisionedAuthenticatedTarget,
+  deadlineAt: revisionedDeadline,
+  intent: revisionedIntent,
+  acknowledgementToken: 'revisioned-token',
+} satisfies RevisionedWhiteboardEffectDelivery;
+
 describe('StreamBuffer Pi wrap-up ordering', () => {
+  it('orders and pauses a revisioned client effect like a presentation mutation', async () => {
+    const lifecycle: string[] = [];
+    let releaseEffect!: () => void;
+    const effectCompletion = new Promise<void>((resolve) => {
+      releaseEffect = resolve;
+    });
+    const buffer = new StreamBuffer(
+      {
+        onAgentStart() {},
+        onAgentEnd() {},
+        onTextReveal(_messageId, _partId, text, complete) {
+          if (complete) lifecycle.push(`text:${text}`);
+        },
+        onActionReady() {},
+        onRevisionedClientEffectQueued() {
+          lifecycle.push('reserved');
+        },
+        onRevisionedClientEffectReady() {
+          lifecycle.push('revisioned-effect');
+          return effectCompletion;
+        },
+        onLiveSpeech() {},
+        onSpeechProgress() {},
+        onThinking() {},
+        onCueUser() {},
+        onDone() {
+          lifecycle.push('done');
+        },
+        onError(message) {
+          throw new Error(message);
+        },
+      },
+      { tickMs: 1, charsPerTick: 100 },
+    );
+    buffer.pushAgentStart({
+      messageId: 'message-1',
+      agentId: 'teacher-1',
+      agentName: 'Teacher',
+    });
+    buffer.pushText('message-1', '先读取，再修改。');
+    buffer.pushRevisionedClientEffect('message-1', revisionedDelivery);
+    buffer.pushAgentEnd({ messageId: 'message-1', agentId: 'teacher-1' });
+    buffer.pushDone({ totalActions: 1, totalAgents: 1 });
+    buffer.pause();
+    buffer.start();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(lifecycle).toEqual(['reserved']);
+    buffer.resume();
+    await vi.waitFor(() =>
+      expect(lifecycle).toEqual(['reserved', 'text:先读取，再修改。', 'revisioned-effect']),
+    );
+    releaseEffect();
+    await buffer.waitUntilDrained();
+    expect(lifecycle).toEqual(['reserved', 'text:先读取，再修改。', 'revisioned-effect', 'done']);
+  });
+
   it('presents pre-tool text before a client effect without waiting for TTS dwell', async () => {
     const lifecycle: string[] = [];
     let releaseEffect!: () => void;
@@ -451,5 +540,36 @@ describe('StreamBuffer Pi wrap-up ordering', () => {
     expect(actionSignal?.aborted).toBe(false);
     buffer.shutdown();
     expect(actionSignal?.aborted).toBe(true);
+  });
+
+  it('releases request-scoped resources exactly once when the buffer is retired', () => {
+    let cleanupCount = 0;
+    const callbacks = {
+      onAgentStart() {},
+      onAgentEnd() {},
+      onTextReveal() {},
+      onActionReady() {},
+      onDispose() {
+        cleanupCount++;
+      },
+      onLiveSpeech() {},
+      onSpeechProgress() {},
+      onThinking() {},
+      onCueUser() {},
+      onDone() {},
+      onError(message: string) {
+        throw new Error(message);
+      },
+    };
+
+    const disposed = new StreamBuffer(callbacks);
+    disposed.dispose();
+    disposed.dispose();
+    expect(cleanupCount).toBe(1);
+
+    const shutDown = new StreamBuffer(callbacks);
+    shutDown.shutdown();
+    shutDown.shutdown();
+    expect(cleanupCount).toBe(2);
   });
 });

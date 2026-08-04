@@ -1,6 +1,14 @@
+import {
+  CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION,
+  normalizeWhiteboardRendererColorV1,
+} from './client-effect-contract';
+import { digestRevisionedValue } from './revisioned-whiteboard-digest';
+
 export const REVISIONED_WHITEBOARD_PROTOCOL_VERSION = 'maic.whiteboard-mutation.v2' as const;
+export const REVISIONED_WHITEBOARD_ACK_HEADER = 'x-maic-revisioned-effect-token' as const;
 
 export const MAX_REVISIONED_WHITEBOARD_RECEIPT_BYTES = 64 * 1024;
+export const MAX_REVISIONED_WHITEBOARD_ACK_BYTES = 68 * 1024;
 export const MAX_REVISIONED_WHITEBOARD_JSON_DEPTH = 32;
 export const MAX_REVISIONED_WHITEBOARD_JSON_ENTRIES = 4096;
 export const MAX_REVISIONED_WHITEBOARD_JSON_STRING_BYTES = 48 * 1024;
@@ -46,6 +54,64 @@ export type RevisionedWhiteboardAuthenticatedTarget = {
   requestId: string;
   sessionId: string;
   sceneId: string;
+};
+
+export type RevisionedDrawTextIntent = {
+  content: string;
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  fontSize?: number;
+  color?: string;
+};
+
+export type RevisionedDrawTextExpectedDescriptor = {
+  kind: 'wb_draw_text_v2';
+  intentDigest: string;
+  stableElementId: string;
+  expectedContentDigest: string;
+};
+
+export type RevisionedDrawTextDelta = {
+  kind: 'whiteboard_text_created_v2';
+  normalizationVersion: typeof CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION;
+  whiteboardId: string;
+  stableElementId: string;
+  createdWhiteboard: boolean;
+  visibilityChanged: boolean;
+  elementCountBefore: number;
+  elementCountAfter: number;
+};
+
+export type RevisionedDrawTextPostcondition = {
+  kind: 'whiteboard_text_exists_v2';
+  normalizationVersion: typeof CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION;
+  whiteboardId: string;
+  stableElementId: string;
+  elementType: 'text';
+  observedContentDigest: string;
+  matchingElementCount: 1;
+};
+
+export type RevisionedDrawTextRequestDigestInput = {
+  executionId: string;
+  expectedBinding: RevisionedWhiteboardBinding;
+  authenticatedTarget: RevisionedWhiteboardAuthenticatedTarget;
+  deadlineAt: number;
+  intent: RevisionedDrawTextIntent;
+};
+
+export type RevisionedWhiteboardEffectDelivery = {
+  protocolVersion: typeof REVISIONED_WHITEBOARD_PROTOCOL_VERSION;
+  executionId: string;
+  requestDigest: string;
+  toolName: 'wb_draw_text';
+  expectedBinding: RevisionedWhiteboardBinding;
+  authenticatedTarget: RevisionedWhiteboardAuthenticatedTarget;
+  deadlineAt: number;
+  intent: RevisionedDrawTextIntent;
+  acknowledgementToken: string;
 };
 
 export type RevisionedWhiteboardRejectedCode =
@@ -171,6 +237,96 @@ function isSafeId(value: unknown): value is string {
     value.length <= 512 &&
     !/[\u0000-\u001f\u007f\u2028\u2029]/u.test(value)
   );
+}
+
+function isSafeText(value: unknown, minLength: number, maxLength: number): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length >= minLength &&
+    value.length <= maxLength &&
+    !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u2028\u2029]/u.test(value)
+  );
+}
+
+function isFiniteInRange(
+  value: unknown,
+  minimum: number,
+  maximum: number,
+  exclusiveMinimum = false,
+): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    (exclusiveMinimum ? value > minimum : value >= minimum) &&
+    value <= maximum
+  );
+}
+
+export function normalizeRevisionedDrawTextIntent(
+  value: unknown,
+): Readonly<RevisionedDrawTextIntent> | null {
+  if (!isRecord(value)) return null;
+  const allowed = new Set(['content', 'x', 'y', 'width', 'height', 'fontSize', 'color']);
+  if (
+    !Object.keys(value).every((key) => allowed.has(key)) ||
+    !Object.prototype.hasOwnProperty.call(value, 'content') ||
+    !Object.prototype.hasOwnProperty.call(value, 'x') ||
+    !Object.prototype.hasOwnProperty.call(value, 'y') ||
+    !isSafeText(value.content, 1, 2_000) ||
+    !isFiniteInRange(value.x, 40, 560) ||
+    !isFiniteInRange(value.y, 40, 323) ||
+    (value.width !== undefined && !isFiniteInRange(value.width, 0, 400, true)) ||
+    (value.height !== undefined && !isFiniteInRange(value.height, 0, 200, true)) ||
+    (value.fontSize !== undefined && !isFiniteInRange(value.fontSize, 1, 512)) ||
+    (value.color !== undefined && !isSafeText(value.color, 1, 64))
+  ) {
+    return null;
+  }
+  let color: string | undefined;
+  if (value.color !== undefined) {
+    try {
+      color = normalizeWhiteboardRendererColorV1(value.color);
+    } catch {
+      return null;
+    }
+  }
+  return Object.freeze({
+    content: value.content,
+    x: Object.is(value.x, -0) ? 0 : value.x,
+    y: Object.is(value.y, -0) ? 0 : value.y,
+    ...(value.width !== undefined ? { width: value.width } : {}),
+    ...(value.height !== undefined ? { height: value.height } : {}),
+    ...(value.fontSize !== undefined ? { fontSize: value.fontSize } : {}),
+    ...(color !== undefined ? { color } : {}),
+  });
+}
+
+export function createRevisionedDrawTextDigests(input: RevisionedDrawTextRequestDigestInput): {
+  normalizedIntent: Readonly<RevisionedDrawTextIntent>;
+  intentDigest: string;
+  requestDigest: string;
+} | null {
+  const normalizedIntent = normalizeRevisionedDrawTextIntent(input.intent);
+  if (
+    !normalizedIntent ||
+    !isSafeId(input.executionId) ||
+    !isBinding(input.expectedBinding) ||
+    !isRevisionedWhiteboardAuthenticatedTarget(input.authenticatedTarget) ||
+    !Number.isFinite(input.deadlineAt)
+  ) {
+    return null;
+  }
+  const intentDigest = digestRevisionedValue(normalizedIntent);
+  const requestDigest = digestRevisionedValue({
+    protocolVersion: REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
+    toolName: 'wb_draw_text',
+    executionId: input.executionId,
+    expectedBinding: input.expectedBinding,
+    authenticatedTarget: input.authenticatedTarget,
+    deadlineAt: input.deadlineAt,
+    normalizedIntent,
+  });
+  return { normalizedIntent, intentDigest, requestDigest };
 }
 
 export function isRevisionedWhiteboardAuthenticatedTarget(
@@ -404,6 +560,114 @@ export function verifyRevisionedWhiteboardAuthorityReceipt(
   return isRevisionedWhiteboardAuthorityReceipt(value)
     ? (immutableJsonSnapshot(value) as ShapeValidatedRevisionedWhiteboardReceipt)
     : null;
+}
+
+function isSha256Digest(value: unknown): value is string {
+  return typeof value === 'string' && /^sha256:[0-9a-f]{64}$/u.test(value);
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+export function isRevisionedDrawTextCommittedReceipt(
+  receipt: ShapeValidatedRevisionedWhiteboardReceipt,
+  expected: RevisionedDrawTextExpectedDescriptor,
+): receipt is ShapeValidatedRevisionedWhiteboardReceipt & RevisionedWhiteboardCommittedReceipt {
+  if (
+    receipt.outcome !== 'committed' ||
+    receipt.toolName !== 'wb_draw_text' ||
+    receipt.changed !== true ||
+    receipt.mutationMayHaveCommitted !== false ||
+    !isRecord(receipt.delta) ||
+    !isRecord(receipt.postcondition)
+  ) {
+    return false;
+  }
+  const delta = receipt.delta;
+  const postcondition = receipt.postcondition;
+  return (
+    hasExactKeys(delta, [
+      'kind',
+      'normalizationVersion',
+      'whiteboardId',
+      'stableElementId',
+      'createdWhiteboard',
+      'visibilityChanged',
+      'elementCountBefore',
+      'elementCountAfter',
+    ]) &&
+    delta.kind === 'whiteboard_text_created_v2' &&
+    delta.normalizationVersion === CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION &&
+    isSafeId(delta.whiteboardId) &&
+    delta.stableElementId === expected.stableElementId &&
+    typeof delta.createdWhiteboard === 'boolean' &&
+    typeof delta.visibilityChanged === 'boolean' &&
+    isNonNegativeSafeInteger(delta.elementCountBefore) &&
+    isNonNegativeSafeInteger(delta.elementCountAfter) &&
+    delta.elementCountAfter === delta.elementCountBefore + 1 &&
+    hasExactKeys(postcondition, [
+      'kind',
+      'normalizationVersion',
+      'whiteboardId',
+      'stableElementId',
+      'elementType',
+      'observedContentDigest',
+      'matchingElementCount',
+    ]) &&
+    postcondition.kind === 'whiteboard_text_exists_v2' &&
+    postcondition.normalizationVersion === CLIENT_EFFECT_TEXT_NORMALIZATION_VERSION &&
+    postcondition.whiteboardId === delta.whiteboardId &&
+    postcondition.stableElementId === expected.stableElementId &&
+    postcondition.elementType === 'text' &&
+    postcondition.observedContentDigest === expected.expectedContentDigest &&
+    isSha256Digest(postcondition.observedContentDigest) &&
+    postcondition.matchingElementCount === 1 &&
+    receipt.currentBinding.stageId === receipt.previousBinding.stageId &&
+    receipt.currentBinding.whiteboardId === delta.whiteboardId &&
+    receipt.currentBinding.revision === receipt.previousBinding.revision + 1 &&
+    (receipt.previousBinding.whiteboardId === null
+      ? delta.createdWhiteboard === true
+      : delta.createdWhiteboard === false)
+  );
+}
+
+export function isRevisionedWhiteboardEffectDelivery(
+  value: unknown,
+): value is RevisionedWhiteboardEffectDelivery {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      'protocolVersion',
+      'executionId',
+      'requestDigest',
+      'toolName',
+      'expectedBinding',
+      'authenticatedTarget',
+      'deadlineAt',
+      'intent',
+      'acknowledgementToken',
+    ]) ||
+    value.protocolVersion !== REVISIONED_WHITEBOARD_PROTOCOL_VERSION ||
+    value.toolName !== 'wb_draw_text' ||
+    !isSafeId(value.executionId) ||
+    !isRequestDigest(value.requestDigest) ||
+    !isBinding(value.expectedBinding) ||
+    !isRevisionedWhiteboardAuthenticatedTarget(value.authenticatedTarget) ||
+    typeof value.deadlineAt !== 'number' ||
+    !Number.isFinite(value.deadlineAt) ||
+    !isSafeId(value.acknowledgementToken)
+  ) {
+    return false;
+  }
+  const digests = createRevisionedDrawTextDigests({
+    executionId: value.executionId,
+    expectedBinding: value.expectedBinding,
+    authenticatedTarget: value.authenticatedTarget,
+    deadlineAt: value.deadlineAt,
+    intent: value.intent as RevisionedDrawTextIntent,
+  });
+  return digests !== null && digests.requestDigest === value.requestDigest;
 }
 
 export function isRevisionedWhiteboardMutationAck(

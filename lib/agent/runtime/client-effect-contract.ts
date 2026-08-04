@@ -1296,7 +1296,7 @@ function normalizeWhiteboardChartValue(value: unknown): number {
   return canonicalNumber(value);
 }
 
-function normalizeWhiteboardChartColor(value: unknown): string {
+export function normalizeWhiteboardRendererColorV1(value: unknown): string {
   if (typeof value !== 'string' || value.length > 64) {
     throw new Error('CLIENT_EFFECT_CHART_THEME_INVALID');
   }
@@ -1464,7 +1464,7 @@ export function normalizeWhiteboardChartV1(input: {
     ) {
       throw new Error('CLIENT_EFFECT_CHART_THEME_INVALID');
     }
-    themeColors = input.themeColors.map(normalizeWhiteboardChartColor);
+    themeColors = input.themeColors.map(normalizeWhiteboardRendererColorV1);
   }
 
   return {

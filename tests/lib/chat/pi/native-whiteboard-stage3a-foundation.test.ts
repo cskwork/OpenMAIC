@@ -155,6 +155,9 @@ describe('Stage 3A shared observation ledger', () => {
     });
     expect(registration).toMatchObject({ ok: true });
     if (!registration.ok) throw new Error('Expected mutation authorization.');
+    if (registration.registration.kind !== 'pending') {
+      throw new Error('Expected a pending mutation registration.');
+    }
     expect(
       runtime.authorizeAndRegister({
         observationToken: token,
@@ -187,7 +190,7 @@ describe('Stage 3A shared observation ledger', () => {
     if (!receipt || receipt.outcome !== 'committed') throw new Error('Expected committed receipt.');
     expect(
       runtime.applyAck(
-        registration.acknowledgementToken,
+        registration.registration.acknowledgementToken,
         createRevisionedWhiteboardAcceptedAck({
           executionId: 'execution-1',
           requestDigest,
@@ -201,7 +204,7 @@ describe('Stage 3A shared observation ledger', () => {
     ).toMatchObject({ kind: 'applied' });
     expect(
       runtime.applyAck(
-        registration.acknowledgementToken,
+        registration.registration.acknowledgementToken,
         createRevisionedWhiteboardTerminalAck(receipt),
       ),
     ).toMatchObject({ kind: 'applied' });

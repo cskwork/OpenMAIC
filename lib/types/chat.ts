@@ -9,6 +9,7 @@ import type { UIMessage } from 'ai';
 import type { CleanupSource } from '@/lib/playback/auto-resume';
 import type { ClientEffectDelivery } from '@/lib/agent/runtime/client-effect-contract';
 import type { ClientQueryDelivery } from '@/lib/agent/runtime/client-query-contract';
+import type { RevisionedWhiteboardEffectDelivery } from '@/lib/agent/runtime/revisioned-whiteboard-contract';
 import type { ThinkingConfig } from './provider';
 
 // Session Types
@@ -439,6 +440,7 @@ export type StatelessEvent =
       };
     }
   | { type: 'client_effect'; data: ClientEffectDelivery }
+  | { type: 'revisioned_client_effect'; data: RevisionedWhiteboardEffectDelivery }
   | { type: 'client_query'; data: ClientQueryDelivery }
   | {
       type: 'thinking';
