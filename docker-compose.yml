@@ -82,36 +82,23 @@ services:
       - NET_ADMIN
     environment:
       - PORT=9000
-      # Use Chromium's HeadlessExperimental.beginFrame capture path instead of
-      # the CPU-bound Page.captureScreenshot fallback. The default "software" GPU
-      # mode (SwiftShader) silently force-enables screenshot capture, which pegs
-      # all cores on CPU rasterization and caps throughput at ~10 fps. Selecting
-      # "hardware" keeps beginFrame active — measured ~2x capture throughput
-      # (~10 -> ~19 fps, 900-frame clip 100s -> 62s), roughly half the CPU, and
-      # pixel-identical static frames (animation frames differ only in sub-pixel
-      # edge antialiasing). No real GPU is required: the win is the faster capture
-      # API, not hardware rasterization — beginFrame falls back gracefully if the
-      # host lacks a GPU.
+      # Keep the beginFrame-capable browser path available when producer decides
+      # the cgroup has enough memory. Under this service's 4 GiB limit producer's
+      # automatic low-memory profile safely selects screenshot capture + one
+      # worker instead of multiplying Chromium for unvalidated 1080p/4K renders.
       - PRODUCER_BROWSER_GPU_MODE=hardware
       - PRODUCER_HEADLESS_SHELL_PATH=/usr/bin/chromium-headless-shell
-      - RENDER_REQUIRE_BEGINFRAME=true
-      # The 4 GiB cgroup limit would otherwise trigger producer's <=8 GiB
-      # low-memory profile, which silently forces screenshot capture + one worker
-      # and nullifies the beginFrame setting above. This latency profile was
-      # measured below 2 GiB peak on the 720p reference fixture; keep one render
-      # and one extraction active so the 4 GiB boundary remains meaningful.
-      - PRODUCER_LOW_MEMORY_MODE=false
       - RENDER_MAX_CONCURRENCY=1
       - RENDER_MAX_CONCURRENT_EXTRACTIONS=1
       # Producer's browser pool shares a Chromium compositor across capture
-      # sessions. Independent browsers made four-worker capture ~3.5x faster on
-      # the reference fixture, at the cost of additional bounded memory.
+      # sessions. Keep it disabled so an operator who raises memory and opts into
+      # parallel capture gets independent browsers; the 4 GiB default resolves to
+      # one worker, so this does not multiply memory by itself.
       - PRODUCER_ENABLE_BROWSER_POOL=false
-      # RenderManager also passes this value explicitly as job.config.workers, so
-      # producer's minimum-parallel threshold cannot silently change 1 -> 2.
-      - PRODUCER_MAX_WORKERS=4
-      # A 10+ minute composition can assign a >300s frame range to each worker;
-      # leave enough CDP headroom to finish instead of falling back 4 -> 2.
+      # Leave producer workers unset: producer 0.7.60 applies its cgroup memory,
+      # CPU, small-job, low-memory, and capture-cost guards. Operators may opt
+      # into the measured 720p latency profile documented in the service README.
+      # Long compositions still need CDP headroom even with one adaptive worker.
       - PRODUCER_PUPPETEER_PROTOCOL_TIMEOUT_MS=900000
       # OpenMAIC's long slide exports currently exhaust producer's 15s static
       # verification budget and disable dedup anyway. Skip that guaranteed-lost
@@ -128,8 +115,8 @@ services:
     # heavy, and extraction is capped separately (RENDER_MAX_CONCURRENT_EXTRACTIONS).
     # Raise for higher RENDER_MAX_CONCURRENCY / larger classrooms.
     mem_limit: 4g
-    # Four independent Chromium instances need more than Docker's 64 MiB default
-    # shared-memory mount. This is a ceiling, not eager allocation.
+    # Chromium media/frame work can exceed Docker's 64 MiB default shared-memory
+    # mount. This is a ceiling inside the same 4 GiB cgroup, not eager allocation.
     shm_size: 2gb
     networks:
       - render

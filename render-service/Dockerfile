@@ -60,7 +60,7 @@ ENV PORT=9000 \
     XDG_CACHE_HOME=/app/.cache \
     PRODUCER_BROWSER_GPU_MODE=hardware \
     PRODUCER_HEADLESS_SHELL_PATH=/usr/bin/chromium-headless-shell \
-    RENDER_REQUIRE_BEGINFRAME=true
+    RENDER_REQUIRE_BEGINFRAME=false
 
 # NOTE: we intentionally do NOT set `USER render` here. The container starts as
 # root so the entrypoint can install the iptables egress lockdown (needs

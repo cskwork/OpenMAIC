@@ -16,16 +16,16 @@ describe('render-service container contract', () => {
     expect(dockerfile).toMatch(/mkdir -p \/tmp\/openmaic-renders \/app\/\.cache/);
   });
 
-  it('uses a resource-consistent single-job latency profile in Compose', () => {
+  it('uses a cgroup-adaptive single-job safety profile in Compose', () => {
     const compose = read('../docker-compose.yml');
     expect(compose).toContain('RENDER_MAX_CONCURRENCY=1');
     expect(compose).toContain('RENDER_MAX_CONCURRENT_EXTRACTIONS=1');
-    expect(compose).toContain('PRODUCER_LOW_MEMORY_MODE=false');
     expect(compose).toContain('PRODUCER_BROWSER_GPU_MODE=hardware');
     expect(compose).toContain('PRODUCER_HEADLESS_SHELL_PATH=/usr/bin/chromium-headless-shell');
-    expect(compose).toContain('RENDER_REQUIRE_BEGINFRAME=true');
     expect(compose).toContain('PRODUCER_ENABLE_BROWSER_POOL=false');
-    expect(compose).toContain('PRODUCER_MAX_WORKERS=4');
+    expect(compose).not.toContain('PRODUCER_LOW_MEMORY_MODE=');
+    expect(compose).not.toContain('PRODUCER_MAX_WORKERS=');
+    expect(compose).not.toContain('RENDER_REQUIRE_BEGINFRAME=');
     expect(compose).toContain('PRODUCER_PUPPETEER_PROTOCOL_TIMEOUT_MS=900000');
     expect(compose).toContain('HF_STATIC_DEDUP=false');
     expect(compose).toContain('mem_limit: 4g');
@@ -36,6 +36,6 @@ describe('render-service container contract', () => {
     expect(dockerfile).toContain('chromium-headless-shell');
     expect(dockerfile).toContain('PRODUCER_BROWSER_GPU_MODE=hardware');
     expect(dockerfile).toContain('PRODUCER_HEADLESS_SHELL_PATH=/usr/bin/chromium-headless-shell');
-    expect(dockerfile).toContain('RENDER_REQUIRE_BEGINFRAME=true');
+    expect(dockerfile).toContain('RENDER_REQUIRE_BEGINFRAME=false');
   });
 });

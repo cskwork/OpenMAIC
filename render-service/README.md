@@ -47,12 +47,12 @@ poll, then download. Job ids are opaque.
 | `RENDER_MAX_COMPRESSION_RATIO`           | `200`                       | Max expanded:compressed ratio per entry (ZIP-bomb guard).                                                                                                                                                                                                                                                                                                           |
 | `RENDER_EGRESS_LOCKDOWN`                 | `true`                      | Install the iptables egress lockdown at startup (needs root + `CAP_NET_ADMIN`); **fails closed** — the container exits if the rules can't be applied. Set `false` to run unisolated.                                                                                                                                                                                |
 | `PRODUCER_TMP_PROJECT_DIR`               | `/tmp/openmaic-renders`     | Scratch dir for unzipped projects + outputs.                                                                                                                                                                                                                                                                                                                        |
-| `PRODUCER_BROWSER_GPU_MODE`              | `hardware` (container)      | Capture path selector. Producer's own default is `software`, which force-enables the CPU-bound `Page.captureScreenshot` fallback (~10 fps, all cores pinned). `hardware` keeps Chromium's `HeadlessExperimental.beginFrame` capture active — ~2x throughput at ~half the CPU, pixel-identical static frames. No real GPU required; falls back gracefully if absent. |
-| `PRODUCER_LOW_MEMORY_MODE`               | `false` (set in Compose)    | Prevents the 4 GiB cgroup limit from silently replacing beginFrame with screenshot capture and pinning the job to one worker. Keep render/extraction concurrency at 1 with this override.                                                                                                                                                                           |
-| `PRODUCER_MAX_WORKERS`                   | unset (producer auto-sizing) | Optional explicit per-job capture worker count. When unset, producer 0.7.60 keeps its CPU, memory, low-memory, small-job, and capture-cost guards. The Compose latency profile sets this to `4`; remove the override to restore adaptive sizing.                                                                                                                                 |
+| `PRODUCER_BROWSER_GPU_MODE`              | `hardware` (container)      | Capture path selector. Producer's own default is `software`, which force-enables the CPU-bound `Page.captureScreenshot` fallback. `hardware` keeps beginFrame eligible when the memory profile permits it; low-memory mode still safely forces screenshot capture. No real GPU is required.                                                                                       |
+| `PRODUCER_LOW_MEMORY_MODE`               | auto                        | Producer detects the cgroup limit. At ≤8 GiB it selects its low-memory path (screenshot capture and one worker), preventing unvalidated high-resolution renders from multiplying Chromium memory.                                                                                                                                                                      |
+| `PRODUCER_MAX_WORKERS`                   | unset (producer auto-sizing) | Optional explicit per-job capture worker count. The default Compose profile leaves it unset so producer 0.7.60 keeps its CPU, memory, low-memory, small-job, and capture-cost guards.                                                                                                                                                                                    |
 | `PRODUCER_ENABLE_BROWSER_POOL`           | `false` (set in Compose)    | Gives parallel frame workers independent Chromium instances instead of sharing a compositor-bound browser pool. Raises memory use; the 720p reference peaked around 1.6 GiB with four workers.                                                                                                                                                                      |
 | `PRODUCER_HEADLESS_SHELL_PATH`           | `/usr/bin/chromium-headless-shell` (container) | Chromium **headless shell** executable used by producer's beginFrame resolver. Regular Chromium is not equivalent: it may resolve as beginFrame-capable and then reject `HeadlessExperimental.beginFrame`, causing a screenshot fallback.                                                                                                                                |
-| `RENDER_REQUIRE_BEGINFRAME`              | `true` (container)          | Fail startup/jobs unless producer's worker performance data reports exactly `beginframe`. The Compose latency profile enables this to prevent silently falling back to the CPU-bound screenshot path.                                                                                                                                                                 |
+| `RENDER_REQUIRE_BEGINFRAME`              | `false`                     | When explicitly enabled, fail startup/jobs unless producer's worker performance data reports exactly `beginframe`. Use this only in a memory-sized beginFrame profile; the 4 GiB Compose default intentionally permits producer's low-memory screenshot path.                                                                                                            |
 | `PRODUCER_PUPPETEER_PROTOCOL_TIMEOUT_MS` | `900000` (set in Compose)   | CDP timeout headroom for long frame ranges. The producer default of 300 seconds caused long jobs to fall back from four workers to two.                                                                                                                                                                                                                             |
 | `HF_STATIC_DEDUP`                        | `false` (set in Compose)    | Temporary OpenMAIC-export workaround: these long slide compositions currently exhaust producer's 15-second verification budget and disable dedup anyway. Skipping the doomed verification removes the fixed startup cost without changing frames.                                                                                                                   |
 | `RENDER_HOME`                            | `/app`                      | Writable home used after the entrypoint drops privileges. Producer font caches live under `$RENDER_HOME/.cache`, never `/root/.cache`.                                                                                                                                                                                                                              |
@@ -136,14 +136,27 @@ npm start
 
 ## Performance profiles
 
-The default Compose service is a **single-job latency profile**: one admitted
-render, four capture workers, and one independent Chromium instance per worker.
-Compose explicitly sets `PRODUCER_MAX_WORKERS=4`; deployments that omit that
-variable retain producer's resource-aware auto-sizing.
-The 4 GiB memory limit is paired with one extraction at a time and a 2 GiB
-`/dev/shm` ceiling. On the 1280×720 reference export this stayed below 2 GiB
-resident memory while making four-worker capture materially faster than either
-one worker or four pooled browser sessions.
+The default Compose service is a **single-job adaptive safety profile**. It
+leaves both `PRODUCER_MAX_WORKERS` and `PRODUCER_LOW_MEMORY_MODE` unset, so
+producer observes the 4 GiB cgroup and selects its low-memory path: one capture
+worker with screenshot capture. This avoids multiplying Chromium memory for the
+product's default 1080p and selectable 4K exports, whose four-worker peak memory
+has not been validated. One render and one extraction are admitted at a time.
+
+For a controlled **1280×720 single-job latency profile**, the reference export
+was measured below 2 GiB resident memory with four independent beginFrame
+workers. Opt into that bounded profile explicitly:
+
+```yaml
+environment:
+  - PRODUCER_LOW_MEMORY_MODE=false
+  - PRODUCER_MAX_WORKERS=4
+  - RENDER_REQUIRE_BEGINFRAME=true
+```
+
+Do not apply this override to 1080p or 4K workloads until their peak cgroup
+memory has been measured; raise `mem_limit` from evidence rather than assuming
+the 720p bound scales safely.
 
 For a **multi-job throughput profile**, prefer one producer worker per job and
 raise service concurrency instead of nesting both forms of parallelism:
@@ -152,15 +165,15 @@ raise service concurrency instead of nesting both forms of parallelism:
 environment:
   - PRODUCER_MAX_WORKERS=1
   - PRODUCER_ENABLE_BROWSER_POOL=false
-  - PRODUCER_HEADLESS_SHELL_PATH=/usr/bin/chromium-headless-shell
-  - RENDER_REQUIRE_BEGINFRAME=true
   - RENDER_MAX_CONCURRENCY=2
   - RENDER_MAX_CONCURRENT_EXTRACTIONS=2
 ```
 
 Size memory for the number of simultaneous archives and Chromium/FFmpeg pairs.
 Do not raise both producer workers and render concurrency without measuring the
-combined CPU and RAM multiplier.
+combined CPU and RAM multiplier. This example keeps beginFrame optional so the
+cgroup-aware low-memory fallback remains valid; require beginFrame only after
+sizing memory for every concurrent job.
 
 Long single jobs still benefit from producer-side bounded chunking/distributed
 rendering. The extended CDP timeout prevents the known 300-second fallback, but
