@@ -63,6 +63,18 @@ function legacyStageCount(issues: readonly UnknownRecord[]): number {
   return roots.size + standaloneCount;
 }
 
+/**
+ * A legacy (v1) project has no instructor to put on the cover, so it never
+ * names one.
+ *
+ * Its roster is the 2–4 *development roles the learner chooses between* — the
+ * design prompt asks for "Data Analyst", "Frontend Developer" and the like —
+ * plus the `Question Agent - <issue>` / `Judge Agent - <issue>` helpers the
+ * issueboard spawns per issue. Promoting any of them would print a student
+ * role, or a machine name, under a "Tutor" label. Picking by the issueboard's
+ * active issue would additionally tie the cover to learner progress. Both are
+ * worse than the card simply not claiming an instructor.
+ */
 export function pblLegacyCover(
   project: unknown,
   scene: { title: string },

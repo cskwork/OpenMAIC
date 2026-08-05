@@ -11,6 +11,15 @@ const mocks = vi.hoisted(() => ({
   persistClassroom: vi.fn(),
   callLLM: vi.fn(),
 }));
+const PBLGenerationErrorMock = vi.hoisted(
+  () =>
+    class PBLGenerationError extends Error {
+      constructor(message: string) {
+        super(message);
+        this.name = 'PBLGenerationError';
+      }
+    },
+);
 
 vi.mock('@/lib/server/resolve-model', () => ({
   resolveModel: mocks.resolveModel,
@@ -36,6 +45,7 @@ vi.mock('@/lib/generation/scene-generator', () => ({
   generateSceneContent: mocks.generateSceneContent,
   generateSceneActions: mocks.generateSceneActions,
   createSceneWithActions: mocks.createSceneWithActions,
+  PBLGenerationError: PBLGenerationErrorMock,
 }));
 
 vi.mock('@/lib/server/classroom-storage', () => ({
@@ -189,5 +199,19 @@ describe('classroom scene generation retries', () => {
     await expect(generateWithProgress()).rejects.toBe(unauthorized);
 
     expect(mocks.generateSceneActions).toHaveBeenCalledTimes(1);
+  });
+
+  it('converts only PBLGenerationError to a null scene result', async () => {
+    const { containPBLGenerationError } = await import('@/lib/server/classroom-generation');
+
+    expect(
+      containPBLGenerationError(
+        new PBLGenerationErrorMock('both planners failed'),
+        'Failed PBL scene',
+      ),
+    ).toBeNull();
+
+    const unrelated = new Error('unrelated failure');
+    expect(() => containPBLGenerationError(unrelated, 'Other scene')).toThrow(unrelated);
   });
 });

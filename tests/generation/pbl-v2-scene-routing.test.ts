@@ -122,10 +122,11 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
     generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(new Error('single-call failed'));
     generatePBLV2ProjectMock.mockRejectedValueOnce(new Error('loop failed'));
 
-    const { generateSceneContent } = await import('@/lib/generation/scene-generator');
+    const { generateSceneContent, PBLGenerationError } =
+      await import('@/lib/generation/scene-generator');
     await expect(
       generateSceneContent(pblOutline(), vi.fn(), { languageModel: mockModel() }),
-    ).rejects.toThrow('after all planner attempts');
+    ).rejects.toBeInstanceOf(PBLGenerationError);
     expect(generatePBLV2ProjectSingleCallMock).toHaveBeenCalledTimes(1);
     expect(generatePBLV2ProjectMock).toHaveBeenCalledTimes(1);
   });

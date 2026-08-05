@@ -225,6 +225,15 @@ describe('app document validators', () => {
     expect(validateAppScene(legacyPBLSceneFixture)).toEqual({ valid: true });
   });
 
+  test('accepts PBL content with an empty legacy projectConfig object', () => {
+    expect(
+      validateAppScene({
+        ...pblScene(),
+        content: { type: 'pbl', projectConfig: {} },
+      }),
+    ).toEqual({ valid: true });
+  });
+
   test('rejects content/type mismatches with a clear path', () => {
     const result = validateAppScene({
       ...interactiveScene(),

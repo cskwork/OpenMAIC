@@ -888,6 +888,13 @@ function normalizeQuizAnswer(question: Record<string, unknown>): string[] | unde
  *
  * Uses the v2 single-call planner first, then the v2 loop planner.
  */
+export class PBLGenerationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PBLGenerationError';
+  }
+}
+
 async function generatePBLSceneContent(
   outline: SceneOutline,
   languageModel?: LanguageModel,
@@ -965,7 +972,9 @@ async function generatePBLSceneContent(
     return null;
   }
 
-  throw new Error(`PBL v2 generation failed for "${outline.title}" after all planner attempts.`);
+  throw new PBLGenerationError(
+    `PBL v2 generation failed for "${outline.title}" after all planner attempts.`,
+  );
 }
 
 /**
@@ -1608,7 +1617,7 @@ function generateDefaultPBLActions(_outline: SceneOutline): Action[] {
       id: `action_${nanoid(8)}`,
       type: 'speech',
       title: 'PBL 项目介绍',
-      text: '现在让我们开始一个项目式学习活动。请选择你的角色，查看任务看板，开始协作完成项目。',
+      text: '现在让我们开始一个项目式学习活动，了解项目的驱动问题，并在项目工作区中逐步探索和实践。',
     },
   ];
 }

@@ -64,7 +64,7 @@ export function PBLRenderer({ content, mode: _mode, sceneId }: PBLRendererProps)
 
   return (
     <div className="flex items-center justify-center h-full text-muted-foreground">
-      <p>{projectConfig ? t('pbl.emptyProject') : t('pbl.legacyFormat')}</p>
+      <p>{t('pbl.emptyProject')}</p>
     </div>
   );
 }

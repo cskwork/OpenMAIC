@@ -139,9 +139,57 @@ export function upgradeLegacyPBLConfigToProjectV2(config: PBLProjectConfig): PBL
 }
 
 export function isEmptyLegacyPBLConfig(config: PBLProjectConfig): boolean {
+  if (
+    !config ||
+    Array.isArray(config) ||
+    typeof config !== 'object' ||
+    !config?.projectInfo ||
+    Array.isArray(config.projectInfo) ||
+    typeof config.projectInfo !== 'object' ||
+    typeof config.projectInfo?.title !== 'string' ||
+    typeof config.projectInfo?.description !== 'string' ||
+    !Array.isArray(config?.agents) ||
+    config.agents.some(
+      (agent) => !agent || typeof agent !== 'object' || typeof agent.name !== 'string',
+    ) ||
+    !config?.issueboard ||
+    Array.isArray(config.issueboard) ||
+    typeof config.issueboard !== 'object' ||
+    !Array.isArray(config.issueboard?.issues) ||
+    config.issueboard.issues.some(
+      (issue) =>
+        !issue ||
+        typeof issue !== 'object' ||
+        typeof issue.id !== 'string' ||
+        typeof issue.title !== 'string' ||
+        typeof issue.description !== 'string' ||
+        typeof issue.notes !== 'string' ||
+        typeof issue.generated_questions !== 'string' ||
+        typeof issue.question_agent_name !== 'string',
+    ) ||
+    !config?.chat ||
+    Array.isArray(config.chat) ||
+    typeof config.chat !== 'object' ||
+    !Array.isArray(config.chat?.messages) ||
+    config.chat.messages.some(
+      (message) =>
+        !message ||
+        typeof message !== 'object' ||
+        typeof message.id !== 'string' ||
+        typeof message.agent_name !== 'string' ||
+        typeof message.message !== 'string' ||
+        typeof message.timestamp !== 'number' ||
+        !Number.isFinite(message.timestamp),
+    ) ||
+    (config.selectedRole !== undefined &&
+      config.selectedRole !== null &&
+      typeof config.selectedRole !== 'string')
+  ) {
+    return true;
+  }
   return (
-    config.projectInfo.title === '' &&
-    config.projectInfo.description === '' &&
+    !config?.projectInfo?.title &&
+    !config?.projectInfo?.description &&
     config.agents.length === 0 &&
     config.issueboard.issues.length === 0 &&
     config.chat.messages.length === 0
@@ -198,7 +246,7 @@ function inferInstructorName(config: PBLProjectConfig): string {
     );
   if (activeIssue?.question_agent_name) return activeIssue.question_agent_name;
   const questionAgent = config.agents.find((agent) =>
-    agent.name.toLowerCase().includes('question'),
+    agent.name?.toLowerCase().includes('question'),
   );
   return questionAgent?.name || 'Instructor';
 }
@@ -233,12 +281,12 @@ function detectLegacyLanguage(config: PBLProjectConfig): string {
 
 function legacyCompletionCriteria(language: string): string {
   return language.startsWith('zh')
-    ? '\u5b66\u4e60\u8005\u5b8c\u6210\u8be5\u4efb\u52a1\uff0c\u5e76\u80fd\u89e3\u91ca\u81ea\u5df1\u7684\u89e3\u51b3\u601d\u8def\u3002'
+    ? '学习者完成该任务，并能解释自己的解决思路。'
     : 'The learner completes this task and can explain their reasoning.';
 }
 
 function legacyDebrief(language: string): string {
   return language.startsWith('zh')
-    ? '\u603b\u7ed3\u672c\u4efb\u52a1\u7684\u5173\u952e\u6536\u83b7\uff0c\u5e76\u51c6\u5907\u8fdb\u5165\u4e0b\u4e00\u6b65\u3002'
+    ? '总结本任务的关键收获，并准备进入下一步。'
     : 'Summarize the key takeaways from this task and prepare for the next step.';
 }

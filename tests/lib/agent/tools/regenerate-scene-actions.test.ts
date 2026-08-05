@@ -11,6 +11,7 @@ import {
 import { generateSceneActions } from '@/lib/generation/generation-pipeline';
 import type { SlideContent } from '@/lib/types/stage';
 import type { PPTElement, Slide } from '@openmaic/dsl';
+import { legacyPBLSceneFixture } from '@/tests/fixtures/pbl-v1-scene';
 
 /** Minimal SceneOutline stub */
 const stubOutline = (id: string, title: string, order = 1) => ({
@@ -20,6 +21,21 @@ const stubOutline = (id: string, title: string, order = 1) => ({
   description: '',
   keyPoints: [],
   order,
+});
+
+const stubPblOutline = (id: string, title: string, order = 1) => ({
+  id,
+  type: 'pbl' as const,
+  title,
+  description: '',
+  keyPoints: [],
+  order,
+  pblConfig: {
+    projectTopic: title,
+    projectDescription: '',
+    targetSkills: [],
+    issueCount: 2,
+  },
 });
 
 /** Minimal SlideContent stub — runtime DSL shape with canvas wrapping elements */
@@ -90,6 +106,27 @@ describe('regenerate_scene_actions', () => {
     // Must NOT receive the raw canvas wrapper
     expect(passedContent).not.toHaveProperty('canvas');
     expect(passedContent).not.toHaveProperty('type');
+  });
+
+  it('upgrades legacy-only PBL content before calling the generator', async () => {
+    const content = structuredClone(legacyPBLSceneFixture.content);
+    if (content.type !== 'pbl') throw new Error('expected legacy PBL content');
+    const tool = makeRegenerateSceneActionsTool(
+      makeDeps('legacy-pbl', {
+        outline: stubPblOutline('legacy-pbl', legacyPBLSceneFixture.title),
+        allOutlines: [stubPblOutline('legacy-pbl', legacyPBLSceneFixture.title)],
+        content,
+      }),
+    );
+
+    await tool.execute('tc-legacy-pbl', { sceneId: 'legacy-pbl' });
+
+    expect(mockGen).toHaveBeenCalledOnce();
+    const [, passedContent] = mockGen.mock.lastCall ?? [];
+    expect(passedContent).toMatchObject({
+      type: 'pbl',
+      projectV2: { title: 'Community Garden Data Project' },
+    });
   });
 
   it('includes the action count in the content text', async () => {
