@@ -34,6 +34,7 @@ import type {
 import type { StatelessChatRequest } from '@/lib/types/chat';
 import type { SendEvent } from '../types';
 import { NativeWhiteboardObservationLedger } from './native-whiteboard-observation-ledger';
+import { deliverAndAwaitRevisionedWhiteboardMutation } from './revisioned-whiteboard-delivery';
 import { RevisionedWhiteboardMutationRuntime } from './revisioned-whiteboard-runtime';
 
 const SafeId = (maxLength: number) =>
@@ -370,31 +371,31 @@ function createHandler(
         'The revisioned whiteboard mutation could not be registered.',
       );
     }
-    if (registered.kind === 'pending') {
-      const delivery = deliveryFor(prepared, {
-        protocolVersion: REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
-        executionId: request.executionId,
-        expectedBinding,
-        authenticatedTarget,
-        deadlineAt: request.deadlineAt,
-        acknowledgementToken: registered.acknowledgementToken,
-      });
-      try {
-        await opts.send({ type: 'revisioned_client_effect', data: delivery });
-      } catch {
-        mutationRuntime.settleDeliveryFailure(request.executionId);
-      }
-    }
-    const settleAbort = () => mutationRuntime.settleDeliveryFailure(request.executionId);
-    signal?.addEventListener('abort', settleAbort, { once: true });
+    const delivery =
+      registered.kind === 'pending'
+        ? deliveryFor(prepared, {
+            protocolVersion: REVISIONED_WHITEBOARD_PROTOCOL_VERSION,
+            executionId: request.executionId,
+            expectedBinding,
+            authenticatedTarget,
+            deadlineAt: request.deadlineAt,
+            acknowledgementToken: registered.acknowledgementToken,
+          })
+        : undefined;
     try {
-      const terminal = await registered.terminal;
-      if (mutationRuntime.takeActionCharge(request.executionId)) {
-        opts.onActionDone({
-          executionId: request.executionId,
-          stableElementId: prepared.expected.stableElementId,
-        });
-      }
+      const terminal = await deliverAndAwaitRevisionedWhiteboardMutation({
+        registration: registered,
+        delivery,
+        executionId: request.executionId,
+        mutationRuntime,
+        send: opts.send,
+        signal,
+        onActionDone: () =>
+          opts.onActionDone({
+            executionId: request.executionId,
+            stableElementId: prepared.expected.stableElementId,
+          }),
+      });
       if (terminal.status !== 'committed' || !terminal.receipt) {
         const code =
           terminal.receipt?.outcome === 'rejected'
@@ -492,7 +493,6 @@ function createHandler(
         isError: false,
       };
     } finally {
-      signal?.removeEventListener('abort', settleAbort);
       mutationRuntime.coordinator.cleanup(request.executionId);
     }
   };

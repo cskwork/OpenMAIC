@@ -21,6 +21,7 @@ import type {
 import type { StatelessChatRequest } from '@/lib/types/chat';
 import type { SendEvent } from '../types';
 import { NativeWhiteboardObservationLedger } from './native-whiteboard-observation-ledger';
+import { deliverAndAwaitRevisionedWhiteboardMutation } from './revisioned-whiteboard-delivery';
 import { RevisionedWhiteboardMutationRuntime } from './revisioned-whiteboard-runtime';
 
 const SafeId = (maxLength: number) =>
@@ -248,31 +249,29 @@ function createHandler(
       );
     }
 
-    if (registered.kind === 'pending') {
-      const delivery = deliveryFor({
-        toolName,
-        requestDigest: prepared.requestDigest,
-        intent: prepared.intent,
-        executionId: request.executionId,
-        expectedBinding,
-        authenticatedTarget,
-        deadlineAt: request.deadlineAt,
-        acknowledgementToken: registered.acknowledgementToken,
-      });
-      try {
-        await opts.send({ type: 'revisioned_client_effect', data: delivery });
-      } catch {
-        mutationRuntime.settleDeliveryFailure(request.executionId);
-      }
-    }
-
-    const settleAbort = () => mutationRuntime.settleDeliveryFailure(request.executionId);
-    signal?.addEventListener('abort', settleAbort, { once: true });
+    const delivery =
+      registered.kind === 'pending'
+        ? deliveryFor({
+            toolName,
+            requestDigest: prepared.requestDigest,
+            intent: prepared.intent,
+            executionId: request.executionId,
+            expectedBinding,
+            authenticatedTarget,
+            deadlineAt: request.deadlineAt,
+            acknowledgementToken: registered.acknowledgementToken,
+          })
+        : undefined;
     try {
-      const terminal = await registered.terminal;
-      if (mutationRuntime.takeActionCharge(request.executionId)) {
-        opts.onActionDone({ executionId: request.executionId, toolName });
-      }
+      const terminal = await deliverAndAwaitRevisionedWhiteboardMutation({
+        registration: registered,
+        delivery,
+        executionId: request.executionId,
+        mutationRuntime,
+        send: opts.send,
+        signal,
+        onActionDone: () => opts.onActionDone({ executionId: request.executionId, toolName }),
+      });
       if (terminal.status !== 'committed' || !terminal.receipt) {
         const code =
           terminal.receipt?.outcome === 'rejected'
@@ -339,7 +338,6 @@ function createHandler(
         isError: false,
       };
     } finally {
-      signal?.removeEventListener('abort', settleAbort);
       mutationRuntime.coordinator.cleanup(request.executionId);
     }
   };
