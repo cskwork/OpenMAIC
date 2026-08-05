@@ -1,5 +1,4 @@
 import type { Scene } from '@/lib/types/stage';
-import { projectV2ToLegacyProjectConfig } from '@/lib/pbl/v2/compat';
 import { synchronizePBLProjectRuntime } from './hydration';
 import { stripToDesignTemplate } from './learner-state';
 
@@ -27,7 +26,6 @@ export async function preparePBLScenesForDocumentPersistence(
       ...scene,
       content: {
         ...content,
-        projectConfig: projectV2ToLegacyProjectConfig(designTemplate),
         projectV2: designTemplate,
       },
     } as Scene;

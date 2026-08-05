@@ -11,8 +11,6 @@ vi.mock('@/lib/pbl/v2/runtime/hydration', async (importOriginal) => ({
 
 import { preparePBLScenesForDocumentPersistence } from '@/lib/pbl/v2/runtime/document-persistence';
 import { stripToDesignTemplate } from '@/lib/pbl/v2/runtime/learner-state';
-import { projectV2ToLegacyProjectConfig } from '@/lib/pbl/v2/compat';
-import type { PBLProjectConfig } from '@/lib/pbl/types';
 import type { PBLProjectV2 } from '@/lib/pbl/v2/types';
 import { makeScene, type Scene } from '@/lib/types/stage';
 
@@ -75,7 +73,6 @@ function makePBLScene(project: PBLProjectV2): Scene {
     },
     {
       type: 'pbl',
-      projectConfig: projectV2ToLegacyProjectConfig(project) as PBLProjectConfig,
       projectV2: project,
     },
   );
@@ -131,12 +128,9 @@ describe('PBL document persistence cutover', () => {
     expect(persisted[0]).not.toBe(pblScene);
     expect(persisted[0]?.content).toMatchObject({
       type: 'pbl',
-      projectConfig: projectV2ToLegacyProjectConfig(stripToDesignTemplate(project)),
       projectV2: stripToDesignTemplate(project),
     });
-    expect(
-      persisted[0]?.content.type === 'pbl' && persisted[0].content.projectConfig.selectedRole,
-    ).toBeNull();
+    expect(persisted[0]?.content).not.toHaveProperty('projectConfig');
     expect(persisted[1]).toBe(slideScene);
     expect(pblScene.content.type === 'pbl' && pblScene.content.projectV2).toBe(project);
   });

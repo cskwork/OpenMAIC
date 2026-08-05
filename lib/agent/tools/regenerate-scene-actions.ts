@@ -98,7 +98,7 @@ export interface RegenerateActionsDeps {
 //   GeneratedSlideContent    { elements, background?, remark? }
 //   GeneratedQuizContent     { questions }
 //   GeneratedInteractiveContent { html, ... }
-//   GeneratedPBLContent      { projectConfig }
+//   GeneratedPBLContent      { projectV2 }
 //
 // The ONLY mismatch is `SlideContent` (runtime) vs `GeneratedSlideContent`:
 //   SlideContent  = { type: 'slide', canvas: Slide }  — elements at canvas.elements
@@ -108,7 +108,7 @@ export interface RegenerateActionsDeps {
 // If we pass SlideContent directly, that check is FALSE → falls through → returns [].
 //
 // For quiz/interactive/pbl the runtime shapes already have the discriminant field
-// at the top level ('questions', 'html', 'projectConfig'), so they pass through as-is.
+// at the top level ('questions', 'html', 'projectV2'), so they pass through as-is.
 
 function toGenerationContent(
   content: SceneContent,

@@ -4,9 +4,8 @@
  * Replaces v1's role-selection + read-only issueboard + @question/@judge
  * model with a single-Instructor guided flow (Hero → Workspace → Completion).
  *
- * v1 (`PBLProjectConfig` in `./types.ts`) is **preserved** for backward
- * compatibility — both fields coexist on `PBLContent`, the renderer
- * branches on which one is populated.
+ * Legacy v1 project data is supported only through the read-only adapter in
+ * `../legacy/read.ts`; new generation and persistence use this v2 model.
  *
  * The product ships a single Instructor. The multi-agent chat-thread
  * structure is kept generic so additional roles can be introduced later
@@ -748,7 +747,7 @@ export interface PBLPendingTaskCompletion {
 /**
  * The v2 PBL project model. Lives at `scene.content.projectV2`.
  *
- * Key differences from v1 `PBLProjectConfig`:
+ * Key differences from the legacy v1 project shape:
  *  - Replaces "issueboard" with structured Milestones + Microtasks
  *  - Replaces the role-selection Landing with Hero → Workspace →
  *    Completion flow

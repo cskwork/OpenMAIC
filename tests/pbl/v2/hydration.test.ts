@@ -9,7 +9,6 @@ import type {
 import { BrowserRuntimeStore, type RuntimeSessionInit, type RuntimeStore } from '@openmaic/storage';
 
 import { applyInstructorEvent } from '@/components/scene-renderers/pbl/v2/apply-instructor-event';
-import type { PBLProjectConfig } from '@/lib/pbl/types';
 import { recordEvent } from '@/lib/pbl/v2/operations/engagement';
 import { addEvaluation } from '@/lib/pbl/v2/operations/evaluation';
 import {
@@ -357,7 +356,6 @@ function makePBLScene(project: PBLProjectV2): Scene {
     },
     {
       type: 'pbl',
-      projectConfig: {} as PBLProjectConfig,
       projectV2: project,
     },
   );

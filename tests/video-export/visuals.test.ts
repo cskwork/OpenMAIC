@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Action } from '@openmaic/dsl';
-import type { PBLProjectConfig } from '@/lib/pbl/types';
-import { upgradeLegacyPBLConfigToProjectV2 } from '@/lib/pbl/v2/compat';
+import { upgradeLegacyPBLConfigToProjectV2, type PBLProjectConfig } from '@/lib/pbl/legacy/read';
 import {
   compileVideoTimeline,
   emitManifest,

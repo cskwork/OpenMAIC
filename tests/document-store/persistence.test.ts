@@ -13,6 +13,7 @@ import { validateAppScene, validateAppStage } from '@/lib/document-store/validat
 import type { SceneOutline } from '@/lib/types/generation';
 import type { AppScene } from '@/lib/types/stage';
 import type { SceneRecord, StageOutlinesRecord, StageRecord } from '@/lib/utils/database';
+import { legacyPBLSceneFixture } from '@/tests/fixtures/pbl-v1-scene';
 
 const stageRecord: StageRecord = {
   id: 'stage-1',
@@ -94,6 +95,21 @@ function pblScene(): AppScene {
 }
 
 describe('app document persistence seam', () => {
+  test('round-trips a document containing a v1-native PBL scene', async () => {
+    const document: AppDocument = {
+      stage: canonicalizeLegacyStage(stageRecord).stage,
+      scenes: [{ ...legacyPBLSceneFixture, stageId: stageRecord.id }],
+    };
+    const store = getDocumentStore({
+      indexedDB: new IDBFactory(),
+      dbName: 'app-document-legacy-pbl-roundtrip',
+    });
+
+    await store.saveDocument(document);
+
+    expect((await store.loadDocument(stageRecord.id))?.scenes).toEqual(document.scenes);
+  });
+
   test('omits nested undefined PBL state before calling the configured store', async () => {
     const saveDocument = vi.fn(async (_document: AppDocument) => undefined);
     const store = getDocumentStore({
@@ -194,6 +210,19 @@ describe('app document validators', () => {
     ['pbl', pblScene()],
   ])('accepts a valid %s scene', (_kind, scene) => {
     expect(validateAppScene(scene)).toEqual({ valid: true });
+  });
+
+  test('accepts PBL content with only projectV2', () => {
+    const scene = {
+      ...pblScene(),
+      content: { type: 'pbl', projectV2: { title: 'V2 project' } },
+    } as unknown as AppScene;
+
+    expect(validateAppScene(scene)).toEqual({ valid: true });
+  });
+
+  test('accepts PBL content with only a legacy projectConfig', () => {
+    expect(validateAppScene(legacyPBLSceneFixture)).toEqual({ valid: true });
   });
 
   test('rejects content/type mismatches with a clear path', () => {

@@ -36,21 +36,15 @@ describe('buildCompleteScene — PBL v2', () => {
       milestones: [{ scenarioStage: 'prep', microtasks: [{}] }],
     } as unknown as PBLProjectV2;
     const content = {
-      projectConfig: {
-        projectInfo: { title: 'Scenario PBL', description: 'Legacy projection' },
-        agents: [],
-        issueboard: { agent_ids: [], issues: [] },
-        chat: { messages: [] },
-        selectedRole: null,
-      },
       projectV2,
-    } as unknown as GeneratedPBLContent;
+    } satisfies GeneratedPBLContent;
 
     const scene = buildCompleteScene(outline, content, [], 'stage-1');
 
     expect(scene?.content.type).toBe('pbl');
     if (scene?.content.type !== 'pbl') throw new Error('expected PBL scene');
     expect(scene.content.projectV2).toBe(projectV2);
+    expect(scene.content).not.toHaveProperty('projectConfig');
     expect(scene.content.projectV2?.scenario).toBeTruthy();
   });
 });

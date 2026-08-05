@@ -265,7 +265,7 @@ import type { Scene, Action } from '@openmaic/dsl';
 type AppScene = Scene<Action, SlideContent | QuizContent | InteractiveContent | PBLContent>;
 ```
 
-Widget *configs* (`WidgetType` / `WidgetConfig`) and `PBLProjectConfig` remain
+Widget configs and PBL payload types remain
 out of scope here — they're faster-moving product surfaces that stay app-side
 and plug in via `Scene`'s generics. The widget *actions* (`widget_highlight`,
 `widget_setState`, …), by contrast, are config-free playback verbs and live in

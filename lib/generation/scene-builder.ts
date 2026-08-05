@@ -230,7 +230,7 @@ function buildCompleteSceneInner(
     };
   }
 
-  if (outline.type === 'pbl' && 'projectConfig' in content) {
+  if (outline.type === 'pbl' && 'projectV2' in content) {
     return {
       id: sceneId,
       stageId,
@@ -239,8 +239,7 @@ function buildCompleteSceneInner(
       order: outline.order,
       content: {
         type: 'pbl',
-        projectConfig: content.projectConfig,
-        ...(content.projectV2 ? { projectV2: content.projectV2 } : {}),
+        projectV2: content.projectV2,
       },
       actions,
       createdAt: Date.now(),

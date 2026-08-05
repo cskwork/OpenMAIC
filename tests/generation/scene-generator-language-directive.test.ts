@@ -8,7 +8,7 @@
  * code path and assert it both reaches the rendered prompt AND the literal
  * placeholder is gone.
  */
-import { describe, expect, it, vi, afterEach } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { generateSceneContent, generateSceneActions } from '@/lib/generation/scene-generator';
 import { buildSceneFromOutline } from '@/lib/generation/scene-builder';
@@ -160,12 +160,7 @@ describe('scene-generator language directive threading (issue #472)', () => {
     it('threads languageDirective into pbl actions prompt', async () => {
       const { aiCall, lastUser } = makeCapturingAiCall('[]');
       const content: GeneratedPBLContent = {
-        projectConfig: {
-          projectInfo: { title: 't', description: 'd' },
-          agents: [],
-          issueboard: { agent_ids: [], issues: [], current_issue_id: null },
-          chat: { messages: [] },
-        },
+        projectV2: {} as GeneratedPBLContent['projectV2'],
       };
 
       await generateSceneActions(
@@ -245,44 +240,6 @@ describe('scene-generator language directive threading (issue #472)', () => {
         expect(user).toContain(DIRECTIVE);
         expect(user).not.toContain('{{languageDirective}}');
       }
-    });
-  });
-
-  describe('pbl content honors caller-provided directive', () => {
-    afterEach(() => {
-      vi.restoreAllMocks();
-    });
-
-    it('forwards options.languageDirective to generatePBLContent', async () => {
-      const pblModule = await import('@/lib/pbl/generate-pbl');
-      const spy = vi.spyOn(pblModule, 'generatePBLContent').mockResolvedValue({
-        projectInfo: { title: '', description: '' },
-        agents: [],
-        issueboard: { agent_ids: [], issues: [], current_issue_id: null },
-        chat: { messages: [] },
-      });
-
-      const aiCall: AICallFn = async () => '';
-
-      await generateSceneContent(
-        baseOutline({
-          type: 'pbl',
-          pblConfig: {
-            projectTopic: 't',
-            projectDescription: 'd',
-            targetSkills: [],
-          },
-        }),
-        aiCall,
-        {
-          languageDirective: DIRECTIVE,
-          languageModel: {} as unknown as import('ai').LanguageModel,
-        },
-      );
-
-      expect(spy).toHaveBeenCalledTimes(1);
-      const config = spy.mock.calls[0][0];
-      expect(config.languageDirective).toBe(DIRECTIVE);
     });
   });
 });
