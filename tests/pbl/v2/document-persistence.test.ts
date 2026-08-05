@@ -13,6 +13,7 @@ import { preparePBLScenesForDocumentPersistence } from '@/lib/pbl/v2/runtime/doc
 import { stripToDesignTemplate } from '@/lib/pbl/v2/runtime/learner-state';
 import type { PBLProjectV2 } from '@/lib/pbl/v2/types';
 import { makeScene, type Scene } from '@/lib/types/stage';
+import { legacyPBLSceneFixture } from '@/tests/fixtures/pbl-v1-scene';
 
 function makeProject(): PBLProjectV2 {
   return {
@@ -141,6 +142,26 @@ describe('PBL document persistence cutover', () => {
     await expect(
       preparePBLScenesForDocumentPersistence('stage-1', [makePBLScene(makeProject())]),
     ).rejects.toThrow('runtime unavailable');
+  });
+
+  it('strips hybrid v2 learner state while preserving the original legacy projectConfig', async () => {
+    const project = makeProject();
+    const projectConfig = structuredClone(
+      legacyPBLSceneFixture.content.type === 'pbl'
+        ? legacyPBLSceneFixture.content.projectConfig
+        : undefined,
+    );
+    if (!projectConfig) throw new Error('expected legacy PBL projectConfig');
+    const hybridScene = makePBLScene(project);
+    if (hybridScene.content.type !== 'pbl') throw new Error('expected PBL scene');
+    hybridScene.content.projectConfig = projectConfig;
+
+    const [persisted] = await preparePBLScenesForDocumentPersistence('stage-1', [hybridScene]);
+
+    expect(persisted?.content.type).toBe('pbl');
+    if (persisted?.content.type !== 'pbl') return;
+    expect(persisted.content.projectV2).toEqual(stripToDesignTemplate(project));
+    expect(persisted.content.projectConfig).toEqual(projectConfig);
   });
 
   it('restores the authored proficiency instead of persisting the learner retier', async () => {

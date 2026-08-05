@@ -129,7 +129,9 @@ export function upgradeLegacyPBLConfigToProjectV2(config: PBLProjectConfig): PBL
     threads: [
       {
         agentId: instructorRole.id,
-        messages: config.chat.messages.map((message) => legacyChatMessage(message, config)),
+        messages: config.chat.messages
+          .filter((message) => typeof message.message === 'string')
+          .map((message) => legacyChatMessage(message, config)),
       },
     ],
     engagementEvents: [],

@@ -128,6 +128,22 @@ describe('PBL legacy read support', () => {
     expect(project.threads[0]?.messages[0]?.ts).toEqual(expect.any(String));
   });
 
+  it('drops malformed legacy chat records without classifying the config as empty', () => {
+    const config = legacyConfig();
+    const validMessage = config.chat.messages[0];
+    const missingMessage = structuredClone(config.chat.messages[1]);
+    const nonStringMessage = structuredClone(config.chat.messages[1]);
+    Reflect.deleteProperty(missingMessage, 'message');
+    Reflect.set(nonStringMessage, 'message', 42);
+    config.chat.messages = [validMessage, missingMessage, nonStringMessage];
+
+    expect(isEmptyLegacyPBLConfig(config)).toBe(false);
+
+    const project = upgradeLegacyPBLConfigToProjectV2(config);
+    expect(project.threads[0]?.messages).toHaveLength(1);
+    expect(project.threads[0]?.messages[0]?.content).toBe(validMessage.message);
+  });
+
   it('falls back to a valid ISO timestamp for an unparseable legacy timestamp', () => {
     const config = legacyConfig();
     Reflect.set(config.chat.messages[0], 'timestamp', 'not-a-date');

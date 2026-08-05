@@ -133,10 +133,8 @@ function toGenerationContent(
     !isEmptyLegacyPBLConfig(content.projectConfig)
   ) {
     const projectV2 = upgradeLegacyPBLConfigToProjectV2(content.projectConfig);
-    if (projectV2) {
-      const upgradedContent = { type: 'pbl' as const, projectV2 };
-      return upgradedContent;
-    }
+    const upgradedContent = { type: 'pbl' as const, projectV2 };
+    return upgradedContent;
   }
   // quiz, interactive, pbl runtime shapes already satisfy the generation type
   return content as GeneratedQuizContent | GeneratedInteractiveContent | GeneratedPBLContent;

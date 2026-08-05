@@ -234,6 +234,21 @@ describe('app document validators', () => {
     ).toEqual({ valid: true });
   });
 
+  test.each(['projectV2', 'projectConfig'] as const)('rejects an array %s', (field) => {
+    const result = validateAppScene({
+      ...pblScene(),
+      content: { type: 'pbl', [field]: [] },
+    });
+
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.errors).toContainEqual({
+        path: `/content/${field}`,
+        message: `\`${field}\` must be an object`,
+      });
+    }
+  });
+
   test('rejects content/type mismatches with a clear path', () => {
     const result = validateAppScene({
       ...interactiveScene(),

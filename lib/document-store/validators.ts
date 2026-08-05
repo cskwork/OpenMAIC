@@ -49,13 +49,13 @@ export const validateAppScene: SceneValidator = (scene) => {
   } else if (
     value.type === 'pbl' &&
     content.projectConfig !== undefined &&
-    !objectValue(content.projectConfig)
+    (!objectValue(content.projectConfig) || Array.isArray(content.projectConfig))
   ) {
     errors.push({ path: '/content/projectConfig', message: '`projectConfig` must be an object' });
   } else if (
     value.type === 'pbl' &&
     content.projectV2 !== undefined &&
-    !objectValue(content.projectV2)
+    (!objectValue(content.projectV2) || Array.isArray(content.projectV2))
   ) {
     errors.push({ path: '/content/projectV2', message: '`projectV2` must be an object' });
   }
