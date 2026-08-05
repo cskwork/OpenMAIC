@@ -12,9 +12,9 @@ import {
   NATIVE_WHITEBOARD_MUTATION_TOOL_NAMES,
   NATIVE_WHITEBOARD_V2_TOOL_NAMES,
   createInternalNativeWhiteboardInventory,
-  selectInternalNativeWhiteboardInventory,
   type NativeWhiteboardV2ToolName,
 } from '@/lib/chat/pi/tools/native-whiteboard-inventory';
+import { selectInternalNativeWhiteboardInventory } from '@/lib/chat/pi/tools/native-whiteboard-v2-inventory';
 import { NativeWhiteboardObservationLedger } from '@/lib/chat/pi/tools/native-whiteboard-observation-ledger';
 import { RevisionedWhiteboardMutationRuntime } from '@/lib/chat/pi/tools/revisioned-whiteboard-runtime';
 
@@ -287,7 +287,7 @@ describe('Stage 3A version-level inventory selector', () => {
     expect(v2.handlers.size).toBe(0);
   });
 
-  it('selects one whole inventory and rejects handlers from the other version', () => {
+  it('selects one whole inventory and rejects generic v2 completion or handlers from the other version', () => {
     const v1Handlers = new Map<NativeWhiteboardV2ToolName, () => void>(
       NATIVE_WHITEBOARD_MUTATION_TOOL_NAMES.map((name) => [name, () => undefined]),
     );
@@ -298,8 +298,11 @@ describe('Stage 3A version-level inventory selector', () => {
     const v2 = createInternalNativeWhiteboardInventory({ version: 'v2', handlers: v2Handlers });
 
     expect(v1.functionallyComplete).toBe(true);
-    expect(v2.functionallyComplete).toBe(true);
-    expect(selectInternalNativeWhiteboardInventory({ version: 'v2', v1, v2 })).toBe(v2);
+    expect(v2.functionallyComplete).toBe(false);
+    expect(selectInternalNativeWhiteboardInventory({ version: 'v1', v1, v2 })).toBe(v1);
+    expect(() => selectInternalNativeWhiteboardInventory({ version: 'v2', v1, v2 })).toThrow(
+      'NATIVE_WHITEBOARD_INVENTORY_INCOMPLETE',
+    );
     expect(() =>
       createInternalNativeWhiteboardInventory({
         version: 'v1',

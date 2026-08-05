@@ -17,7 +17,7 @@ import { piClientQueryCoordinator } from '@/lib/agent/runtime/client-query-coord
 import { runNativeChild } from '@/lib/agent/runtime/run-native-child';
 import { NativeWhiteboardObservationLedger } from '@/lib/chat/pi/tools/native-whiteboard-observation-ledger';
 import { buildInternalNativeWhiteboardReadTool } from '@/lib/chat/pi/tools/native-whiteboard-read';
-import { buildInternalRevisionedWhiteboardDrawTextTool } from '@/lib/chat/pi/tools/native-whiteboard-v2-draw-text';
+import { buildInternalNativeWhiteboardV2Inventory } from '@/lib/chat/pi/tools/native-whiteboard-v2-inventory';
 import {
   buildInternalRevisionedWhiteboardDrawChartTool,
   buildInternalRevisionedWhiteboardDrawLatexTool,
@@ -264,13 +264,8 @@ describe('Stage 3B-2 real same-Child continuation', () => {
         buffer.pushRevisionedClientEffect('child-1', event.data);
       }
     };
-    const read = buildInternalNativeWhiteboardReadTool({
-      body: body(initialStage),
-      observationLedger,
-      send,
-    });
     const onActionDone = vi.fn();
-    const draw = buildInternalRevisionedWhiteboardDrawTextTool({
+    const inventory = buildInternalNativeWhiteboardV2Inventory({
       body: body(initialStage),
       observationLedger,
       mutationRuntime,
@@ -376,14 +371,11 @@ describe('Stage 3B-2 real same-Child continuation', () => {
       streamFn,
       systemPrompt: 'Use authoritative whiteboard reads and revisioned mutations.',
       prompt: 'Draw after reading, and recover from stale state.',
-      tools: [read.tool, draw.tool],
-      allowedToolNames: new Set(['wb_read', 'wb_draw_text']),
-      clientQueryHandlers: new Map([['wb_read', read.handler]]),
-      clientEffectHandlers: new Map([['wb_draw_text', draw.handler]]),
-      toolCategories: new Map([
-        ['wb_read', 'read'],
-        ['wb_draw_text', 'mutation'],
-      ]),
+      tools: [...inventory.tools],
+      allowedToolNames: inventory.allowedToolNames,
+      clientQueryHandlers: inventory.clientQueryHandlers,
+      clientEffectHandlers: inventory.clientEffectHandlers,
+      toolCategories: inventory.toolCategories,
       toolBudgets: {
         maxMutationExecutions: 2,
         maxReadExecutions: 8,
@@ -392,7 +384,7 @@ describe('Stage 3B-2 real same-Child continuation', () => {
       },
       timeoutMs: 10_000,
       createExecutionId: () => executionIds.shift()!,
-      onSettled: (childInvocationId) => read.dispose(childInvocationId),
+      onSettled: inventory.disposeChild,
     });
 
     buffer.pushAgentEnd({ messageId: 'child-1', agentId: 'teacher-1' });
