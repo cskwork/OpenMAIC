@@ -146,40 +146,27 @@ export function isEmptyLegacyPBLConfig(config: PBLProjectConfig): boolean {
     !config?.projectInfo ||
     Array.isArray(config.projectInfo) ||
     typeof config.projectInfo !== 'object' ||
-    typeof config.projectInfo?.title !== 'string' ||
-    typeof config.projectInfo?.description !== 'string' ||
     !Array.isArray(config?.agents) ||
     config.agents.some(
-      (agent) => !agent || typeof agent !== 'object' || typeof agent.name !== 'string',
+      (agent) =>
+        !agent ||
+        Array.isArray(agent) ||
+        typeof agent !== 'object' ||
+        (agent.name !== undefined && agent.name !== null && typeof agent.name !== 'string'),
     ) ||
     !config?.issueboard ||
     Array.isArray(config.issueboard) ||
     typeof config.issueboard !== 'object' ||
     !Array.isArray(config.issueboard?.issues) ||
     config.issueboard.issues.some(
-      (issue) =>
-        !issue ||
-        typeof issue !== 'object' ||
-        typeof issue.id !== 'string' ||
-        typeof issue.title !== 'string' ||
-        typeof issue.description !== 'string' ||
-        typeof issue.notes !== 'string' ||
-        typeof issue.generated_questions !== 'string' ||
-        typeof issue.question_agent_name !== 'string',
+      (issue) => !issue || Array.isArray(issue) || typeof issue !== 'object',
     ) ||
     !config?.chat ||
     Array.isArray(config.chat) ||
     typeof config.chat !== 'object' ||
     !Array.isArray(config.chat?.messages) ||
     config.chat.messages.some(
-      (message) =>
-        !message ||
-        typeof message !== 'object' ||
-        typeof message.id !== 'string' ||
-        typeof message.agent_name !== 'string' ||
-        typeof message.message !== 'string' ||
-        typeof message.timestamp !== 'number' ||
-        !Number.isFinite(message.timestamp),
+      (message) => !message || Array.isArray(message) || typeof message !== 'object',
     ) ||
     (config.selectedRole !== undefined &&
       config.selectedRole !== null &&
@@ -221,12 +208,13 @@ function legacyChatMessage(
   config: PBLProjectConfig,
 ): PBLChatMessage {
   const isUser = isLegacyUserMessage(message, config);
+  const timestamp = new Date(message.timestamp || Date.now());
   return {
     id: message.id,
     agentId: isUser ? undefined : LEGACY_INSTRUCTOR_ROLE_ID,
     roleType: isUser ? 'user' : 'instructor',
     content: message.message,
-    ts: new Date(message.timestamp || Date.now()).toISOString(),
+    ts: Number.isNaN(timestamp.getTime()) ? new Date().toISOString() : timestamp.toISOString(),
   };
 }
 

@@ -24,7 +24,7 @@ vi.mock('@/components/scene-renderers/pbl/v2/hero', async () => {
 
 import { PBLRenderer } from '@/components/scene-renderers/pbl-renderer';
 import { validateAppScene } from '@/lib/document-store/validators';
-import { upgradeLegacyPBLConfigToProjectV2 } from '@/lib/pbl/legacy/read';
+import { isEmptyLegacyPBLConfig, upgradeLegacyPBLConfigToProjectV2 } from '@/lib/pbl/legacy/read';
 import { isPBLProjectV2 } from '@/lib/pbl/v2/types';
 import { legacyPBLSceneFixture } from '@/tests/fixtures/pbl-v1-scene';
 
@@ -105,6 +105,38 @@ describe('PBL legacy read support', () => {
     const project = upgradeLegacyPBLConfigToProjectV2(config);
 
     expect(project.milestones.map((milestone) => milestone.status)).toEqual(['locked', 'active']);
+  });
+
+  it('keeps structurally sound legacy configs with sloppy leaves renderable', () => {
+    const config = legacyConfig();
+    const issue = config.issueboard.issues[0];
+    const message = config.chat.messages[0];
+    Reflect.deleteProperty(issue, 'notes');
+    Reflect.deleteProperty(issue, 'generated_questions');
+    Reflect.deleteProperty(issue, 'question_agent_name');
+    Reflect.deleteProperty(message, 'timestamp');
+
+    expect(isEmptyLegacyPBLConfig(config)).toBe(false);
+
+    const project = upgradeLegacyPBLConfigToProjectV2(config);
+    expect(isPBLProjectV2(project)).toBe(true);
+    expect(project.title).toBe('Community Garden Data Project');
+    expect(project.milestones[0]).toMatchObject({
+      id: 'legacy_ms_issue-1',
+      title: 'Inspect the measurements',
+    });
+    expect(project.threads[0]?.messages[0]?.ts).toEqual(expect.any(String));
+  });
+
+  it('falls back to a valid ISO timestamp for an unparseable legacy timestamp', () => {
+    const config = legacyConfig();
+    Reflect.set(config.chat.messages[0], 'timestamp', 'not-a-date');
+
+    const project = upgradeLegacyPBLConfigToProjectV2(config);
+    const timestamp = project.threads[0]?.messages[0]?.ts;
+
+    expect(() => new Date(timestamp ?? '').toISOString()).not.toThrow();
+    expect(timestamp).toBe(new Date(timestamp ?? '').toISOString());
   });
 
   it('renders emptyProject for a new empty PBL scene', () => {
