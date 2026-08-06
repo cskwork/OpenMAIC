@@ -21,8 +21,80 @@ function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function isRecordArray(value: unknown): value is UnknownRecord[] {
+  return Array.isArray(value) && value.every(isRecord);
+}
+
 function records(value: unknown): UnknownRecord[] {
   return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+/**
+ * Mirrors `hasPBLProjectV2Containers` (lib/pbl/v2/types.ts) in full, not just
+ * the containers the cover reads: on a hybrid scene, renderer and export must
+ * agree on whether the v2 payload is authoritative over the legacy config, or
+ * the classroom would fall back to legacy data while the exported video still
+ * shows the damaged v2 project. (For v2-only scenes the cover stays permissive;
+ * see `pblCover` in passes/visuals.ts.)
+ */
+export function hasPblV2CoverContainers(value: unknown): value is UnknownRecord {
+  if (
+    !isRecord(value) ||
+    !isRecordArray(value.milestones) ||
+    !isRecordArray(value.roles) ||
+    !isRecordArray(value.submissions) ||
+    !isRecordArray(value.evaluations) ||
+    !isRecordArray(value.threads) ||
+    !isRecordArray(value.engagementEvents)
+  ) {
+    return false;
+  }
+  if (value.milestones.some((milestone) => !isRecordArray(milestone.microtasks))) return false;
+  if (value.threads.some((thread) => !isRecordArray(thread.messages))) return false;
+  if (value.gains !== undefined && !Array.isArray(value.gains)) return false;
+  if (value.runtimeEvents !== undefined && !isRecordArray(value.runtimeEvents)) return false;
+  if (
+    value.scenario !== undefined &&
+    (!isRecord(value.scenario) || !isRecordArray(value.scenario.characters))
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Mirrors the verdict of `isEmptyLegacyPBLConfig` (lib/pbl/legacy/read.ts) for
+ * the hybrid fallback decision in passes/visuals.ts: a legacy config only
+ * overrides a damaged v2 payload when the renderer would actually show it —
+ * structurally sound containers AND some non-empty content. An empty or
+ * garbage legacy stub must not discard recoverable v2 cover fields.
+ */
+export function isUsableLegacyCoverConfig(value: unknown): value is UnknownRecord {
+  if (!isRecord(value)) return false;
+  const projectInfo = value.projectInfo;
+  if (!isRecord(projectInfo)) return false;
+  if (
+    !Array.isArray(value.agents) ||
+    value.agents.some(
+      (agent) => !isRecord(agent) || (agent.name != null && typeof agent.name !== 'string'),
+    )
+  ) {
+    return false;
+  }
+  if (value.selectedRole != null && typeof value.selectedRole !== 'string') return false;
+  const issueboard = value.issueboard;
+  if (!isRecord(issueboard) || !isRecordArray(issueboard.issues)) return false;
+  const chat = value.chat;
+  if (!isRecord(chat) || !isRecordArray(chat.messages)) return false;
+  // Raw truthiness, not trimmed text: `isEmptyLegacyPBLConfig` treats a
+  // whitespace-only title as content, and this verdict must match it exactly.
+  return Boolean(
+    projectInfo.title ||
+    projectInfo.description ||
+    value.agents.length > 0 ||
+    issueboard.issues.length > 0 ||
+    chat.messages.length > 0,
+  );
 }
 
 function text(value: unknown): string | undefined {

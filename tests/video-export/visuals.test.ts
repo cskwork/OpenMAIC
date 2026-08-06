@@ -129,6 +129,8 @@ describe('video-export cover visual pass', () => {
           },
           threads: [{ messages: [{ content: 'SECRET_CHAT' }] }],
           submissions: [{ content: 'SECRET_SUBMISSION' }],
+          evaluations: [],
+          engagementEvents: [],
         },
         projectConfig: {
           projectInfo: { title: 'Legacy title', description: 'Legacy description' },
@@ -363,6 +365,40 @@ describe('video-export cover visual pass', () => {
         taskCount: 2,
       },
     ]);
+  });
+
+  it('uses legacy cover fields when a hybrid scene has malformed projectV2', () => {
+    const visual = compile(
+      pblScene({
+        projectConfig: legacyProjectConfig({ activeIssue: 'root', chat: '' }),
+        projectV2: { title: 'broken' },
+      }),
+    ).scenes[0].visuals[0];
+
+    expect(visual).toEqual({
+      kind: 'pbl-cover',
+      startMs: 0,
+      durationMs: 3600,
+      title: 'Legacy Project',
+      description: 'Legacy description',
+      gains: [],
+      stageCount: 1,
+      taskCount: 2,
+    });
+  });
+
+  it('keeps a partial projectV2 cover when the legacy config is an empty stub', () => {
+    const visual = compile(
+      pblScene({
+        projectConfig: {},
+        projectV2: { title: 'Recoverable v2 title' },
+      }),
+    ).scenes[0].visuals[0];
+
+    expect(visual).toMatchObject({
+      kind: 'pbl-cover',
+      title: 'Recoverable v2 title',
+    });
   });
 
   /**

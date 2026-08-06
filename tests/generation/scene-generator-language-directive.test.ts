@@ -208,6 +208,47 @@ describe('scene-generator language directive threading (issue #472)', () => {
       expect(lastSystem()).toContain('2. Recommend a watering plan');
       expect(lastSystem()).not.toContain('{{projectSummary}}');
     });
+
+    it('tolerates non-string leaves in a container-valid pbl project summary', async () => {
+      const { aiCall, lastSystem } = makeCapturingAiCall('[]');
+      const content = {
+        projectV2: {
+          title: 42,
+          description: 42,
+          gains: [42],
+          roles: [],
+          milestones: [
+            { title: 42, order: 0, microtasks: [] },
+            { title: 'Valid milestone', order: 1, microtasks: [] },
+          ],
+          submissions: [],
+          evaluations: [],
+          threads: [],
+          engagementEvents: [],
+        },
+      } as unknown as GeneratedPBLContent;
+
+      await expect(
+        generateSceneActions(
+          baseOutline({
+            type: 'pbl',
+            pblConfig: {
+              projectTopic: 'Fallback project',
+              projectDescription: 'Fallback description',
+              targetSkills: [],
+            },
+          }),
+          content,
+          aiCall,
+        ),
+      ).resolves.toEqual(expect.any(Array));
+
+      expect(lastSystem()).toContain('Project title: Fallback project');
+      expect(lastSystem()).toContain('Driving goal: Fallback description');
+      expect(lastSystem()).toContain('1. Task 1');
+      expect(lastSystem()).toContain('2. Valid milestone');
+      expect(lastSystem()).not.toContain('Learner gains: 42');
+    });
   });
 
   describe('widget generation (interactive scenes)', () => {

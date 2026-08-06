@@ -83,6 +83,33 @@ describe('PBL legacy read support', () => {
     expect(markup).toContain('Community Garden Data Project');
   });
 
+  it('falls back to upgraded legacy data when a hybrid scene has malformed projectV2', () => {
+    const content = structuredClone(legacyPBLSceneFixture.content);
+    if (content.type !== 'pbl' || !content.projectConfig) {
+      throw new Error('expected legacy PBL projectConfig');
+    }
+    content.projectConfig.selectedRole = null;
+    content.projectConfig.chat.messages = [];
+    content.projectConfig.issueboard.current_issue_id = 'issue-1';
+    content.projectConfig.issueboard.issues.forEach((issue, index) => {
+      issue.is_done = false;
+      issue.is_active = index === 0;
+    });
+    Reflect.set(content, 'projectV2', { title: 'broken' });
+
+    const markup = renderToStaticMarkup(
+      createElement(PBLRenderer, {
+        content,
+        mode: 'playback',
+        sceneId: legacyPBLSceneFixture.id,
+      }),
+    );
+
+    expect(markup).toContain('data-testid="pbl-v2-hero"');
+    expect(markup).toContain('Community Garden Data Project');
+    expect(markup).not.toContain('pbl.emptyProject');
+  });
+
   it('detects Chinese content when upgrading a legacy project', () => {
     const config = legacyConfig();
     config.projectInfo.title = '天气数据项目';

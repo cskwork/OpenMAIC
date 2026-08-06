@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { validateAppScene } from '@/lib/document-store/validators';
+import { hasPBLProjectV2Containers } from '@/lib/pbl/v2/types';
 import type { GeneratedPBLContent, SceneOutline } from '@/lib/types/generation';
+import type { AppScene } from '@/lib/types/stage';
 
 const generatePBLV2ProjectSingleCallMock = vi.hoisted(() => vi.fn());
 const generatePBLV2ProjectMock = vi.hoisted(() => vi.fn());
@@ -62,6 +65,22 @@ function mockModel() {
   return { provider: 'test', modelId: 'test-model' } as never;
 }
 
+function expectPersistablePBLContent(content: GeneratedPBLContent | null): void {
+  expect(content).not.toBeNull();
+  if (!content) throw new Error('expected generated PBL content');
+
+  expect(hasPBLProjectV2Containers(content.projectV2)).toBe(true);
+  const scene = {
+    id: 'scene-pbl-1',
+    stageId: 'stage-1',
+    title: 'CSV Data Analyzer',
+    order: 0,
+    type: 'pbl',
+    content: { type: 'pbl', ...content },
+  } as AppScene;
+  expect(validateAppScene(scene)).toEqual({ valid: true });
+}
+
 describe('generateSceneContent — PBL v2 planner routing', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -78,6 +97,10 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
       title: 'CSV Data Analyzer project',
       milestones: [{ microtasks: [] }],
       roles: [{ id: 'role_1' }],
+      submissions: [],
+      evaluations: [],
+      threads: [{ messages: [] }],
+      engagementEvents: [],
     };
     generatePBLV2ProjectSingleCallMock.mockResolvedValue(projectV2);
 
@@ -100,6 +123,7 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
     expect(generatePBLV2ProjectMock).not.toHaveBeenCalled();
     expect(content).toEqual({ projectV2 });
     expect(content).not.toHaveProperty('projectConfig');
+    expectPersistablePBLContent(content);
   });
 
   it('falls back to the loop when single-call validation fails', async () => {
@@ -107,14 +131,20 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
       title: 'CSV Data Analyzer project',
       milestones: [{ microtasks: [] }, { microtasks: [] }],
       roles: [{ id: 'role_1' }],
+      submissions: [],
+      evaluations: [],
+      threads: [{ messages: [] }],
+      engagementEvents: [],
     };
     generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(new Error('single-call failed'));
     generatePBLV2ProjectMock.mockResolvedValue(projectV2);
 
     const { generateSceneContent } = await import('@/lib/generation/scene-generator');
-    await expect(
-      generateSceneContent(pblOutline(), vi.fn(), { languageModel: mockModel() }),
-    ).resolves.toEqual({ projectV2 });
+    const content = (await generateSceneContent(pblOutline(), vi.fn(), {
+      languageModel: mockModel(),
+    })) as GeneratedPBLContent | null;
+    expect(content).toEqual({ projectV2 });
+    expectPersistablePBLContent(content);
     expect(generatePBLV2ProjectSingleCallMock).toHaveBeenCalledTimes(1);
     expect(generatePBLV2ProjectMock).toHaveBeenCalledTimes(1);
   });

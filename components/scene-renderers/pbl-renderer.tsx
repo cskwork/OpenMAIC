@@ -43,7 +43,7 @@ export function PBLRenderer({ content, mode: _mode, sceneId }: PBLRendererProps)
     // null is treated like absent: stored scenes predating projectV2 validation
     // may carry an explicit null and must keep falling back to the legacy path.
     if (content.projectV2 != null) {
-      return hasPBLProjectV2Containers(content.projectV2) ? content.projectV2 : null;
+      if (hasPBLProjectV2Containers(content.projectV2)) return content.projectV2;
     }
     if (!projectConfig || isEmptyLegacyPBLConfig(projectConfig)) return null;
     return upgradeLegacyPBLConfigToProjectV2(projectConfig);

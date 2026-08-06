@@ -1484,18 +1484,25 @@ function isUtilityClass(cls: string): boolean {
 function buildPBLProjectSummary(outline: SceneOutline, project: PBLProjectV2 | undefined): string {
   const fallbackTitle = outline.pblConfig?.projectTopic?.trim() || outline.title;
   const fallbackDescription = outline.pblConfig?.projectDescription?.trim() || outline.description;
-  const title = project?.title?.trim() || fallbackTitle;
-  const description = project?.description?.trim() || fallbackDescription;
-  const learningObjective = project?.learningObjective?.trim();
-  const scenarioGoal = project?.scenario?.goal?.trim();
+  const summaryText = (value: unknown): string | undefined =>
+    typeof value === 'string' ? value.trim() || undefined : undefined;
+  const title = summaryText(project?.title) || fallbackTitle;
+  const description = summaryText(project?.description) || fallbackDescription;
+  const learningObjective = summaryText(project?.learningObjective);
+  const scenarioGoal = summaryText(project?.scenario?.goal);
   const gains = Array.isArray(project?.gains)
-    ? project.gains.map((gain) => gain.trim()).filter(Boolean)
+    ? project.gains.map(summaryText).filter((gain): gain is string => gain !== undefined)
     : [];
   const milestones = Array.isArray(project?.milestones)
     ? [...project.milestones]
-        .sort((a, b) => a.order - b.order)
-        .map((milestone) => milestone.title?.trim())
-        .filter(Boolean)
+        .map((milestone, index) => ({ milestone, index }))
+        .sort((a, b) => {
+          const aOrder = typeof a.milestone.order === 'number' ? a.milestone.order : a.index;
+          const bOrder = typeof b.milestone.order === 'number' ? b.milestone.order : b.index;
+          return aOrder - bOrder;
+        })
+        .map(({ milestone }) => milestone)
+        .map((milestone, index) => summaryText(milestone.title) ?? `Task ${index + 1}`)
     : [];
 
   return [
