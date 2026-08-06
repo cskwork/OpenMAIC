@@ -14,9 +14,12 @@ const mocks = vi.hoisted(() => ({
 const PBLGenerationErrorMock = vi.hoisted(
   () =>
     class PBLGenerationError extends Error {
-      constructor(message: string) {
+      readonly statusCode?: number;
+
+      constructor(message: string, options?: { statusCode?: number }) {
         super(message);
         this.name = 'PBLGenerationError';
+        this.statusCode = options?.statusCode;
       }
     },
 );
@@ -215,7 +218,83 @@ describe('classroom scene generation retries', () => {
     expect(() => containPBLGenerationError(unrelated, 'Other scene')).toThrow(unrelated);
   });
 
-  it('retries and skips a failed PBL scene while completing surrounding slides', async () => {
+  it('does not retry a status-less PBL failure and completes surrounding slides', async () => {
+    const outlines = [
+      { ...outline, id: 'outline-slide-1', title: 'Opening slide', order: 0 },
+      {
+        ...outline,
+        id: 'outline-pbl',
+        type: 'pbl' as const,
+        title: 'Practice project',
+        order: 1,
+        pblConfig: {
+          projectTopic: 'Retries',
+          projectDescription: 'Practice resilient generation',
+          targetSkills: ['Retry handling'],
+        },
+      },
+      { ...outline, id: 'outline-slide-2', title: 'Closing slide', order: 2 },
+    ];
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: true,
+      data: { languageDirective: 'Use English.', outlines },
+    });
+    mocks.generateSceneContent.mockImplementation(async (sceneOutline) => {
+      if (sceneOutline.type === 'pbl') {
+        throw new PBLGenerationErrorMock('both planners failed');
+      }
+      return slideContent;
+    });
+
+    const { result } = await generateWithProgress();
+    const pblCalls = mocks.generateSceneContent.mock.calls.filter(
+      ([sceneOutline]) => sceneOutline.type === 'pbl',
+    );
+
+    expect(result.scenesCount).toBe(2);
+    expect(result.scenes.map((scene) => scene.title)).toEqual(['Opening slide', 'Closing slide']);
+    expect(pblCalls).toHaveLength(1);
+  });
+
+  it('does not retry a 401 PBL failure and completes surrounding slides', async () => {
+    const outlines = [
+      { ...outline, id: 'outline-slide-1', title: 'Opening slide', order: 0 },
+      {
+        ...outline,
+        id: 'outline-pbl',
+        type: 'pbl' as const,
+        title: 'Practice project',
+        order: 1,
+        pblConfig: {
+          projectTopic: 'Retries',
+          projectDescription: 'Practice resilient generation',
+          targetSkills: ['Retry handling'],
+        },
+      },
+      { ...outline, id: 'outline-slide-2', title: 'Closing slide', order: 2 },
+    ];
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: true,
+      data: { languageDirective: 'Use English.', outlines },
+    });
+    mocks.generateSceneContent.mockImplementation(async (sceneOutline) => {
+      if (sceneOutline.type === 'pbl') {
+        throw new PBLGenerationErrorMock('provider key rejected', { statusCode: 401 });
+      }
+      return slideContent;
+    });
+
+    const { result } = await generateWithProgress();
+    const pblCalls = mocks.generateSceneContent.mock.calls.filter(
+      ([sceneOutline]) => sceneOutline.type === 'pbl',
+    );
+
+    expect(result.scenesCount).toBe(2);
+    expect(result.scenes.map((scene) => scene.title)).toEqual(['Opening slide', 'Closing slide']);
+    expect(pblCalls).toHaveLength(1);
+  });
+
+  it('retries a 429 PBL failure before skipping it and completing surrounding slides', async () => {
     vi.useFakeTimers();
     try {
       const outlines = [
@@ -240,7 +319,7 @@ describe('classroom scene generation retries', () => {
       });
       mocks.generateSceneContent.mockImplementation(async (sceneOutline) => {
         if (sceneOutline.type === 'pbl') {
-          throw new PBLGenerationErrorMock('both planners failed');
+          throw new PBLGenerationErrorMock('provider rate limited', { statusCode: 429 });
         }
         return slideContent;
       });
@@ -254,7 +333,7 @@ describe('classroom scene generation retries', () => {
 
       expect(result.scenesCount).toBe(2);
       expect(result.scenes.map((scene) => scene.title)).toEqual(['Opening slide', 'Closing slide']);
-      expect(pblCalls.length).toBeGreaterThan(1);
+      expect(pblCalls).toHaveLength(6);
     } finally {
       vi.useRealTimers();
     }

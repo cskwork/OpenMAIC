@@ -591,32 +591,33 @@ export async function generateClassroom(
     // calls through it instead of the aiCall closure — without it PBL scenes
     // silently fail (return null) on this one-shot path.
     const contentCall = await resolveSceneContentCall(safeOutline.type);
-    const content = await withGenerationRetry(
-      async () => {
-        try {
-          return await generateSceneContent(safeOutline, contentCall.aiCall, {
-            agents,
-            languageDirective,
-            allowProceduralSkill: vocationalActive,
-            // PBL scene content is driven by the model object, not the aiCall
-            // closure, so both the routed model AND its thinking config must be
-            // passed explicitly — otherwise a `scene-content:pbl` route with a
-            // `thinking` config would be silently ignored here (slide/quiz/
-            // interactive go through the aiCall closure and already honor it).
-            ...(safeOutline.type === 'pbl'
-              ? { languageModel: contentCall.model, thinkingConfig: contentCall.thinking }
-              : {}),
-          });
-        } catch (error) {
-          return containPBLGenerationError(error, safeOutline.title);
-        }
-      },
-      {
-        label: `scene ${index + 1}/${outlines.length} content`,
-        shouldRetryResult: (result) => result === null,
-        onRetry: (event) => reportSceneRetry('content', event),
-      },
-    );
+    const content = await (async () => {
+      try {
+        return await withGenerationRetry(
+          () =>
+            generateSceneContent(safeOutline, contentCall.aiCall, {
+              agents,
+              languageDirective,
+              allowProceduralSkill: vocationalActive,
+              // PBL scene content is driven by the model object, not the aiCall
+              // closure, so both the routed model AND its thinking config must be
+              // passed explicitly — otherwise a `scene-content:pbl` route with a
+              // `thinking` config would be silently ignored here (slide/quiz/
+              // interactive go through the aiCall closure and already honor it).
+              ...(safeOutline.type === 'pbl'
+                ? { languageModel: contentCall.model, thinkingConfig: contentCall.thinking }
+                : {}),
+            }),
+          {
+            label: `scene ${index + 1}/${outlines.length} content`,
+            shouldRetryResult: (result) => result === null,
+            onRetry: (event) => reportSceneRetry('content', event),
+          },
+        );
+      } catch (error) {
+        return containPBLGenerationError(error, safeOutline.title);
+      }
+    })();
     if (!content) {
       log.warn(`Skipping scene "${safeOutline.title}" — content generation failed`);
       continue;
