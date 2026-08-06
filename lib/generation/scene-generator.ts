@@ -24,8 +24,10 @@ import type { WidgetType, WidgetConfig } from '@/lib/types/widgets';
 import type { PromptId } from '@/lib/prompts/types';
 import type { LanguageModel } from 'ai';
 import { createStageAPI } from '@/lib/api/stage-api';
-import { generatePBLV2Project, PlannerV2Error } from '@/lib/pbl/v2/agents/planner';
+import { callLLM } from '@/lib/ai/llm';
+import { generatePBLV2Project } from '@/lib/pbl/v2/agents/planner';
 import { generatePBLV2ProjectSingleCall } from '@/lib/pbl/v2/agents/planner-single-call';
+import { PlannerV2Error } from '@/lib/pbl/v2/agents/planner-core';
 import type { PBLPlannerV2Input, PBLProjectV2 } from '@/lib/pbl/v2/types';
 import { buildPrompt, PROMPT_IDS } from '@/lib/prompts';
 import { DEFAULT_LANGUAGE_DIRECTIVE } from './outline-generator';
@@ -958,11 +960,18 @@ async function generatePBLSceneContent(
     {
       label: 'single-call',
       run: () =>
-        generatePBLV2ProjectSingleCall(plannerInput, languageModel, { onProgress }, thinkingConfig),
+        generatePBLV2ProjectSingleCall(
+          plannerInput,
+          languageModel,
+          callLLM,
+          { onProgress },
+          thinkingConfig,
+        ),
     },
     {
       label: 'loop',
-      run: () => generatePBLV2Project(plannerInput, languageModel, { onProgress }, thinkingConfig),
+      run: () =>
+        generatePBLV2Project(plannerInput, languageModel, callLLM, { onProgress }, thinkingConfig),
     },
   ];
   const attemptErrors: unknown[] = [];

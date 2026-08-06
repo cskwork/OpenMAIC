@@ -93,7 +93,8 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
         courseContext: expect.objectContaining({ languageDirective: 'Reply in English.' }),
       }),
       expect.anything(),
-      expect.anything(),
+      expect.any(Function),
+      expect.objectContaining({ onProgress: expect.any(Function) }),
       undefined,
     );
     expect(generatePBLV2ProjectMock).not.toHaveBeenCalled();

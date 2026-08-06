@@ -9,20 +9,20 @@ import type {
 import { BrowserRuntimeStore, type RuntimeSessionInit, type RuntimeStore } from '@openmaic/storage';
 
 import { applyInstructorEvent } from '@/components/scene-renderers/pbl/v2/apply-instructor-event';
-import { recordEvent } from '@/lib/pbl/v2/operations/engagement';
-import { addEvaluation } from '@/lib/pbl/v2/operations/evaluation';
+import { recordEvent } from '@/lib/pbl/v2/operations/kernel/engagement';
+import { addEvaluation } from '@/lib/pbl/v2/operations/runtime/evaluation';
 import {
   advanceMicrotask,
   continueAfterHandover,
   resetProjectProgress,
   startMicrotask,
-} from '@/lib/pbl/v2/operations/progress';
-import { transitionProjectUiPhase } from '@/lib/pbl/v2/operations/runtime-events';
-import { addSubmission } from '@/lib/pbl/v2/operations/submission';
+} from '@/lib/pbl/v2/operations/kernel/progress';
+import { transitionProjectUiPhase } from '@/lib/pbl/v2/operations/kernel/runtime-events';
+import { addSubmission } from '@/lib/pbl/v2/operations/runtime/submission';
 import {
   clearPendingTaskCompletion,
   setPendingTaskCompletion,
-} from '@/lib/pbl/v2/operations/task-completion';
+} from '@/lib/pbl/v2/operations/kernel/task-completion';
 import { drainProjectRuntime } from '@/lib/pbl/v2/runtime/drain';
 import { foldPBLRuntime } from '@/lib/pbl/v2/runtime/fold';
 import {
