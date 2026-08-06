@@ -889,10 +889,29 @@ function normalizeQuizAnswer(question: Record<string, unknown>): string[] | unde
  * Uses the v2 single-call planner first, then the v2 loop planner.
  */
 export class PBLGenerationError extends Error {
-  constructor(message: string) {
-    super(message);
+  readonly statusCode?: number;
+
+  constructor(message: string, options?: ErrorOptions & { statusCode?: number }) {
+    super(message, options);
     this.name = 'PBLGenerationError';
+    this.statusCode = options?.statusCode;
   }
+}
+
+function plannerErrorStatus(error: unknown, seen = new Set<unknown>()): number | undefined {
+  if (!error || seen.has(error) || typeof error !== 'object') return undefined;
+  seen.add(error);
+
+  const record = error as Record<string, unknown>;
+  const raw = record.statusCode ?? record.status ?? record.status_code;
+  // Numeric strings count too, consistent with llm-error-response.ts.
+  const status =
+    typeof raw === 'number' ? raw : typeof raw === 'string' ? Number.parseInt(raw, 10) : Number.NaN;
+  if (Number.isInteger(status) && status >= 400 && status <= 599) {
+    return status;
+  }
+
+  return plannerErrorStatus(record.cause, seen) ?? plannerErrorStatus(record.lastError, seen);
 }
 
 async function generatePBLSceneContent(
@@ -946,6 +965,7 @@ async function generatePBLSceneContent(
       run: () => generatePBLV2Project(plannerInput, languageModel, { onProgress }, thinkingConfig),
     },
   ];
+  const attemptErrors: unknown[] = [];
 
   for (const attempt of attempts) {
     try {
@@ -955,6 +975,7 @@ async function generatePBLSceneContent(
       );
       return { projectV2 };
     } catch (err) {
+      attemptErrors.push(err);
       const msg =
         err instanceof PlannerV2Error
           ? `validation failed: ${err.message}`
@@ -965,6 +986,9 @@ async function generatePBLSceneContent(
     }
   }
 
+  const firstError = attemptErrors[0];
+  const lastError = attemptErrors[attemptErrors.length - 1];
+
   if (scenarioRoleplay) {
     log.error(
       `PBL v2 scenario generation failed for "${outline.title}"; refusing to generate an ordinary PBL project.`,
@@ -974,6 +998,10 @@ async function generatePBLSceneContent(
 
   throw new PBLGenerationError(
     `PBL v2 generation failed for "${outline.title}" after all planner attempts.`,
+    {
+      cause: lastError,
+      statusCode: plannerErrorStatus(lastError) ?? plannerErrorStatus(firstError),
+    },
   );
 }
 

@@ -61,6 +61,12 @@ export interface PBLProjectConfig {
   selectedRole?: string | null;
 }
 
+interface LegacyReadablePBLContent {
+  type: 'pbl';
+  projectConfig?: PBLProjectConfig;
+  projectV2?: PBLProjectV2;
+}
+
 const LEGACY_INSTRUCTOR_ROLE_ID = 'role-compat-instructor';
 
 export function upgradeLegacyPBLConfigToProjectV2(config: PBLProjectConfig): PBLProjectV2 {
@@ -183,6 +189,23 @@ export function isEmptyLegacyPBLConfig(config: PBLProjectConfig): boolean {
     config.issueboard.issues.length === 0 &&
     config.chat.messages.length === 0
   );
+}
+
+export function normalizeLegacyPBLContent<T extends LegacyReadablePBLContent>(
+  content: T,
+): T | { type: 'pbl'; projectV2: PBLProjectV2 } {
+  if (
+    !content.projectV2 &&
+    content.projectConfig &&
+    !isEmptyLegacyPBLConfig(content.projectConfig)
+  ) {
+    return {
+      type: 'pbl',
+      projectV2: upgradeLegacyPBLConfigToProjectV2(content.projectConfig),
+    };
+  }
+
+  return content;
 }
 
 function legacyIssueStatus(

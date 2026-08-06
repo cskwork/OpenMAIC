@@ -35,7 +35,7 @@ import type {
 } from '@/lib/types/generation';
 import type { SceneContent } from '@/lib/types/stage';
 import type { LlmStage } from '@/lib/server/model-routes';
-import { isEmptyLegacyPBLConfig, upgradeLegacyPBLConfigToProjectV2 } from '@/lib/pbl/legacy/read';
+import { normalizeLegacyPBLContent } from '@/lib/pbl/legacy/read';
 
 // ── Scene context shape (client-sourced, injected via deps) ──────────────────
 
@@ -126,15 +126,8 @@ function toGenerationContent(
       // remark is not stored in the runtime canvas; omit it
     } satisfies GeneratedSlideContent;
   }
-  if (
-    content.type === 'pbl' &&
-    !content.projectV2 &&
-    content.projectConfig &&
-    !isEmptyLegacyPBLConfig(content.projectConfig)
-  ) {
-    const projectV2 = upgradeLegacyPBLConfigToProjectV2(content.projectConfig);
-    const upgradedContent = { type: 'pbl' as const, projectV2 };
-    return upgradedContent;
+  if (content.type === 'pbl') {
+    return normalizeLegacyPBLContent(content) as GeneratedPBLContent;
   }
   // quiz, interactive, pbl runtime shapes already satisfy the generation type
   return content as GeneratedQuizContent | GeneratedInteractiveContent | GeneratedPBLContent;

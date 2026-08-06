@@ -131,6 +131,46 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
     expect(generatePBLV2ProjectMock).toHaveBeenCalledTimes(1);
   });
 
+  it('preserves the last planner failure as cause and exposes its HTTP status', async () => {
+    const firstError = Object.assign(new Error('single-call unavailable'), { statusCode: 503 });
+    const lastError = Object.assign(new Error('loop rate limited'), { status: 429 });
+    generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(firstError);
+    generatePBLV2ProjectMock.mockRejectedValueOnce(lastError);
+
+    const { generateSceneContent, PBLGenerationError } =
+      await import('@/lib/generation/scene-generator');
+
+    try {
+      await generateSceneContent(pblOutline(), vi.fn(), { languageModel: mockModel() });
+      throw new Error('expected PBL generation to fail');
+    } catch (error) {
+      expect(error).toBeInstanceOf(PBLGenerationError);
+      expect(error).toMatchObject({
+        message: 'PBL v2 generation failed for "CSV Data Analyzer" after all planner attempts.',
+        statusCode: 429,
+        cause: lastError,
+      });
+    }
+  });
+
+  it('recovers a numeric-string status from an earlier planner attempt', async () => {
+    const firstError = Object.assign(new Error('single-call rate limited'), { statusCode: '429' });
+    const lastError = new Error('loop validation failed');
+    generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(firstError);
+    generatePBLV2ProjectMock.mockRejectedValueOnce(lastError);
+
+    const { generateSceneContent, PBLGenerationError } =
+      await import('@/lib/generation/scene-generator');
+
+    try {
+      await generateSceneContent(pblOutline(), vi.fn(), { languageModel: mockModel() });
+      throw new Error('expected PBL generation to fail');
+    } catch (error) {
+      expect(error).toBeInstanceOf(PBLGenerationError);
+      expect(error).toMatchObject({ statusCode: 429, cause: lastError });
+    }
+  });
+
   it('continues to refuse degradation when scenario PBL v2 generation fails', async () => {
     generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(new Error('single-call failed'));
     generatePBLV2ProjectMock.mockRejectedValueOnce(new Error('loop failed'));
