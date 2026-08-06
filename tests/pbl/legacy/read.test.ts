@@ -178,4 +178,16 @@ describe('PBL legacy read support', () => {
 
     expect(markup).toContain('pbl.emptyProject');
   });
+
+  it('renders a placeholder for malformed stored projectV2 without throwing', () => {
+    const markup = renderToStaticMarkup(
+      createElement(PBLRenderer, {
+        content: { type: 'pbl', projectV2: { title: 'V2 project' } } as never,
+        mode: 'playback',
+        sceneId: 'malformed-v2-pbl-scene',
+      }),
+    );
+
+    expect(markup).toContain('pbl.emptyProject');
+  });
 });

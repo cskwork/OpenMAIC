@@ -1,5 +1,6 @@
 import { validateScene, validateStage, type ValidationIssue } from '@openmaic/dsl';
 import type { SceneValidator, StageValidator } from '@openmaic/storage';
+import { hasPBLProjectV2Containers } from '@/lib/pbl/v2/types';
 
 function objectValue(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;
@@ -54,10 +55,15 @@ export const validateAppScene: SceneValidator = (scene) => {
     errors.push({ path: '/content/projectConfig', message: '`projectConfig` must be an object' });
   } else if (
     value.type === 'pbl' &&
-    content.projectV2 !== undefined &&
-    (!objectValue(content.projectV2) || Array.isArray(content.projectV2))
+    // null is treated like absent so documents stored before projectV2
+    // validation existed keep saving; the renderer applies the same rule.
+    content.projectV2 != null &&
+    !hasPBLProjectV2Containers(content.projectV2)
   ) {
-    errors.push({ path: '/content/projectV2', message: '`projectV2` must be an object' });
+    errors.push({
+      path: '/content/projectV2',
+      message: '`projectV2` must contain milestones, roles and threads arrays',
+    });
   }
 
   return errors.length === 0 ? { valid: true } : { valid: false, errors };

@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import { Maximize2, Minimize2 } from 'lucide-react';
 import { motion } from 'motion/react';
 import type { PBLContent, StageMode } from '@/lib/types/stage';
-import type { PBLProjectV2 } from '@/lib/pbl/v2/types';
+import { hasPBLProjectV2Containers, type PBLProjectV2 } from '@/lib/pbl/v2/types';
 import { isEmptyLegacyPBLConfig, upgradeLegacyPBLConfigToProjectV2 } from '@/lib/pbl/legacy/read';
 import { normalizeProjectRuntime } from '@/lib/pbl/v2/operations/progress';
 import { transitionProjectUiPhase } from '@/lib/pbl/v2/operations/runtime-events';
@@ -40,7 +40,11 @@ export function PBLRenderer({ content, mode: _mode, sceneId }: PBLRendererProps)
 
   const { projectConfig } = content;
   const resolvedProjectV2 = useMemo(() => {
-    if (content.projectV2) return content.projectV2;
+    // null is treated like absent: stored scenes predating projectV2 validation
+    // may carry an explicit null and must keep falling back to the legacy path.
+    if (content.projectV2 != null) {
+      return hasPBLProjectV2Containers(content.projectV2) ? content.projectV2 : null;
+    }
     if (!projectConfig || isEmptyLegacyPBLConfig(projectConfig)) return null;
     return upgradeLegacyPBLConfigToProjectV2(projectConfig);
   }, [content.projectV2, projectConfig]);

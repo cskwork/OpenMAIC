@@ -943,9 +943,47 @@ export interface PBLPlannerV2Input {
 // Type guards
 // ---------------------------------------------------------------------------
 
-/** Narrow `unknown` to `PBLProjectV2`. Used by `pbl-renderer.tsx` to
- *  branch v1 vs v2 paths. Cheap structural check — does not validate
- *  every field; intended as a safety net, not a full validator. */
+function isNonArrayObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isObjectArray(value: unknown): value is Record<string, unknown>[] {
+  return Array.isArray(value) && value.every(isNonArrayObject);
+}
+
+/** Whether a persisted v2 value has every container the renderer and runtime
+ *  normalization path dereference on mount. Deliberately ignores leaf fields:
+ *  old or hand-edited projects may have incomplete scalar metadata while still
+ *  being safe to normalize and render. */
+export function hasPBLProjectV2Containers(value: unknown): boolean {
+  if (!isNonArrayObject(value)) return false;
+
+  if (
+    !isObjectArray(value.milestones) ||
+    !isObjectArray(value.roles) ||
+    !isObjectArray(value.submissions) ||
+    !isObjectArray(value.evaluations) ||
+    !isObjectArray(value.threads) ||
+    !isObjectArray(value.engagementEvents)
+  ) {
+    return false;
+  }
+
+  if (value.milestones.some((milestone) => !isObjectArray(milestone.microtasks))) return false;
+  if (value.threads.some((thread) => !isObjectArray(thread.messages))) return false;
+
+  if (value.gains !== undefined && !Array.isArray(value.gains)) return false;
+  if (value.runtimeEvents !== undefined && !isObjectArray(value.runtimeEvents)) return false;
+  if (value.scenario !== undefined) {
+    if (!isNonArrayObject(value.scenario)) return false;
+    if (!isObjectArray(value.scenario.characters)) return false;
+  }
+
+  return true;
+}
+
+/** Narrow `unknown` to `PBLProjectV2`. Cheap structural check — does not
+ *  validate every field; intended as a safety net, not a full validator. */
 export function isPBLProjectV2(value: unknown): value is PBLProjectV2 {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Partial<PBLProjectV2>;

@@ -10,6 +10,7 @@ import {
 import { getDocumentStore } from '@/lib/document-store/store';
 import type { AppDocument } from '@/lib/document-store/persistence-types';
 import { validateAppScene, validateAppStage } from '@/lib/document-store/validators';
+import { upgradeLegacyPBLConfigToProjectV2 } from '@/lib/pbl/legacy/read';
 import type { SceneOutline } from '@/lib/types/generation';
 import type { AppScene } from '@/lib/types/stage';
 import type { SceneRecord, StageOutlinesRecord, StageRecord } from '@/lib/utils/database';
@@ -123,11 +124,16 @@ describe('app document persistence seam', () => {
           content: {
             ...pblScene().content,
             projectV2: {
+              roles: [],
               milestones: [
                 {
                   microtasks: [{ id: 'mt-1', internalAssessment: undefined }],
                 },
               ],
+              submissions: [],
+              evaluations: [],
+              threads: [],
+              engagementEvents: [],
             },
           },
         },
@@ -212,11 +218,35 @@ describe('app document validators', () => {
     expect(validateAppScene(scene)).toEqual({ valid: true });
   });
 
-  test('accepts PBL content with only projectV2', () => {
+  test('rejects projectV2 without the renderer-required containers', () => {
     const scene = {
       ...pblScene(),
       content: { type: 'pbl', projectV2: { title: 'V2 project' } },
     } as unknown as AppScene;
+
+    expect(validateAppScene(scene)).toEqual({
+      valid: false,
+      errors: [
+        {
+          path: '/content/projectV2',
+          message: '`projectV2` must contain milestones, roles and threads arrays',
+        },
+      ],
+    });
+  });
+
+  test('accepts a complete v2 project', () => {
+    const content = structuredClone(legacyPBLSceneFixture.content);
+    if (content.type !== 'pbl' || !content.projectConfig) {
+      throw new Error('expected legacy PBL projectConfig fixture');
+    }
+    const scene = {
+      ...pblScene(),
+      content: {
+        type: 'pbl',
+        projectV2: upgradeLegacyPBLConfigToProjectV2(content.projectConfig),
+      },
+    } as AppScene;
 
     expect(validateAppScene(scene)).toEqual({ valid: true });
   });
@@ -234,17 +264,41 @@ describe('app document validators', () => {
     ).toEqual({ valid: true });
   });
 
-  test.each(['projectV2', 'projectConfig'] as const)('rejects an array %s', (field) => {
+  test('accepts a null projectV2 as if absent', () => {
+    expect(
+      validateAppScene({
+        ...pblScene(),
+        content: { type: 'pbl', projectV2: null },
+      }),
+    ).toEqual({ valid: true });
+  });
+
+  test('rejects an array projectV2', () => {
     const result = validateAppScene({
       ...pblScene(),
-      content: { type: 'pbl', [field]: [] },
+      content: { type: 'pbl', projectV2: [] },
     });
 
     expect(result.valid).toBe(false);
     if (!result.valid) {
       expect(result.errors).toContainEqual({
-        path: `/content/${field}`,
-        message: `\`${field}\` must be an object`,
+        path: '/content/projectV2',
+        message: '`projectV2` must contain milestones, roles and threads arrays',
+      });
+    }
+  });
+
+  test('rejects an array projectConfig', () => {
+    const result = validateAppScene({
+      ...pblScene(),
+      content: { type: 'pbl', projectConfig: [] },
+    });
+
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.errors).toContainEqual({
+        path: '/content/projectConfig',
+        message: '`projectConfig` must be an object',
       });
     }
   });

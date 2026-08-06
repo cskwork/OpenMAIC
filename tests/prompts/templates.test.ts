@@ -10,6 +10,7 @@
 import { describe, test, expect } from 'vitest';
 import { buildStructuredPrompt } from '@/lib/orchestration/prompt-builder';
 import { buildDirectorPrompt } from '@/lib/orchestration/director-prompt';
+import { loadPrompt } from '@/lib/prompts';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import type { StatelessChatRequest } from '@/lib/types/chat';
 
@@ -95,6 +96,24 @@ describe('no surviving placeholders', () => {
   test('director prompt', () => {
     const out = buildDirectorPrompt([baseAgent], 'No history', [], 0);
     expect(out).not.toMatch(UNRESOLVED_PLACEHOLDER);
+  });
+});
+
+describe('PBL action workflow', () => {
+  test('previews the v2 instructor-guided milestone workspace', () => {
+    const prompt = loadPrompt('pbl-actions');
+
+    expect(prompt?.systemPrompt).toContain(
+      'complete project configuration with milestones and a guided project workspace led by an instructor',
+    );
+    expect(prompt?.systemPrompt).toContain(
+      'Briefly previews what the project involves, including its driving goal and key milestones',
+    );
+    expect(prompt?.systemPrompt).toContain(
+      'Encourages students to enter the project workspace and start the first task',
+    );
+    expect(prompt?.systemPrompt).not.toContain('available roles');
+    expect(prompt?.systemPrompt).not.toContain('select a role');
   });
 });
 
