@@ -112,6 +112,9 @@ describe('PBL action workflow', () => {
     expect(prompt?.systemPrompt).toContain(
       'Encourages students to enter the project workspace and start the first task',
     );
+    expect(prompt?.systemPrompt).toContain('## Project Plan');
+    expect(prompt?.systemPrompt).toContain('{{projectSummary}}');
+    expect(prompt?.systemPrompt).toContain('do not invent or rename them');
     expect(prompt?.systemPrompt).not.toContain('available roles');
     expect(prompt?.systemPrompt).not.toContain('select a role');
   });

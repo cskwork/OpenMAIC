@@ -173,13 +173,26 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
   });
 
   it('continues to refuse degradation when scenario PBL v2 generation fails', async () => {
-    generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(new Error('single-call failed'));
-    generatePBLV2ProjectMock.mockRejectedValueOnce(new Error('loop failed'));
+    const firstError = Object.assign(new Error('single-call unavailable'), { statusCode: 503 });
+    const lastError = Object.assign(new Error('loop rate limited'), { status: 429 });
+    generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(firstError);
+    generatePBLV2ProjectMock.mockRejectedValueOnce(lastError);
 
-    const { generateSceneContent } = await import('@/lib/generation/scene-generator');
-    await expect(
-      generateSceneContent(scenarioPblOutline(), vi.fn(), { languageModel: mockModel() }),
-    ).resolves.toBeNull();
+    const { generateSceneContent, PBLGenerationError } =
+      await import('@/lib/generation/scene-generator');
+
+    try {
+      await generateSceneContent(scenarioPblOutline(), vi.fn(), { languageModel: mockModel() });
+      throw new Error('expected scenario PBL generation to fail');
+    } catch (error) {
+      expect(error).toBeInstanceOf(PBLGenerationError);
+      expect(error).toMatchObject({
+        message:
+          'PBL v2 scenario generation failed for "Difficult feedback conversation" after all planner attempts.',
+        statusCode: 429,
+        cause: lastError,
+      });
+    }
     expect(generatePBLV2ProjectSingleCallMock).toHaveBeenCalledTimes(1);
     expect(generatePBLV2ProjectMock).toHaveBeenCalledTimes(1);
   });

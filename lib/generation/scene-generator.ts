@@ -997,21 +997,19 @@ async function generatePBLSceneContent(
 
   const firstError = attemptErrors[0];
   const lastError = attemptErrors[attemptErrors.length - 1];
+  let failureMessage = `PBL v2 generation failed for "${outline.title}" after all planner attempts.`;
 
   if (scenarioRoleplay) {
     log.error(
       `PBL v2 scenario generation failed for "${outline.title}"; refusing to generate an ordinary PBL project.`,
     );
-    return null;
+    failureMessage = `PBL v2 scenario generation failed for "${outline.title}" after all planner attempts.`;
   }
 
-  throw new PBLGenerationError(
-    `PBL v2 generation failed for "${outline.title}" after all planner attempts.`,
-    {
-      cause: lastError,
-      statusCode: plannerErrorStatus(lastError) ?? plannerErrorStatus(firstError),
-    },
-  );
+  throw new PBLGenerationError(failureMessage, {
+    cause: lastError,
+    statusCode: plannerErrorStatus(lastError) ?? plannerErrorStatus(firstError),
+  });
 }
 
 /**
@@ -1491,6 +1489,38 @@ function isUtilityClass(cls: string): boolean {
   return UTILITY_EXACT.has(cls);
 }
 
+function buildPBLProjectSummary(outline: SceneOutline, project: PBLProjectV2 | undefined): string {
+  const fallbackTitle = outline.pblConfig?.projectTopic?.trim() || outline.title;
+  const fallbackDescription = outline.pblConfig?.projectDescription?.trim() || outline.description;
+  const title = project?.title?.trim() || fallbackTitle;
+  const description = project?.description?.trim() || fallbackDescription;
+  const learningObjective = project?.learningObjective?.trim();
+  const scenarioGoal = project?.scenario?.goal?.trim();
+  const gains = Array.isArray(project?.gains)
+    ? project.gains.map((gain) => gain.trim()).filter(Boolean)
+    : [];
+  const milestones = Array.isArray(project?.milestones)
+    ? [...project.milestones]
+        .sort((a, b) => a.order - b.order)
+        .map((milestone) => milestone.title?.trim())
+        .filter(Boolean)
+    : [];
+
+  return [
+    `Project title: ${title}`,
+    `Driving goal: ${description}`,
+    learningObjective ? `Learning objective: ${learningObjective}` : '',
+    scenarioGoal ? `Scenario goal: ${scenarioGoal}` : '',
+    gains.length > 0 ? `Learner gains: ${gains.join('; ')}` : '',
+    'Milestones:',
+    milestones.length > 0
+      ? milestones.map((milestone, index) => `${index + 1}. ${milestone}`).join('\n')
+      : '(No generated milestones are available; introduce the project topic without inventing any.)',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
 /**
  * Step 3.2: Generate Actions based on content and script
  */
@@ -1614,15 +1644,17 @@ export async function generateSceneActions(
     return generateDefaultInteractiveActions(outline);
   }
 
-  if (outline.type === 'pbl' && 'projectV2' in content) {
+  if (outline.type === 'pbl') {
     const pblConfig = outline.pblConfig;
     const agentsText = formatAgentsForPrompt(agents);
+    const projectV2 = 'projectV2' in content ? content.projectV2 : undefined;
     const prompts = buildPrompt(PROMPT_IDS.PBL_ACTIONS, {
       title: outline.title,
       keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
       description: outline.description,
       projectTopic: pblConfig?.projectTopic || outline.title,
       projectDescription: pblConfig?.projectDescription || outline.description,
+      projectSummary: buildPBLProjectSummary(outline, projectV2),
       courseContext: buildCourseContext(ctx),
       agents: agentsText,
       languageDirective: languageDirective || '',

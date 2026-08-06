@@ -13,6 +13,8 @@ import { describe, expect, it } from 'vitest';
 import { generateSceneContent, generateSceneActions } from '@/lib/generation/scene-generator';
 import { buildSceneFromOutline } from '@/lib/generation/scene-builder';
 import type { AICallFn } from '@/lib/generation/pipeline-types';
+import { normalizeLegacyPBLContent } from '@/lib/pbl/legacy/read';
+import { legacyPBLSceneFixture } from '@/tests/fixtures/pbl-v1-scene';
 import type {
   SceneOutline,
   GeneratedSlideContent,
@@ -158,7 +160,7 @@ describe('scene-generator language directive threading (issue #472)', () => {
     });
 
     it('threads languageDirective into pbl actions prompt', async () => {
-      const { aiCall, lastUser } = makeCapturingAiCall('[]');
+      const { aiCall, lastUser, lastSystem } = makeCapturingAiCall('[]');
       const content: GeneratedPBLContent = {
         projectV2: {} as GeneratedPBLContent['projectV2'],
       };
@@ -179,6 +181,32 @@ describe('scene-generator language directive threading (issue #472)', () => {
 
       expect(lastUser()).toContain(DIRECTIVE);
       expect(lastUser()).not.toContain('{{languageDirective}}');
+      expect(lastSystem()).toContain('Project title: t');
+      expect(lastSystem()).toContain('Driving goal: d');
+      expect(lastSystem()).not.toContain('undefined');
+      expect(lastSystem()).not.toContain('{{projectSummary}}');
+    });
+
+    it('grounds the pbl actions prompt in the generated project plan', async () => {
+      const { aiCall, lastSystem } = makeCapturingAiCall('[]');
+      const legacyContent = structuredClone(legacyPBLSceneFixture.content);
+      if (legacyContent.type !== 'pbl') {
+        throw new Error('expected a PBL fixture');
+      }
+      const normalized = normalizeLegacyPBLContent(legacyContent);
+      if (!('projectV2' in normalized) || !normalized.projectV2) {
+        throw new Error('expected the legacy PBL fixture to normalize to projectV2');
+      }
+      const content: GeneratedPBLContent = {
+        projectV2: normalized.projectV2,
+      };
+
+      await generateSceneActions(baseOutline({ type: 'pbl' }), content, aiCall);
+
+      expect(lastSystem()).toContain('Project title: Community Garden Data Project');
+      expect(lastSystem()).toContain('1. Inspect the measurements');
+      expect(lastSystem()).toContain('2. Recommend a watering plan');
+      expect(lastSystem()).not.toContain('{{projectSummary}}');
     });
   });
 
