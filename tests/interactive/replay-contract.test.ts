@@ -25,7 +25,7 @@ describe('ReplayContract static parsing', () => {
     const report = analyzeReplayHtml(`
       <a href="https://example.test">external</a>
       <canvas></canvas><video src="movie.mp4"></video>
-      <input type="file"><script>setInterval(() => Math.random(), 20); window.open('/popup')</script>
+      <input type="file"><script>setInterval(() => Math.random(), 20); window.open('/popup'); window.location = '/next'</script>
     `);
     expect(report.capabilities).toMatchObject({
       reset: 'supported',

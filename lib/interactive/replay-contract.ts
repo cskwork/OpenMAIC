@@ -111,6 +111,7 @@ export interface ReplayContract {
   limits: ReplayLimits;
   exploredStates: number;
   exploredOperations: number;
+  exploredTransitions: number;
 }
 
 export interface ReplayInspectorOptions {
@@ -184,7 +185,7 @@ export function analyzeReplayHtml(html: string): {
       true,
     ),
     navigation: statusFor(
-      has(/<(?:a|form)\b|\b(?:location\.(?:assign|replace|href)|history\.)/i),
+      has(/<(?:a|form)\b|\b(?:location|history\.|window\.location|document\.location)/i),
       true,
     ),
     popups: statusFor(has(/\b(?:window\.)?open\s*\(/i), true),
@@ -456,7 +457,9 @@ export async function inspectReplayContract(
       }
     }
     const controls = (Array.isArray(ready.controls) ? ready.controls : []) as ReplayControl[];
-    const unsafeExploration = (['navigation', 'popups', 'fileOperations'] as const).some((key) => {
+    const unsafeExploration = (
+      ['navigation', 'popups', 'fileOperations', 'externalResources'] as const
+    ).some((key) => {
       const status = staticReport.capabilities[key];
       return status === 'risk' || status === 'unsupported';
     });
@@ -483,6 +486,7 @@ export async function inspectReplayContract(
     const queue: ReplayOperation[][] = operations.map((operation) => [operation]);
     const seenSignatures = new Set([initial.signature]);
     let requestId = 0;
+    let attemptedOperations = 0;
     let states = 1;
     while (
       queue.length > 0 &&
@@ -497,6 +501,17 @@ export async function inspectReplayContract(
         let settled = true;
         let failed = false;
         for (const operation of path) {
+          if (attemptedOperations >= limits.maxOperations) {
+            diagnostics.push({
+              code: 'operation-limit-reached',
+              severity: 'warning',
+              message: 'Replay exploration stopped at the configured operation limit',
+              selector: operation.selector,
+            });
+            failed = true;
+            break;
+          }
+          attemptedOperations++;
           const id = `${++requestId}`;
           const operationResult = waitForPortMessage(
             port,
@@ -590,7 +605,8 @@ export async function inspectReplayContract(
       ),
       limits,
       exploredStates: states,
-      exploredOperations: transitions.length,
+      exploredOperations: attemptedOperations,
+      exploredTransitions: transitions.length,
     };
   } catch (error) {
     diagnostics.push({
@@ -618,6 +634,7 @@ export async function inspectReplayContract(
       limits,
       exploredStates: 0,
       exploredOperations: 0,
+      exploredTransitions: 0,
     };
   } finally {
     iframe.remove();
