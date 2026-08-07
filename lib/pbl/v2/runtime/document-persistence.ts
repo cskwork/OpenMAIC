@@ -1,4 +1,5 @@
 import type { Scene } from '@/lib/types/stage';
+import { hasPBLProjectV2Containers } from '@/lib/pbl/v2/types';
 import { synchronizePBLProjectRuntime } from './hydration';
 import { stripToDesignTemplate } from './learner-state';
 
@@ -14,19 +15,26 @@ export async function preparePBLScenesForDocumentPersistence(
   await Promise.all(
     scenes.map(async (scene) => {
       const content = scene.content;
-      if (content.type !== 'pbl' || !content.projectV2) return;
+      if (content.type !== 'pbl') return;
+      const projectV2 = content.projectV2;
+      // Preserve malformed stored bytes unchanged: persistence cannot safely
+      // interpret, strip, or replace a project that lacks the runtime containers.
+      if (projectV2 == null || !hasPBLProjectV2Containers(projectV2)) return;
       await synchronizePBLProjectRuntime({
         stageId,
         sceneId: scene.id,
-        project: content.projectV2,
+        project: projectV2,
       });
     }),
   );
 
   return scenes.map((scene) => {
     const content = scene.content;
-    if (content.type !== 'pbl' || !content.projectV2) return scene;
-    const designTemplate = stripToDesignTemplate(content.projectV2);
+    if (content.type !== 'pbl') return scene;
+    const projectV2 = content.projectV2;
+    // See the synchronization pass above: damaged v2 payloads must round-trip byte-for-byte.
+    if (projectV2 == null || !hasPBLProjectV2Containers(projectV2)) return scene;
+    const designTemplate = stripToDesignTemplate(projectV2);
     return {
       ...scene,
       content: {

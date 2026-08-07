@@ -167,6 +167,47 @@ describe('scene API retry boundary', () => {
     );
   });
 
+  it('builds damaged hybrid PBL content from the upgraded legacy project', async () => {
+    vi.resetModules();
+    mocks.generateSceneActions.mockResolvedValue([
+      { id: 'action-1', type: 'speech', title: 'Welcome', text: 'Let us continue.' },
+    ]);
+    mocks.buildCompleteScene.mockImplementation((_outline, content, actions, stageId) => {
+      if (!('projectV2' in content)) return null;
+      return {
+        id: 'scene-pbl-1',
+        stageId,
+        type: 'pbl',
+        title: pblOutline.title,
+        order: pblOutline.order,
+        content: { type: 'pbl', projectV2: content.projectV2 },
+        actions,
+      };
+    });
+    const damagedHybrid = structuredClone(legacyPBLSceneFixture.content);
+    Reflect.set(damagedHybrid, 'projectV2', { title: 'broken' });
+
+    const { POST } = await import('@/app/api/generate/scene-actions/route');
+    const response = await POST(
+      mockRequest({
+        outline: pblOutline,
+        allOutlines: [pblOutline],
+        content: damagedHybrid,
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.scene.content.projectV2).toMatchObject({
+      title: 'Community Garden Data Project',
+      milestones: [{ title: 'Inspect the measurements' }, { title: 'Recommend a watering plan' }],
+    });
+    expect(body.scene.content.projectV2).not.toEqual({ title: 'broken' });
+    expect(mocks.buildCompleteScene.mock.calls[0][1]).toBe(
+      mocks.generateSceneActions.mock.calls[0][1],
+    );
+  });
+
   it('preserves an upstream 401 from the scene-content route', async () => {
     vi.resetModules();
     const unauthorized = Object.assign(new Error('provider key rejected'), { statusCode: 401 });

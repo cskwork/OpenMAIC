@@ -5,7 +5,13 @@
  * exportable. Writers must never import it to create or project legacy shapes;
  * v1 data is accepted only when it already exists in stored scene content.
  */
-import type { PBLChatMessage, PBLMilestoneStatus, PBLProjectV2, PBLRole } from '../v2/types';
+import {
+  hasPBLProjectV2Containers,
+  type PBLChatMessage,
+  type PBLMilestoneStatus,
+  type PBLProjectV2,
+  type PBLRole,
+} from '../v2/types';
 
 interface LegacyPBLProjectInfo {
   title: string;
@@ -66,6 +72,11 @@ interface LegacyReadablePBLContent {
   projectConfig?: PBLProjectConfig;
   projectV2?: PBLProjectV2;
 }
+
+export type ResolvedPBLContent =
+  | { kind: 'v2'; projectV2: PBLProjectV2 }
+  | { kind: 'legacy'; projectConfig: PBLProjectConfig }
+  | { kind: 'empty' };
 
 const LEGACY_INSTRUCTOR_ROLE_ID = 'role-compat-instructor';
 
@@ -191,17 +202,32 @@ export function isEmptyLegacyPBLConfig(config: PBLProjectConfig): boolean {
   );
 }
 
+export function resolvePBLContent(content: {
+  projectV2?: unknown;
+  projectConfig?: unknown;
+}): ResolvedPBLContent {
+  if (content.projectV2 != null && hasPBLProjectV2Containers(content.projectV2)) {
+    return { kind: 'v2', projectV2: content.projectV2 as PBLProjectV2 };
+  }
+
+  if (
+    content.projectConfig != null &&
+    !isEmptyLegacyPBLConfig(content.projectConfig as PBLProjectConfig)
+  ) {
+    return { kind: 'legacy', projectConfig: content.projectConfig as PBLProjectConfig };
+  }
+
+  return { kind: 'empty' };
+}
+
 export function normalizeLegacyPBLContent<T extends LegacyReadablePBLContent>(
   content: T,
 ): T | { type: 'pbl'; projectV2: PBLProjectV2 } {
-  if (
-    !content.projectV2 &&
-    content.projectConfig &&
-    !isEmptyLegacyPBLConfig(content.projectConfig)
-  ) {
+  const resolved = resolvePBLContent(content);
+  if (resolved.kind === 'legacy') {
     return {
       type: 'pbl',
-      projectV2: upgradeLegacyPBLConfigToProjectV2(content.projectConfig),
+      projectV2: upgradeLegacyPBLConfigToProjectV2(resolved.projectConfig),
     };
   }
 

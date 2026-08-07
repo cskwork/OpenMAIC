@@ -27,6 +27,7 @@ import { drainProjectRuntime } from '@/lib/pbl/v2/runtime/drain';
 import { foldPBLRuntime } from '@/lib/pbl/v2/runtime/fold';
 import {
   appendPBLRuntimeSnapshotIfChanged,
+  documentContainsLearnerState,
   hydratePBLProjectFromRuntime,
   hydratePBLScenesFromRuntime,
   synchronizePBLProjectRuntime,
@@ -40,6 +41,7 @@ import { makeScene, type Scene } from '@/lib/types/stage';
 import type { KVScope, KVStore } from '@openmaic/storage';
 import type { PBLProjectV2, PBLRuntimeEvent } from '@/lib/pbl/v2/types';
 import { withRuntimeStorageExclusiveLock } from '@/lib/utils/chat-storage-lock';
+import { legacyPBLSceneFixture } from '@/tests/fixtures/pbl-v1-scene';
 
 if (!('IDBKeyRange' in globalThis)) {
   Object.defineProperty(globalThis, 'IDBKeyRange', { value: IDBKeyRange, configurable: true });
@@ -396,6 +398,22 @@ async function ensureSession(store: MemoryRuntimeStore): Promise<RuntimeSession>
 }
 
 describe('PBL runtime hydration', () => {
+  it('skips a damaged hybrid without touching runtime or learner-state hydration', async () => {
+    const damagedHybrid = structuredClone(legacyPBLSceneFixture) as Scene;
+    if (damagedHybrid.content.type !== 'pbl') throw new Error('expected PBL scene');
+    Reflect.set(damagedHybrid.content, 'projectV2', { title: 'broken' });
+
+    const hydrated = await hydratePBLScenesFromRuntime(STAGE_ID, [damagedHybrid], {
+      store: new ThrowingRuntimeStore(),
+      kv: new MemoryKVStore(),
+      learnerKey: LEARNER_KEY,
+    });
+
+    expect(hydrated).toEqual([damagedHybrid]);
+    expect(hydrated[0]).toBe(damagedHybrid);
+    expect(documentContainsLearnerState({ title: 'broken' })).toBe(false);
+  });
+
   it('returns unchanged scenes when runtime hydration throws for a scene', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const project = makeProject({ uiPhase: 'workspace' });

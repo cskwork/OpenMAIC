@@ -129,6 +129,32 @@ describe('regenerate_scene_actions', () => {
     });
   });
 
+  it('upgrades damaged hybrid PBL content from the usable legacy project', async () => {
+    const content = structuredClone(legacyPBLSceneFixture.content);
+    if (content.type !== 'pbl') throw new Error('expected legacy PBL content');
+    Reflect.set(content, 'projectV2', { title: 'broken' });
+    const tool = makeRegenerateSceneActionsTool(
+      makeDeps('damaged-hybrid-pbl', {
+        outline: stubPblOutline('damaged-hybrid-pbl', legacyPBLSceneFixture.title),
+        allOutlines: [stubPblOutline('damaged-hybrid-pbl', legacyPBLSceneFixture.title)],
+        content,
+      }),
+    );
+
+    await tool.execute('tc-damaged-hybrid-pbl', { sceneId: 'damaged-hybrid-pbl' });
+
+    expect(mockGen).toHaveBeenCalledOnce();
+    const [, passedContent] = mockGen.mock.lastCall ?? [];
+    expect(passedContent).toMatchObject({
+      type: 'pbl',
+      projectV2: {
+        title: 'Community Garden Data Project',
+        milestones: [{ title: 'Inspect the measurements' }, { title: 'Recommend a watering plan' }],
+      },
+    });
+    expect(passedContent).not.toMatchObject({ projectV2: { title: 'broken' } });
+  });
+
   it('includes the action count in the content text', async () => {
     const multiCtx: SceneContext = {
       outline: stubOutline('s2', 'Quiz', 2),

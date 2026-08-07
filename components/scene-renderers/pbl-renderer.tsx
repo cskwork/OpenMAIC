@@ -5,8 +5,8 @@ import { createPortal } from 'react-dom';
 import { Maximize2, Minimize2 } from 'lucide-react';
 import { motion } from 'motion/react';
 import type { PBLContent, StageMode } from '@/lib/types/stage';
-import { hasPBLProjectV2Containers, type PBLProjectV2 } from '@/lib/pbl/v2/types';
-import { isEmptyLegacyPBLConfig, upgradeLegacyPBLConfigToProjectV2 } from '@/lib/pbl/legacy/read';
+import type { PBLProjectV2 } from '@/lib/pbl/v2/types';
+import { resolvePBLContent, upgradeLegacyPBLConfigToProjectV2 } from '@/lib/pbl/legacy/read';
 import { normalizeProjectRuntime } from '@/lib/pbl/v2/operations/kernel/progress';
 import { transitionProjectUiPhase } from '@/lib/pbl/v2/operations/kernel/runtime-events';
 import { useStageStore } from '@/lib/store/stage';
@@ -38,16 +38,16 @@ interface PBLRendererProps {
 export function PBLRenderer({ content, mode: _mode, sceneId }: PBLRendererProps) {
   const { t } = useI18n();
 
-  const { projectConfig } = content;
   const resolvedProjectV2 = useMemo(() => {
     // null is treated like absent: stored scenes predating projectV2 validation
     // may carry an explicit null and must keep falling back to the legacy path.
-    if (content.projectV2 != null) {
-      if (hasPBLProjectV2Containers(content.projectV2)) return content.projectV2;
+    const resolved = resolvePBLContent(content);
+    if (resolved.kind === 'v2') return resolved.projectV2;
+    if (resolved.kind === 'legacy') {
+      return upgradeLegacyPBLConfigToProjectV2(resolved.projectConfig);
     }
-    if (!projectConfig || isEmptyLegacyPBLConfig(projectConfig)) return null;
-    return upgradeLegacyPBLConfigToProjectV2(projectConfig);
-  }, [content.projectV2, projectConfig]);
+    return null;
+  }, [content]);
 
   if (resolvedProjectV2) {
     return (

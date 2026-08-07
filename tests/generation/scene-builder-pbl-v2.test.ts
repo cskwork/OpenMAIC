@@ -33,7 +33,12 @@ describe('buildCompleteScene — PBL v2', () => {
           },
         ],
       },
+      roles: [],
       milestones: [{ scenarioStage: 'prep', microtasks: [{}] }],
+      submissions: [],
+      evaluations: [],
+      threads: [],
+      engagementEvents: [],
     } as unknown as PBLProjectV2;
     const content = {
       projectV2,

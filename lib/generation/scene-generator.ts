@@ -30,6 +30,7 @@ import { generatePBLV2Project } from '@/lib/pbl/v2/agents/planner';
 import { generatePBLV2ProjectSingleCall } from '@/lib/pbl/v2/agents/planner-single-call';
 import { PlannerV2Error } from '@/lib/pbl/v2/agents/planner-core';
 import type { PBLPlannerV2Input, PBLProjectV2 } from '@/lib/pbl/v2/types';
+import { resolvePBLContent } from '@/lib/pbl/legacy/read';
 import { buildPrompt, PROMPT_IDS } from '@/lib/prompts';
 import { DEFAULT_LANGUAGE_DIRECTIVE } from './outline-generator';
 import { postProcessInteractiveHtml } from './interactive-post-processor';
@@ -1653,7 +1654,8 @@ export async function generateSceneActions(
   if (outline.type === 'pbl') {
     const pblConfig = outline.pblConfig;
     const agentsText = formatAgentsForPrompt(agents);
-    const projectV2 = 'projectV2' in content ? content.projectV2 : undefined;
+    const resolved = resolvePBLContent(content as Partial<GeneratedPBLContent>);
+    const projectV2 = resolved.kind === 'v2' ? resolved.projectV2 : undefined;
     const prompts = buildPrompt(PROMPT_IDS.PBL_ACTIONS, {
       title: outline.title,
       keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
@@ -1932,14 +1934,16 @@ export function createSceneWithActions(
     return sceneResult.success ? (sceneResult.data ?? null) : null;
   }
 
-  if (outline.type === 'pbl' && 'projectV2' in content) {
+  const resolvedPBL =
+    outline.type === 'pbl' ? resolvePBLContent(content as Partial<GeneratedPBLContent>) : undefined;
+  if (resolvedPBL?.kind === 'v2') {
     const sceneResult = api.scene.create({
       type: 'pbl',
       title: outline.title,
       order: outline.order,
       content: {
         type: 'pbl',
-        projectV2: content.projectV2,
+        projectV2: resolvedPBL.projectV2,
       },
       actions,
       outlineId: outline.id,

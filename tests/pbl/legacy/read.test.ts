@@ -24,7 +24,12 @@ vi.mock('@/components/scene-renderers/pbl/v2/hero', async () => {
 
 import { PBLRenderer } from '@/components/scene-renderers/pbl-renderer';
 import { validateAppScene } from '@/lib/document-store/validators';
-import { isEmptyLegacyPBLConfig, upgradeLegacyPBLConfigToProjectV2 } from '@/lib/pbl/legacy/read';
+import {
+  isEmptyLegacyPBLConfig,
+  normalizeLegacyPBLContent,
+  resolvePBLContent,
+  upgradeLegacyPBLConfigToProjectV2,
+} from '@/lib/pbl/legacy/read';
 import { isPBLProjectV2 } from '@/lib/pbl/v2/types';
 import { legacyPBLSceneFixture } from '@/tests/fixtures/pbl-v1-scene';
 
@@ -37,6 +42,66 @@ function legacyConfig() {
 }
 
 describe('PBL legacy read support', () => {
+  it('resolves valid v2 content ahead of a usable legacy fallback', () => {
+    const projectConfig = legacyConfig();
+    const projectV2 = upgradeLegacyPBLConfigToProjectV2(projectConfig);
+
+    expect(resolvePBLContent({ projectV2, projectConfig })).toEqual({
+      kind: 'v2',
+      projectV2,
+    });
+  });
+
+  it.each([
+    ['missing', {}],
+    ['undefined', { projectV2: undefined }],
+    ['null', { projectV2: null }],
+    ['damaged', { projectV2: { title: 'broken' } }],
+  ])('resolves usable legacy content when projectV2 is %s', (_label, v2Content) => {
+    const projectConfig = legacyConfig();
+
+    expect(resolvePBLContent({ ...v2Content, projectConfig })).toEqual({
+      kind: 'legacy',
+      projectConfig,
+    });
+  });
+
+  it.each([
+    ['missing content', {}],
+    ['null values', { projectV2: null, projectConfig: null }],
+    ['damaged v2', { projectV2: { title: 'broken' } }],
+    ['malformed legacy', { projectConfig: {} }],
+    [
+      'empty legacy',
+      {
+        projectConfig: {
+          projectInfo: { title: '', description: '' },
+          agents: [],
+          issueboard: { agent_ids: [], issues: [], current_issue_id: null },
+          chat: { messages: [] },
+        },
+      },
+    ],
+  ])('resolves %s as empty', (_label, content) => {
+    expect(resolvePBLContent(content)).toEqual({ kind: 'empty' });
+  });
+
+  it('normalizes a damaged hybrid from its usable legacy project', () => {
+    const content = structuredClone(legacyPBLSceneFixture.content);
+    if (content.type !== 'pbl') throw new Error('expected legacy PBL content');
+    Reflect.set(content, 'projectV2', { title: 'broken' });
+
+    const normalized = normalizeLegacyPBLContent(content);
+
+    expect(normalized).toMatchObject({
+      type: 'pbl',
+      projectV2: {
+        title: 'Community Garden Data Project',
+        milestones: [{ title: 'Inspect the measurements' }, { title: 'Recommend a watering plan' }],
+      },
+    });
+  });
+
   it('round-trips a v1-native stored scene and upgrades it to a renderable v2 project', () => {
     const roundTripped = JSON.parse(JSON.stringify(legacyPBLSceneFixture));
     expect(validateAppScene(roundTripped)).toEqual({ valid: true });

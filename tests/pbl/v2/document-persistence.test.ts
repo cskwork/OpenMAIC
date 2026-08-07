@@ -110,6 +110,18 @@ beforeEach(() => {
 });
 
 describe('PBL document persistence cutover', () => {
+  it('passes a damaged hybrid through unchanged without runtime synchronization', async () => {
+    const damagedHybrid = structuredClone(legacyPBLSceneFixture) as Scene;
+    if (damagedHybrid.content.type !== 'pbl') throw new Error('expected PBL scene');
+    Reflect.set(damagedHybrid.content, 'projectV2', { title: 'broken' });
+
+    const [persisted] = await preparePBLScenesForDocumentPersistence('stage-1', [damagedHybrid]);
+
+    expect(persisted).toBe(damagedHybrid);
+    expect(persisted).toEqual(damagedHybrid);
+    expect(synchronizePBLProjectRuntimeMock).not.toHaveBeenCalled();
+  });
+
   it('durably synchronizes learner state before returning design-only scenes', async () => {
     const project = makeProject();
     const pblScene = makePBLScene(project);
