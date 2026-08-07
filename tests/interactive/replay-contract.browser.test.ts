@@ -47,7 +47,6 @@ describe.skipIf(!REQUIRED)('ReplayContract browser inspector', () => {
         {
           operationTimeoutMs: 1_200,
           settleMs: 10,
-          nonce: 'browser-test-nonce',
         },
       );
       const result = await page.evaluate(async (srcdoc) => {
@@ -55,35 +54,43 @@ describe.skipIf(!REQUIRED)('ReplayContract browser inspector', () => {
         iframe.setAttribute('sandbox', 'allow-scripts');
         iframe.style.cssText = 'position:fixed;left:-10000px;width:800px;height:500px';
         document.body.appendChild(iframe);
+        const portPromise = new Promise<MessagePort>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('port timeout')), 1_200);
+          const listener = (event: MessageEvent) => {
+            if (
+              event.source !== iframe.contentWindow ||
+              event.data?.kind !== '__openmaicReplay-hello' ||
+              !event.ports?.[0]
+            )
+              return;
+            clearTimeout(timer);
+            window.removeEventListener('message', listener);
+            event.ports[0].start();
+            resolve(event.ports[0]);
+          };
+          window.addEventListener('message', listener);
+        });
+        iframe.srcdoc = srcdoc;
+        const port = await portPromise;
         const wait = <T>(kind: string) =>
           new Promise<T>((resolve, reject) => {
             const timer = setTimeout(() => reject(new Error('timeout')), 1_200);
             const listener = (event: MessageEvent) => {
-              if (
-                event.source !== iframe.contentWindow ||
-                event.data?.kind !== kind ||
-                event.data?.nonce !== 'browser-test-nonce'
-              )
-                return;
+              if (event.data?.kind !== kind) return;
               clearTimeout(timer);
-              window.removeEventListener('message', listener);
+              port.removeEventListener('message', listener);
               resolve(event.data as T);
             };
-            window.addEventListener('message', listener);
+            port.addEventListener('message', listener);
           });
         const readyPromise = wait<ReadyMessage>('__openmaicReplay-ready');
-        iframe.srcdoc = srcdoc;
         const ready = await readyPromise;
         const operationPromise = wait<OperationMessage>('__openmaicReplay-operation-result');
-        iframe.contentWindow?.postMessage(
-          {
-            kind: '__openmaicReplay-operation',
-            id: '1',
-            nonce: 'browser-test-nonce',
-            operation: { kind: 'click', selector: '#start-button' },
-          },
-          '*',
-        );
+        port.postMessage({
+          kind: '__openmaicReplay-operation',
+          id: '1',
+          operation: { kind: 'click', selector: '#start-button' },
+        });
         const operation = await operationPromise;
         iframe.remove();
         return { ready, operation };
