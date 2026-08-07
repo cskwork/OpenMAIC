@@ -982,6 +982,20 @@ export function hasPBLProjectV2Containers(value: unknown): boolean {
   return true;
 }
 
+/** Whether a stored v2 payload has the minimum design structure the current
+ * workspace can turn into learner progress. Runtime normalization can create
+ * an Instructor thread and activate an existing microtask, but it cannot
+ * invent either the Instructor role or a task definition. */
+export function isRunnablePBLProjectV2(value: unknown): boolean {
+  if (!hasPBLProjectV2Containers(value)) return false;
+
+  const project = value as Pick<PBLProjectV2, 'milestones' | 'roles'>;
+  return (
+    project.roles.some((role) => role.type === 'instructor') &&
+    project.milestones.some((milestone) => milestone.microtasks.length > 0)
+  );
+}
+
 /** Narrow `unknown` to `PBLProjectV2`. Cheap structural check — does not
  *  validate every field; intended as a safety net, not a full validator. */
 export function isPBLProjectV2(value: unknown): value is PBLProjectV2 {

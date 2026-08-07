@@ -6,7 +6,7 @@
  * v1 data is accepted only when it already exists in stored scene content.
  */
 import {
-  hasPBLProjectV2Containers,
+  isRunnablePBLProjectV2,
   type PBLChatMessage,
   type PBLMilestoneStatus,
   type PBLProjectV2,
@@ -206,11 +206,7 @@ export function resolvePBLContent(content: {
   projectV2?: unknown;
   projectConfig?: unknown;
 }): ResolvedPBLContent {
-  if (
-    content.projectV2 != null &&
-    hasPBLProjectV2Containers(content.projectV2) &&
-    (content.projectV2 as PBLProjectV2).milestones.length > 0
-  ) {
+  if (isRunnablePBLProjectV2(content.projectV2)) {
     return { kind: 'v2', projectV2: content.projectV2 as PBLProjectV2 };
   }
 

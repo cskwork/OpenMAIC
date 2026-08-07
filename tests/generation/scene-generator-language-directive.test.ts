@@ -216,10 +216,10 @@ describe('scene-generator language directive threading (issue #472)', () => {
           title: 42,
           description: 42,
           gains: [42],
-          roles: [],
+          roles: [{ id: 'role_instructor', type: 'instructor', name: 'Instructor' }],
           milestones: [
-            { title: 42, order: 0, microtasks: [] },
-            { title: 'Valid milestone', order: 1, microtasks: [] },
+            { title: 42, order: 0, microtasks: [{}] },
+            { title: 'Valid milestone', order: 1, microtasks: [{}] },
           ],
           submissions: [],
           evaluations: [],

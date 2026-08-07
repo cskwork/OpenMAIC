@@ -172,22 +172,27 @@ describe('PBL document persistence cutover', () => {
   });
 
   it('passes through a non-runnable v2 payload on a hybrid untouched', async () => {
-    // The resolver treats a container-valid but milestone-empty v2 payload as
-    // non-authoritative; persistence must follow the same verdict and neither
-    // synchronize nor rewrite the inert bytes it falls back from.
+    // The resolver treats a container-valid v2 payload with no usable task as
+    // non-authoritative when legacy data can run; persistence must follow that
+    // verdict and neither synchronize nor rewrite either arm of the hybrid.
     const project = makeProject();
-    Reflect.set(project, 'milestones', []);
+    project.milestones.forEach((milestone) => {
+      milestone.microtasks = [];
+    });
     project.threads[0]?.messages.push({
       id: 'message-1',
       roleType: 'user',
       content: 'Learner discussion',
       ts: '2026-07-14T00:01:00.000Z',
     });
-    const hybridScene = makePBLScene(project);
+    const hybridScene = structuredClone(legacyPBLSceneFixture) as Scene;
+    if (hybridScene.content.type !== 'pbl') throw new Error('expected PBL scene');
+    hybridScene.content.projectV2 = project;
 
     const [persisted] = await preparePBLScenesForDocumentPersistence('stage-1', [hybridScene]);
 
     expect(persisted).toBe(hybridScene);
+    expect(persisted).toEqual(hybridScene);
     expect(synchronizePBLProjectRuntimeMock).not.toHaveBeenCalled();
   });
 

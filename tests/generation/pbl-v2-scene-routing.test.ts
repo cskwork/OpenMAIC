@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { validateAppScene } from '@/lib/document-store/validators';
-import { hasPBLProjectV2Containers } from '@/lib/pbl/v2/types';
+import { hasPBLProjectV2Containers, isRunnablePBLProjectV2 } from '@/lib/pbl/v2/types';
 import type { GeneratedPBLContent, SceneOutline } from '@/lib/types/generation';
 import type { AppScene } from '@/lib/types/stage';
 
@@ -75,6 +75,7 @@ function expectPersistablePBLContent(content: GeneratedPBLContent | null): void 
   if (!content) throw new Error('expected generated PBL content');
 
   expect(hasPBLProjectV2Containers(content.projectV2)).toBe(true);
+  expect(isRunnablePBLProjectV2(content.projectV2)).toBe(true);
   const scene = {
     id: 'scene-pbl-1',
     stageId: 'stage-1',
@@ -100,8 +101,8 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
   it('always tries single-call first and returns only projectV2', async () => {
     const projectV2 = {
       title: 'CSV Data Analyzer project',
-      milestones: [{ microtasks: [] }],
-      roles: [{ id: 'role_1' }],
+      milestones: [{ microtasks: [{ id: 'task_1' }] }],
+      roles: [{ id: 'role_1', type: 'instructor' }],
       submissions: [],
       evaluations: [],
       threads: [{ messages: [] }],
@@ -134,8 +135,8 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
   it('falls back to the loop when single-call validation fails', async () => {
     const projectV2 = {
       title: 'CSV Data Analyzer project',
-      milestones: [{ microtasks: [] }, { microtasks: [] }],
-      roles: [{ id: 'role_1' }],
+      milestones: [{ microtasks: [{ id: 'task_1' }] }, { microtasks: [{ id: 'task_2' }] }],
+      roles: [{ id: 'role_1', type: 'instructor' }],
       submissions: [],
       evaluations: [],
       threads: [{ messages: [] }],

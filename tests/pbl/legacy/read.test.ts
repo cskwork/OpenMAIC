@@ -30,7 +30,7 @@ import {
   resolvePBLContent,
   upgradeLegacyPBLConfigToProjectV2,
 } from '@/lib/pbl/legacy/read';
-import { isPBLProjectV2 } from '@/lib/pbl/v2/types';
+import { isPBLProjectV2, type PBLProjectV2 } from '@/lib/pbl/v2/types';
 import { legacyPBLSceneFixture } from '@/tests/fixtures/pbl-v1-scene';
 
 function legacyConfig() {
@@ -233,6 +233,58 @@ describe('PBL legacy read support', () => {
     expect(markup).not.toContain('Empty v2 title');
   });
 
+  it.each([
+    [
+      'all milestones have empty microtasks',
+      (project: PBLProjectV2) => {
+        project.milestones.forEach((milestone) => {
+          milestone.microtasks = [];
+        });
+      },
+    ],
+    [
+      'there is no Instructor role',
+      (project: PBLProjectV2) => {
+        project.roles.forEach((role) => {
+          role.type = 'mentor';
+        });
+      },
+    ],
+  ])('renders upgraded legacy data when %s', (_label, makeNonRunnable) => {
+    const content = structuredClone(legacyPBLSceneFixture.content);
+    if (content.type !== 'pbl' || !content.projectConfig) {
+      throw new Error('expected legacy PBL projectConfig');
+    }
+    const projectV2 = upgradeLegacyPBLConfigToProjectV2(content.projectConfig);
+    projectV2.title = 'Non-runnable v2 title';
+    makeNonRunnable(projectV2);
+    content.projectV2 = projectV2;
+    content.projectConfig.selectedRole = null;
+    content.projectConfig.chat.messages = [];
+    content.projectConfig.issueboard.current_issue_id = 'issue-1';
+    content.projectConfig.issueboard.issues.forEach((issue, index) => {
+      issue.is_done = false;
+      issue.is_active = index === 0;
+    });
+
+    expect(resolvePBLContent(content)).toEqual({
+      kind: 'legacy',
+      projectConfig: content.projectConfig,
+    });
+
+    const markup = renderToStaticMarkup(
+      createElement(PBLRenderer, {
+        content,
+        mode: 'playback',
+        sceneId: legacyPBLSceneFixture.id,
+      }),
+    );
+
+    expect(markup).toContain('data-testid="pbl-v2-hero"');
+    expect(markup).toContain('Community Garden Data Project');
+    expect(markup).not.toContain('Non-runnable v2 title');
+  });
+
   it('detects Chinese content when upgrading a legacy project', () => {
     const config = legacyConfig();
     config.projectInfo.title = '天气数据项目';
@@ -325,6 +377,38 @@ describe('PBL legacy read support', () => {
         content: { type: 'pbl', projectV2 },
         mode: 'playback',
         sceneId: 'empty-v2-pbl-scene',
+      }),
+    );
+
+    expect(markup).toContain('pbl.emptyProject');
+  });
+
+  it.each([
+    [
+      'all milestones have empty microtasks',
+      (project: PBLProjectV2) => {
+        project.milestones.forEach((milestone) => {
+          milestone.microtasks = [];
+        });
+      },
+    ],
+    [
+      'there is no Instructor role',
+      (project: PBLProjectV2) => {
+        project.roles.forEach((role) => {
+          role.type = 'mentor';
+        });
+      },
+    ],
+  ])('renders a placeholder for a v2-only project when %s', (_label, makeNonRunnable) => {
+    const projectV2 = upgradeLegacyPBLConfigToProjectV2(legacyConfig());
+    makeNonRunnable(projectV2);
+
+    const markup = renderToStaticMarkup(
+      createElement(PBLRenderer, {
+        content: { type: 'pbl', projectV2 },
+        mode: 'playback',
+        sceneId: 'non-runnable-v2-pbl-scene',
       }),
     );
 

@@ -33,7 +33,7 @@ describe('buildCompleteScene — PBL v2', () => {
           },
         ],
       },
-      roles: [],
+      roles: [{ id: 'role_instructor', type: 'instructor', name: 'Instructor' }],
       milestones: [{ scenarioStage: 'prep', microtasks: [{}] }],
       submissions: [],
       evaluations: [],

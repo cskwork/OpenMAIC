@@ -14,6 +14,8 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
+  hasPBLProjectV2Containers,
+  isRunnablePBLProjectV2,
   isPBLProjectV2,
   type PBLProjectV2,
   type PBLMilestone,
@@ -251,5 +253,25 @@ describe('PBL v2 — isPBLProjectV2 type guard', () => {
         threads: [],
       }),
     ).toBe(false);
+  });
+});
+
+describe('PBL v2 — runnable workspace predicate', () => {
+  it('accepts a normal planner-shaped project', () => {
+    expect(isRunnablePBLProjectV2(makeFullProject())).toBe(true);
+  });
+
+  it('requires an Instructor role and at least one microtask', () => {
+    const withoutInstructor = makeFullProject();
+    withoutInstructor.roles[0]!.type = 'mentor';
+    expect(hasPBLProjectV2Containers(withoutInstructor)).toBe(true);
+    expect(isRunnablePBLProjectV2(withoutInstructor)).toBe(false);
+
+    const withoutTasks = makeFullProject();
+    withoutTasks.milestones.forEach((milestone) => {
+      milestone.microtasks = [];
+    });
+    expect(hasPBLProjectV2Containers(withoutTasks)).toBe(true);
+    expect(isRunnablePBLProjectV2(withoutTasks)).toBe(false);
   });
 });

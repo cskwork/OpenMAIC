@@ -10,7 +10,11 @@
  */
 import type { CompilerScene } from '../deps';
 import type { Diagnostic, PblCoverVisual, VideoTimelineScene, VisualSegment } from '../ir';
-import { hasPblV2CoverContainers, isUsableLegacyCoverConfig, pblLegacyCover } from '../legacy/read';
+import {
+  isRunnablePblV2CoverProject,
+  isUsableLegacyCoverConfig,
+  pblLegacyCover,
+} from '../legacy/read';
 
 export interface VisualsResult {
   scenes: VideoTimelineScene[];
@@ -93,17 +97,14 @@ function pblCover(scene: CompilerScene, timeline: VideoTimelineScene): PblCoverV
     scene.content && isRecord(scene.content.projectConfig)
       ? scene.content.projectConfig
       : undefined;
-  // On a hybrid scene a damaged v2 payload must not shadow usable legacy data:
+  // On a hybrid scene a damaged or non-runnable v2 payload must not shadow usable legacy data:
   // the renderer falls back to the legacy config there, and the exported cover
   // has to agree with what the classroom shows. When the legacy config is
   // absent, empty, or garbage (the renderer would not show it either), the
   // cover keeps reading a partial v2 payload defensively — a sparse cover
   // beats an empty one, and there is nothing usable to diverge from.
   const legacyUsable = isUsableLegacyCoverConfig(projectConfig);
-  const v2Runnable =
-    hasPblV2CoverContainers(projectV2) &&
-    Array.isArray(projectV2.milestones) &&
-    projectV2.milestones.length > 0;
+  const v2Runnable = isRunnablePblV2CoverProject(projectV2);
   if (isRecord(projectV2) && (v2Runnable || !legacyUsable)) {
     return pblV2Cover(projectV2, scene, timeline);
   }

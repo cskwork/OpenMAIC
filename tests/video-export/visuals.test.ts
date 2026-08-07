@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Action } from '@openmaic/dsl';
 import { upgradeLegacyPBLConfigToProjectV2, type PBLProjectConfig } from '@/lib/pbl/legacy/read';
+import type { PBLProjectV2 } from '@/lib/pbl/v2/types';
 import {
   compileVideoTimeline,
   emitManifest,
@@ -41,6 +42,25 @@ function compile(scene: CompilerScene) {
     { timing: stubProbe({ 'quiz-speech': 2400, 'pbl-speech': 3600 }), assets: NO_ASSETS },
   );
 }
+
+const nonRunnableV2Mutations: Array<[string, (project: PBLProjectV2) => void]> = [
+  [
+    'all milestones have empty microtasks',
+    (project) => {
+      project.milestones.forEach((milestone) => {
+        milestone.microtasks = [];
+      });
+    },
+  ],
+  [
+    'there is no Instructor role',
+    (project) => {
+      project.roles.forEach((role) => {
+        role.type = 'mentor';
+      });
+    },
+  ],
+];
 
 describe('video-export cover visual pass', () => {
   it('builds a whole-scene Quiz cover from authored questions and default points', () => {
@@ -403,6 +423,25 @@ describe('video-export cover visual pass', () => {
     });
   });
 
+  it.each(nonRunnableV2Mutations)(
+    'uses legacy cover fields when a hybrid v2 project is non-runnable because %s',
+    (_label, makeNonRunnable) => {
+      const projectConfig = legacyProjectConfig({ activeIssue: 'root', chat: '' });
+      const projectV2 = upgradeLegacyPBLConfigToProjectV2(projectConfig);
+      projectV2.title = 'Non-runnable v2 title';
+      makeNonRunnable(projectV2);
+
+      const visual = compile(pblScene({ projectConfig, projectV2 })).scenes[0].visuals[0];
+
+      expect(visual).toMatchObject({
+        kind: 'pbl-cover',
+        title: 'Legacy Project',
+        stageCount: 1,
+        taskCount: 2,
+      });
+    },
+  );
+
   it('keeps a partial projectV2 cover when the legacy config is an empty stub', () => {
     const visual = compile(
       pblScene({
@@ -416,6 +455,24 @@ describe('video-export cover visual pass', () => {
       title: 'Recoverable v2 title',
     });
   });
+
+  it.each(nonRunnableV2Mutations)(
+    'keeps the permissive v2-only cover when %s',
+    (_label, makeNonRunnable) => {
+      const projectV2 = upgradeLegacyPBLConfigToProjectV2(
+        legacyProjectConfig({ activeIssue: 'root', chat: '' }),
+      );
+      projectV2.title = 'Recoverable non-runnable v2';
+      makeNonRunnable(projectV2);
+
+      const visual = compile(pblScene({ projectV2 })).scenes[0].visuals[0];
+
+      expect(visual).toMatchObject({
+        kind: 'pbl-cover',
+        title: 'Recoverable non-runnable v2',
+      });
+    },
+  );
 
   it('keeps the permissive v2 cover when a damaged hybrid legacy shell has no issues', () => {
     const projectConfig = legacyProjectConfig({ activeIssue: 'root', chat: '' });

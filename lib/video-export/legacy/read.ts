@@ -63,6 +63,19 @@ export function hasPblV2CoverContainers(value: unknown): value is UnknownRecord 
 }
 
 /**
+ * Mirrors `isRunnablePBLProjectV2` for the dependency-isolated export path.
+ * Container validity alone is not enough for hybrid precedence: the workspace
+ * also needs an Instructor role and at least one authored microtask.
+ */
+export function isRunnablePblV2CoverProject(value: unknown): value is UnknownRecord {
+  return (
+    hasPblV2CoverContainers(value) &&
+    records(value.roles).some((role) => role.type === 'instructor') &&
+    records(value.milestones).some((milestone) => records(milestone.microtasks).length > 0)
+  );
+}
+
+/**
  * Mirrors the resolver's usable-legacy verdict for the hybrid fallback decision
  * in passes/visuals.ts: a legacy config only overrides a non-runnable v2 payload
  * when the renderer would actually show it — structurally sound containers,
