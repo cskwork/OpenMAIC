@@ -155,6 +155,31 @@ describe('regenerate_scene_actions', () => {
     expect(passedContent).not.toMatchObject({ projectV2: { title: 'broken' } });
   });
 
+  it('leaves a title-only legacy shell unnormalized for downstream empty handling', async () => {
+    const content = structuredClone(legacyPBLSceneFixture.content);
+    if (content.type !== 'pbl' || !content.projectConfig) {
+      throw new Error('expected legacy PBL content');
+    }
+    content.projectConfig.agents = [];
+    content.projectConfig.issueboard.issues = [];
+    content.projectConfig.issueboard.current_issue_id = null;
+    content.projectConfig.chat.messages = [];
+    content.projectConfig.selectedRole = null;
+    const tool = makeRegenerateSceneActionsTool(
+      makeDeps('title-only-pbl', {
+        outline: stubPblOutline('title-only-pbl', legacyPBLSceneFixture.title),
+        allOutlines: [stubPblOutline('title-only-pbl', legacyPBLSceneFixture.title)],
+        content,
+      }),
+    );
+
+    await tool.execute('tc-title-only-pbl', { sceneId: 'title-only-pbl' });
+
+    const [, passedContent] = mockGen.mock.lastCall ?? [];
+    expect(passedContent).toEqual(content);
+    expect(passedContent).not.toHaveProperty('projectV2');
+  });
+
   it('includes the action count in the content text', async () => {
     const multiCtx: SceneContext = {
       outline: stubOutline('s2', 'Quiz', 2),

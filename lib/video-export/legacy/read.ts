@@ -63,10 +63,10 @@ export function hasPblV2CoverContainers(value: unknown): value is UnknownRecord 
 }
 
 /**
- * Mirrors the verdict of `isEmptyLegacyPBLConfig` (lib/pbl/legacy/read.ts) for
- * the hybrid fallback decision in passes/visuals.ts: a legacy config only
- * overrides a damaged v2 payload when the renderer would actually show it —
- * structurally sound containers AND some non-empty content. An empty or
+ * Mirrors the resolver's usable-legacy verdict for the hybrid fallback decision
+ * in passes/visuals.ts: a legacy config only overrides a non-runnable v2 payload
+ * when the renderer would actually show it — structurally sound containers,
+ * non-empty content, and at least one runnable issue. An empty, issue-less, or
  * garbage legacy stub must not discard recoverable v2 cover fields.
  */
 export function isUsableLegacyCoverConfig(value: unknown): value is UnknownRecord {
@@ -87,13 +87,17 @@ export function isUsableLegacyCoverConfig(value: unknown): value is UnknownRecor
   const chat = value.chat;
   if (!isRecord(chat) || !isRecordArray(chat.messages)) return false;
   // Raw truthiness, not trimmed text: `isEmptyLegacyPBLConfig` treats a
-  // whitespace-only title as content, and this verdict must match it exactly.
-  return Boolean(
-    projectInfo.title ||
-    projectInfo.description ||
-    value.agents.length > 0 ||
-    issueboard.issues.length > 0 ||
-    chat.messages.length > 0,
+  // whitespace-only title as content. The explicit issue requirement mirrors
+  // resolvePBLContent without changing that broader "has any data" predicate.
+  return (
+    issueboard.issues.length > 0 &&
+    Boolean(
+      projectInfo.title ||
+      projectInfo.description ||
+      value.agents.length > 0 ||
+      issueboard.issues.length > 0 ||
+      chat.messages.length > 0,
+    )
   );
 }
 

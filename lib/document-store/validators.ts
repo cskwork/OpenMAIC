@@ -1,6 +1,7 @@
 import { validateScene, validateStage, type ValidationIssue } from '@openmaic/dsl';
 import type { SceneValidator, StageValidator } from '@openmaic/storage';
 import { hasPBLProjectV2Containers } from '@/lib/pbl/v2/types';
+import { isEmptyLegacyPBLConfig, type PBLProjectConfig } from '@/lib/pbl/legacy/read';
 
 function objectValue(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;
@@ -81,6 +82,18 @@ export const validateAppScene: SceneValidator = (scene) => {
     // null is treated like absent so documents stored before projectV2
     // validation existed keep saving; the renderer applies the same rule.
     content.projectV2 != null &&
+    // Every scene accepted by the old write barrier carried projectConfig, so
+    // stored scenes with both fields are the pre-cutover hybrid cohort. Preserve
+    // a damaged projectV2 there as inert bytes — but only when the legacy config
+    // is structurally sound and non-empty (real stored v1 data, the renderer's
+    // actual fallback); an empty stub like `{}` must not disable v2 validation.
+    // V2-only scenes are new planner writes, where strict container validation
+    // enforces planner output quality.
+    !(
+      objectValue(content.projectConfig) &&
+      !Array.isArray(content.projectConfig) &&
+      !isEmptyLegacyPBLConfig(content.projectConfig as PBLProjectConfig)
+    ) &&
     !hasPBLProjectV2Containers(content.projectV2)
   ) {
     errors.push({

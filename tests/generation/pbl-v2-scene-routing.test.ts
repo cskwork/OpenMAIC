@@ -65,6 +65,11 @@ function mockModel() {
   return { provider: 'test', modelId: 'test-model' } as never;
 }
 
+async function plannerError(message: string) {
+  const { PlannerV2Error } = await import('@/lib/pbl/v2/agents/planner-core');
+  return new PlannerV2Error(message, {} as never);
+}
+
 function expectPersistablePBLContent(content: GeneratedPBLContent | null): void {
   expect(content).not.toBeNull();
   if (!content) throw new Error('expected generated PBL content');
@@ -136,7 +141,9 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
       threads: [{ messages: [] }],
       engagementEvents: [],
     };
-    generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(new Error('single-call failed'));
+    generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(
+      await plannerError('single-call failed'),
+    );
     generatePBLV2ProjectMock.mockResolvedValue(projectV2);
 
     const { generateSceneContent } = await import('@/lib/generation/scene-generator');
@@ -150,7 +157,9 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
   });
 
   it('surfaces an error for ordinary PBL when both v2 attempts fail', async () => {
-    generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(new Error('single-call failed'));
+    generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(
+      await plannerError('single-call failed'),
+    );
     generatePBLV2ProjectMock.mockRejectedValueOnce(new Error('loop failed'));
 
     const { generateSceneContent, PBLGenerationError } =
@@ -163,7 +172,9 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
   });
 
   it('preserves the last planner failure as cause and exposes its HTTP status', async () => {
-    const firstError = Object.assign(new Error('single-call unavailable'), { statusCode: 503 });
+    const firstError = Object.assign(await plannerError('single-call unavailable'), {
+      statusCode: 503,
+    });
     const lastError = Object.assign(new Error('loop rate limited'), { status: 429 });
     generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(firstError);
     generatePBLV2ProjectMock.mockRejectedValueOnce(lastError);
@@ -185,7 +196,9 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
   });
 
   it('recovers a numeric-string status from an earlier planner attempt', async () => {
-    const firstError = Object.assign(new Error('single-call rate limited'), { statusCode: '429' });
+    const firstError = Object.assign(await plannerError('single-call rate limited'), {
+      statusCode: '429',
+    });
     const lastError = new Error('loop validation failed');
     generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(firstError);
     generatePBLV2ProjectMock.mockRejectedValueOnce(lastError);
@@ -203,7 +216,9 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
   });
 
   it('continues to refuse degradation when scenario PBL v2 generation fails', async () => {
-    const firstError = Object.assign(new Error('single-call unavailable'), { statusCode: 503 });
+    const firstError = Object.assign(await plannerError('single-call unavailable'), {
+      statusCode: 503,
+    });
     const lastError = Object.assign(new Error('loop rate limited'), { status: 429 });
     generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(firstError);
     generatePBLV2ProjectMock.mockRejectedValueOnce(lastError);
@@ -225,5 +240,37 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
     }
     expect(generatePBLV2ProjectSingleCallMock).toHaveBeenCalledTimes(1);
     expect(generatePBLV2ProjectMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not run the loop planner after a single-call provider failure', async () => {
+    const unauthorized = Object.assign(new Error('provider key rejected'), { statusCode: 401 });
+    generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(unauthorized);
+
+    const { generateSceneContent, PBLGenerationError } =
+      await import('@/lib/generation/scene-generator');
+
+    try {
+      await generateSceneContent(pblOutline(), vi.fn(), { languageModel: mockModel() });
+      throw new Error('expected PBL generation to fail');
+    } catch (error) {
+      expect(error).toBeInstanceOf(PBLGenerationError);
+      expect(error).toMatchObject({ statusCode: 401, cause: unauthorized });
+    }
+    expect(generatePBLV2ProjectSingleCallMock).toHaveBeenCalledTimes(1);
+    expect(generatePBLV2ProjectMock).not.toHaveBeenCalled();
+  });
+
+  it('does not run the loop planner after cancellation', async () => {
+    const aborted = new DOMException('The operation was aborted', 'AbortError');
+    generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(aborted);
+
+    const { generateSceneContent, PBLGenerationError } =
+      await import('@/lib/generation/scene-generator');
+
+    await expect(
+      generateSceneContent(pblOutline(), vi.fn(), { languageModel: mockModel() }),
+    ).rejects.toMatchObject({ name: PBLGenerationError.name, cause: aborted });
+    expect(generatePBLV2ProjectSingleCallMock).toHaveBeenCalledTimes(1);
+    expect(generatePBLV2ProjectMock).not.toHaveBeenCalled();
   });
 });

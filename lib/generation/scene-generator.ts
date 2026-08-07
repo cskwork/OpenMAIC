@@ -985,6 +985,7 @@ async function generatePBLSceneContent(
             ? err.message
             : String(err);
       log.warn(`PBL v2 generation failed (${attempt.label}: ${msg}).`);
+      if (attempt.label === 'single-call' && !(err instanceof PlannerV2Error)) break;
     }
   }
 

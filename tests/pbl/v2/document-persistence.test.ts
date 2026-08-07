@@ -134,6 +134,23 @@ describe('PBL document persistence cutover', () => {
     expect(synchronizePBLProjectRuntimeMock).not.toHaveBeenCalled();
   });
 
+  it('persists container-valid projects with malformed optional leaves without throwing', async () => {
+    const project = makeProject();
+    Reflect.set(project, 'gains', [42]);
+    Reflect.set(project, 'proficiencyAssessment', {});
+
+    const [persisted] = await preparePBLScenesForDocumentPersistence('stage-1', [
+      makePBLScene(project),
+    ]);
+
+    expect(synchronizePBLProjectRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(persisted.content.type).toBe('pbl');
+    if (persisted.content.type !== 'pbl') throw new Error('expected PBL scene');
+    expect(persisted.content.projectV2?.gains).toEqual([42]);
+    expect(persisted.content.projectV2?.proficiencyAssessment).toBeUndefined();
+    expect(persisted.content.projectV2?.proficiency).toBe('intermediate');
+  });
+
   it('passes through a project failing the shared container check untouched', async () => {
     // Single acceptance criterion across validator, resolver and persistence:
     // a payload the renderer will not treat as v2 is inert bytes here too, so
@@ -151,6 +168,26 @@ describe('PBL document persistence cutover', () => {
     const [persisted] = await preparePBLScenesForDocumentPersistence('stage-1', [damagedScene]);
 
     expect(persisted).toBe(damagedScene);
+    expect(synchronizePBLProjectRuntimeMock).not.toHaveBeenCalled();
+  });
+
+  it('passes through a non-runnable v2 payload on a hybrid untouched', async () => {
+    // The resolver treats a container-valid but milestone-empty v2 payload as
+    // non-authoritative; persistence must follow the same verdict and neither
+    // synchronize nor rewrite the inert bytes it falls back from.
+    const project = makeProject();
+    Reflect.set(project, 'milestones', []);
+    project.threads[0]?.messages.push({
+      id: 'message-1',
+      roleType: 'user',
+      content: 'Learner discussion',
+      ts: '2026-07-14T00:01:00.000Z',
+    });
+    const hybridScene = makePBLScene(project);
+
+    const [persisted] = await preparePBLScenesForDocumentPersistence('stage-1', [hybridScene]);
+
+    expect(persisted).toBe(hybridScene);
     expect(synchronizePBLProjectRuntimeMock).not.toHaveBeenCalled();
   });
 

@@ -1,12 +1,15 @@
 import type { Scene } from '@/lib/types/stage';
-import { hasPBLProjectV2Containers } from '@/lib/pbl/v2/types';
+import { resolvePBLContent } from '@/lib/pbl/legacy/read';
 import { synchronizePBLProjectRuntime } from './hydration';
 import { stripToDesignTemplate } from './learner-state';
 
 /**
- * Strip scenes with projectV2 to their design templates before document persistence. Any legacy
- * projectConfig on the same scene is intentionally passed through untouched so the original v1
- * record, including its chat history, is never rewritten or lost.
+ * Strip scenes with an authoritative projectV2 to their design templates before
+ * document persistence. Authority is decided by `resolvePBLContent`, the same
+ * rule the renderer uses: a payload the classroom will not show as v2 (damaged
+ * or not runnable) is inert bytes here too and round-trips untouched, as does
+ * any legacy projectConfig on the same scene — the original v1 record,
+ * including its chat history, is never rewritten or lost.
  */
 export async function preparePBLScenesForDocumentPersistence(
   stageId: string,
@@ -16,14 +19,12 @@ export async function preparePBLScenesForDocumentPersistence(
     scenes.map(async (scene) => {
       const content = scene.content;
       if (content.type !== 'pbl') return;
-      const projectV2 = content.projectV2;
-      // Preserve malformed stored bytes unchanged: persistence cannot safely
-      // interpret, strip, or replace a project that lacks the runtime containers.
-      if (projectV2 == null || !hasPBLProjectV2Containers(projectV2)) return;
+      const resolved = resolvePBLContent(content);
+      if (resolved.kind !== 'v2') return;
       await synchronizePBLProjectRuntime({
         stageId,
         sceneId: scene.id,
-        project: projectV2,
+        project: resolved.projectV2,
       });
     }),
   );
@@ -31,10 +32,9 @@ export async function preparePBLScenesForDocumentPersistence(
   return scenes.map((scene) => {
     const content = scene.content;
     if (content.type !== 'pbl') return scene;
-    const projectV2 = content.projectV2;
-    // See the synchronization pass above: damaged v2 payloads must round-trip byte-for-byte.
-    if (projectV2 == null || !hasPBLProjectV2Containers(projectV2)) return scene;
-    const designTemplate = stripToDesignTemplate(projectV2);
+    const resolved = resolvePBLContent(content);
+    if (resolved.kind !== 'v2') return scene;
+    const designTemplate = stripToDesignTemplate(resolved.projectV2);
     return {
       ...scene,
       content: {

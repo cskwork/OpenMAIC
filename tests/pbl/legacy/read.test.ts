@@ -41,6 +41,16 @@ function legacyConfig() {
   return content.projectConfig;
 }
 
+function titleOnlyLegacyConfig() {
+  const config = legacyConfig();
+  config.agents = [];
+  config.issueboard.issues = [];
+  config.issueboard.current_issue_id = null;
+  config.chat.messages = [];
+  config.selectedRole = null;
+  return config;
+}
+
 describe('PBL legacy read support', () => {
   it('resolves valid v2 content ahead of a usable legacy fallback', () => {
     const projectConfig = legacyConfig();
@@ -49,6 +59,17 @@ describe('PBL legacy read support', () => {
     expect(resolvePBLContent({ projectV2, projectConfig })).toEqual({
       kind: 'v2',
       projectV2,
+    });
+  });
+
+  it('resolves usable legacy content ahead of a container-valid v2 project with no milestones', () => {
+    const projectConfig = legacyConfig();
+    const projectV2 = upgradeLegacyPBLConfigToProjectV2(projectConfig);
+    projectV2.milestones = [];
+
+    expect(resolvePBLContent({ projectV2, projectConfig })).toEqual({
+      kind: 'legacy',
+      projectConfig,
     });
   });
 
@@ -71,6 +92,7 @@ describe('PBL legacy read support', () => {
     ['null values', { projectV2: null, projectConfig: null }],
     ['damaged v2', { projectV2: { title: 'broken' } }],
     ['malformed legacy', { projectConfig: {} }],
+    ['title-only legacy', { projectConfig: titleOnlyLegacyConfig() }],
     [
       'empty legacy',
       {
@@ -100,6 +122,12 @@ describe('PBL legacy read support', () => {
         milestones: [{ title: 'Inspect the measurements' }, { title: 'Recommend a watering plan' }],
       },
     });
+  });
+
+  it('leaves title-only legacy content unnormalized for the existing empty-content path', () => {
+    const content = { type: 'pbl' as const, projectConfig: titleOnlyLegacyConfig() };
+
+    expect(normalizeLegacyPBLContent(content)).toBe(content);
   });
 
   it('round-trips a v1-native stored scene and upgrades it to a renderable v2 project', () => {
@@ -173,6 +201,36 @@ describe('PBL legacy read support', () => {
     expect(markup).toContain('data-testid="pbl-v2-hero"');
     expect(markup).toContain('Community Garden Data Project');
     expect(markup).not.toContain('pbl.emptyProject');
+  });
+
+  it('renders upgraded legacy data when a hybrid v2 project has no milestones', () => {
+    const content = structuredClone(legacyPBLSceneFixture.content);
+    if (content.type !== 'pbl' || !content.projectConfig) {
+      throw new Error('expected legacy PBL projectConfig');
+    }
+    const projectV2 = upgradeLegacyPBLConfigToProjectV2(content.projectConfig);
+    projectV2.title = 'Empty v2 title';
+    projectV2.milestones = [];
+    content.projectV2 = projectV2;
+    content.projectConfig.selectedRole = null;
+    content.projectConfig.chat.messages = [];
+    content.projectConfig.issueboard.current_issue_id = 'issue-1';
+    content.projectConfig.issueboard.issues.forEach((issue, index) => {
+      issue.is_done = false;
+      issue.is_active = index === 0;
+    });
+
+    const markup = renderToStaticMarkup(
+      createElement(PBLRenderer, {
+        content,
+        mode: 'playback',
+        sceneId: legacyPBLSceneFixture.id,
+      }),
+    );
+
+    expect(markup).toContain('data-testid="pbl-v2-hero"');
+    expect(markup).toContain('Community Garden Data Project');
+    expect(markup).not.toContain('Empty v2 title');
   });
 
   it('detects Chinese content when upgrading a legacy project', () => {
@@ -253,6 +311,36 @@ describe('PBL legacy read support', () => {
         content: { type: 'pbl' },
         mode: 'playback',
         sceneId: 'new-pbl-scene',
+      }),
+    );
+
+    expect(markup).toContain('pbl.emptyProject');
+  });
+
+  it('renders a placeholder for a v2-only project with no milestones', () => {
+    const projectV2 = upgradeLegacyPBLConfigToProjectV2(legacyConfig());
+    projectV2.milestones = [];
+    const markup = renderToStaticMarkup(
+      createElement(PBLRenderer, {
+        content: { type: 'pbl', projectV2 },
+        mode: 'playback',
+        sceneId: 'empty-v2-pbl-scene',
+      }),
+    );
+
+    expect(markup).toContain('pbl.emptyProject');
+  });
+
+  it('renders a placeholder for a damaged hybrid whose legacy shell has no issues', () => {
+    const markup = renderToStaticMarkup(
+      createElement(PBLRenderer, {
+        content: {
+          type: 'pbl',
+          projectConfig: titleOnlyLegacyConfig(),
+          projectV2: { title: 'broken' },
+        } as never,
+        mode: 'playback',
+        sceneId: 'unrunnable-hybrid-pbl-scene',
       }),
     );
 

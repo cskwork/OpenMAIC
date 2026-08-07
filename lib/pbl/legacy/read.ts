@@ -206,13 +206,18 @@ export function resolvePBLContent(content: {
   projectV2?: unknown;
   projectConfig?: unknown;
 }): ResolvedPBLContent {
-  if (content.projectV2 != null && hasPBLProjectV2Containers(content.projectV2)) {
+  if (
+    content.projectV2 != null &&
+    hasPBLProjectV2Containers(content.projectV2) &&
+    (content.projectV2 as PBLProjectV2).milestones.length > 0
+  ) {
     return { kind: 'v2', projectV2: content.projectV2 as PBLProjectV2 };
   }
 
   if (
     content.projectConfig != null &&
-    !isEmptyLegacyPBLConfig(content.projectConfig as PBLProjectConfig)
+    !isEmptyLegacyPBLConfig(content.projectConfig as PBLProjectConfig) &&
+    (content.projectConfig as PBLProjectConfig).issueboard.issues.length > 0
   ) {
     return { kind: 'legacy', projectConfig: content.projectConfig as PBLProjectConfig };
   }

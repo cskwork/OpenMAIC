@@ -113,6 +113,25 @@ describe('app document persistence seam', () => {
     expect((await store.loadDocument(stageRecord.id))?.scenes).toEqual(document.scenes);
   });
 
+  test('round-trips a stored hybrid with inert damaged projectV2 bytes', async () => {
+    const damagedHybrid = structuredClone(legacyPBLSceneFixture) as AppScene;
+    if (damagedHybrid.content.type !== 'pbl') throw new Error('expected PBL scene');
+    Reflect.set(damagedHybrid.content, 'projectV2', { title: 'broken' });
+    const document: AppDocument = {
+      stage: canonicalizeLegacyStage(stageRecord).stage,
+      scenes: [{ ...damagedHybrid, stageId: stageRecord.id }],
+    };
+    const store = getDocumentStore({
+      indexedDB: new IDBFactory(),
+      dbName: 'app-document-damaged-hybrid-roundtrip',
+    });
+
+    expect(validateAppScene(document.scenes[0])).toEqual({ valid: true });
+    await store.saveDocument(document);
+
+    expect((await store.loadDocument(stageRecord.id))?.scenes).toEqual(document.scenes);
+  });
+
   test('omits nested undefined PBL state before calling the configured store', async () => {
     const saveDocument = vi.fn(async (_document: AppDocument) => undefined);
     const store = getDocumentStore({
@@ -235,6 +254,30 @@ describe('app document validators', () => {
         },
       ],
     });
+  });
+
+  test('accepts damaged projectV2 as inert bytes on a stored hybrid', () => {
+    const scene = structuredClone(legacyPBLSceneFixture) as AppScene;
+    if (scene.content.type !== 'pbl') throw new Error('expected PBL scene');
+    Reflect.set(scene.content, 'projectV2', { title: 'broken' });
+
+    expect(validateAppScene(scene)).toEqual({ valid: true });
+  });
+
+  test('an empty projectConfig stub does not disable projectV2 validation', () => {
+    const scene = {
+      ...pblScene(),
+      content: { type: 'pbl', projectConfig: {}, projectV2: { title: 'broken' } },
+    } as unknown as AppScene;
+
+    const result = validateAppScene(scene);
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.errors).toContainEqual({
+        path: '/content/projectV2',
+        message: '`projectV2` must contain milestones, roles and threads arrays',
+      });
+    }
   });
 
   test('accepts a complete v2 project', () => {

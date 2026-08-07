@@ -387,6 +387,22 @@ describe('video-export cover visual pass', () => {
     });
   });
 
+  it('uses legacy cover fields when a hybrid v2 project has no milestones', () => {
+    const projectConfig = legacyProjectConfig({ activeIssue: 'root', chat: '' });
+    const projectV2 = upgradeLegacyPBLConfigToProjectV2(projectConfig);
+    projectV2.title = 'Empty v2 title';
+    projectV2.milestones = [];
+
+    const visual = compile(pblScene({ projectConfig, projectV2 })).scenes[0].visuals[0];
+
+    expect(visual).toMatchObject({
+      kind: 'pbl-cover',
+      title: 'Legacy Project',
+      stageCount: 1,
+      taskCount: 2,
+    });
+  });
+
   it('keeps a partial projectV2 cover when the legacy config is an empty stub', () => {
     const visual = compile(
       pblScene({
@@ -398,6 +414,22 @@ describe('video-export cover visual pass', () => {
     expect(visual).toMatchObject({
       kind: 'pbl-cover',
       title: 'Recoverable v2 title',
+    });
+  });
+
+  it('keeps the permissive v2 cover when a damaged hybrid legacy shell has no issues', () => {
+    const projectConfig = legacyProjectConfig({ activeIssue: 'root', chat: '' });
+    projectConfig.issueboard.issues = [];
+
+    const visual = compile(
+      pblScene({ projectConfig, projectV2: { title: 'Recoverable damaged v2' } }),
+    ).scenes[0].visuals[0];
+
+    expect(visual).toMatchObject({
+      kind: 'pbl-cover',
+      title: 'Recoverable damaged v2',
+      stageCount: 0,
+      taskCount: 0,
     });
   });
 

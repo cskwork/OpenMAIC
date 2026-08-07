@@ -414,6 +414,21 @@ describe('PBL runtime hydration', () => {
     expect(documentContainsLearnerState({ title: 'broken' })).toBe(false);
   });
 
+  it('skips a container-valid v2 project with no runnable milestones', async () => {
+    const project = makeProject();
+    project.milestones = [];
+    const scene = makePBLScene(project);
+
+    const hydrated = await hydratePBLScenesFromRuntime(STAGE_ID, [scene], {
+      store: new ThrowingRuntimeStore(),
+      kv: new MemoryKVStore(),
+      learnerKey: LEARNER_KEY,
+    });
+
+    expect(hydrated).toEqual([scene]);
+    expect(hydrated[0]).toBe(scene);
+  });
+
   it('returns unchanged scenes when runtime hydration throws for a scene', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const project = makeProject({ uiPhase: 'workspace' });

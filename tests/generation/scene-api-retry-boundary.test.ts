@@ -208,6 +208,41 @@ describe('scene API retry boundary', () => {
     );
   });
 
+  it('keeps a title-only legacy shell on the existing empty-content error path', async () => {
+    vi.resetModules();
+    mocks.generateSceneActions.mockResolvedValue([]);
+    mocks.buildCompleteScene.mockImplementation((_outline, content) =>
+      'projectV2' in content ? { content } : null,
+    );
+    const legacyContent = structuredClone(legacyPBLSceneFixture.content);
+    if (legacyContent.type !== 'pbl' || !legacyContent.projectConfig) {
+      throw new Error('expected legacy PBL content');
+    }
+    const projectConfig = legacyContent.projectConfig;
+    projectConfig.agents = [];
+    projectConfig.issueboard.issues = [];
+    projectConfig.issueboard.current_issue_id = null;
+    projectConfig.chat.messages = [];
+    projectConfig.selectedRole = null;
+
+    const { POST } = await import('@/app/api/generate/scene-actions/route');
+    const response = await POST(
+      mockRequest({
+        outline: pblOutline,
+        allOutlines: [pblOutline],
+        content: { type: 'pbl', projectConfig },
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body).toMatchObject({
+      success: false,
+      error: 'Failed to build scene: Community Garden Data Project',
+    });
+    expect(mocks.generateSceneActions.mock.calls[0][1]).toEqual({ type: 'pbl', projectConfig });
+  });
+
   it('preserves an upstream 401 from the scene-content route', async () => {
     vi.resetModules();
     const unauthorized = Object.assign(new Error('provider key rejected'), { statusCode: 401 });

@@ -100,7 +100,11 @@ function pblCover(scene: CompilerScene, timeline: VideoTimelineScene): PblCoverV
   // cover keeps reading a partial v2 payload defensively — a sparse cover
   // beats an empty one, and there is nothing usable to diverge from.
   const legacyUsable = isUsableLegacyCoverConfig(projectConfig);
-  if (isRecord(projectV2) && (hasPblV2CoverContainers(projectV2) || !legacyUsable)) {
+  const v2Runnable =
+    hasPblV2CoverContainers(projectV2) &&
+    Array.isArray(projectV2.milestones) &&
+    projectV2.milestones.length > 0;
+  if (isRecord(projectV2) && (v2Runnable || !legacyUsable)) {
     return pblV2Cover(projectV2, scene, timeline);
   }
   return pblLegacyCover(projectConfig ?? {}, scene, timeline);
