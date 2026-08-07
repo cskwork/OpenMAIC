@@ -122,6 +122,52 @@ describe('PBL document persistence cutover', () => {
     expect(synchronizePBLProjectRuntimeMock).not.toHaveBeenCalled();
   });
 
+  it('passes through a project with damaged learner-state containers untouched', async () => {
+    const project = makeProject();
+    Reflect.set(project, 'threads', {});
+    const damagedScene = makePBLScene(project);
+
+    const [persisted] = await preparePBLScenesForDocumentPersistence('stage-1', [damagedScene]);
+
+    expect(persisted).toBe(damagedScene);
+    expect(persisted).toEqual(damagedScene);
+    expect(synchronizePBLProjectRuntimeMock).not.toHaveBeenCalled();
+  });
+
+  it('passes through a project failing the shared container check untouched', async () => {
+    // Single acceptance criterion across validator, resolver and persistence:
+    // a payload the renderer will not treat as v2 is inert bytes here too, so
+    // persistence must neither synchronize it nor rewrite it.
+    const project = makeProject();
+    project.threads[0]?.messages.push({
+      id: 'message-1',
+      roleType: 'user',
+      content: 'Learner discussion',
+      ts: '2026-07-14T00:01:00.000Z',
+    });
+    Reflect.set(project, 'gains', 'oops');
+    const damagedScene = makePBLScene(project);
+
+    const [persisted] = await preparePBLScenesForDocumentPersistence('stage-1', [damagedScene]);
+
+    expect(persisted).toBe(damagedScene);
+    expect(synchronizePBLProjectRuntimeMock).not.toHaveBeenCalled();
+  });
+
+  it('strips learner state when proficiencyAssessment is an explicit null', async () => {
+    const project = makeProject();
+    Reflect.set(project, 'proficiencyAssessment', null);
+
+    const [persisted] = await preparePBLScenesForDocumentPersistence('stage-1', [
+      makePBLScene(project),
+    ]);
+
+    expect(synchronizePBLProjectRuntimeMock).toHaveBeenCalledOnce();
+    expect(persisted?.content.type).toBe('pbl');
+    if (persisted?.content.type !== 'pbl') return;
+    expect(persisted.content.projectV2).toEqual(stripToDesignTemplate(project));
+  });
+
   it('durably synchronizes learner state before returning design-only scenes', async () => {
     const project = makeProject();
     const pblScene = makePBLScene(project);
