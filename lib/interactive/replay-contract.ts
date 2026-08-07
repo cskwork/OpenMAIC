@@ -122,6 +122,12 @@ export interface ReplayInspectorOptions {
   settleMs?: number;
 }
 
+interface ReplayInjectionOptions {
+  operationTimeoutMs: number;
+  settleMs: number;
+  nonce: string;
+}
+
 const DEFAULT_LIMITS: ReplayLimits = {
   maxOperations: 24,
   maxDepth: 1,
@@ -225,14 +231,19 @@ function cssEscape(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, (char) => `\\${char}`);
 }
 
-function injectInspector(
-  html: string,
-  options: Required<Pick<ReplayInspectorOptions, 'operationTimeoutMs' | 'settleMs'>>,
-): string {
+function createReplayNonce(): string {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (globalThis.crypto?.getRandomValues) globalThis.crypto.getRandomValues(bytes);
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function injectInspector(html: string, options: ReplayInjectionOptions): string {
   const timeout = Math.max(100, Math.floor(options.operationTimeoutMs));
   const settle = Math.max(0, Math.floor(options.settleMs));
+  const nonce = JSON.stringify(options.nonce);
   const script = `<script data-openmaic-replay-inspector>(function(){
-var TIMEOUT=${timeout},SETTLE=${settle},PREFIX='__openmaicReplay';
+var TIMEOUT=${timeout},SETTLE=${settle},PREFIX='__openmaicReplay',TOKEN=${nonce};
 function esc(s){return String(s).replace(/[^a-zA-Z0-9_-]/g,function(c){return '\\\\'+c})}
 function selector(el){if(el.id)return '#'+esc(el.id);for(var i=0,n=['data-testid','data-step-id','data-action'];i<n.length;i++){var v=el.getAttribute(n[i]);if(v)return '['+n[i]+'="'+esc(v)+'"]'}var parts=[],node=el;while(node&&node.nodeType===1&&node.tagName.toLowerCase()!=='html'){var index=1,sibling=node.previousElementSibling;while(sibling){if(sibling.tagName===node.tagName)index++;sibling=sibling.previousElementSibling}parts.unshift(node.tagName.toLowerCase()+':nth-of-type('+index+')');node=node.parentElement}return parts.join(' > ')}
 function text(el){return String(el.textContent||'').replace(/\\s+/g,' ').trim().slice(0,160)}
@@ -240,12 +251,13 @@ function vis(el){var r=el.getBoundingClientRect(),reasons=[],v='visible',n=el;wh
 function snapshot(){var els=[].slice.call(document.querySelectorAll('[id],[data-testid],[data-step-id],[data-action],button,input,select,textarea,[role]')),seen={},targets=[];els.forEach(function(el){var s=selector(el);if(!s||seen[s])return;seen[s]=1;targets.push(vis(el))});targets.sort(function(a,b){return a.selector.localeCompare(b.selector)});var groups={visible:[],hidden:[],offViewport:[],occluded:[]};targets.forEach(function(t){if(groups[t.visibility])groups[t.visibility].push(t.selector)});var serial=targets.map(function(t){return [t.selector,t.visibility,t.text,t.disabled,t.rect.x,t.rect.y,t.rect.width,t.rect.height].join('|')}).join('\\n');return {signature:fnv(serial),targets:targets,visible:groups.visible,hidden:groups.hidden,offViewport:groups.offViewport,occluded:groups.occluded}}
 function fnv(s){var h=2166136261;for(var i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return (h>>>0).toString(16).padStart(8,'0')}
 function controls(){var out=[],seen={};[].slice.call(document.querySelectorAll('button,input,select,textarea,[role="button"],[role="switch"],[role="checkbox"]')).forEach(function(el){var s=selector(el);if(!s||seen[s])return;seen[s]=1;var tag=el.tagName.toLowerCase(),type=(el.getAttribute('type')||'').toLowerCase(),toggle=type==='checkbox'||type==='radio'||el.getAttribute('role')==='switch'||el.getAttribute('role')==='checkbox',button=tag==='button'||(tag==='input'&&type==='button'),kind=toggle?'toggle':(button?'button':(tag==='input'||tag==='select'||tag==='textarea'?'input':'button')),bounded=true,reason='',value;if(tag==='a'){bounded=false;reason='navigation-control'}if(tag==='input'&&(type==='file'||type==='url'||type==='email'||type==='submit'||type==='image')){bounded=false;reason='unsafe-input-type'}if(kind==='input'&&tag==='textarea'&&!(el.maxLength>0&&el.maxLength<=${SAFE_INPUT_MAX})){bounded=false;reason='unbounded-input'}if(kind==='input'&&tag==='input'&&(type===''||type==='text'||type==='search')&&!(el.maxLength>0&&el.maxLength<=${SAFE_INPUT_MAX})){bounded=false;reason='unbounded-input'}if(kind==='input'&&tag==='input'&&(type==='number'||type==='range')){var min=Number(el.min),max=Number(el.max);if(!Number.isFinite(min)||!Number.isFinite(max)||max<min){bounded=false;reason='unbounded-input'}else value=(min+max)/2}if(kind==='input'&&tag==='select'){value=el.options&&el.options.length?el.options[Math.min(1,el.options.length-1)].value:''}if(kind==='input'&&value===undefined)value='';if(tag==='button'&&el.form&&(type===''||type==='submit'||type==='reset')){bounded=false;reason='form-navigation'}out.push({selector:s,kind:kind,tagName:tag,label:text(el)||el.getAttribute('aria-label')||'',inputType:type||undefined,bounded:bounded,safe:bounded&&!el.disabled,operationValue:value,reason:reason||undefined})});return out.sort(function(a,b){return a.selector.localeCompare(b.selector)})}
-function emit(kind,payload){try{var x={kind:PREFIX+'-'+kind};Object.keys(payload||{}).forEach(function(k){x[k]=payload[k]});parent.postMessage(x,'*')}catch(_){} }
-function settle(){return new Promise(function(resolve){var done=false,t=setTimeout(function(){if(!done){done=true;resolve()}},Math.max(50,TIMEOUT-50));requestAnimationFrame(function(){requestAnimationFrame(function(){setTimeout(function(){if(done)return;done=true;clearTimeout(t);resolve()},SETTLE)})})})}
+function emit(kind,payload){try{var x={kind:PREFIX+'-'+kind,nonce:TOKEN};Object.keys(payload||{}).forEach(function(k){x[k]=payload[k]});parent.postMessage(x,'*')}catch(_){} }
+function settle(){return new Promise(function(resolve){var done=false,t=setTimeout(function(){if(!done){done=true;resolve(false)}},Math.max(50,TIMEOUT-50));requestAnimationFrame(function(){requestAnimationFrame(function(){setTimeout(function(){if(done)return;done=true;clearTimeout(t);resolve(true)},SETTLE)})})})}
 function safeOp(op){var el=document.querySelector(op.selector);if(!el)return {ok:false,error:'target-not-found'};if(el.disabled||el.getAttribute('aria-disabled')==='true')return {ok:false,error:'target-disabled'};try{if(op.kind==='input'){var value=String(op.value==null?'':op.value);if(value.length>${SAFE_INPUT_MAX})return {ok:false,error:'input-too-long'};el.value=value;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}))}else{el.click()}return {ok:true}}catch(e){return {ok:false,error:String(e&&e.message||e)}}}
-window.addEventListener('message',function(e){var d=e.data||{};if(!d||d.kind!==PREFIX+'-operation')return;var before=snapshot(),result=safeOp(d.operation||{});settle().then(function(){emit('operation-result',{id:d.id,before:before,after:snapshot(),result:result,controls:controls()})})});
-window.addEventListener('click',function(e){var a=e.target&&e.target.closest&&e.target.closest('a');if(a)emit('diagnostic',{code:'navigation-blocked',message:'link activation is not explored'})},true);
+window.addEventListener('message',function(e){var d=e.data||{};if(e.source!==parent||!d||d.nonce!==TOKEN||d.kind!==PREFIX+'-operation')return;var before=snapshot(),result=safeOp(d.operation||{});settle().then(function(settled){emit('operation-result',{id:d.id,before:before,after:snapshot(),result:result,settled:settled,controls:controls()})})});
+window.addEventListener('click',function(e){var a=e.target&&e.target.closest&&e.target.closest('a');if(a){e.preventDefault();e.stopPropagation();emit('diagnostic',{code:'navigation-blocked',message:'link activation is not explored'})}},true);
 window.addEventListener('submit',function(e){e.preventDefault();emit('diagnostic',{code:'navigation-blocked',message:'form submission is not explored'})},true);
+try{window.open=function(){emit('diagnostic',{code:'popup-blocked',message:'popup activation is not explored'});return null};window.alert=function(){emit('diagnostic',{code:'popup-blocked',message:'modal activation is not explored'})};window.confirm=function(){emit('diagnostic',{code:'popup-blocked',message:'modal activation is not explored'});return false};if(window.navigator&&window.navigator.share)window.navigator.share=function(){emit('diagnostic',{code:'popup-blocked',message:'share activation is not explored'});return Promise.reject(new Error('replay-popup-blocked'))};if(window.HTMLAnchorElement){HTMLAnchorElement.prototype.click=function(){emit('diagnostic',{code:'navigation-blocked',message:'programmatic link activation is not explored'})}}if(window.history){history.pushState=function(){emit('diagnostic',{code:'navigation-blocked',message:'history mutation is not explored'})};history.replaceState=function(){emit('diagnostic',{code:'navigation-blocked',message:'history mutation is not explored'})}}if(window.Location){['assign','replace'].forEach(function(name){try{Location.prototype[name]=function(){emit('diagnostic',{code:'navigation-blocked',message:'location mutation is not explored'})}}catch(_) {}})}}catch(_){}
 function ready(){emit('ready',{snapshot:snapshot(),controls:controls(),viewport:{width:innerWidth,height:innerHeight}})}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',ready,{once:true});else ready();
 })();</script>`;
@@ -269,11 +281,14 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
  */
 export function buildReplayInspectorDocument(
   html: string,
-  options: Pick<ReplayInspectorOptions, 'operationTimeoutMs' | 'settleMs'> = {},
+  options: Pick<ReplayInspectorOptions, 'operationTimeoutMs' | 'settleMs'> & {
+    nonce?: string;
+  } = {},
 ): string {
   return injectInspector(html, {
     operationTimeoutMs: options.operationTimeoutMs ?? DEFAULT_LIMITS.operationTimeoutMs,
     settleMs: options.settleMs ?? 30,
+    nonce: options.nonce ?? createReplayNonce(),
   });
 }
 
@@ -281,6 +296,7 @@ function waitForMessage(
   iframe: HTMLIFrameElement,
   predicate: (data: Record<string, unknown>) => boolean,
   timeoutMs: number,
+  nonce: string,
 ): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const timer = globalThis.setTimeout(() => {
@@ -291,6 +307,7 @@ function waitForMessage(
       if (event.source !== iframe.contentWindow || !event.data || typeof event.data !== 'object')
         return;
       const data = event.data as Record<string, unknown>;
+      if (data.nonce !== nonce) return;
       if (!predicate(data)) return;
       globalThis.clearTimeout(timer);
       window.removeEventListener('message', onMessage);
@@ -384,6 +401,7 @@ export async function inspectReplayContract(
   };
   const viewport = options.viewport ?? { width: 1280, height: 720 };
   const staticReport = analyzeReplayHtml(html);
+  const nonce = createReplayNonce();
   const iframe = document.createElement('iframe');
   iframe.title = 'ReplayContract inspector';
   iframe.setAttribute('sandbox', 'allow-scripts');
@@ -397,10 +415,12 @@ export async function inspectReplayContract(
       iframe,
       (data) => data.kind === '__openmaicReplay-ready',
       limits.operationTimeoutMs,
+      nonce,
     );
     iframe.srcdoc = injectInspector(html, {
       operationTimeoutMs: limits.operationTimeoutMs,
       settleMs: options.settleMs ?? 30,
+      nonce,
     });
     return ready;
   };
@@ -418,55 +438,97 @@ export async function inspectReplayContract(
       }
     }
     const controls = (Array.isArray(ready.controls) ? ready.controls : []) as ReplayControl[];
+    const unsafeExploration = (['navigation', 'popups', 'fileOperations'] as const).some((key) => {
+      const status = staticReport.capabilities[key];
+      return status === 'risk' || status === 'unsupported';
+    });
+    if (unsafeExploration) {
+      diagnostics.push({
+        code: 'exploration-skipped-unsafe-capability',
+        severity: 'warning',
+        message:
+          'Candidate exploration skipped because the source exposes navigation, popup, or file capabilities',
+      });
+    }
     const safeControls =
-      limits.maxDepth === 0
+      limits.maxDepth === 0 || unsafeExploration
         ? []
         : controls
             .filter((control) => control.safe && control.bounded)
             .slice(0, limits.maxOperations);
+    const operations: ReplayOperation[] = safeControls.map((control) => ({
+      kind: control.kind === 'toggle' ? 'toggle' : control.kind === 'input' ? 'input' : 'click',
+      selector: control.selector,
+      ...(control.kind === 'input' ? { value: control.operationValue ?? '' } : {}),
+    }));
+    const operationBySelector = new Map(safeControls.map((control) => [control.selector, control]));
+    const queue: ReplayOperation[][] = operations.map((operation) => [operation]);
+    const seenSignatures = new Set([initial.signature]);
+    let requestId = 0;
     let states = 1;
-    for (const control of safeControls) {
-      if (states >= limits.maxStates || transitions.length >= limits.maxOperations) break;
+    while (
+      queue.length > 0 &&
+      states < limits.maxStates &&
+      transitions.length < limits.maxOperations
+    ) {
+      const path = queue.shift()!;
       try {
-        const operation: ReplayOperation = {
-          kind: control.kind === 'toggle' ? 'toggle' : control.kind === 'input' ? 'input' : 'click',
-          selector: control.selector,
-          ...(control.kind === 'input' ? { value: control.operationValue ?? '' } : {}),
-        };
-        const id = `${transitions.length + 1}`;
         const fresh = await loadFresh();
-        const before = normalizeSnapshot(fresh.snapshot);
-        const operationResult = waitForMessage(
-          iframe,
-          (data) => data.kind === '__openmaicReplay-operation-result' && data.id === id,
-          limits.operationTimeoutMs,
-        );
-        iframe.contentWindow?.postMessage(
-          { kind: '__openmaicReplay-operation', id, operation },
-          '*',
-        );
-        const result = await operationResult;
-        const after = normalizeSnapshot(result.after);
-        const opResult = result.result as { ok?: boolean; error?: string };
-        if (!opResult?.ok) {
-          diagnostics.push({
-            code: 'operation-failed',
-            severity: 'warning',
-            message: opResult?.error ?? 'operation failed',
-            selector: control.selector,
-          });
-          continue;
+        const snapshots = [normalizeSnapshot(fresh.snapshot)];
+        let settled = true;
+        let failed = false;
+        for (const operation of path) {
+          const id = `${++requestId}`;
+          const operationResult = waitForMessage(
+            iframe,
+            (data) => data.kind === '__openmaicReplay-operation-result' && data.id === id,
+            limits.operationTimeoutMs,
+            nonce,
+          );
+          iframe.contentWindow?.postMessage(
+            { kind: '__openmaicReplay-operation', id, operation, nonce },
+            '*',
+          );
+          const result = await operationResult;
+          const opResult = result.result as { ok?: boolean; error?: string };
+          if (!opResult?.ok) {
+            diagnostics.push({
+              code: 'operation-failed',
+              severity: 'warning',
+              message: opResult?.error ?? 'operation failed',
+              selector: operation.selector,
+            });
+            failed = true;
+            break;
+          }
+          snapshots.push(normalizeSnapshot(result.after));
+          settled = settled && result.settled === true;
         }
-        states++;
+        if (failed) continue;
+        const before = snapshots[snapshots.length - 2];
+        const after = snapshots[snapshots.length - 1];
+        if (!settled) {
+          diagnostics.push({
+            code: 'operation-not-settled',
+            severity: 'warning',
+            message: 'Operation timed out before the iframe reached a stable state',
+            selector: path[path.length - 1].selector,
+          });
+        }
+        const isNewState = !seenSignatures.has(after.signature);
+        if (isNewState) {
+          seenSignatures.add(after.signature);
+          states++;
+        }
         transitions.push({
-          depth: 1,
-          operation,
+          depth: path.length,
+          operation: path[path.length - 1],
           preconditions: {
-            target: control.selector,
+            target: path[path.length - 1].selector,
             visibility:
-              before.targets.find((target) => target.selector === control.selector)?.visibility ??
-              'unknown',
-            enabled: !control.reason,
+              before.targets.find((target) => target.selector === path[path.length - 1].selector)
+                ?.visibility ?? 'unknown',
+            enabled: !operationBySelector.get(path[path.length - 1].selector)?.reason,
           },
           postconditions: {
             changed: before.signature !== after.signature,
@@ -475,16 +537,22 @@ export async function inspectReplayContract(
             offViewport: after.offViewport,
             occluded: after.occluded,
           },
-          wait: { settled: true, timeoutMs: limits.operationTimeoutMs },
+          wait: { settled, timeoutMs: limits.operationTimeoutMs },
           before,
           after,
         });
+        if (isNewState && path.length < limits.maxDepth) {
+          for (const operation of operations) {
+            if (queue.length + transitions.length >= limits.maxOperations) break;
+            queue.push([...path, operation]);
+          }
+        }
       } catch (error) {
         diagnostics.push({
           code: 'operation-timeout',
           severity: 'warning',
           message: error instanceof Error ? error.message : String(error),
-          selector: control.selector,
+          selector: path[path.length - 1].selector,
         });
       }
     }

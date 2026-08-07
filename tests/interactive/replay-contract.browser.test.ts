@@ -47,6 +47,7 @@ describe.skipIf(!REQUIRED)('ReplayContract browser inspector', () => {
         {
           operationTimeoutMs: 1_200,
           settleMs: 10,
+          nonce: 'browser-test-nonce',
         },
       );
       const result = await page.evaluate(async (srcdoc) => {
@@ -58,7 +59,12 @@ describe.skipIf(!REQUIRED)('ReplayContract browser inspector', () => {
           new Promise<T>((resolve, reject) => {
             const timer = setTimeout(() => reject(new Error('timeout')), 1_200);
             const listener = (event: MessageEvent) => {
-              if (event.source !== iframe.contentWindow || event.data?.kind !== kind) return;
+              if (
+                event.source !== iframe.contentWindow ||
+                event.data?.kind !== kind ||
+                event.data?.nonce !== 'browser-test-nonce'
+              )
+                return;
               clearTimeout(timer);
               window.removeEventListener('message', listener);
               resolve(event.data as T);
@@ -73,6 +79,7 @@ describe.skipIf(!REQUIRED)('ReplayContract browser inspector', () => {
           {
             kind: '__openmaicReplay-operation',
             id: '1',
+            nonce: 'browser-test-nonce',
             operation: { kind: 'click', selector: '#start-button' },
           },
           '*',
