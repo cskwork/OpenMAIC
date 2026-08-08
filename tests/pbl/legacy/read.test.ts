@@ -51,6 +51,55 @@ function titleOnlyLegacyConfig() {
   return config;
 }
 
+const nonRunnableV2Mutations: Array<[string, (project: PBLProjectV2) => void]> = [
+  [
+    'all milestones have empty microtasks',
+    (project) => {
+      project.milestones.forEach((milestone) => {
+        milestone.microtasks = [];
+      });
+    },
+  ],
+  [
+    'one milestone has no microtasks',
+    (project) => {
+      project.milestones.at(-1)!.microtasks = [];
+    },
+  ],
+  [
+    'there is no Instructor role',
+    (project) => {
+      project.roles.forEach((role) => {
+        role.type = 'mentor';
+      });
+    },
+  ],
+  [
+    'the Instructor has no id',
+    (project) => {
+      Reflect.deleteProperty(project.roles.find((role) => role.type === 'instructor')!, 'id');
+    },
+  ],
+  [
+    'the Instructor has no name',
+    (project) => {
+      Reflect.deleteProperty(project.roles.find((role) => role.type === 'instructor')!, 'name');
+    },
+  ],
+  [
+    'a microtask has no id',
+    (project) => {
+      Reflect.deleteProperty(project.milestones.at(-1)!.microtasks.at(-1)!, 'id');
+    },
+  ],
+  [
+    'a microtask has no title',
+    (project) => {
+      Reflect.deleteProperty(project.milestones.at(-1)!.microtasks.at(-1)!, 'title');
+    },
+  ],
+];
+
 describe('PBL legacy read support', () => {
   it('resolves valid v2 content ahead of a usable legacy fallback', () => {
     const projectConfig = legacyConfig();
@@ -233,57 +282,43 @@ describe('PBL legacy read support', () => {
     expect(markup).not.toContain('Empty v2 title');
   });
 
-  it.each([
-    [
-      'all milestones have empty microtasks',
-      (project: PBLProjectV2) => {
-        project.milestones.forEach((milestone) => {
-          milestone.microtasks = [];
-        });
-      },
-    ],
-    [
-      'there is no Instructor role',
-      (project: PBLProjectV2) => {
-        project.roles.forEach((role) => {
-          role.type = 'mentor';
-        });
-      },
-    ],
-  ])('renders upgraded legacy data when %s', (_label, makeNonRunnable) => {
-    const content = structuredClone(legacyPBLSceneFixture.content);
-    if (content.type !== 'pbl' || !content.projectConfig) {
-      throw new Error('expected legacy PBL projectConfig');
-    }
-    const projectV2 = upgradeLegacyPBLConfigToProjectV2(content.projectConfig);
-    projectV2.title = 'Non-runnable v2 title';
-    makeNonRunnable(projectV2);
-    content.projectV2 = projectV2;
-    content.projectConfig.selectedRole = null;
-    content.projectConfig.chat.messages = [];
-    content.projectConfig.issueboard.current_issue_id = 'issue-1';
-    content.projectConfig.issueboard.issues.forEach((issue, index) => {
-      issue.is_done = false;
-      issue.is_active = index === 0;
-    });
+  it.each(nonRunnableV2Mutations)(
+    'renders upgraded legacy data when %s',
+    (_label, makeNonRunnable) => {
+      const content = structuredClone(legacyPBLSceneFixture.content);
+      if (content.type !== 'pbl' || !content.projectConfig) {
+        throw new Error('expected legacy PBL projectConfig');
+      }
+      const projectV2 = upgradeLegacyPBLConfigToProjectV2(content.projectConfig);
+      projectV2.title = 'Non-runnable v2 title';
+      makeNonRunnable(projectV2);
+      content.projectV2 = projectV2;
+      content.projectConfig.selectedRole = null;
+      content.projectConfig.chat.messages = [];
+      content.projectConfig.issueboard.current_issue_id = 'issue-1';
+      content.projectConfig.issueboard.issues.forEach((issue, index) => {
+        issue.is_done = false;
+        issue.is_active = index === 0;
+      });
 
-    expect(resolvePBLContent(content)).toEqual({
-      kind: 'legacy',
-      projectConfig: content.projectConfig,
-    });
+      expect(resolvePBLContent(content)).toEqual({
+        kind: 'legacy',
+        projectConfig: content.projectConfig,
+      });
 
-    const markup = renderToStaticMarkup(
-      createElement(PBLRenderer, {
-        content,
-        mode: 'playback',
-        sceneId: legacyPBLSceneFixture.id,
-      }),
-    );
+      const markup = renderToStaticMarkup(
+        createElement(PBLRenderer, {
+          content,
+          mode: 'playback',
+          sceneId: legacyPBLSceneFixture.id,
+        }),
+      );
 
-    expect(markup).toContain('data-testid="pbl-v2-hero"');
-    expect(markup).toContain('Community Garden Data Project');
-    expect(markup).not.toContain('Non-runnable v2 title');
-  });
+      expect(markup).toContain('data-testid="pbl-v2-hero"');
+      expect(markup).toContain('Community Garden Data Project');
+      expect(markup).not.toContain('Non-runnable v2 title');
+    },
+  );
 
   it('detects Chinese content when upgrading a legacy project', () => {
     const config = legacyConfig();
@@ -383,37 +418,23 @@ describe('PBL legacy read support', () => {
     expect(markup).toContain('pbl.emptyProject');
   });
 
-  it.each([
-    [
-      'all milestones have empty microtasks',
-      (project: PBLProjectV2) => {
-        project.milestones.forEach((milestone) => {
-          milestone.microtasks = [];
-        });
-      },
-    ],
-    [
-      'there is no Instructor role',
-      (project: PBLProjectV2) => {
-        project.roles.forEach((role) => {
-          role.type = 'mentor';
-        });
-      },
-    ],
-  ])('renders a placeholder for a v2-only project when %s', (_label, makeNonRunnable) => {
-    const projectV2 = upgradeLegacyPBLConfigToProjectV2(legacyConfig());
-    makeNonRunnable(projectV2);
+  it.each(nonRunnableV2Mutations)(
+    'renders a placeholder for a v2-only project when %s',
+    (_label, makeNonRunnable) => {
+      const projectV2 = upgradeLegacyPBLConfigToProjectV2(legacyConfig());
+      makeNonRunnable(projectV2);
 
-    const markup = renderToStaticMarkup(
-      createElement(PBLRenderer, {
-        content: { type: 'pbl', projectV2 },
-        mode: 'playback',
-        sceneId: 'non-runnable-v2-pbl-scene',
-      }),
-    );
+      const markup = renderToStaticMarkup(
+        createElement(PBLRenderer, {
+          content: { type: 'pbl', projectV2 },
+          mode: 'playback',
+          sceneId: 'non-runnable-v2-pbl-scene',
+        }),
+      );
 
-    expect(markup).toContain('pbl.emptyProject');
-  });
+      expect(markup).toContain('pbl.emptyProject');
+    },
+  );
 
   it('renders a placeholder for a damaged hybrid whose legacy shell has no issues', () => {
     const markup = renderToStaticMarkup(

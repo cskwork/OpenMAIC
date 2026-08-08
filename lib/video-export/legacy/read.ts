@@ -65,13 +65,34 @@ export function hasPblV2CoverContainers(value: unknown): value is UnknownRecord 
 /**
  * Mirrors `isRunnablePBLProjectV2` for the dependency-isolated export path.
  * Container validity alone is not enough for hybrid precedence: the workspace
- * also needs an Instructor role and at least one authored microtask.
+ * also needs the Instructor id used for thread binding, every microtask id used
+ * by lookup/update paths, and the role/task labels that runtime cannot invent.
  */
 export function isRunnablePblV2CoverProject(value: unknown): value is UnknownRecord {
+  if (!hasPblV2CoverContainers(value)) return false;
+
+  const milestones = records(value.milestones);
   return (
-    hasPblV2CoverContainers(value) &&
-    records(value.roles).some((role) => role.type === 'instructor') &&
-    records(value.milestones).some((milestone) => records(milestone.microtasks).length > 0)
+    records(value.roles).some(
+      (role) =>
+        role.type === 'instructor' &&
+        typeof role.id === 'string' &&
+        role.id.trim().length > 0 &&
+        typeof role.name === 'string',
+    ) &&
+    milestones.length > 0 &&
+    milestones.every((milestone) => {
+      const microtasks = records(milestone.microtasks);
+      return (
+        microtasks.length > 0 &&
+        microtasks.every(
+          (microtask) =>
+            typeof microtask.id === 'string' &&
+            microtask.id.trim().length > 0 &&
+            typeof microtask.title === 'string',
+        )
+      );
+    })
   );
 }
 

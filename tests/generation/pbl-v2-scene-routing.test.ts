@@ -101,8 +101,8 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
   it('always tries single-call first and returns only projectV2', async () => {
     const projectV2 = {
       title: 'CSV Data Analyzer project',
-      milestones: [{ microtasks: [{ id: 'task_1' }] }],
-      roles: [{ id: 'role_1', type: 'instructor' }],
+      milestones: [{ microtasks: [{ id: 'task_1', title: 'Inspect the CSV' }] }],
+      roles: [{ id: 'role_1', type: 'instructor', name: 'Instructor' }],
       submissions: [],
       evaluations: [],
       threads: [{ messages: [] }],
@@ -135,8 +135,11 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
   it('falls back to the loop when single-call validation fails', async () => {
     const projectV2 = {
       title: 'CSV Data Analyzer project',
-      milestones: [{ microtasks: [{ id: 'task_1' }] }, { microtasks: [{ id: 'task_2' }] }],
-      roles: [{ id: 'role_1', type: 'instructor' }],
+      milestones: [
+        { microtasks: [{ id: 'task_1', title: 'Inspect the CSV' }] },
+        { microtasks: [{ id: 'task_2', title: 'Summarize the data' }] },
+      ],
+      roles: [{ id: 'role_1', type: 'instructor', name: 'Instructor' }],
       submissions: [],
       evaluations: [],
       threads: [{ messages: [] }],
@@ -260,7 +263,7 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
     const projectV2 = {
       title: 'Recovered project',
       roles: [{ id: 'role-i', type: 'instructor', name: 'Instructor' }],
-      milestones: [{ id: 'ms-1', microtasks: [{ id: 'mt-1' }] }],
+      milestones: [{ id: 'ms-1', microtasks: [{ id: 'mt-1', title: 'Recovered task' }] }],
       submissions: [],
       evaluations: [],
       threads: [],

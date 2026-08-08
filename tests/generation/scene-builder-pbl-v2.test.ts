@@ -34,7 +34,12 @@ describe('buildCompleteScene — PBL v2', () => {
         ],
       },
       roles: [{ id: 'role_instructor', type: 'instructor', name: 'Instructor' }],
-      milestones: [{ scenarioStage: 'prep', microtasks: [{}] }],
+      milestones: [
+        {
+          scenarioStage: 'prep',
+          microtasks: [{ id: 'task_prep', title: 'Prepare for the scenario' }],
+        },
+      ],
       submissions: [],
       evaluations: [],
       threads: [],

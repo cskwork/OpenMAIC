@@ -53,11 +53,41 @@ const nonRunnableV2Mutations: Array<[string, (project: PBLProjectV2) => void]> =
     },
   ],
   [
+    'one milestone has no microtasks',
+    (project) => {
+      project.milestones.at(-1)!.microtasks = [];
+    },
+  ],
+  [
     'there is no Instructor role',
     (project) => {
       project.roles.forEach((role) => {
         role.type = 'mentor';
       });
+    },
+  ],
+  [
+    'the Instructor has no id',
+    (project) => {
+      Reflect.deleteProperty(project.roles.find((role) => role.type === 'instructor')!, 'id');
+    },
+  ],
+  [
+    'the Instructor has no name',
+    (project) => {
+      Reflect.deleteProperty(project.roles.find((role) => role.type === 'instructor')!, 'name');
+    },
+  ],
+  [
+    'a microtask has no id',
+    (project) => {
+      Reflect.deleteProperty(project.milestones.at(-1)!.microtasks.at(-1)!, 'id');
+    },
+  ],
+  [
+    'a microtask has no title',
+    (project) => {
+      Reflect.deleteProperty(project.milestones.at(-1)!.microtasks.at(-1)!, 'title');
     },
   ],
 ];

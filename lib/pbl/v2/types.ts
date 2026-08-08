@@ -983,16 +983,37 @@ export function hasPBLProjectV2Containers(value: unknown): boolean {
 }
 
 /** Whether a stored v2 payload has the minimum design structure the current
- * workspace can turn into learner progress. Runtime normalization can create
- * an Instructor thread and activate an existing microtask, but it cannot
- * invent either the Instructor role or a task definition. */
+ * workspace can turn into learner progress. Runtime normalization can repair
+ * status and create the Instructor thread, but it cannot synthesize the role
+ * id used to bind that thread, the microtask ids used by lookup/update paths,
+ * or the role/task labels rendered by the workspace and Instructor prompt.
+ * Other scalar leaves remain deliberately outside this structural predicate. */
 export function isRunnablePBLProjectV2(value: unknown): boolean {
   if (!hasPBLProjectV2Containers(value)) return false;
 
-  const project = value as Pick<PBLProjectV2, 'milestones' | 'roles'>;
+  const project = value as {
+    roles: Record<string, unknown>[];
+    milestones: Array<{ microtasks: Record<string, unknown>[] }>;
+  };
   return (
-    project.roles.some((role) => role.type === 'instructor') &&
-    project.milestones.some((milestone) => milestone.microtasks.length > 0)
+    project.roles.some(
+      (role) =>
+        role.type === 'instructor' &&
+        typeof role.id === 'string' &&
+        role.id.trim().length > 0 &&
+        typeof role.name === 'string',
+    ) &&
+    project.milestones.length > 0 &&
+    project.milestones.every(
+      (milestone) =>
+        milestone.microtasks.length > 0 &&
+        milestone.microtasks.every(
+          (microtask) =>
+            typeof microtask.id === 'string' &&
+            microtask.id.trim().length > 0 &&
+            typeof microtask.title === 'string',
+        ),
+    )
   );
 }
 
