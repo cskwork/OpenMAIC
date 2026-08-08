@@ -173,9 +173,7 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
   });
 
   it('preserves the last planner failure as cause and exposes its HTTP status', async () => {
-    const firstError = Object.assign(await plannerError('single-call unavailable'), {
-      statusCode: 503,
-    });
+    const firstError = await plannerError('single-call validation failed');
     const lastError = Object.assign(new Error('loop rate limited'), { status: 429 });
     generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(firstError);
     generatePBLV2ProjectMock.mockRejectedValueOnce(lastError);
@@ -196,13 +194,11 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
     }
   });
 
-  it('recovers a numeric-string status from an earlier planner attempt', async () => {
-    const firstError = Object.assign(await plannerError('single-call rate limited'), {
+  it('parses a numeric-string provider status and skips the loop fallback', async () => {
+    const firstError = Object.assign(new Error('single-call rate limited'), {
       statusCode: '429',
     });
-    const lastError = new Error('loop validation failed');
     generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(firstError);
-    generatePBLV2ProjectMock.mockRejectedValueOnce(lastError);
 
     const { generateSceneContent, PBLGenerationError } =
       await import('@/lib/generation/scene-generator');
@@ -212,14 +208,13 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
       throw new Error('expected PBL generation to fail');
     } catch (error) {
       expect(error).toBeInstanceOf(PBLGenerationError);
-      expect(error).toMatchObject({ statusCode: 429, cause: lastError });
+      expect(error).toMatchObject({ statusCode: 429, cause: firstError });
     }
+    expect(generatePBLV2ProjectMock).not.toHaveBeenCalled();
   });
 
   it('continues to refuse degradation when scenario PBL v2 generation fails', async () => {
-    const firstError = Object.assign(await plannerError('single-call unavailable'), {
-      statusCode: 503,
-    });
+    const firstError = await plannerError('single-call validation failed');
     const lastError = Object.assign(new Error('loop rate limited'), { status: 429 });
     generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(firstError);
     generatePBLV2ProjectMock.mockRejectedValueOnce(lastError);
@@ -259,6 +254,29 @@ describe('generateSceneContent — PBL v2 planner routing', () => {
     }
     expect(generatePBLV2ProjectSingleCallMock).toHaveBeenCalledTimes(1);
     expect(generatePBLV2ProjectMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the loop planner after an unexpected runtime error', async () => {
+    const projectV2 = {
+      title: 'Recovered project',
+      roles: [{ id: 'role-i', type: 'instructor', name: 'Instructor' }],
+      milestones: [{ id: 'ms-1', microtasks: [{ id: 'mt-1' }] }],
+      submissions: [],
+      evaluations: [],
+      threads: [],
+      engagementEvents: [],
+    };
+    generatePBLV2ProjectSingleCallMock.mockRejectedValueOnce(
+      new TypeError('unexpected runtime failure'),
+    );
+    generatePBLV2ProjectMock.mockResolvedValueOnce(projectV2);
+
+    const { generateSceneContent } = await import('@/lib/generation/scene-generator');
+    await expect(
+      generateSceneContent(pblOutline(), vi.fn(), { languageModel: mockModel() }),
+    ).resolves.toEqual({ projectV2 });
+    expect(generatePBLV2ProjectSingleCallMock).toHaveBeenCalledTimes(1);
+    expect(generatePBLV2ProjectMock).toHaveBeenCalledTimes(1);
   });
 
   it('does not run the loop planner after cancellation', async () => {

@@ -985,7 +985,18 @@ async function generatePBLSceneContent(
             ? err.message
             : String(err);
       log.warn(`PBL v2 generation failed (${attempt.label}: ${msg}).`);
-      if (attempt.label === 'single-call' && !(err instanceof PlannerV2Error)) break;
+      // Provider/HTTP failures and cancellations skip the loop fallback: the
+      // loop planner would hit the same provider again (or run against an
+      // abort the user already issued). Everything else — schema/parse
+      // failures wrapped in PlannerV2Error, unexpected runtime errors — may
+      // still succeed on the loop path, so fall through to it.
+      if (
+        attempt.label === 'single-call' &&
+        (plannerErrorStatus(err) !== undefined ||
+          (err instanceof DOMException && err.name === 'AbortError'))
+      ) {
+        break;
+      }
     }
   }
 
