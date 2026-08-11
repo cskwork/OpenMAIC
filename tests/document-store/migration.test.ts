@@ -586,4 +586,55 @@ describe('legacy document migration', () => {
     expect(result.document?.stage.name).toBe('Migrated');
     expect((await documentStore.loadDocument('stage-1'))?.stage).not.toHaveProperty('description');
   });
+
+  test('a save-back failure does not break loading the converted document', async () => {
+    // Quota pressure or a transient write error must not fail the read: the
+    // converted document opens anyway, and the next open retries the save.
+    const realStore = store();
+    await realStore.saveDocument({
+      dslVersion: DSL_VERSION,
+      stage: { id: 'stage-1', name: 'Migrated', createdAt: 100, updatedAt: 200 },
+      scenes: [],
+    });
+    let writes = 0;
+    const flakyStore = new Proxy(realStore, {
+      get(target, property) {
+        if (property === 'saveDocument') {
+          return (document: AppDocument) => {
+            writes += 1;
+            if (writes === 1) return Promise.reject(new Error('quota exceeded'));
+            return target.saveDocument(document);
+          };
+        }
+        return Reflect.get(target, property);
+      },
+    });
+    const kv = new MemoryKv();
+    const convert = (doc: AppDocument): Promise<AppDocument> =>
+      Promise.resolve({
+        ...doc,
+        stage: { ...doc.stage, name: 'converted' },
+      });
+
+    const first = await accessDocument('stage-1', {
+      store: flakyStore,
+      kv,
+      legacyStore: legacy(null),
+      lockManager: lockManager(),
+      convertAssetRefs: convert,
+    });
+    expect(first.document?.stage.name).toBe('converted');
+    // Nothing persisted from the failed write.
+    expect((await realStore.loadDocument('stage-1'))?.stage.name).toBe('Migrated');
+
+    const second = await accessDocument('stage-1', {
+      store: flakyStore,
+      kv,
+      legacyStore: legacy(null),
+      lockManager: lockManager(),
+      convertAssetRefs: convert,
+    });
+    expect(second.document?.stage.name).toBe('converted');
+    expect((await realStore.loadDocument('stage-1'))?.stage.name).toBe('converted');
+  });
 });

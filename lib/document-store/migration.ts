@@ -138,7 +138,20 @@ async function saveConvertedDocument(
   if ((await readGeneration(deps.kv)) !== expectedGeneration) {
     throw new DocumentStorageGenerationChangedError(stageId);
   }
-  await store.saveDocument(converted);
+  try {
+    await store.saveDocument(converted);
+  } catch (error) {
+    // Best-effort: a readable document must not fail to open because the
+    // save-back did (quota pressure, a transient write error). The converted
+    // document still opens, unconverted legacy references keep their
+    // playback fallbacks, and the next open retries both. The generation
+    // fence above stays fatal: it is a cross-tab write race, not a
+    // persistence hiccup.
+    log.warn(
+      `Converted document ${JSON.stringify(stageId)} could not be saved back; will retry on next open`,
+      error,
+    );
+  }
 }
 
 function resolveStore(deps: DocumentMigrationDeps): DocumentStore<AppScene, AppStage> {

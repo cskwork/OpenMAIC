@@ -237,7 +237,10 @@ describe('runClassroomLoad', () => {
 
       // The warm ghost did not starve the restore: the server fallback ran,
       // the restored classroom is live, and the deletion was lifted.
-      expect(deps.fetchClassroom).toHaveBeenCalledExactlyOnceWith('stage-warm-ghost');
+      expect(deps.fetchClassroom).toHaveBeenCalledExactlyOnceWith(
+        'stage-warm-ghost',
+        deps.isCurrent,
+      );
       expect(deps.applyFallbackScenes).toHaveBeenCalledOnce();
       expect(useStageStore.getState().stage?.id).toBe('stage-warm-ghost');
       expect(useStageStore.getState().scenes.map((s) => s.id)).toEqual(['scene-server']);
@@ -289,7 +292,10 @@ describe('runClassroomLoad', () => {
       await runClassroomLoad(deps);
 
       // The zero-scene ghost was discarded and the server restore ran.
-      expect(deps.fetchClassroom).toHaveBeenCalledExactlyOnceWith('stage-zero-ghost');
+      expect(deps.fetchClassroom).toHaveBeenCalledExactlyOnceWith(
+        'stage-zero-ghost',
+        deps.isCurrent,
+      );
       expect(deps.applyFallbackScenes).toHaveBeenCalledOnce();
       expect(useStageStore.getState().stage?.id).toBe('stage-zero-ghost');
       expect(useStageStore.getState().scenes.map((s) => s.id)).toEqual(['scene-server']);
@@ -425,7 +431,10 @@ describe('runClassroomLoad', () => {
       // The parked load fell through to a cold load (finding no local data)
       // and the server fallback restored the classroom, lifting the deletion.
       expect(loadStageData).toHaveBeenCalledWith('stage-del-success');
-      expect(deps.fetchClassroom).toHaveBeenCalledExactlyOnceWith('stage-del-success');
+      expect(deps.fetchClassroom).toHaveBeenCalledExactlyOnceWith(
+        'stage-del-success',
+        deps.isCurrent,
+      );
       expect(useStageStore.getState().stage?.id).toBe('stage-del-success');
       expect(useStageStore.getState().scenes.map((s) => s.id)).toEqual(['scene-server']);
       expect(isStageDeleted('stage-del-success')).toBe(false);

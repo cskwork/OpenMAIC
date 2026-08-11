@@ -52,7 +52,10 @@ export interface RunClassroomLoadArgs<TMediaTasks = unknown> {
   isCurrent: () => boolean;
   loadFromStorage: (classroomId: string, loadToken: StageSceneLoadToken) => Promise<void>;
   getCurrentStage: () => Stage | null;
-  fetchClassroom: (classroomId: string) => Promise<ClassroomPayload | null>;
+  fetchClassroom: (
+    classroomId: string,
+    shouldConvert?: () => boolean,
+  ) => Promise<ClassroomPayload | null>;
   applyFallbackScenes: (args: {
     loadToken: StageSceneLoadToken;
     stage: Stage;
@@ -125,7 +128,10 @@ export async function runClassroomLoad<TMediaTasks = unknown>({
 
     if (!getCurrentStage()) {
       log.info('No IndexedDB data, trying server-side storage for:', classroomId);
-      const classroom = await fetchClassroom(classroomId);
+      // Conversion has pool and Dexie side effects, so it runs only while
+      // this load is still the current one; a superseded load fetches the
+      // payload but never converts it.
+      const classroom = await fetchClassroom(classroomId, isCurrent);
       if (!isCurrent()) return;
 
       if (classroom) {
@@ -236,7 +242,10 @@ export async function runClassroomLoad<TMediaTasks = unknown>({
   }
 }
 
-export async function fetchClassroomFromApi(classroomId: string): Promise<ClassroomPayload | null> {
+export async function fetchClassroomFromApi(
+  classroomId: string,
+  shouldConvert: () => boolean = () => true,
+): Promise<ClassroomPayload | null> {
   const res = await fetch(`/api/classroom?id=${encodeURIComponent(classroomId)}`);
   if (!res.ok) return null;
 
@@ -245,6 +254,12 @@ export async function fetchClassroomFromApi(classroomId: string): Promise<Classr
     classroom?: ClassroomPayload;
   };
   if (!json.success || !json.classroom) return null;
+  // Conversion allocates pool assets and writes compatibility rows, so it
+  // must not run for a load the caller has already superseded: the payload
+  // would be discarded while the side effects stayed. The unconverted
+  // payload carries no side effects at all, and the document load path
+  // retries conversion on the next open.
+  if (!shouldConvert()) return json.classroom;
   // A server classroom payload is a pre-conversion transport: its speech
   // actions still carry the serving URL beside a derived audioId, and its
   // media bytes live behind that URL, not in any local store. Convert before
