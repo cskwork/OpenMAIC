@@ -92,11 +92,15 @@ export interface LegacyAssetConversionDeps {
   putAudioRecord(record: AudioFileRecord): Promise<void>;
   /**
    * The compatibility row a previous (possibly partial) conversion mirrored
-   * for this legacy audio id, if any. This is what makes a retry idempotent:
+   * for this legacy pair, if any. This is what makes a retry idempotent:
    * without it, a conversion that failed after allocating would allocate a
-   * fresh twin on every retry.
+   * fresh twin on every retry. Both origin keys are tried because a URL-only
+   * action has no legacy id to key on.
    */
-  getMirroredAudioRecord(stageId: string, legacyId: string): Promise<AudioFileRecord | undefined>;
+  getMirroredAudioRecord(
+    stageId: string,
+    keys: { audioId?: string; audioUrl?: string },
+  ): Promise<AudioFileRecord | undefined>;
   /**
    * Remove an allocation nothing references anymore -- the compensation when
    * a compatibility write fails after the allocation succeeded, so a failed
@@ -146,14 +150,23 @@ export async function findLegacyMediaRecord(
   mediaFileKey: (stageId: string, ref: string) => string,
   stageId: string,
   ref: string,
+  assetRefExists: (ref: string) => Promise<boolean>,
 ): Promise<MediaFileRecord | undefined> {
   const exact = await db.mediaFiles.get(mediaFileKey(stageId, ref));
-  if (exact) return exact;
-  return db.mediaFiles
+  const mirror = await db.mediaFiles
     .where('stageId')
     .equals(stageId)
-    .and((row) => row.placeholderRef === ref)
+    .and((row) => row.placeholderRef === ref && row.id !== mediaFileKey(stageId, ref))
     .first();
+  // A pool-backed mirror wins over the exact row: it is the retry's recovery
+  // handle, and preferring the exact row would allocate a twin of it.
+  if (mirror) {
+    const keyedRef = mirror.id.startsWith(`${stageId}:`)
+      ? mirror.id.slice(stageId.length + 1)
+      : undefined;
+    if (keyedRef && (await assetRefExists(keyedRef))) return mirror;
+  }
+  return exact ?? mirror;
 }
 
 /** The default production wiring: Dexie legacy tables plus the app asset pool. */
@@ -166,16 +179,22 @@ async function defaultDeps(): Promise<LegacyAssetConversionDeps> {
   return {
     putAsset: (blob, meta) => putAsset(blob, meta),
     assetRefExists: (ref) => assetRefExists(ref),
-    getMediaRecord: (stageId, ref) => findLegacyMediaRecord(db, mediaFileKey, stageId, ref),
+    getMediaRecord: (stageId, ref) =>
+      findLegacyMediaRecord(db, mediaFileKey, stageId, ref, assetRefExists),
     getAudioRecord: (audioId) => db.audioFiles.get(audioId),
     putMediaRecord: (stageId, ref, record) =>
       db.mediaFiles
         .put({ ...record, id: mediaFileKey(stageId, ref), stageId })
         .then(() => undefined),
     putAudioRecord: (record) => db.audioFiles.put(record).then(() => undefined),
-    getMirroredAudioRecord: (stageId, legacyId) =>
+    getMirroredAudioRecord: (stageId, keys) =>
       db.audioFiles
-        .filter((row) => row.stageId === stageId && row.originAudioId === legacyId)
+        .filter(
+          (row) =>
+            row.stageId === stageId &&
+            ((keys.audioId !== undefined && row.originAudioId === keys.audioId) ||
+              (keys.audioUrl !== undefined && row.originAudioUrl === keys.audioUrl)),
+        )
         .first(),
     removeAsset: (ref) => removeAsset(ref),
     fetchLegacyUrl: async (url) => {
@@ -368,7 +387,7 @@ export async function convertDocumentAssetRefs(
           // A previous partially committed conversion may already have
           // mirrored this row; reuse its allocation instead of orphaning a
           // twin entry on every retry.
-          const mirrored = await resolvedDeps.getMirroredAudioRecord(stageId, audioId);
+          const mirrored = await resolvedDeps.getMirroredAudioRecord(stageId, { audioId });
           if (mirrored && (await resolvedDeps.assetRefExists(mirrored.id))) {
             report.converted += 1;
             return mirrored.id;
@@ -417,6 +436,17 @@ export async function convertDocumentAssetRefs(
       const pendingUrl =
         urlOutcomeByRef.get(urlKey) ??
         (async (): Promise<UrlOutcome> => {
+          // A previous partially committed conversion may already have
+          // fetched this URL and mirrored it; reuse its allocation instead of
+          // fetching and allocating again on every retry.
+          const mirrored = await resolvedDeps.getMirroredAudioRecord(stageId, {
+            audioId,
+            audioUrl,
+          });
+          if (mirrored && (await resolvedDeps.assetRefExists(mirrored.id))) {
+            report.converted += 1;
+            return { kind: 'allocated', assetId: mirrored.id };
+          }
           const fetched = await resolvedDeps.fetchLegacyUrl(audioUrl);
           if (fetched.kind === 'ok') {
             const assetId = await resolvedDeps.putAsset(
@@ -432,7 +462,10 @@ export async function convertDocumentAssetRefs(
                 text: speech.text,
                 voice: speech.voice,
                 createdAt: Date.now(),
+                // Both origin keys are recoverable handles for the next
+                // retry; a URL-only action has no legacy id to key on.
                 ...(audioId ? { originAudioId: audioId } : {}),
+                originAudioUrl: audioUrl,
               });
             } catch (error) {
               // Do not strand an allocation nothing references.

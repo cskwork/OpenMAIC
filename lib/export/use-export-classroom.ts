@@ -91,7 +91,9 @@ export function useExportClassroom() {
           const stampedId = (action as SpeechAction).audioId;
           if (stampedId && audioIdToPath.has(stampedId)) continue;
           try {
-            const response = await fetch(legacyUrl);
+            // Bounded wait, like the load-path converter: one stalled legacy
+            // endpoint must not wedge the whole export.
+            const response = await fetch(legacyUrl, { signal: AbortSignal.timeout(15_000) });
             if (!response.ok) continue;
             const blob = await response.blob();
             const format = blob.type.split('/')[1] || 'mp3';

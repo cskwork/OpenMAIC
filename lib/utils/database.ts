@@ -134,6 +134,8 @@ export interface AudioFileRecord {
    * needs no schema bump for a non-indexed field; retry recovery reads it.
    */
   originAudioId?: string;
+  /** The legacy URL a compatibility mirror was fetched from, for retry recovery. */
+  originAudioUrl?: string;
   blob: Blob; // Audio binary data
   duration?: number; // Duration (seconds)
   format: string; // mp3, wav, etc.

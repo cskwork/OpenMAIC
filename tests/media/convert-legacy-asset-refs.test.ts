@@ -31,11 +31,21 @@ function makeHarness() {
       return id;
     },
     assetRefExists: async (ref) => pool.has(ref),
-    getMediaRecord: async (stageId, ref) =>
-      // Mirrors the production lookup: exact key first, then a same-stage
-      // row retained under placeholderRef.
-      mediaRows.get(`${stageId}:${ref}`) ??
-      [...mediaRows.values()].find((row) => row.stageId === stageId && row.placeholderRef === ref),
+    getMediaRecord: async (stageId, ref) => {
+      // Mirrors the production lookup: a pool-backed mirror wins (it is the
+      // retry's recovery handle), then the exact key, then any placeholderRef
+      // match.
+      const exact = mediaRows.get(`${stageId}:${ref}`);
+      const mirror = [...mediaRows.values()].find(
+        (row) =>
+          row.stageId === stageId && row.placeholderRef === ref && row.id !== `${stageId}:${ref}`,
+      );
+      if (mirror) {
+        const keyedRef = mirror.id.slice(stageId.length + 1);
+        if (pool.has(keyedRef)) return mirror;
+      }
+      return exact ?? mirror;
+    },
     getAudioRecord: async (audioId) => audioRows.get(audioId),
     putMediaRecord: async (stageId, ref, record) => {
       mediaRows.set(`${stageId}:${ref}`, { ...record, id: `${stageId}:${ref}`, stageId });
@@ -43,9 +53,12 @@ function makeHarness() {
     putAudioRecord: async (record) => {
       audioRows.set(record.id, record);
     },
-    getMirroredAudioRecord: async (stageId, legacyId) =>
+    getMirroredAudioRecord: async (stageId, keys) =>
       [...audioRows.values()].find(
-        (row) => row.stageId === stageId && row.originAudioId === legacyId,
+        (row) =>
+          row.stageId === stageId &&
+          ((keys.audioId !== undefined && row.originAudioId === keys.audioId) ||
+            (keys.audioUrl !== undefined && row.originAudioUrl === keys.audioUrl)),
       ),
     removeAsset: async (ref) => {
       pool.delete(ref);
@@ -529,6 +542,8 @@ describe('speech reference conversion', () => {
 
 describe('findLegacyMediaRecord', () => {
   const keyOf = (stageId: string, ref: string) => `${stageId}:${ref}`;
+  const nothingInPool = async () => false;
+  const pooled = (refs: string[]) => async (ref: string) => refs.includes(ref);
 
   function fakeTable(rows: MediaFileRecord[]) {
     return {
@@ -543,12 +558,30 @@ describe('findLegacyMediaRecord', () => {
     };
   }
 
-  test('exact key wins when both shapes exist', async () => {
+  test('a pool-backed mirror wins over the exact row: it is the retry recovery handle', async () => {
+    // A previous run allocated and mirrored but never saved the document;
+    // preferring the exact row would allocate a twin of the mirror.
     const exact = mediaRecord({ id: 'stage-1:gen_img_1' });
     const rekeyed = mediaRecord({ id: 'stage-1:ast_pool_1', placeholderRef: 'gen_img_1' });
     const db = { mediaFiles: fakeTable([exact, rekeyed]) };
 
-    const found = await findLegacyMediaRecord(db, keyOf, 'stage-1', 'gen_img_1');
+    const found = await findLegacyMediaRecord(
+      db,
+      keyOf,
+      'stage-1',
+      'gen_img_1',
+      pooled(['ast_pool_1']),
+    );
+
+    expect(found).toBe(rekeyed);
+  });
+
+  test('exact key wins when the mirror is not pool-backed', async () => {
+    const exact = mediaRecord({ id: 'stage-1:gen_img_1' });
+    const rekeyed = mediaRecord({ id: 'stage-1:ast_pool_1', placeholderRef: 'gen_img_1' });
+    const db = { mediaFiles: fakeTable([exact, rekeyed]) };
+
+    const found = await findLegacyMediaRecord(db, keyOf, 'stage-1', 'gen_img_1', nothingInPool);
 
     expect(found).toBe(exact);
   });
@@ -559,7 +592,7 @@ describe('findLegacyMediaRecord', () => {
     const rekeyed = mediaRecord({ id: 'stage-1:ast_pool_1', placeholderRef: 'gen_img_1' });
     const db = { mediaFiles: fakeTable([rekeyed]) };
 
-    const found = await findLegacyMediaRecord(db, keyOf, 'stage-1', 'gen_img_1');
+    const found = await findLegacyMediaRecord(db, keyOf, 'stage-1', 'gen_img_1', nothingInPool);
 
     expect(found).toBe(rekeyed);
   });
@@ -572,6 +605,8 @@ describe('findLegacyMediaRecord', () => {
     });
     const db = { mediaFiles: fakeTable([foreign]) };
 
-    await expect(findLegacyMediaRecord(db, keyOf, 'stage-1', 'gen_img_1')).resolves.toBeUndefined();
+    await expect(
+      findLegacyMediaRecord(db, keyOf, 'stage-1', 'gen_img_1', nothingInPool),
+    ).resolves.toBeUndefined();
   });
 });
