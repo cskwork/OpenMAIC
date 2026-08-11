@@ -956,6 +956,79 @@ describe('HttpAssetStore snapshot behavior', () => {
     expect(heads).toBe(2);
   });
 
+  test('a redirected byte response latches redirect egress and labels from the pre-download HEAD', async () => {
+    // The object store's answer after a followed redirect: the pinned content
+    // type, and no revision. The first such contact latches redirect egress;
+    // the read is redone probe-first so the label predates the download.
+    const methods: string[] = [];
+    const fetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+      const method = init?.method ?? 'GET';
+      methods.push(method);
+      if (method === 'HEAD') {
+        return new Response(null, {
+          status: 200,
+          headers: { 'x-asset-revision': '7', 'content-type': 'image/png' },
+        });
+      }
+      const response = new Response(new Blob(['redirected-bytes'], { type: 'image/png' }), {
+        status: 200,
+        headers: { 'content-type': 'image/png' },
+      });
+      Object.defineProperty(response, 'redirected', { value: true });
+      return response;
+    });
+    const store = new HttpAssetStore({ baseUrl: 'https://assets.invalid', fetch });
+    stores.push(store);
+
+    const url = await store.resolve('asset');
+    expect(url).not.toBeNull();
+    expect(methods).toEqual(['GET', 'HEAD', 'GET']);
+    expect(blobForObjectUrl(url!)?.type).toBe('image/png');
+
+    // The label came from the probe: a warm resolve revalidates against it
+    // and keeps the snapshot.
+    const again = await store.resolve('asset');
+    expect(again).toBe(url);
+    expect(methods).toEqual(['GET', 'HEAD', 'GET', 'HEAD']);
+  });
+
+  test('a redirect-mode miss is answered by the probe without a download', async () => {
+    const methods: string[] = [];
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const method = init?.method ?? 'GET';
+      methods.push(method);
+      const url = String(input);
+      if (url.includes('missing')) {
+        expect(method).toBe('HEAD');
+        return new Response(JSON.stringify({ error: { code: 'ASSET_NOT_FOUND' } }), {
+          status: 404,
+          headers: { 'x-error-code': 'ASSET_NOT_FOUND' },
+        });
+      }
+      if (method === 'HEAD') {
+        return new Response(null, {
+          status: 200,
+          headers: { 'x-asset-revision': '1', 'content-type': 'image/png' },
+        });
+      }
+      const response = new Response(new Blob(['bytes'], { type: 'image/png' }), {
+        status: 200,
+        headers: { 'content-type': 'image/png' },
+      });
+      Object.defineProperty(response, 'redirected', { value: true });
+      return response;
+    });
+    const store = new HttpAssetStore({ baseUrl: 'https://assets.invalid', fetch });
+    stores.push(store);
+
+    // Latch redirect egress with one successful resolve.
+    await expect(store.resolve('asset')).resolves.not.toBeNull();
+    methods.length = 0;
+
+    await expect(store.resolve('missing')).resolves.toBeNull();
+    expect(methods).toEqual(['HEAD']);
+  });
+
   test('an unclassifiable HEAD falls back to GET and is never treated as a miss', async () => {
     let requests = 0;
     const fetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {

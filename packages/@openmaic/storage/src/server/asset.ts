@@ -37,6 +37,14 @@ export type AssetByteEgress = 'direct' | 'redirect';
 /** The shortest signed URL lifetime that still covers a redirect round trip. */
 export const DEFAULT_SIGNED_URL_TTL_SECONDS = 60;
 
+/**
+ * Seven days: the SigV4 presigning maximum, and so the longest lifetime the
+ * shipped signer can honor. A longer configured lifetime would mint a
+ * redirect whose target the object store rejects, turning a successful read
+ * into an object-store error, so it is rejected at construction instead.
+ */
+export const MAX_SIGNED_URL_TTL_SECONDS = 604_800;
+
 /** Options for the asset registry HTTP contract handler. */
 export interface AssetHttpHandlerOptions {
   authenticate: AssetHttpAuthenticate;
@@ -57,7 +65,9 @@ export interface AssetHttpHandlerOptions {
   /**
    * Lifetime of a minted signed URL, in seconds. Defaults to 60. Valid only
    * with `byteEgress: 'redirect'`, and deliberately short: the signed URL is
-   * a bearer credential for its whole lifetime.
+   * a bearer credential for its whole lifetime. Capped at
+   * {@link MAX_SIGNED_URL_TTL_SECONDS}, the longest lifetime the shipped
+   * signer can honor.
    */
   signedUrlTtlSeconds?: number;
 }
@@ -640,6 +650,11 @@ export function createAssetHttpHandler(
     assertPositiveSafeInteger(options.signedUrlTtlSeconds, 'signedUrlTtlSeconds');
     if (byteEgress !== 'redirect') {
       throw new Error('@openmaic/storage: signedUrlTtlSeconds requires byteEgress "redirect"');
+    }
+    if (options.signedUrlTtlSeconds > MAX_SIGNED_URL_TTL_SECONDS) {
+      throw new Error(
+        '@openmaic/storage: signedUrlTtlSeconds exceeds the seven-day presigning maximum',
+      );
     }
   }
 

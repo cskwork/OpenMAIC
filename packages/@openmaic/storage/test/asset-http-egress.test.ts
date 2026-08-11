@@ -234,6 +234,16 @@ describe('asset byte egress', () => {
     ).toThrow(/signedUrlTtlSeconds requires byteEgress "redirect"/);
   });
 
+  test('a signed URL lifetime beyond the presigning maximum is rejected at construction', () => {
+    expect(() =>
+      createAssetHttpHandler(stubStore(), {
+        authenticate: async () => PRINCIPAL,
+        byteEgress: 'redirect',
+        signedUrlTtlSeconds: 604_801,
+      }),
+    ).toThrow(/seven-day presigning maximum/);
+  });
+
   test('a malformed egress mode is rejected at construction', () => {
     expect(() =>
       createAssetHttpHandler(stubStore(), {

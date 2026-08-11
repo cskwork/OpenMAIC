@@ -152,6 +152,7 @@ export class HttpAssetStore implements StorageProvider {
   private readonly identities = new Map<AssetRef, ObjectUrlIdentity>();
   private readonly inFlight = new Map<AssetRef, Promise<string | null>>();
   private readonly generations = new Map<AssetRef, number>();
+  private redirectEgress = false;
   private closed = false;
 
   constructor(options: HttpAssetStoreOptions) {
@@ -351,6 +352,31 @@ export class HttpAssetStore implements StorageProvider {
     encoded: string,
   ): Promise<{ url: string | null; retry: boolean }> {
     const generation = this.generation(id);
+    // Under indirect byte egress the byte GET redirects, and the response
+    // fetch exposes is the object store's: it carries the pinned content type
+    // but no revision. The label then comes from a HEAD probe made *before*
+    // the download, never after. A replacement between probe and download
+    // labels newer bytes with the older revision, which the next revalidation
+    // detects and corrects; the reverse order could pin stale bytes under a
+    // fresh revision indefinitely. The probe doubles as the miss check, so a
+    // redirect-mode miss costs no download.
+    let probed: ObjectUrlIdentity | undefined;
+    if (this.redirectEgress) {
+      const head = await this.fetchResponse('HEAD', `/assets/${encoded}/content`);
+      if (!head.ok) {
+        const code = head.headers.get('x-error-code');
+        if (head.status === 404 && code === 'ASSET_NOT_FOUND') {
+          this.identities.delete(id);
+          await this.urls.invalidate(id);
+          return { url: null, retry: false };
+        }
+        if (code !== null) throw await this.httpError(head);
+        // An unclassifiable HEAD error falls back to the unprobed GET below.
+      } else if (head.status === 200) {
+        // A successful but unclassifiable HEAD behaves as no probe at all.
+        probed = responseIdentity(head) ?? undefined;
+      }
+    }
     const response = await this.fetchResponse('GET', `/assets/${encoded}/content`);
     if (!response.ok) {
       const error = await this.httpError(response);
@@ -361,7 +387,17 @@ export class HttpAssetStore implements StorageProvider {
       }
       throw error;
     }
-    const identity = responseIdentity(response);
+    let identity = responseIdentity(response);
+    if (identity === null && response.redirected && !this.redirectEgress) {
+      // First contact with a redirecting deployment. Discard this download
+      // and redo the read in probe-first order: labeling these bytes now
+      // would take a HEAD after the fact, the one ordering that can stick a
+      // stale label. The latch keeps this self-inflicted double download to
+      // at most once in this client's lifetime.
+      this.redirectEgress = true;
+      return { url: null, retry: true };
+    }
+    identity ??= probed ?? null;
     if (response.status !== 200 || identity === null) {
       throw malformed(
         response.status,
