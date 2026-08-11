@@ -808,6 +808,7 @@ describe('embedded persistence route', () => {
           response.end();
         };
       }),
+      DEFAULT_SIGNED_URL_TTL_SECONDS: 60,
     }));
     vi.stubEnv('DATABASE_URL', connectionString);
     vi.stubEnv('PERSISTENCE_DEV_TOKEN', 'test-token');
@@ -819,7 +820,7 @@ describe('embedded persistence route', () => {
       new Request('http://localhost/api/persistence/runtime/sessions', {
         headers: { authorization: 'Bearer test-token' },
       }),
-      { poolFactory: () => ({ end: vi.fn() }) as never },
+      { poolFactory: () => ({ end: vi.fn().mockResolvedValue(undefined) }) as never },
     );
   };
 
@@ -832,6 +833,26 @@ describe('embedded persistence route', () => {
 
     expect(response.status).toBe(204);
     expect((handlerOptions[0] as { byteEgress?: unknown }).byteEgress).toBe('redirect');
+  });
+
+  it('fails loud when redirect egress is combined with a too-short collection grace', async () => {
+    // A signed URL must never outlive its object: with the default 60-second
+    // lifetime, a grace below ten minutes can collect the object while the
+    // URL is still valid.
+    const handlerOptions: unknown[] = [];
+    mockEgressWiring(handlerOptions, 'postgres://egress-grace-test');
+    vi.stubEnv('ASSET_BYTE_EGRESS', 'redirect');
+    vi.stubEnv('ASSET_COLLECTION_GRACE_MS', '30000');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const response = await requestThroughRoute();
+
+    expect(response.status).toBe(500);
+    expect(handlerOptions).toHaveLength(0);
+    expect(error.mock.calls[0]?.[1]).toMatchObject({
+      message: expect.stringContaining('ten times'),
+    });
+    error.mockRestore();
   });
 
   it.each(['', 'direct'])('keeps byte egress direct for ASSET_BYTE_EGRESS=%j', async (value) => {

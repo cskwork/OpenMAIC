@@ -4,7 +4,8 @@ import { Readable } from 'node:stream';
 import { PgAssetStore, ensureAssetSchema } from '@openmaic/storage/asset/pg';
 import { PgDocumentStore, ensureDocumentSchema } from '@openmaic/storage/document/pg';
 import { PgRuntimeStore, ensureSchema } from '@openmaic/storage/runtime/pg';
-import { createStorageHttpHandler } from '@openmaic/storage/server';
+import { DEFAULT_ASSET_COLLECTION_GRACE_MS } from '@openmaic/storage';
+import { createStorageHttpHandler, DEFAULT_SIGNED_URL_TTL_SECONDS } from '@openmaic/storage/server';
 import {
   nodePostgresTransaction,
   type ConnectableQueryable,
@@ -53,6 +54,34 @@ function configuredAssetByteEgress(value: string | undefined): 'redirect' | unde
   return undefined;
 }
 
+/**
+ * Redirect egress and the collection grace must agree: a signed URL that
+ * outlives its object turns a valid read into an object-store error. The
+ * handler mints URLs with a 60-second default lifetime, so the deployment's
+ * grace -- ASSET_COLLECTION_GRACE_MS, one hour by default -- must sit far
+ * above it. Ten times is the floor; anything less is a misconfiguration
+ * worth failing loudly over, since the alternative is reads that die quietly
+ * minutes after they were authorized.
+ */
+function assertEgressWithinCollectionGrace(egress: 'redirect' | undefined): void {
+  if (egress !== 'redirect') return;
+  const raw = process.env.ASSET_COLLECTION_GRACE_MS;
+  const graceMs = raw === undefined ? DEFAULT_ASSET_COLLECTION_GRACE_MS : Number(raw);
+  if (!Number.isSafeInteger(graceMs) || graceMs < 0) {
+    throw new Error(
+      'Invalid ASSET_COLLECTION_GRACE_MS: expected a non-negative safe integer of milliseconds',
+    );
+  }
+  const ttlMs = DEFAULT_SIGNED_URL_TTL_SECONDS * 1000;
+  if (graceMs < ttlMs * 10) {
+    throw new Error(
+      `ASSET_BYTE_EGRESS=redirect requires ASSET_COLLECTION_GRACE_MS to be at least ten times ` +
+        `the signed URL lifetime (${DEFAULT_SIGNED_URL_TTL_SECONDS}s); got ${graceMs}ms. ` +
+        'Raise the grace period or use direct egress.',
+    );
+  }
+}
+
 async function createPersistenceHandler(
   connectionString: string,
   poolFactory: PoolFactory,
@@ -90,6 +119,8 @@ async function createPersistenceHandler(
     // runs from instrumentation.ts instead, over the byte store this same
     // lib/persistence/asset-byte-store selection produces, so the collector
     // always deletes through the layer the request path wrote through.
+    const byteEgress = configuredAssetByteEgress(process.env.ASSET_BYTE_EGRESS);
+    assertEgressWithinCollectionGrace(byteEgress);
     return createStorageHttpHandler(runtimeStore, documentStore, {
       authenticate: authenticatePersistenceRequest,
       authorizeMerge: async () => false,
@@ -99,9 +130,7 @@ async function createPersistenceHandler(
       validateStage: validateAppStage,
       payloadValidators: APP_RUNTIME_PAYLOAD_VALIDATORS,
       assetStore,
-      ...(configuredAssetByteEgress(process.env.ASSET_BYTE_EGRESS) === 'redirect'
-        ? { byteEgress: 'redirect' as const }
-        : {}),
+      ...(byteEgress === 'redirect' ? { byteEgress: 'redirect' as const } : {}),
     });
   } catch (error) {
     await pool.end().catch(() => {});
