@@ -372,7 +372,10 @@ export class HttpAssetStore implements StorageProvider {
     }
     let identity: ObjectUrlIdentity | null = null;
     let bytes: ArrayBuffer;
-    if (response.headers.get('content-type')?.startsWith(ASSET_DESCRIPTOR_MEDIA_TYPE)) {
+    // Exact essence match: a longer media type that merely begins with the
+    // reserved value is a legitimate payload type, not a descriptor.
+    const servedEssence = response.headers.get('content-type')?.split(';', 1)[0]?.trim();
+    if (servedEssence === ASSET_DESCRIPTOR_MEDIA_TYPE) {
       // Indirect egress, answered as a descriptor rather than a redirect.
       // Following a 302 would forward this request's headers -- the
       // deployment's custom credential headers included; only Authorization

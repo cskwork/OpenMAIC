@@ -15,6 +15,17 @@ const nextConfig: NextConfig = {
     '@earendil-works/pi-agent-core',
     '@openmaic/generation',
   ],
+  // The S3 byte store and its presigner are reached through deliberately
+  // untraced dynamic imports (optional peers of @openmaic/storage), so the
+  // standalone build would not ship them; without them the persistence
+  // route's S3 and redirect-egress modes cannot resolve their SDK. Include
+  // them explicitly for the one route that can opt in.
+  outputFileTracingIncludes: {
+    '/api/persistence/[...path]': [
+      './node_modules/@aws-sdk/client-s3/**/*',
+      './node_modules/@aws-sdk/s3-request-presigner/**/*',
+    ],
+  },
   experimental: {
     proxyClientMaxBodySize: '200mb',
   },

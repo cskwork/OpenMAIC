@@ -129,6 +129,31 @@ describe('asset byte egress', () => {
     });
   });
 
+  test('a descriptor range with q=0 selects the redirect instead', async () => {
+    const indirect = vi.fn(async () => ({ url: 'https://objects.example/signed', revision: 3 }));
+    const { url } = await serve(stubStore({ indirect }), { byteEgress: 'redirect' });
+
+    const response = await fetch(`${url}/assets/ast_example/content`, {
+      redirect: 'manual',
+      headers: { accept: 'application/vnd.openmaic.asset-descriptor+json;q=0' },
+    });
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe('https://objects.example/signed');
+  });
+
+  test('a longer media type containing the descriptor token selects the redirect', async () => {
+    const indirect = vi.fn(async () => ({ url: 'https://objects.example/signed', revision: 3 }));
+    const { url } = await serve(stubStore({ indirect }), { byteEgress: 'redirect' });
+
+    const response = await fetch(`${url}/assets/ast_example/content`, {
+      redirect: 'manual',
+      headers: { accept: 'application/vnd.openmaic.asset-descriptor+json-seq' },
+    });
+
+    expect(response.status).toBe(302);
+  });
+
   test('mints the URL under the same authorization and labelling as a direct read', async () => {
     let seen:
       | { principal: AssetPrincipal; ref: string; request: AssetIndirectReadRequest }

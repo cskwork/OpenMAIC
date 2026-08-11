@@ -1029,6 +1029,26 @@ describe('HttpAssetStore snapshot behavior', () => {
     });
   });
 
+  test('a media type that merely begins with the descriptor type is served as bytes', async () => {
+    // Only the exact essence identifies a descriptor; a longer type naming a
+    // real payload must not be parsed as one.
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => {
+      return new Response(new Blob(['payload'], { type: 'text/plain' }), {
+        status: 200,
+        headers: {
+          'content-type': 'application/vnd.openmaic.asset-descriptor+json-seq',
+          'x-asset-revision': '4',
+        },
+      });
+    });
+    const store = new HttpAssetStore({ baseUrl: 'https://assets.invalid', fetch });
+    stores.push(store);
+
+    const url = await store.resolve('asset');
+    expect(url).not.toBeNull();
+    expect(blobForObjectUrl(url!)?.type).toBe('application/vnd.openmaic.asset-descriptor+json-seq');
+  });
+
   test('an unclassifiable HEAD falls back to GET and is never treated as a miss', async () => {
     let requests = 0;
     const fetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {

@@ -108,7 +108,16 @@ function validationFailure(message: string): AssetHttpError {
 /** Whether the caller asked for a descriptor answer over a redirect. */
 function requestsDescriptor(req: IncomingMessage): boolean {
   const accept = req.headers.accept;
-  return typeof accept === 'string' && accept.includes(ASSET_DESCRIPTOR_MEDIA_TYPE);
+  if (typeof accept !== 'string') return false;
+  return accept.split(',').some((range) => {
+    const [type, ...params] = range.split(';');
+    if (type?.trim() !== ASSET_DESCRIPTOR_MEDIA_TYPE) return false;
+    // An explicit q=0 rejects the descriptor even though the range matches.
+    const quality = params
+      .map((param) => param.split('='))
+      .find(([name]) => name?.trim().toLowerCase() === 'q');
+    return quality === undefined || Number(quality[1]) > 0;
+  });
 }
 
 /**
