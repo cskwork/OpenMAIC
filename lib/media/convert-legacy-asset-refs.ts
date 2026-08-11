@@ -300,6 +300,14 @@ type SlideLike = Pick<Slide, 'background' | 'elements'>;
  * last, so a failure mid-conversion never leaves the persisted document
  * pointing at bytes that were never stored.
  */
+/**
+ * Total wall-clock budget for legacy URL probes in one conversion pass. Each
+ * probe is individually capped; this caps the aggregate, so a document full
+ * of stalled URLs cannot hold the load path for (count / concurrency) times
+ * the per-probe timeout.
+ */
+const URL_PROBE_BUDGET_MS = 60_000;
+
 export async function convertDocumentAssetRefs(
   document: AppDocument,
   deps?: LegacyAssetConversionDeps,
@@ -307,6 +315,11 @@ export async function convertDocumentAssetRefs(
 ): Promise<LegacyAssetConversionResult> {
   const resolvedDeps = deps ?? (await defaultDeps());
   const stageId = document.stage.id;
+  // The URL probes are the only network-bound work here, and each is already
+  // individually capped, but a document full of stalled URLs would still
+  // multiply that cap by the clip count. One shared budget bounds the whole
+  // pass; what is left converts on a later open.
+  const urlProbeBudgetEndsAt = Date.now() + URL_PROBE_BUDGET_MS;
   // Liveness probe for callers whose own work can be superseded mid-flight
   // (a classroom load): a stale conversion must stop producing side effects
   // as soon as its result is known to be unwanted, not after the last fetch.
@@ -353,6 +366,10 @@ export async function convertDocumentAssetRefs(
         : new Blob([record.blob], { type: record.mimeType });
       const assetId = await resolvedDeps.putAsset(blob, mediaMeta(record, blob));
       try {
+        // Liveness is rechecked at the commit boundary: an abort between the
+        // allocation and its mirror compensates the allocation, exactly like
+        // a mirror-write failure.
+        assertContinuing();
         // Mirror the row under the allocated id, like the audio path and the
         // generation write path: collectMediaFiles derives export references
         // from row keys, so without the copy an exported manifest would name
@@ -434,6 +451,8 @@ export async function convertDocumentAssetRefs(
             audioMeta(record.blob, record, speech),
           );
           try {
+            // Liveness is rechecked at the commit boundary, like the media path.
+            assertContinuing();
             // Dexie stays a deliberate compatibility double-write until Part
             // 3 converges exporters and import/export onto the pool; mirror
             // the row under the allocated id, keyed like the generation
@@ -484,6 +503,11 @@ export async function convertDocumentAssetRefs(
             report.converted += 1;
             return { kind: 'allocated', assetId: mirrored.id };
           }
+          if (Date.now() > urlProbeBudgetEndsAt) {
+            // The document cannot wait for every stalled URL; the rest of
+            // this pass converts on a later open.
+            return { kind: 'unavailable' };
+          }
           const fetched = await resolvedDeps.fetchLegacyUrl(audioUrl);
           if (fetched.kind === 'ok') {
             const assetId = await resolvedDeps.putAsset(
@@ -491,6 +515,8 @@ export async function convertDocumentAssetRefs(
               audioMeta(fetched.blob, undefined, speech),
             );
             try {
+              // Liveness is rechecked at the commit boundary, like the media path.
+              assertContinuing();
               await resolvedDeps.putAudioRecord({
                 id: assetId,
                 stageId,
