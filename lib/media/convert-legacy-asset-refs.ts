@@ -111,6 +111,34 @@ export interface LegacyAssetConversionDeps {
   fetchLegacyUrl(url: string): Promise<LegacyUrlFetch>;
 }
 
+/** Run each job through at most `limit` workers, preserving input order. */
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await fn(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+/**
+ * Thrown when the caller's liveness check fails mid-conversion. Callers that
+ * degrade to the unconverted document (the classroom fetch path) treat this
+ * like any converter failure; the document load path never passes a check.
+ */
+export class LegacyConversionAbortedError extends Error {
+  override readonly name = 'LegacyConversionAbortedError';
+}
+
 export interface LegacyAssetConversionReport {
   /** References rewritten to a freshly allocated asset id. */
   converted: number;
@@ -275,9 +303,16 @@ type SlideLike = Pick<Slide, 'background' | 'elements'>;
 export async function convertDocumentAssetRefs(
   document: AppDocument,
   deps?: LegacyAssetConversionDeps,
+  shouldContinue?: () => boolean,
 ): Promise<LegacyAssetConversionResult> {
   const resolvedDeps = deps ?? (await defaultDeps());
   const stageId = document.stage.id;
+  // Liveness probe for callers whose own work can be superseded mid-flight
+  // (a classroom load): a stale conversion must stop producing side effects
+  // as soon as its result is known to be unwanted, not after the last fetch.
+  const assertContinuing = (): void => {
+    if (shouldContinue && !shouldContinue()) throw new LegacyConversionAbortedError();
+  };
   // One allocation per logical legacy ref, shared across every slot, manifest
   // key, and speech action that names it -- they already shared one byte
   // store. The map holds the in-flight promise, not just the settled value:
@@ -340,6 +375,7 @@ export async function convertDocumentAssetRefs(
   };
 
   const convertSlide = async <T extends SlideLike>(slide: T): Promise<T> => {
+    assertContinuing();
     const slots = [...slideMediaReferenceSlots(slide)];
     const rewrites: Array<{ index: number; assetId: string }> = [];
     for (let index = 0; index < slots.length; index += 1) {
@@ -359,6 +395,7 @@ export async function convertDocumentAssetRefs(
   };
 
   const convertSpeechAction = async (action: Action): Promise<Action> => {
+    assertContinuing();
     if (action.type !== 'speech') return action;
     const speech = action as LegacySpeechAction;
     const audioId = speech.audioId || undefined;
@@ -531,24 +568,30 @@ export async function convertDocumentAssetRefs(
         nextScene = { ...nextScene, whiteboards: converted };
       }
     }
-    if (scene.actions) {
-      // Bounded concurrency: server classrooms carry one dangling URL per
-      // clip, and awaiting them one at a time would price the document open
-      // at the sum of every fetch. The promise caches make concurrent
-      // conversion of shared references safe.
-      const converted: Action[] = [];
-      const SPEECH_CONCURRENCY = 4;
-      for (let index = 0; index < scene.actions.length; index += SPEECH_CONCURRENCY) {
-        const chunk = await Promise.all(
-          scene.actions.slice(index, index + SPEECH_CONCURRENCY).map(convertSpeechAction),
-        );
-        converted.push(...chunk);
-      }
-      if (converted.some((action, index) => action !== scene.actions![index])) {
-        nextScene = { ...nextScene, actions: converted };
-      }
-    }
     scenes.push(nextScene);
+  }
+
+  // Speech actions across ALL scenes through one bounded pool: converting
+  // per scene would multiply the per-fetch timeout by the scene count when a
+  // legacy endpoint stalls. The promise caches make concurrent conversion of
+  // shared references safe.
+  const speechJobs: Array<{ sceneIndex: number; actionIndex: number; action: Action }> = [];
+  document.scenes.forEach((scene, sceneIndex) => {
+    scene.actions?.forEach((action, actionIndex) => {
+      if (action.type === 'speech') speechJobs.push({ sceneIndex, actionIndex, action });
+    });
+  });
+  const convertedSpeech = await mapWithConcurrency(speechJobs, 4, (job) =>
+    convertSpeechAction(job.action),
+  );
+  for (const [index, job] of speechJobs.entries()) {
+    const converted = convertedSpeech[index];
+    if (converted === job.action) continue;
+    const scene = scenes[job.sceneIndex];
+    const actions = (scene.actions ?? document.scenes[job.sceneIndex].actions)?.map((action, i) =>
+      i === job.actionIndex ? converted : action,
+    );
+    scenes[job.sceneIndex] = { ...scene, actions };
   }
 
   // The video manifest is keyed by the same media refs; re-key placeholder

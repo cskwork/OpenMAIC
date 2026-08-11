@@ -269,7 +269,14 @@ export async function fetchClassroomFromApi(
   // document load path retries conversion on the next open.
   try {
     const { convertDocumentAssetRefs } = await import('@/lib/media/convert-legacy-asset-refs');
-    const converted = await convertDocumentAssetRefs({ ...json.classroom });
+    // The guard travels into the conversion: a load superseded mid-fetch
+    // stops producing side effects as soon as it is known to be unwanted,
+    // and the abort degrades to the unconverted payload like any failure.
+    const converted = await convertDocumentAssetRefs(
+      { ...json.classroom },
+      undefined,
+      shouldConvert,
+    );
     return { stage: converted.document.stage, scenes: converted.document.scenes };
   } catch {
     return json.classroom;

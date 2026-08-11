@@ -280,6 +280,36 @@ describe('slide placeholder conversion', () => {
     expect(audioRows.get(assetId)?.originAudioId).toBe('tts_s0_a1');
   });
 
+  test('speech conversion spans scenes through one pool, preserving order', async () => {
+    const { pool, urlFetches, deps } = makeHarness();
+    const url = 'https://server.example.com/audio/across.mp3';
+    urlFetches.set(url, { kind: 'ok', blob: new Blob(['across-audio'], { type: 'audio/mpeg' }) });
+    const sceneA = {
+      ...slideScene([speech({ id: 'a1', audioUrl: url })]),
+      id: 'scene-a',
+      order: 0,
+    };
+    const sceneB = {
+      ...slideScene([speech({ id: 'b1', audioUrl: url }), speech({ id: 'b2', text: 'Other' })]),
+      id: 'scene-b',
+      order: 1,
+    };
+    const doc = document({ scenes: [sceneA, sceneB] });
+
+    const result = await convertDocumentAssetRefs(doc, deps);
+
+    expect(pool.size).toBe(1);
+    const [assetId] = [...pool.keys()];
+    expect(result.document.scenes).toHaveLength(2);
+    expect(result.document.scenes[0].id).toBe('scene-a');
+    expect(result.document.scenes[1].id).toBe('scene-b');
+    const actionsA = result.document.scenes[0].actions as unknown as Array<Record<string, unknown>>;
+    const actionsB = result.document.scenes[1].actions as unknown as Array<Record<string, unknown>>;
+    expect(actionsA[0]?.audioId).toBe(assetId);
+    expect(actionsB[0]?.audioId).toBe(assetId);
+    expect(actionsB[1]).not.toHaveProperty('audioId');
+  });
+
   test('background image placeholders convert like element refs', async () => {
     const { mediaRows, pool, deps } = makeHarness();
     mediaRows.set('stage-1:gen_img_bg', mediaRecord());
