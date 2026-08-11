@@ -94,7 +94,6 @@ export function actionsToManifest(
       return {
         ...rest,
         ...(audioRef ? { audioRef } : {}),
-        ...(speech.audioUrl ? { audioUrl: speech.audioUrl } : {}),
       } as ManifestAction;
     }
     if (action.type === 'discussion') {

@@ -121,9 +121,8 @@ export function setSpeechTextClearAudioById(actions: Action[], id: string, text:
     ...a,
     text,
     audioInvalidated: true,
-  } as Action & { audioId?: string; audioUrl?: string; audioInvalidated?: boolean };
+  } as Action & { audioId?: string; audioInvalidated?: boolean };
   delete cleaned.audioId;
-  delete cleaned.audioUrl;
   next[index] = cleaned;
   return next;
 }

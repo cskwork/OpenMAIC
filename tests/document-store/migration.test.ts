@@ -479,4 +479,111 @@ describe('legacy document migration', () => {
       sceneId: 'newer-scene',
     });
   });
+
+  test('converts legacy asset references on open and saves the rewrite back', async () => {
+    const documentStore = store();
+    await documentStore.saveDocument({
+      dslVersion: DSL_VERSION,
+      stage: { id: 'stage-1', name: 'Migrated', createdAt: 100, updatedAt: 200 },
+      scenes: [],
+    });
+    const convertAssetRefs = vi.fn(async (document: AppDocument) => ({
+      ...document,
+      stage: { ...document.stage, description: 'converted' },
+    }));
+
+    const result = await accessDocument('stage-1', {
+      store: documentStore,
+      kv: new MemoryKv(),
+      legacyStore: legacy(null),
+      lockManager: lockManager(),
+      convertAssetRefs,
+    });
+
+    expect(convertAssetRefs).toHaveBeenCalledOnce();
+    expect(result.document?.stage.description).toBe('converted');
+    // The converted document was persisted: a later raw load sees the rewrite.
+    expect((await documentStore.loadDocument('stage-1'))?.stage.description).toBe('converted');
+  });
+
+  test('pays no write when the converter returns the document by identity', async () => {
+    const realStore = store();
+    let saves = 0;
+    const countingStore = new Proxy(realStore, {
+      get(target, property) {
+        if (property === 'saveDocument') {
+          return async (document: AppDocument): Promise<void> => {
+            saves += 1;
+            return target.saveDocument(document);
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as DocumentStore<AppScene>;
+    await realStore.saveDocument({
+      dslVersion: DSL_VERSION,
+      stage: { id: 'stage-1', name: 'Migrated', createdAt: 100, updatedAt: 200 },
+      scenes: [],
+    });
+    saves = 0;
+
+    const result = await accessDocument('stage-1', {
+      store: countingStore,
+      kv: new MemoryKv(),
+      legacyStore: legacy(null),
+      lockManager: lockManager(),
+      convertAssetRefs: (document) => Promise.resolve(document),
+    });
+
+    expect(result.document?.stage.name).toBe('Migrated');
+    expect(saves).toBe(0);
+  });
+
+  test('converts a canonicalized legacy snapshot before its first save', async () => {
+    const documentStore = store();
+    const kv = new MemoryKv();
+    const convertAssetRefs = vi.fn(async (document: AppDocument) => ({
+      ...document,
+      stage: { ...document.stage, description: 'converted-at-birth' },
+    }));
+
+    const result = await accessDocument('stage-1', {
+      store: documentStore,
+      kv,
+      legacyStore: legacy(snapshot()),
+      lockManager: lockManager(),
+      convertAssetRefs,
+    });
+
+    expect(convertAssetRefs).toHaveBeenCalledOnce();
+    expect(result.document?.stage.description).toBe('converted-at-birth');
+    expect((await documentStore.loadDocument('stage-1'))?.stage.description).toBe(
+      'converted-at-birth',
+    );
+    // The migration metadata still settles against the converted destination.
+    expect(await kv.get('document-migration:stage-1', 'device')).toMatchObject({
+      sourceUpdatedAt: 200,
+    });
+  });
+
+  test('a converter failure does not break loading the document', async () => {
+    const documentStore = store();
+    await documentStore.saveDocument({
+      dslVersion: DSL_VERSION,
+      stage: { id: 'stage-1', name: 'Migrated', createdAt: 100, updatedAt: 200 },
+      scenes: [],
+    });
+
+    const result = await accessDocument('stage-1', {
+      store: documentStore,
+      kv: new MemoryKv(),
+      legacyStore: legacy(null),
+      lockManager: lockManager(),
+      convertAssetRefs: () => Promise.reject(new Error('pool unavailable')),
+    });
+
+    expect(result.document?.stage.name).toBe('Migrated');
+    expect((await documentStore.loadDocument('stage-1'))?.stage).not.toHaveProperty('description');
+  });
 });

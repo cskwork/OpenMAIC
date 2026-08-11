@@ -289,6 +289,89 @@ describe('needsMigration', () => {
   });
 });
 
+describe('0.1.0 -> 0.2.0 ladder entry (audioUrl abolition)', () => {
+  const speechAction = (extra: Record<string, unknown>) => ({
+    id: 'a1',
+    type: 'speech',
+    text: 'Hello',
+    ...extra,
+  });
+  const docWithActions = (actions: unknown[], stamp?: string) => ({
+    stage: { id: 'st', name: 'Course', createdAt: 1, updatedAt: 2 },
+    scenes: [
+      {
+        id: 's1',
+        stageId: 'st',
+        type: 'slide',
+        title: 'Scene',
+        order: 0,
+        content: { type: 'slide', canvas: { id: 'c1', elements: [] } },
+        actions,
+      },
+    ],
+    ...(stamp ? { [DSL_VERSION_KEY]: stamp } : {}),
+  });
+
+  it('drops a URL-only speech reference, leaving the reference unset', () => {
+    // The pure layer cannot ingest the bytes or probe reachability, and a URL
+    // minted by one deployment cannot travel with the document -- so the
+    // field is dropped, exactly the outcome the converter produces for a URL
+    // that no longer resolves.
+    const out = migrate(
+      docWithActions([speechAction({ audioUrl: 'https://cdn.example.com/a.mp3' })], '0.1.0'),
+    ) as ReturnType<typeof docWithActions>;
+    expect(out[DSL_VERSION_KEY]).toBe(DSL_VERSION);
+    const action = out.scenes[0].actions[0] as Record<string, unknown>;
+    expect(action).not.toHaveProperty('audioUrl');
+    expect(action).not.toHaveProperty('audioId');
+    expect(action.text).toBe('Hello');
+  });
+
+  it('preserves a co-present audioId/audioUrl pair verbatim', () => {
+    // The audioId may be a dangling derived id whose only live handle is the
+    // URL beside it; a pure transform cannot decide the pair, so both handles
+    // survive for the app-side reference converter.
+    const pair = speechAction({
+      audioId: 'tts_s0_a1',
+      audioUrl: 'https://cdn.example.com/a.mp3',
+    });
+    const out = migrate(docWithActions([pair], '0.1.0')) as ReturnType<typeof docWithActions>;
+    expect(out[DSL_VERSION_KEY]).toBe(DSL_VERSION);
+    expect(out.scenes[0].actions[0]).toEqual(pair);
+  });
+
+  it('leaves an audioId-only speech action untouched apart from the stamp', () => {
+    const idOnly = speechAction({ audioId: 'tts_s0_a1' });
+    const out = migrate(docWithActions([idOnly], '0.1.0')) as ReturnType<typeof docWithActions>;
+    expect(out[DSL_VERSION_KEY]).toBe(DSL_VERSION);
+    expect(out.scenes[0].actions[0]).toEqual(idOnly);
+  });
+
+  it('lifts unversioned (0.0.0) documents through both entries', () => {
+    const out = migrate(
+      docWithActions([speechAction({ audioUrl: 'https://cdn.example.com/a.mp3' })]),
+    ) as ReturnType<typeof docWithActions>;
+    expect(out[DSL_VERSION_KEY]).toBe(DSL_VERSION);
+    expect(out.scenes[0].actions[0]).not.toHaveProperty('audioUrl');
+  });
+
+  it('does not mutate its input, and copies only the actions it changes', () => {
+    const pair = speechAction({
+      audioId: 'tts_s0_a1',
+      audioUrl: 'https://cdn.example.com/a.mp3',
+    });
+    const urlOnly = speechAction({ audioUrl: 'https://cdn.example.com/b.mp3' });
+    const input = docWithActions([pair, urlOnly], '0.1.0');
+    const snapshot = structuredClone(input);
+    const out = migrate(input) as ReturnType<typeof docWithActions>;
+    expect(input).toEqual(snapshot);
+    // The untouched pair action rides through by reference; only the action
+    // that lost a field is copied.
+    expect(out.scenes[0].actions[0]).toBe(pair);
+    expect(out.scenes[0].actions[1]).not.toBe(urlOnly);
+  });
+});
+
 describe('migrate', () => {
   it('stamps a legacy document up to the current version', () => {
     const out = migrate({ id: 'legacy', name: 'course' }) as Record<string, unknown>;

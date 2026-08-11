@@ -257,7 +257,6 @@ function SpeechTtsBar({
   sceneOrder,
   language,
   text,
-  audioUrl,
   refreshKey,
   regenerating,
   onGenerated,
@@ -268,7 +267,6 @@ function SpeechTtsBar({
   sceneOrder: number;
   language?: string;
   text: string;
-  audioUrl?: string;
   refreshKey?: number;
   regenerating?: boolean;
   onGenerated: (audioId: string) => Promise<void>;
@@ -313,10 +311,6 @@ function SpeechTtsBar({
     let alive = true;
     (async () => {
       try {
-        if (audioUrl) {
-          if (alive) setStatus('ready');
-          return;
-        }
         // A missing stamped id means "not generated" for new documents. Probe
         // the deterministic key only to preserve pre-allocation Dexie rows.
         const legacyId = lookupId
@@ -343,18 +337,15 @@ function SpeechTtsBar({
     return () => {
       alive = false;
     };
-  }, [lookupId, actionId, sceneOrder, audioUrl, audioInvalidated, refreshKey, regenerating]);
+  }, [lookupId, actionId, sceneOrder, audioInvalidated, refreshKey, regenerating]);
 
   useEffect(() => () => stopPreview(), [stopPreview]);
 
   const preview = async () => {
     stopPreview();
-    let src = audioUrl ?? null;
-    if (!src && readAudioId) {
-      src = await audioObjectUrl(readAudioId);
-      objUrlRef.current = src;
-    }
+    const src = readAudioId ? await audioObjectUrl(readAudioId) : null;
     if (!src) return;
+    objUrlRef.current = src;
     const a = new Audio(src);
     audioRef.current = a;
     a.addEventListener('ended', stopPreview);
@@ -439,7 +430,6 @@ function SpeechClip({
   language,
   autoFocus,
   ttsActive,
-  audioUrl,
   ttsRefresh,
   regenerating,
   onCommit,
@@ -462,7 +452,6 @@ function SpeechClip({
   language?: string;
   autoFocus: boolean;
   ttsActive: boolean;
-  audioUrl?: string;
   ttsRefresh?: number;
   regenerating?: boolean;
   onCommit: (text: string) => void;
@@ -559,7 +548,6 @@ function SpeechClip({
           sceneOrder={sceneOrder}
           language={language}
           text={val}
-          audioUrl={audioUrl}
           refreshKey={ttsRefresh}
           regenerating={regenerating}
           onGenerated={onGenerated}
@@ -1333,7 +1321,6 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
                               sceneOrder={sceneOrder}
                               language={language}
                               ttsActive={ttsActive}
-                              audioUrl={(action as { audioUrl?: string }).audioUrl}
                               ttsRefresh={ttsRefresh}
                               regenerating={regeneratingIds.has(key)}
                               autoFocus={key === focusId}

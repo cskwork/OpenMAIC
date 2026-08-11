@@ -245,7 +245,20 @@ export async function fetchClassroomFromApi(classroomId: string): Promise<Classr
     classroom?: ClassroomPayload;
   };
   if (!json.success || !json.classroom) return null;
-  return json.classroom;
+  // A server classroom payload is a pre-conversion transport: its speech
+  // actions still carry the serving URL beside a derived audioId, and its
+  // media bytes live behind that URL, not in any local store. Convert before
+  // the payload is applied or persisted, so the classroom is born with
+  // allocated asset ids and the raw URLs are never stored. Conversion failure
+  // degrades to the unconverted payload rather than blocking the load -- the
+  // document load path retries conversion on the next open.
+  try {
+    const { convertDocumentAssetRefs } = await import('@/lib/media/convert-legacy-asset-refs');
+    const converted = await convertDocumentAssetRefs({ ...json.classroom });
+    return { stage: converted.document.stage, scenes: converted.document.scenes };
+  } catch {
+    return json.classroom;
+  }
 }
 
 export function applyClassroomStageAndScenes(

@@ -620,7 +620,7 @@ export class PlaybackEngine {
         const hasText = !!speechAction.text.trim();
 
         this.audioPlayer
-          .play(speechAction.audioId || '', speechAction.audioUrl)
+          .play(speechAction.audioId || '')
           .then((audioStarted) => {
             if (!this.isCurrentGeneration(generation)) return;
             if (!audioStarted) {

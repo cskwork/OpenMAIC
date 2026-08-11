@@ -1,12 +1,12 @@
 /**
  * Audio Player - Audio player interface
  *
- * Handles audio playback, pause, stop, and other operations
- * Loads pre-generated TTS audio files from IndexedDB
+ * Handles audio playback, pause, stop, and other operations.
+ * Resolves pre-generated TTS audio bytes pool-first through the shared read
+ * path, with the Dexie `audioFiles` table as the legacy fallback.
  *
  */
 
-import { db } from '@/lib/utils/database';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('AudioPlayer');
@@ -42,36 +42,19 @@ export class AudioPlayer {
   }
 
   /**
-   * Play audio (from URL or IndexedDB pre-generated cache)
-   * @param audioId Audio ID
-   * @param audioUrl Optional server-generated audio URL (takes priority over IndexedDB)
+   * Play audio for a speech reference.
+   *
+   * The reference is resolved pool-first through the shared read path, so a
+   * stable-id regeneration whose mirror write failed does not keep serving
+   * superseded narration; the Dexie `audioFiles` table remains the fallback
+   * for legacy and imported rows that were never pool-backed.
+   *
+   * @param audioId Audio asset reference (allocated asset id, or a legacy TTS-derived id)
    * @returns true if audio started playing, false if no audio (TTS disabled or not generated)
    */
-  public async play(audioId: string, audioUrl?: string): Promise<boolean> {
+  public async play(audioId: string): Promise<boolean> {
     const requestToken = ++this.requestToken;
     try {
-      // 1. Try audioUrl first (server-generated TTS)
-      if (audioUrl) {
-        this.stopAudioElement();
-        if (requestToken !== this.requestToken) return false;
-        this.audio = new Audio();
-        this.audio.src = audioUrl;
-        if (this.muted) this.audio.volume = 0;
-        else this.audio.volume = this.volume;
-        this.audio.defaultPlaybackRate = this.playbackRate;
-        this.audio.playbackRate = this.playbackRate;
-        this.audio.addEventListener('ended', () => {
-          this.onEndedCallback?.();
-        });
-        await this.audio.play();
-        if (requestToken !== this.requestToken) return false;
-        this.audio.playbackRate = this.playbackRate;
-        return true;
-      }
-
-      // 2. Fall back to stored bytes (client-generated TTS), resolved pool-first
-      // so a stable-id regeneration whose mirror write failed does not keep
-      // serving superseded narration.
       const blob = await resolveBytes(audioId);
       if (requestToken !== this.requestToken) return false;
 

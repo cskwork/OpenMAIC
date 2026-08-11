@@ -56,7 +56,7 @@
  * Changing it requires a package version increase that the dependents' caret
  * does not admit; see the module docstring.
  */
-export const DSL_VERSION = '0.1.0' as const;
+export const DSL_VERSION = '0.2.0' as const;
 
 export type DslVersion = typeof DSL_VERSION;
 
@@ -77,9 +77,8 @@ export const UNVERSIONED_DSL_VERSION = '0.0.0' as const;
  * The first shipped serialized-contract version — a **pinned literal**, not the
  * moving {@link DSL_VERSION}. Migration endpoints must be immutable: they name a
  * fixed point in the ladder, so they cannot reference `DSL_VERSION` (which moves
- * every time the shape changes). It equals `DSL_VERSION` today; the two diverge
- * the moment the first real shape change bumps `DSL_VERSION` and appends a step
- * from here.
+ * every time the shape changes). It diverged from `DSL_VERSION` when the first
+ * real shape change (the `audioUrl` abolition) appended a step from here.
  */
 export const INITIAL_DSL_VERSION = '0.1.0' as const;
 
@@ -159,6 +158,55 @@ export interface DslMigration {
 }
 
 /**
+ * The 0.1.0 → 0.2.0 transform: the field-level half of the `SpeechAction.audioUrl`
+ * abolition. 0.2.0 removes `audioUrl` from the contract -- a raw URL bakes in
+ * the deployment that minted it and an expiry assumption, so it cannot travel
+ * with the document. The other half (ingesting the bytes behind a URL and
+ * rewriting the reference to an allocated asset id) is not a pure transform's
+ * job: it is the app-side reference converter's, which runs on every document
+ * the app opens before that document is ever saved at 0.2.0. This ladder entry
+ * therefore only covers documents the converter never reached, and it is
+ * deliberately limited to the one case a pure function can decide without
+ * losing a live handle:
+ *
+ * - `audioUrl` with NO `audioId` beside it: the URL was the whole reference.
+ *   The pure layer cannot fetch it (reachability is unknowable here), and a
+ *   dead URL must never be carried into the new format -- so the field is
+ *   dropped and the reference left unset, exactly the outcome the converter
+ *   produces for a URL that no longer resolves.
+ * - `audioUrl` beside an `audioId` (co-present pair): kept verbatim. The
+ *   audioId may be a dangling derived id whose only live handle is the URL
+ *   next to it; removing the URL on the version bump alone would destroy that
+ *   handle. The pair collapses to one allocated asset id only inside the
+ *   converter, which can check local bytes and probe the URL. Until then the
+ *   pair is inert data: no 0.2.0 consumer reads `audioUrl`.
+ *
+ * Pure and non-mutating: actions and scenes are copied only when a field is
+ * actually dropped.
+ */
+function dropUrlOnlySpeechRefs(doc: unknown): unknown {
+  if (!isObject(doc) || !Array.isArray(doc.scenes)) return doc;
+  let scenesChanged = false;
+  const scenes = doc.scenes.map((scene: unknown) => {
+    if (!isObject(scene) || !Array.isArray(scene.actions)) return scene;
+    let actionsChanged = false;
+    const actions = scene.actions.map((action: unknown) => {
+      if (!isObject(action) || action.type !== 'speech') return action;
+      if (typeof action.audioUrl !== 'string' || action.audioUrl === '') return action;
+      if (typeof action.audioId === 'string' && action.audioId !== '') return action;
+      const { audioUrl: _dropped, ...rest } = action;
+      void _dropped;
+      actionsChanged = true;
+      return rest;
+    });
+    if (!actionsChanged) return scene;
+    scenesChanged = true;
+    return { ...scene, actions };
+  });
+  return scenesChanged ? { ...doc, scenes } : doc;
+}
+
+/**
  * Ordered migration ladder. Each entry's `to` is the next entry's `from`, and
  * the last entry's `to` is {@link DSL_VERSION} (both checked by a test). Every
  * `from` / `to` is a **pinned literal** — never the moving `DSL_VERSION`
@@ -168,14 +216,18 @@ export interface DslMigration {
  * The first entry stamps legacy (pre-`dslVersion`) documents up to
  * {@link INITIAL_DSL_VERSION}. It is intentionally a no-op *transform*: bringing
  * `Action` into the contract (#811) and adding validators (#817) did not alter
- * any serialized document, so the current on-disk shape already *is* 0.1.0. The
- * entry exists to wire the pipeline end to end and to give real documents a
- * version stamp to migrate forward from. When the serialized shape first
- * changes, bump {@link DSL_VERSION} *then* and append a real transform from
- * `INITIAL_DSL_VERSION` to the new pinned version.
+ * any serialized document, so the on-disk shape at that point already *was*
+ * 0.1.0. The entry exists to wire the pipeline end to end and to give real
+ * documents a version stamp to migrate forward from.
+ *
+ * The second entry is the first real transform: the 0.2.0 `audioUrl` abolition.
+ * It does only the field-level half, for documents the app-side reference
+ * converter never reached -- see {@link dropUrlOnlySpeechRefs} for the case
+ * split and why the co-present pair is out of a pure migration's reach.
  */
 export const DSL_MIGRATIONS: readonly DslMigration[] = [
   { from: UNVERSIONED_DSL_VERSION, to: INITIAL_DSL_VERSION, migrate: (doc) => doc },
+  { from: INITIAL_DSL_VERSION, to: '0.2.0', migrate: dropUrlOnlySpeechRefs },
 ];
 
 /**

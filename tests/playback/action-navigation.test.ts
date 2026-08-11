@@ -62,7 +62,7 @@ function createActionEngine() {
   };
 }
 
-function createAudioPlayer(play?: (audioId: string, audioUrl?: string) => Promise<boolean>) {
+function createAudioPlayer(play?: (audioId: string) => Promise<boolean>) {
   let ended: (() => void) | null = null;
   return {
     player: {
@@ -410,7 +410,7 @@ describe('PlaybackEngine action navigation', () => {
 
     expect(engine.getMode()).toBe('playing');
     expect(player.play).toHaveBeenCalledTimes(1);
-    expect(player.play).toHaveBeenCalledWith('', undefined);
+    expect(player.play).toHaveBeenCalledWith('');
     expect(engine.getSnapshot().actionIndex).toBe(2);
   });
 

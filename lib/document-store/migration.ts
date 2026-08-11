@@ -45,9 +45,24 @@ export interface DocumentMigrationDeps {
   legacyStore?: LegacyDocumentStore;
   lockManager?: LockManager | null;
   migrateDsl?: (document: unknown) => unknown;
+  /**
+   * App-side legacy asset-reference converter (#1007 part 2, step c). Runs on
+   * every document this layer loads under the document lock, before the
+   * document is handed out or saved at the current DSL version: the pure DSL
+   * ladder cannot read local bytes or probe URLs, so ingesting legacy media
+   * bytes and collapsing `audioUrl`/`audioId` pairs happens here. Injectable
+   * for tests; the default wires Dexie legacy tables and the app asset pool.
+   */
+  convertAssetRefs?: AssetRefConverter;
   /** The mutation callback acquires the runtime shared epoch before writing. */
   storageSharedLockHeld?: boolean;
 }
+
+/**
+ * Rewrites a loaded document's legacy media references to allocated asset ids,
+ * returning the input by identity when nothing converted.
+ */
+export type AssetRefConverter = (document: AppDocument) => Promise<AppDocument>;
 
 export interface DocumentAccessResult {
   document: AppDocument | null;
@@ -75,6 +90,56 @@ export class DocumentStorageGenerationChangedError extends Error {
 const MARKER_PREFIX = 'document-migration:';
 let defaultKv: KVStore | undefined;
 const log = createLogger('DocumentMigration');
+
+/**
+ * Run the legacy asset-reference converter over a loaded document. Conversion
+ * is best-effort on the load path: a failure (pool unavailable, IndexedDB
+ * hiccup) must not break opening the document, so it logs and returns the
+ * document unconverted -- legacy references still resolve through the read
+ * fallbacks, and the next open retries.
+ */
+async function convertLoadedDocument(
+  document: AppDocument,
+  deps: DocumentMigrationDeps,
+): Promise<AppDocument> {
+  try {
+    const convert =
+      deps.convertAssetRefs ??
+      (async (value: AppDocument) => {
+        const { convertDocumentAssetRefs } = await import('@/lib/media/convert-legacy-asset-refs');
+        return (await convertDocumentAssetRefs(value)).document;
+      });
+    return await convert(document);
+  } catch (error) {
+    log.warn(
+      `Legacy asset conversion failed for document ${JSON.stringify(document.stage.id)}; ` +
+        'leaving legacy references for a later open',
+      error,
+    );
+    return document;
+  }
+}
+
+/**
+ * Persist a converted document, fenced by the storage generation exactly like
+ * the legacy-migration save below: a conversion write that lands after a
+ * clearDatabase would resurrect a document the user asked to wipe, so the
+ * write fails loud instead. A no-op conversion (identity) pays no write.
+ */
+async function saveConvertedDocument(
+  store: DocumentStore<AppScene, AppStage>,
+  stageId: string,
+  existing: AppDocument,
+  converted: AppDocument,
+  deps: DocumentMigrationDeps,
+  expectedGeneration: number,
+): Promise<void> {
+  if (converted === existing) return;
+  if ((await readGeneration(deps.kv)) !== expectedGeneration) {
+    throw new DocumentStorageGenerationChangedError(stageId);
+  }
+  await store.saveDocument(converted);
+}
 
 function resolveStore(deps: DocumentMigrationDeps): DocumentStore<AppScene, AppStage> {
   return deps.store ? getDocumentStore({ store: deps.store }) : getDocumentStore();
@@ -284,17 +349,40 @@ async function migrateLocked(
               `Legacy snapshot diverges from authoritative destination for stage ${stageId}; migration marker was not written`,
               error,
             );
-            return { document: existing, readOnlyLegacy: false };
+            // The destination remains authoritative; convert and persist it
+            // exactly like the main exit so diverged documents are not
+            // stranded with legacy references forever.
+            const converted = await convertLoadedDocument(existing, deps);
+            await saveConvertedDocument(
+              store,
+              stageId,
+              existing,
+              converted,
+              deps,
+              expectedGeneration,
+            );
+            return { document: converted, readOnlyLegacy: false };
           }
         }
         await finishMigrationMetadata(snapshot, kv);
       }
-      return { document: existing, readOnlyLegacy: false };
+      // Lazy reference conversion on open: rewrite legacy media handles to
+      // allocated asset ids and save the converted document back under the
+      // same lock. An unconverted document is returned as-is (identity), so
+      // already-converted documents pay no write.
+      const converted = await convertLoadedDocument(existing, deps);
+      await saveConvertedDocument(store, stageId, existing, converted, deps, expectedGeneration);
+      return { document: converted, readOnlyLegacy: false };
     }
 
     const snapshot = await getLegacyDocumentStore(deps).read(stageId);
     if (!snapshot) return { document: null, readOnlyLegacy: false };
-    const expected = canonicalize(snapshot);
+    // Convert the canonicalized legacy aggregate BEFORE it is first saved, so
+    // the destination is born with allocated asset ids where bytes are
+    // available. The verification below migrates `expected` through the pure
+    // ladder before comparing, so a kept co-present pair (which the ladder
+    // preserves) verifies consistently.
+    const expected = await convertLoadedDocument(canonicalize(snapshot), deps);
     if ((await readGeneration(deps.kv)) !== expectedGeneration) {
       throw new DocumentStorageGenerationChangedError(stageId);
     }
@@ -360,6 +448,10 @@ export async function accessDocument(
     );
   } catch (error) {
     if (!(error instanceof DocumentLockUnavailableError)) throw error;
+    // Reference conversion is deliberately skipped on the lock-free fallback:
+    // allocating assets and saving the rewrite without cross-realm exclusion
+    // could double-allocate against a peer realm. Legacy references still
+    // resolve through the read fallbacks, and a later locked open converts.
     const destination = await resolveStore(deps).loadDocument(stageId);
     if (destination) {
       assertValidDestination(stageId, destination);
