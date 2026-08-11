@@ -956,77 +956,76 @@ describe('HttpAssetStore snapshot behavior', () => {
     expect(heads).toBe(2);
   });
 
-  test('a redirected byte response latches redirect egress and labels from the pre-download HEAD', async () => {
-    // The object store's answer after a followed redirect: the pinned content
-    // type, and no revision. The first such contact latches redirect egress;
-    // the read is redone probe-first so the label predates the download.
-    const methods: string[] = [];
-    const fetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+  test('a descriptor answer is followed with no deployment headers, and labels from the descriptor', async () => {
+    // Indirect egress for the packaged client: the byte GET asks for a
+    // descriptor, and the signed URL is fetched without any of the
+    // deployment's headers -- automatic redirect following would forward
+    // them to the object store's origin.
+    const seen: Array<{ method: string; url: string; headers: HeadersInit | undefined }> = [];
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = String(input);
       const method = init?.method ?? 'GET';
-      methods.push(method);
+      seen.push({ method, url, headers: init?.headers });
+      if (url === 'https://objects.example/signed') {
+        // The object store's answer: the pinned content type, no revision.
+        return new Response(new Blob(['signed-bytes'], { type: 'image/png' }), {
+          status: 200,
+          headers: { 'content-type': 'image/png' },
+        });
+      }
       if (method === 'HEAD') {
         return new Response(null, {
           status: 200,
           headers: { 'x-asset-revision': '7', 'content-type': 'image/png' },
         });
       }
-      const response = new Response(new Blob(['redirected-bytes'], { type: 'image/png' }), {
+      return new Response(JSON.stringify({ url: 'https://objects.example/signed', revision: 7 }), {
         status: 200,
-        headers: { 'content-type': 'image/png' },
+        headers: {
+          'content-type': 'application/json',
+          'x-asset-egress': 'descriptor',
+          'x-asset-revision': '7',
+        },
       });
-      Object.defineProperty(response, 'redirected', { value: true });
-      return response;
     });
-    const store = new HttpAssetStore({ baseUrl: 'https://assets.invalid', fetch });
+    const store = new HttpAssetStore({
+      baseUrl: 'https://assets.invalid',
+      fetch,
+      headers: () => ({ 'x-api-key': 'deployment-secret' }),
+    });
     stores.push(store);
 
     const url = await store.resolve('asset');
     expect(url).not.toBeNull();
-    expect(methods).toEqual(['GET', 'HEAD', 'GET']);
     expect(blobForObjectUrl(url!)?.type).toBe('image/png');
 
-    // The label came from the probe: a warm resolve revalidates against it
-    // and keeps the snapshot.
+    const [byteGet, signedGet] = seen;
+    expect(byteGet?.method).toBe('GET');
+    expect(new Headers(byteGet?.headers).get('x-asset-egress')).toBe('descriptor');
+    expect(signedGet?.url).toBe('https://objects.example/signed');
+    expect(new Headers(signedGet?.headers).get('x-api-key')).toBeNull();
+    expect(signedGet?.headers).toBeUndefined();
+
+    // The label came from the descriptor: a warm resolve revalidates against
+    // it and keeps the snapshot.
     const again = await store.resolve('asset');
     expect(again).toBe(url);
-    expect(methods).toEqual(['GET', 'HEAD', 'GET', 'HEAD']);
+    expect(seen[seen.length - 1]?.method).toBe('HEAD');
   });
 
-  test('a redirect-mode miss is answered by the probe without a download', async () => {
-    const methods: string[] = [];
-    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
-      const method = init?.method ?? 'GET';
-      methods.push(method);
-      const url = String(input);
-      if (url.includes('missing')) {
-        expect(method).toBe('HEAD');
-        return new Response(JSON.stringify({ error: { code: 'ASSET_NOT_FOUND' } }), {
-          status: 404,
-          headers: { 'x-error-code': 'ASSET_NOT_FOUND' },
-        });
-      }
-      if (method === 'HEAD') {
-        return new Response(null, {
-          status: 200,
-          headers: { 'x-asset-revision': '1', 'content-type': 'image/png' },
-        });
-      }
-      const response = new Response(new Blob(['bytes'], { type: 'image/png' }), {
+  test('a malformed egress descriptor fails as MALFORMED_RESPONSE', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => {
+      return new Response(JSON.stringify({ url: 'https://objects.example/signed' }), {
         status: 200,
-        headers: { 'content-type': 'image/png' },
+        headers: { 'content-type': 'application/json', 'x-asset-egress': 'descriptor' },
       });
-      Object.defineProperty(response, 'redirected', { value: true });
-      return response;
     });
     const store = new HttpAssetStore({ baseUrl: 'https://assets.invalid', fetch });
     stores.push(store);
 
-    // Latch redirect egress with one successful resolve.
-    await expect(store.resolve('asset')).resolves.not.toBeNull();
-    methods.length = 0;
-
-    await expect(store.resolve('missing')).resolves.toBeNull();
-    expect(methods).toEqual(['HEAD']);
+    await expect(store.resolve('asset')).rejects.toMatchObject({
+      code: 'MALFORMED_RESPONSE',
+    });
   });
 
   test('an unclassifiable HEAD falls back to GET and is never treated as a miss', async () => {

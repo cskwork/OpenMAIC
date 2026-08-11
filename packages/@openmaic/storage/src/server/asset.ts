@@ -550,18 +550,43 @@ async function route(
         if (!Number.isSafeInteger(indirect.revision) || indirect.revision < 1) {
           throw new Error('@openmaic/storage: asset store returned a malformed revision');
         }
+        if (req.headers['x-asset-egress'] === 'descriptor') {
+          // A descriptor answer instead of the redirect. A platform fetch
+          // follows a 302 with the original request's headers -- only
+          // Authorization is stripped across origins -- so following one
+          // would forward this deployment's custom credential headers to the
+          // object store's origin. A client that sends the descriptor
+          // request header fetches the signed URL itself, with none of those
+          // headers, and takes the revision from the descriptor body.
+          sendJson(
+            req,
+            res,
+            200,
+            { url: indirect.url, revision: indirect.revision },
+            {
+              'x-asset-egress': 'descriptor',
+              'x-asset-revision': String(indirect.revision),
+              'cache-control': 'private, no-store',
+              vary: 'Cookie, Authorization, X-Asset-Egress',
+              'access-control-expose-headers': 'X-Asset-Revision, X-Error-Code, X-Asset-Egress',
+            },
+          );
+          return;
+        }
         // The 302 repeats the read route's posture: it is as per-principal and
         // as uncacheable as the bytes it points at. The revision travels on
         // the redirect itself; the signed URL pins the served media type,
         // disposition, and cache posture, so the follow-up response reproduces
-        // the direct response's labels. The signature is the credential the
-        // follow-up carries -- the client sends none of its own there.
+        // the direct response's labels. Generic HTTP consumers follow the
+        // redirect as-is; the packaged client never sees this branch, because
+        // it asks for the descriptor above rather than risk its credential
+        // headers being forwarded across origins by redirect handling.
         res.sendDate = false;
         res.writeHead(302, {
           location: indirect.url,
           'x-asset-revision': String(indirect.revision),
           'cache-control': 'private, no-store',
-          vary: 'Cookie, Authorization',
+          vary: 'Cookie, Authorization, X-Asset-Egress',
           'access-control-expose-headers': 'X-Asset-Revision, X-Error-Code',
         });
         res.end();

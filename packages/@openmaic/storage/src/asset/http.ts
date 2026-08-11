@@ -152,7 +152,6 @@ export class HttpAssetStore implements StorageProvider {
   private readonly identities = new Map<AssetRef, ObjectUrlIdentity>();
   private readonly inFlight = new Map<AssetRef, Promise<string | null>>();
   private readonly generations = new Map<AssetRef, number>();
-  private redirectEgress = false;
   private closed = false;
 
   constructor(options: HttpAssetStoreOptions) {
@@ -205,6 +204,13 @@ export class HttpAssetStore implements StorageProvider {
     }
     const headers = await this.headers(method, path, body !== undefined);
     if (body !== undefined) headers['content-type'] = body.type;
+    if (method === 'GET') {
+      // Advertise descriptor support on the byte read: a redirect-egress
+      // server then answers with the signed URL in a JSON body instead of a
+      // 302 the platform fetch would follow with these headers attached,
+      // custom credential headers included.
+      headers['x-asset-egress'] = 'descriptor';
+    }
     try {
       return await this.fetchImpl(`${this.baseUrl}${path}`, {
         method,
@@ -352,31 +358,6 @@ export class HttpAssetStore implements StorageProvider {
     encoded: string,
   ): Promise<{ url: string | null; retry: boolean }> {
     const generation = this.generation(id);
-    // Under indirect byte egress the byte GET redirects, and the response
-    // fetch exposes is the object store's: it carries the pinned content type
-    // but no revision. The label then comes from a HEAD probe made *before*
-    // the download, never after. A replacement between probe and download
-    // labels newer bytes with the older revision, which the next revalidation
-    // detects and corrects; the reverse order could pin stale bytes under a
-    // fresh revision indefinitely. The probe doubles as the miss check, so a
-    // redirect-mode miss costs no download.
-    let probed: ObjectUrlIdentity | undefined;
-    if (this.redirectEgress) {
-      const head = await this.fetchResponse('HEAD', `/assets/${encoded}/content`);
-      if (!head.ok) {
-        const code = head.headers.get('x-error-code');
-        if (head.status === 404 && code === 'ASSET_NOT_FOUND') {
-          this.identities.delete(id);
-          await this.urls.invalidate(id);
-          return { url: null, retry: false };
-        }
-        if (code !== null) throw await this.httpError(head);
-        // An unclassifiable HEAD error falls back to the unprobed GET below.
-      } else if (head.status === 200) {
-        // A successful but unclassifiable HEAD behaves as no probe at all.
-        probed = responseIdentity(head) ?? undefined;
-      }
-    }
     const response = await this.fetchResponse('GET', `/assets/${encoded}/content`);
     if (!response.ok) {
       const error = await this.httpError(response);
@@ -387,28 +368,95 @@ export class HttpAssetStore implements StorageProvider {
       }
       throw error;
     }
-    let identity = responseIdentity(response);
-    if (identity === null && response.redirected && !this.redirectEgress) {
-      // First contact with a redirecting deployment. Discard this download
-      // and redo the read in probe-first order: labeling these bytes now
-      // would take a HEAD after the fact, the one ordering that can stick a
-      // stale label. The latch keeps this self-inflicted double download to
-      // at most once in this client's lifetime.
-      this.redirectEgress = true;
-      return { url: null, retry: true };
-    }
-    identity ??= probed ?? null;
-    if (response.status !== 200 || identity === null) {
-      throw malformed(
-        response.status,
-        '@openmaic/storage: asset byte response must carry content type and revision',
-      );
-    }
+    let identity: ObjectUrlIdentity | null = null;
     let bytes: ArrayBuffer;
-    try {
-      bytes = await response.arrayBuffer();
-    } catch {
-      throw malformed(response.status, '@openmaic/storage: asset byte response could not be read');
+    if (response.headers.get('x-asset-egress') === 'descriptor') {
+      // Indirect egress, answered as a descriptor rather than a redirect.
+      // Following a 302 would forward this request's headers -- the
+      // deployment's custom credential headers included; only Authorization
+      // is stripped across origins -- to the object store. The descriptor
+      // carries the revision, and the bytes are fetched with no deployment
+      // headers at all.
+      let descriptor: unknown;
+      try {
+        descriptor = await response.json();
+      } catch {
+        throw malformed(
+          response.status,
+          '@openmaic/storage: asset egress descriptor could not be read',
+        );
+      }
+      const signedUrl =
+        typeof descriptor === 'object' && descriptor !== null && 'url' in descriptor
+          ? (descriptor as { url?: unknown }).url
+          : undefined;
+      const revision =
+        typeof descriptor === 'object' && descriptor !== null && 'revision' in descriptor
+          ? (descriptor as { revision?: unknown }).revision
+          : undefined;
+      if (
+        typeof signedUrl !== 'string' ||
+        signedUrl === '' ||
+        typeof revision !== 'number' ||
+        !Number.isSafeInteger(revision) ||
+        revision < 1
+      ) {
+        throw malformed(
+          response.status,
+          '@openmaic/storage: asset egress descriptor must carry a url and revision',
+        );
+      }
+      let byteResponse: Response;
+      try {
+        byteResponse = await this.fetchImpl(signedUrl, {
+          cache: 'no-store',
+          credentials: 'omit',
+        });
+      } catch {
+        throw new HttpAssetStoreError(
+          0,
+          'HTTP_REQUEST_FAILED',
+          '@openmaic/storage: asset HTTP request failed',
+        );
+      }
+      if (!byteResponse.ok) {
+        throw malformed(
+          byteResponse.status,
+          '@openmaic/storage: asset signed URL did not serve bytes',
+        );
+      }
+      const mediaType = byteResponse.headers.get('content-type');
+      if (mediaType === null || mediaType === '') {
+        throw malformed(
+          byteResponse.status,
+          '@openmaic/storage: asset byte response must carry content type and revision',
+        );
+      }
+      identity = { revision: String(revision), mediaType };
+      try {
+        bytes = await byteResponse.arrayBuffer();
+      } catch {
+        throw malformed(
+          byteResponse.status,
+          '@openmaic/storage: asset byte response could not be read',
+        );
+      }
+    } else {
+      identity = responseIdentity(response);
+      if (response.status !== 200 || identity === null) {
+        throw malformed(
+          response.status,
+          '@openmaic/storage: asset byte response must carry content type and revision',
+        );
+      }
+      try {
+        bytes = await response.arrayBuffer();
+      } catch {
+        throw malformed(
+          response.status,
+          '@openmaic/storage: asset byte response could not be read',
+        );
+      }
     }
     if (this.generation(id) !== generation) return { url: null, retry: true };
     const url = await this.urls.resolve(id, identity, async () => {
