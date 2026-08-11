@@ -855,6 +855,18 @@ describe('embedded persistence route', () => {
     error.mockRestore();
   });
 
+  it('treats an empty collection grace as unset, like the collector does', async () => {
+    const handlerOptions: unknown[] = [];
+    mockEgressWiring(handlerOptions, 'postgres://egress-empty-grace-test');
+    vi.stubEnv('ASSET_BYTE_EGRESS', 'redirect');
+    vi.stubEnv('ASSET_COLLECTION_GRACE_MS', '  ');
+
+    const response = await requestThroughRoute();
+
+    expect(response.status).toBe(204);
+    expect((handlerOptions[0] as { byteEgress?: unknown }).byteEgress).toBe('redirect');
+  });
+
   it.each(['', 'direct'])('keeps byte egress direct for ASSET_BYTE_EGRESS=%j', async (value) => {
     const handlerOptions: unknown[] = [];
     mockEgressWiring(handlerOptions, `postgres://egress-default-${value || 'unset'}-test`);

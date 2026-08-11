@@ -65,8 +65,9 @@ function configuredAssetByteEgress(value: string | undefined): 'redirect' | unde
  */
 function assertEgressWithinCollectionGrace(egress: 'redirect' | undefined): void {
   if (egress !== 'redirect') return;
-  const raw = process.env.ASSET_COLLECTION_GRACE_MS;
-  const graceMs = raw === undefined ? DEFAULT_ASSET_COLLECTION_GRACE_MS : Number(raw);
+  // Empty means unset, matching the collector's own durationEnv parsing.
+  const raw = process.env.ASSET_COLLECTION_GRACE_MS?.trim();
+  const graceMs = raw === undefined || raw === '' ? DEFAULT_ASSET_COLLECTION_GRACE_MS : Number(raw);
   if (!Number.isSafeInteger(graceMs) || graceMs < 0) {
     throw new Error(
       'Invalid ASSET_COLLECTION_GRACE_MS: expected a non-negative safe integer of milliseconds',
