@@ -277,4 +277,15 @@ describe('asset byte egress', () => {
       }),
     ).toThrow(/byteEgress must be "direct" or "redirect"/);
   });
+
+  test('the descriptor media type is reserved from the renderable allowlist', () => {
+    // The client identifies a descriptor answer by this exact Content-Type;
+    // a served asset must never carry it.
+    expect(() =>
+      createAssetHttpHandler(stubStore(), {
+        authenticate: async () => PRINCIPAL,
+        renderableTypes: ['image/png', 'application/vnd.openmaic.asset-descriptor+json'],
+      }),
+    ).toThrow(/must not contain the asset descriptor media type/);
+  });
 });

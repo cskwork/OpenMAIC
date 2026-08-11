@@ -685,6 +685,13 @@ export function createAssetHttpHandler(
   if (configuredTypes.some((value) => excluded.has(value.toLowerCase()))) {
     throw new Error('@openmaic/storage: renderableTypes contains an excluded executable type');
   }
+  if (configuredTypes.some((value) => value.toLowerCase() === ASSET_DESCRIPTOR_MEDIA_TYPE)) {
+    // Reserved: the client identifies a descriptor answer by this exact
+    // Content-Type, so no served asset may ever carry it.
+    throw new Error(
+      '@openmaic/storage: renderableTypes must not contain the asset descriptor media type',
+    );
+  }
   if (configuredTypes.some((value) => value !== value.trim() || value.includes(';'))) {
     throw new Error('@openmaic/storage: renderableTypes must contain exact media types');
   }
