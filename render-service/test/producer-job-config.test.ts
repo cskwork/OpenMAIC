@@ -2,6 +2,7 @@ import type { RenderJob } from '@hyperframes/producer';
 import { describe, expect, it } from 'vitest';
 import {
   assertRequiredCaptureMode,
+  assertRequiredCaptureModeIfObserved,
   buildProducerJobConfig,
   buildRenderExecutionMetrics,
   buildRenderExecutionMetricsFromJob,
@@ -32,6 +33,11 @@ describe('buildProducerJobConfig', () => {
     expect(() => assertRequiredCaptureMode('beginframe', true)).not.toThrow();
     expect(() => assertRequiredCaptureMode('screenshot', false)).not.toThrow();
   });
+
+  it('preserves the producer failure until capture mode has actually been observed', () => {
+    expect(() => assertRequiredCaptureModeIfObserved('unknown', true)).not.toThrow();
+    expect(() => assertRequiredCaptureModeIfObserved('screenshot', true)).toThrow(/beginFrame/i);
+  });
 });
 
 describe('buildRenderExecutionMetrics', () => {
@@ -57,7 +63,7 @@ describe('buildRenderExecutionMetrics', () => {
     });
   });
 
-  it('reports capture selection from producer error observability on hard failure', () => {
+  it('does not treat request observability as actual mode on hard failure', () => {
     const failedJob = {
       errorDetails: {
         message: 'Target closed',
@@ -87,8 +93,94 @@ describe('buildRenderExecutionMetrics', () => {
     } satisfies Pick<RenderJob, 'perfSummary' | 'errorDetails'>;
 
     expect(buildRenderExecutionMetricsFromJob(failedJob, versions)).toMatchObject({
-      actualCaptureMode: 'beginframe',
+      actualCaptureMode: 'unknown',
       actualWorkers: 1,
     });
+  });
+
+  it('keeps a confirmed screenshot result available for the required-mode guard', () => {
+    const failedJob = {
+      errorDetails: {
+        message: 'Target closed',
+        elapsedMs: 1000,
+        freeMemoryMB: 1024,
+        observability: {
+          events: [
+            {
+              phase: 'capture_disk',
+              status: 'error',
+              elapsedMs: 1000,
+              data: { captureMode: 'screenshot', workerCount: 1 },
+            },
+          ],
+          eventCount: 1,
+          browserDiagnostics: {
+            total: 0,
+            errors: 0,
+            pageErrors: 0,
+            requestFailed: 0,
+            httpErrors: 0,
+            navigationStarts: 0,
+            navigationFailures: 0,
+            consoleErrors: 0,
+            consoleWarnings: 0,
+          },
+          capture: {
+            forceScreenshot: false,
+            captureMode: 'beginframe',
+            workerCount: 1,
+          },
+        },
+      },
+    } satisfies Pick<RenderJob, 'perfSummary' | 'errorDetails'>;
+
+    const metrics = buildRenderExecutionMetricsFromJob(failedJob, versions);
+    expect(metrics.actualCaptureMode).toBe('screenshot');
+    expect(() => assertRequiredCaptureModeIfObserved(metrics.actualCaptureMode, true)).toThrow(
+      /beginFrame/i,
+    );
+  });
+
+  it('treats a forced HDR layered capture as screenshot despite the outer probe mode', () => {
+    const failedJob = {
+      errorDetails: {
+        message: 'Target closed',
+        elapsedMs: 1000,
+        freeMemoryMB: 1024,
+        observability: {
+          events: [
+            {
+              phase: 'capture_hdr_layered',
+              status: 'error',
+              elapsedMs: 1000,
+              data: { forceScreenshot: true, captureMode: 'beginframe', workerCount: 1 },
+            },
+          ],
+          eventCount: 1,
+          browserDiagnostics: {
+            total: 0,
+            errors: 0,
+            pageErrors: 0,
+            requestFailed: 0,
+            httpErrors: 0,
+            navigationStarts: 0,
+            navigationFailures: 0,
+            consoleErrors: 0,
+            consoleWarnings: 0,
+          },
+          capture: {
+            forceScreenshot: true,
+            captureMode: 'screenshot',
+            workerCount: 1,
+          },
+        },
+      },
+    } satisfies Pick<RenderJob, 'perfSummary' | 'errorDetails'>;
+
+    const metrics = buildRenderExecutionMetricsFromJob(failedJob, versions);
+    expect(metrics.actualCaptureMode).toBe('screenshot');
+    expect(() => assertRequiredCaptureModeIfObserved(metrics.actualCaptureMode, true)).toThrow(
+      /beginFrame/i,
+    );
   });
 });

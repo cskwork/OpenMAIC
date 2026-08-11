@@ -78,6 +78,14 @@ export function assertRequiredCaptureMode(
   }
 }
 
+export function assertRequiredCaptureModeIfObserved(
+  captureMode: string,
+  requireBeginFrame: boolean,
+): void {
+  if (captureMode === 'unknown') return;
+  assertRequiredCaptureMode(captureMode, requireBeginFrame);
+}
+
 export function buildRenderExecutionMetrics(
   actualCaptureMode: string | undefined,
   actualWorkers: number | undefined,
@@ -97,11 +105,31 @@ export function buildRenderExecutionMetricsFromJob(
   job: Pick<RenderJob, 'perfSummary' | 'errorDetails'>,
   versions: RuntimeVersions,
 ): RenderExecutionMetrics {
-  const capture =
-    job.perfSummary?.observability?.capture ?? job.errorDetails?.observability?.capture;
+  const perfCapture = job.perfSummary?.observability?.capture;
+  const failureCaptureEvent = job.errorDetails?.observability?.events
+    .slice()
+    .reverse()
+    .find(
+      (event) =>
+        (event.phase === 'capture_disk' ||
+          event.phase === 'capture_streaming' ||
+          event.phase === 'capture_hdr_layered') &&
+        (event.data?.forceScreenshot === true || typeof event.data?.captureMode === 'string'),
+    );
+  const failureCaptureMode =
+    failureCaptureEvent?.data?.forceScreenshot === true
+      ? 'screenshot'
+      : typeof failureCaptureEvent?.data?.captureMode === 'string'
+        ? failureCaptureEvent.data.captureMode
+        : undefined;
   return buildRenderExecutionMetrics(
-    job.perfSummary?.drawElement?.mode ?? capture?.captureMode,
-    job.perfSummary?.workers ?? capture?.workerCount,
+    // `errorDetails.observability.capture.captureMode` is initialized from the
+    // request before browser resolution. It is not an actual mode unless a
+    // successful perf summary records the launched capture session.
+    job.perfSummary?.drawElement?.mode ?? perfCapture?.captureMode ?? failureCaptureMode,
+    job.perfSummary?.workers ??
+      perfCapture?.workerCount ??
+      job.errorDetails?.observability?.capture.workerCount,
     versions,
   );
 }
@@ -267,8 +295,9 @@ export class RenderManager {
 
       const updateMetrics = async (): Promise<RenderExecutionMetrics> => {
         // Producer mutates the same `job` object. Successful renders expose a
-        // perf summary; hard failures expose the same capture selection through
-        // errorDetails observability. Persist either before the job is terminal.
+        // perf summary; hard failures may expose an observed capture-stage mode
+        // and resolved worker count through errorDetails events. Persist either
+        // before the job is terminal.
         const metrics = buildRenderExecutionMetricsFromJob(job, this.runtimeVersions);
         await this.jobs.update(id, { metrics });
         return metrics;
@@ -295,7 +324,11 @@ export class RenderManager {
           abort.signal,
         );
       } catch (error) {
-        await updateMetrics();
+        const metrics = await updateMetrics();
+        // A hard failure can still carry an actual mode in a partial perf
+        // summary. Preserve the producer error for unresolved failures, but
+        // reject a confirmed screenshot result under the standard profile.
+        assertRequiredCaptureModeIfObserved(metrics.actualCaptureMode, config.requireBeginFrame);
         throw error;
       }
 
