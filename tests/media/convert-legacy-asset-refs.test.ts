@@ -31,13 +31,24 @@ function makeHarness() {
       return id;
     },
     assetRefExists: async (ref) => pool.has(ref),
-    getMediaRecord: async (stageId, ref) => mediaRows.get(`${stageId}:${ref}`),
+    getMediaRecord: async (stageId, ref) =>
+      // Mirrors the production lookup: exact key first, then a same-stage
+      // row retained under placeholderRef.
+      mediaRows.get(`${stageId}:${ref}`) ??
+      [...mediaRows.values()].find((row) => row.stageId === stageId && row.placeholderRef === ref),
     getAudioRecord: async (audioId) => audioRows.get(audioId),
     putMediaRecord: async (stageId, ref, record) => {
       mediaRows.set(`${stageId}:${ref}`, { ...record, id: `${stageId}:${ref}`, stageId });
     },
     putAudioRecord: async (record) => {
       audioRows.set(record.id, record);
+    },
+    getMirroredAudioRecord: async (stageId, legacyId) =>
+      [...audioRows.values()].find(
+        (row) => row.stageId === stageId && row.originAudioId === legacyId,
+      ),
+    removeAsset: async (ref) => {
+      pool.delete(ref);
     },
     fetchLegacyUrl: async (url) => urlFetches.get(url) ?? { kind: 'unavailable' },
   };
@@ -212,6 +223,48 @@ describe('slide placeholder conversion', () => {
     // The original row stays: stage deletion still reclaims by the legacy key.
     expect(mediaRows.get('stage-1:gen_img_1')).toBeDefined();
     expect(result.changed).toBe(true);
+  });
+
+  test('a retried conversion reuses the mirrored allocation instead of orphaning a twin', async () => {
+    // Simulates a previous run that allocated and mirrored but never saved
+    // the document: the retry finds the mirror and rewrites to the same id.
+    const { mediaRows, pool, deps } = makeHarness();
+    const priorId = 'ast_pool_prior';
+    pool.set(priorId, { blob: new Blob(['image-bytes']), meta: {} });
+    mediaRows.set(
+      `stage-1:${priorId}`,
+      mediaRecord({ id: `stage-1:${priorId}`, placeholderRef: 'gen_img_1' }),
+    );
+    // The legacy row is gone (re-keyed), so the exact key misses.
+    const doc = document({
+      scenes: [slideScene([], [{ id: 'el1', type: 'image', src: 'gen_img_1' }])],
+    });
+
+    const result = await convertDocumentAssetRefs(doc, deps);
+
+    expect(pool.size).toBe(1);
+    const canvas = (
+      result.document.scenes[0].content as { canvas: { elements: { src: string }[] } }
+    ).canvas;
+    expect(canvas.elements[0].src).toBe(priorId);
+  });
+
+  test('speech actions sharing one dangling pair fetch and allocate once', async () => {
+    const { audioRows, pool, urlFetches, deps } = makeHarness();
+    const url = 'https://server.example.com/audio/shared.mp3';
+    urlFetches.set(url, { kind: 'ok', blob: new Blob(['shared-audio'], { type: 'audio/mpeg' }) });
+    const first = speech({ id: 'a1', audioId: 'tts_s0_a1', audioUrl: url });
+    const second = speech({ id: 'a2', audioId: 'tts_s0_a1', audioUrl: url });
+    const doc = document({ scenes: [slideScene([first, second])] });
+
+    const result = await convertDocumentAssetRefs(doc, deps);
+
+    expect(pool.size).toBe(1);
+    const [assetId] = [...pool.keys()];
+    const actions = result.document.scenes[0].actions as unknown as Array<Record<string, unknown>>;
+    expect(actions[0]?.audioId).toBe(assetId);
+    expect(actions[1]?.audioId).toBe(assetId);
+    expect(audioRows.get(assetId)?.originAudioId).toBe('tts_s0_a1');
   });
 
   test('background image placeholders convert like element refs', async () => {

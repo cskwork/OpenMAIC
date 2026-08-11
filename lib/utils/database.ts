@@ -129,6 +129,11 @@ export interface AudioFileRecord {
   id: string; // Primary key (audioId)
   /** Stage ownership index. Absent on legacy rows; document walking remains their fallback. */
   stageId?: string;
+  /**
+   * The legacy derived id a compatibility mirror was written for. IndexedDB
+   * needs no schema bump for a non-indexed field; retry recovery reads it.
+   */
+  originAudioId?: string;
   blob: Blob; // Audio binary data
   duration?: number; // Duration (seconds)
   format: string; // mp3, wav, etc.

@@ -90,6 +90,19 @@ export interface LegacyAssetConversionDeps {
   putMediaRecord(stageId: string, ref: string, record: MediaFileRecord): Promise<void>;
   /** Write the post-conversion Dexie compatibility copy of an audio row. */
   putAudioRecord(record: AudioFileRecord): Promise<void>;
+  /**
+   * The compatibility row a previous (possibly partial) conversion mirrored
+   * for this legacy audio id, if any. This is what makes a retry idempotent:
+   * without it, a conversion that failed after allocating would allocate a
+   * fresh twin on every retry.
+   */
+  getMirroredAudioRecord(stageId: string, legacyId: string): Promise<AudioFileRecord | undefined>;
+  /**
+   * Remove an allocation nothing references anymore -- the compensation when
+   * a compatibility write fails after the allocation succeeded, so a failed
+   * conversion does not strand entries (and their quota) in the pool.
+   */
+  removeAsset(ref: string): Promise<void>;
   /** Fetch (and thereby probe) a legacy `audioUrl`. */
   fetchLegacyUrl(url: string): Promise<LegacyUrlFetch>;
 }
@@ -145,7 +158,7 @@ export async function findLegacyMediaRecord(
 
 /** The default production wiring: Dexie legacy tables plus the app asset pool. */
 async function defaultDeps(): Promise<LegacyAssetConversionDeps> {
-  const [{ db, mediaFileKey }, { putAsset }, { assetRefExists }] = await Promise.all([
+  const [{ db, mediaFileKey }, { putAsset, removeAsset }, { assetRefExists }] = await Promise.all([
     import('@/lib/utils/database'),
     import('./asset-pool'),
     import('./use-asset-url'),
@@ -160,9 +173,16 @@ async function defaultDeps(): Promise<LegacyAssetConversionDeps> {
         .put({ ...record, id: mediaFileKey(stageId, ref), stageId })
         .then(() => undefined),
     putAudioRecord: (record) => db.audioFiles.put(record).then(() => undefined),
+    getMirroredAudioRecord: (stageId, legacyId) =>
+      db.audioFiles
+        .filter((row) => row.stageId === stageId && row.originAudioId === legacyId)
+        .first(),
+    removeAsset: (ref) => removeAsset(ref),
     fetchLegacyUrl: async (url) => {
       try {
-        const response = await fetch(url);
+        // Bounded wait: conversion runs on the document load path, and one
+        // stalled URL must not hold the document lock indefinitely.
+        const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
         if (response.ok) return { kind: 'ok', blob: await response.blob() };
         // Only definitive absence empties the reference. A 408 or 429 is
         // transient by definition, a 401 or 403 may clear on a credential
@@ -245,6 +265,12 @@ export async function convertDocumentAssetRefs(
   // slides convert concurrently, and caching only completed allocations would
   // let two slides naming one ref each allocate their own asset.
   const allocationByRef = new Map<string, Promise<string | null>>();
+  /** Outcome of the URL-backed speech path, cached per dangling pair. */
+  type UrlOutcome =
+    | { readonly kind: 'allocated'; readonly assetId: string }
+    | { readonly kind: 'dead' }
+    | { readonly kind: 'unavailable' };
+  const urlOutcomeByRef = new Map<string, Promise<UrlOutcome>>();
   const report: LegacyAssetConversionReport = { converted: 0, emptied: 0, kept: 0 };
   let changed = false;
 
@@ -258,19 +284,35 @@ export async function convertDocumentAssetRefs(
         report.kept += 1;
         return null;
       }
+      // A previous conversion -- or the recovery write path -- may already
+      // have keyed this row to an allocated id. Reuse it rather than
+      // allocating a twin entry for the same bytes.
+      const keyedRef = record.id.startsWith(`${stageId}:`)
+        ? record.id.slice(stageId.length + 1)
+        : undefined;
+      if (keyedRef && keyedRef !== ref && (await resolvedDeps.assetRefExists(keyedRef))) {
+        report.converted += 1;
+        return keyedRef;
+      }
       const blob = record.blob.type
         ? record.blob
         : new Blob([record.blob], { type: record.mimeType });
       const assetId = await resolvedDeps.putAsset(blob, mediaMeta(record, blob));
-      // Mirror the row under the allocated id, like the audio path and the
-      // generation write path: collectMediaFiles derives export references
-      // from row keys, so without the copy an exported manifest would name
-      // media the ZIP only knows by the old placeholder. The original ref
-      // stays on placeholderRef for reload reconciliation.
-      await resolvedDeps.putMediaRecord(stageId, assetId, {
-        ...record,
-        placeholderRef: record.placeholderRef ?? ref,
-      });
+      try {
+        // Mirror the row under the allocated id, like the audio path and the
+        // generation write path: collectMediaFiles derives export references
+        // from row keys, so without the copy an exported manifest would name
+        // media the ZIP only knows by the old placeholder. The original ref
+        // stays on placeholderRef for reload reconciliation.
+        await resolvedDeps.putMediaRecord(stageId, assetId, {
+          ...record,
+          placeholderRef: record.placeholderRef ?? ref,
+        });
+      } catch (error) {
+        // Do not strand an allocation nothing references.
+        await resolvedDeps.removeAsset(assetId).catch(() => undefined);
+        throw error;
+      }
       report.converted += 1;
       return assetId;
     })();
@@ -318,19 +360,39 @@ export async function convertDocumentAssetRefs(
     if (audioId && record?.blob && record.blob.size > 0) {
       // Several speech actions can share one derived id; they shared one
       // audioFiles row, so they collapse into one allocated asset. Speech
-      // actions convert sequentially today, but the cache is the same
-      // promise-keyed one the concurrent slide path uses.
+      // actions convert concurrently, and the cache is the same
+      // promise-keyed one the slide path uses.
       const pendingAudio =
         allocationByRef.get(audioId) ??
         (async (): Promise<string | null> => {
+          // A previous partially committed conversion may already have
+          // mirrored this row; reuse its allocation instead of orphaning a
+          // twin entry on every retry.
+          const mirrored = await resolvedDeps.getMirroredAudioRecord(stageId, audioId);
+          if (mirrored && (await resolvedDeps.assetRefExists(mirrored.id))) {
+            report.converted += 1;
+            return mirrored.id;
+          }
           const allocated = await resolvedDeps.putAsset(
             record.blob,
             audioMeta(record.blob, record, speech),
           );
-          // Dexie stays a deliberate compatibility double-write until Part 3
-          // converges exporters and import/export onto the pool; mirror the
-          // row under the allocated id, keyed like the generation write path.
-          await resolvedDeps.putAudioRecord({ ...record, id: allocated, stageId });
+          try {
+            // Dexie stays a deliberate compatibility double-write until Part
+            // 3 converges exporters and import/export onto the pool; mirror
+            // the row under the allocated id, keyed like the generation
+            // write path, with the legacy id retained for retry recovery.
+            await resolvedDeps.putAudioRecord({
+              ...record,
+              id: allocated,
+              stageId,
+              originAudioId: audioId,
+            });
+          } catch (error) {
+            // Do not strand an allocation nothing references.
+            await resolvedDeps.removeAsset(allocated).catch(() => undefined);
+            throw error;
+          }
           report.converted += 1;
           return allocated;
         })();
@@ -348,28 +410,49 @@ export async function convertDocumentAssetRefs(
 
     if (audioUrl) {
       // The audioId is dangling (or absent): the URL is the only live handle.
-      const fetched = await resolvedDeps.fetchLegacyUrl(audioUrl);
-      if (fetched.kind === 'ok') {
-        const assetId = await resolvedDeps.putAsset(
-          fetched.blob,
-          audioMeta(fetched.blob, undefined, speech),
-        );
-        await resolvedDeps.putAudioRecord({
-          id: assetId,
-          stageId,
-          blob: fetched.blob,
-          format: audioFormat(fetched.blob, undefined),
-          text: speech.text,
-          voice: speech.voice,
-          createdAt: Date.now(),
-        });
-        const next: LegacySpeechAction = { ...speech, audioId: assetId };
+      // Actions sharing one pair also share this allocation, cached like the
+      // local-byte paths -- otherwise each would fetch identical bytes and
+      // receive its own twin entry.
+      const urlKey = audioId ?? audioUrl;
+      const pendingUrl =
+        urlOutcomeByRef.get(urlKey) ??
+        (async (): Promise<UrlOutcome> => {
+          const fetched = await resolvedDeps.fetchLegacyUrl(audioUrl);
+          if (fetched.kind === 'ok') {
+            const assetId = await resolvedDeps.putAsset(
+              fetched.blob,
+              audioMeta(fetched.blob, undefined, speech),
+            );
+            try {
+              await resolvedDeps.putAudioRecord({
+                id: assetId,
+                stageId,
+                blob: fetched.blob,
+                format: audioFormat(fetched.blob, undefined),
+                text: speech.text,
+                voice: speech.voice,
+                createdAt: Date.now(),
+                ...(audioId ? { originAudioId: audioId } : {}),
+              });
+            } catch (error) {
+              // Do not strand an allocation nothing references.
+              await resolvedDeps.removeAsset(assetId).catch(() => undefined);
+              throw error;
+            }
+            report.converted += 1;
+            return { kind: 'allocated', assetId };
+          }
+          return fetched.kind === 'dead' ? { kind: 'dead' } : { kind: 'unavailable' };
+        })();
+      urlOutcomeByRef.set(urlKey, pendingUrl);
+      const outcome = await pendingUrl;
+      if (outcome.kind === 'allocated') {
+        const next: LegacySpeechAction = { ...speech, audioId: outcome.assetId };
         delete next.audioUrl;
         changed = true;
-        report.converted += 1;
         return next;
       }
-      if (fetched.kind === 'dead') {
+      if (outcome.kind === 'dead') {
         // A URL that no longer resolves converts to NO asset and an emptied
         // reference: a dead URL is never carried into the new format.
         const next: LegacySpeechAction = { ...speech };
@@ -416,8 +499,18 @@ export async function convertDocumentAssetRefs(
       }
     }
     if (scene.actions) {
+      // Bounded concurrency: server classrooms carry one dangling URL per
+      // clip, and awaiting them one at a time would price the document open
+      // at the sum of every fetch. The promise caches make concurrent
+      // conversion of shared references safe.
       const converted: Action[] = [];
-      for (const action of scene.actions) converted.push(await convertSpeechAction(action));
+      const SPEECH_CONCURRENCY = 4;
+      for (let index = 0; index < scene.actions.length; index += SPEECH_CONCURRENCY) {
+        const chunk = await Promise.all(
+          scene.actions.slice(index, index + SPEECH_CONCURRENCY).map(convertSpeechAction),
+        );
+        converted.push(...chunk);
+      }
       if (converted.some((action, index) => action !== scene.actions![index])) {
         nextScene = { ...nextScene, actions: converted };
       }
