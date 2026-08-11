@@ -3,6 +3,7 @@ import type { AssetMeta } from '@openmaic/dsl';
 
 import {
   convertDocumentAssetRefs,
+  findLegacyMediaRecord,
   type LegacyAssetConversionDeps,
   type LegacyUrlFetch,
 } from '@/lib/media/convert-legacy-asset-refs';
@@ -32,6 +33,9 @@ function makeHarness() {
     assetRefExists: async (ref) => pool.has(ref),
     getMediaRecord: async (stageId, ref) => mediaRows.get(`${stageId}:${ref}`),
     getAudioRecord: async (audioId) => audioRows.get(audioId),
+    putMediaRecord: async (stageId, ref, record) => {
+      mediaRows.set(`${stageId}:${ref}`, { ...record, id: `${stageId}:${ref}`, stageId });
+    },
     putAudioRecord: async (record) => {
       audioRows.set(record.id, record);
     },
@@ -186,6 +190,28 @@ describe('slide placeholder conversion', () => {
     for (const slide of result.document.stage.whiteboard ?? []) {
       expect(slide.elements[0]).toMatchObject({ src: assetId });
     }
+  });
+
+  test('converted media mirrors its Dexie row under the allocated id', async () => {
+    // collectMediaFiles derives export references from row keys: without the
+    // mirror, an exported manifest would name media the ZIP only knows by
+    // the old placeholder, and the round-trip loses it.
+    const { mediaRows, pool, deps } = makeHarness();
+    mediaRows.set('stage-1:gen_img_1', mediaRecord());
+    const doc = document({
+      scenes: [slideScene([], [{ id: 'el1', type: 'image', src: 'gen_img_1' }])],
+    });
+
+    const result = await convertDocumentAssetRefs(doc, deps);
+
+    const [assetId] = [...pool.keys()];
+    const mirror = mediaRows.get(`stage-1:${assetId}`);
+    expect(mirror).toBeDefined();
+    expect(mirror?.placeholderRef).toBe('gen_img_1');
+    expect(await mirror?.blob.text()).toBe('image-bytes');
+    // The original row stays: stage deletion still reclaims by the legacy key.
+    expect(mediaRows.get('stage-1:gen_img_1')).toBeDefined();
+    expect(result.changed).toBe(true);
   });
 
   test('background image placeholders convert like element refs', async () => {
@@ -445,5 +471,54 @@ describe('speech reference conversion', () => {
     expect(twice.changed).toBe(false);
     expect(twice.document).toBe(once.document);
     expect(pool.size).toBe(allocationsAfterFirst);
+  });
+});
+
+describe('findLegacyMediaRecord', () => {
+  const keyOf = (stageId: string, ref: string) => `${stageId}:${ref}`;
+
+  function fakeTable(rows: MediaFileRecord[]) {
+    return {
+      get: async (key: string) => rows.find((row) => row.id === key),
+      where: (_field: 'stageId') => ({
+        equals: (stageId: string) => ({
+          and: (pred: (row: MediaFileRecord) => boolean) => ({
+            first: async () => rows.find((row) => row.stageId === stageId && pred(row)),
+          }),
+        }),
+      }),
+    };
+  }
+
+  test('exact key wins when both shapes exist', async () => {
+    const exact = mediaRecord({ id: 'stage-1:gen_img_1' });
+    const rekeyed = mediaRecord({ id: 'stage-1:ast_pool_1', placeholderRef: 'gen_img_1' });
+    const db = { mediaFiles: fakeTable([exact, rekeyed]) };
+
+    const found = await findLegacyMediaRecord(db, keyOf, 'stage-1', 'gen_img_1');
+
+    expect(found).toBe(exact);
+  });
+
+  test('a re-keyed row is found through its retained placeholderRef', async () => {
+    // The recovery flow re-keys rows to the allocated id but keeps the gen_*
+    // reference; a document not yet converted still names the placeholder.
+    const rekeyed = mediaRecord({ id: 'stage-1:ast_pool_1', placeholderRef: 'gen_img_1' });
+    const db = { mediaFiles: fakeTable([rekeyed]) };
+
+    const found = await findLegacyMediaRecord(db, keyOf, 'stage-1', 'gen_img_1');
+
+    expect(found).toBe(rekeyed);
+  });
+
+  test("another stage's retained placeholder does not leak across", async () => {
+    const foreign = mediaRecord({
+      id: 'stage-2:ast_pool_1',
+      stageId: 'stage-2',
+      placeholderRef: 'gen_img_1',
+    });
+    const db = { mediaFiles: fakeTable([foreign]) };
+
+    await expect(findLegacyMediaRecord(db, keyOf, 'stage-1', 'gen_img_1')).resolves.toBeUndefined();
   });
 });

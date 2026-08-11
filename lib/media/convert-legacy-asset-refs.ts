@@ -80,6 +80,14 @@ export interface LegacyAssetConversionDeps {
   getMediaRecord(stageId: string, ref: string): Promise<MediaFileRecord | undefined>;
   /** Legacy TTS row for an `audioId`. */
   getAudioRecord(audioId: string): Promise<AudioFileRecord | undefined>;
+  /**
+   * Write the post-conversion Dexie compatibility copy of a media row, keyed
+   * by the ref the document now names. Without it the export/import
+   * round-trip breaks: collectMediaFiles derives ZIP references from row
+   * keys, so a converted document would point at media the export only knows
+   * by the old placeholder. Same double-write discipline as the audio path.
+   */
+  putMediaRecord(stageId: string, ref: string, record: MediaFileRecord): Promise<void>;
   /** Write the post-conversion Dexie compatibility copy of an audio row. */
   putAudioRecord(record: AudioFileRecord): Promise<void>;
   /** Fetch (and thereby probe) a legacy `audioUrl`. */
@@ -102,6 +110,39 @@ export interface LegacyAssetConversionResult {
   report: LegacyAssetConversionReport;
 }
 
+/**
+ * Locate a legacy media row by exact key first, then by a retained
+ * `placeholderRef`. Rows re-keyed to an allocated id keep the original gen_*
+ * reference in that field for reload reconciliation, and a document not yet
+ * converted still names the placeholder -- the exact key alone would miss
+ * bytes that are right there.
+ */
+export async function findLegacyMediaRecord(
+  db: {
+    mediaFiles: {
+      get(key: string): Promise<MediaFileRecord | undefined>;
+      where(field: 'stageId'): {
+        equals(stageId: string): {
+          and(pred: (row: MediaFileRecord) => boolean): {
+            first(): Promise<MediaFileRecord | undefined>;
+          };
+        };
+      };
+    };
+  },
+  mediaFileKey: (stageId: string, ref: string) => string,
+  stageId: string,
+  ref: string,
+): Promise<MediaFileRecord | undefined> {
+  const exact = await db.mediaFiles.get(mediaFileKey(stageId, ref));
+  if (exact) return exact;
+  return db.mediaFiles
+    .where('stageId')
+    .equals(stageId)
+    .and((row) => row.placeholderRef === ref)
+    .first();
+}
+
 /** The default production wiring: Dexie legacy tables plus the app asset pool. */
 async function defaultDeps(): Promise<LegacyAssetConversionDeps> {
   const [{ db, mediaFileKey }, { putAsset }, { assetRefExists }] = await Promise.all([
@@ -112,8 +153,12 @@ async function defaultDeps(): Promise<LegacyAssetConversionDeps> {
   return {
     putAsset: (blob, meta) => putAsset(blob, meta),
     assetRefExists: (ref) => assetRefExists(ref),
-    getMediaRecord: (stageId, ref) => db.mediaFiles.get(mediaFileKey(stageId, ref)),
+    getMediaRecord: (stageId, ref) => findLegacyMediaRecord(db, mediaFileKey, stageId, ref),
     getAudioRecord: (audioId) => db.audioFiles.get(audioId),
+    putMediaRecord: (stageId, ref, record) =>
+      db.mediaFiles
+        .put({ ...record, id: mediaFileKey(stageId, ref), stageId })
+        .then(() => undefined),
     putAudioRecord: (record) => db.audioFiles.put(record).then(() => undefined),
     fetchLegacyUrl: async (url) => {
       try {
@@ -217,6 +262,15 @@ export async function convertDocumentAssetRefs(
         ? record.blob
         : new Blob([record.blob], { type: record.mimeType });
       const assetId = await resolvedDeps.putAsset(blob, mediaMeta(record, blob));
+      // Mirror the row under the allocated id, like the audio path and the
+      // generation write path: collectMediaFiles derives export references
+      // from row keys, so without the copy an exported manifest would name
+      // media the ZIP only knows by the old placeholder. The original ref
+      // stays on placeholderRef for reload reconciliation.
+      await resolvedDeps.putMediaRecord(stageId, assetId, {
+        ...record,
+        placeholderRef: record.placeholderRef ?? ref,
+      });
       report.converted += 1;
       return assetId;
     })();
