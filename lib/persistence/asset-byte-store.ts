@@ -87,5 +87,14 @@ export function lazyAssetByteStore(
     write: async (hash, bytes) => (await resolve()).write(hash, bytes),
     read: async (hash) => (await resolve()).read(hash),
     delete: async (hash) => (await resolve()).delete(hash),
+    // The wrapper always carries the method, so capability is decided by the
+    // answer, not by method presence: an inner layer without a signer answers
+    // `undefined`, and the caller falls back to direct bytes. That keeps the
+    // opt-in indirect egress a no-op for the PostgreSQL byte column without
+    // the wrapper knowing which layer it will resolve to.
+    signReadUrl: async (hash, headers) => {
+      const store = await resolve();
+      return typeof store.signReadUrl === 'function' ? store.signReadUrl(hash, headers) : undefined;
+    },
   };
 }
