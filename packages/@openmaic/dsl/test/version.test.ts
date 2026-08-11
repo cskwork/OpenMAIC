@@ -312,19 +312,15 @@ describe('0.1.0 -> 0.2.0 ladder entry (audioUrl abolition)', () => {
     ...(stamp ? { [DSL_VERSION_KEY]: stamp } : {}),
   });
 
-  it('drops a URL-only speech reference, leaving the reference unset', () => {
-    // The pure layer cannot ingest the bytes or probe reachability, and a URL
-    // minted by one deployment cannot travel with the document -- so the
-    // field is dropped, exactly the outcome the converter produces for a URL
-    // that no longer resolves.
-    const out = migrate(
-      docWithActions([speechAction({ audioUrl: 'https://cdn.example.com/a.mp3' })], '0.1.0'),
-    ) as ReturnType<typeof docWithActions>;
+  it('keeps a URL-only speech reference for the converter to probe', () => {
+    // The ladder cannot tell a live URL from a dead one, and it runs on every
+    // read before the converter sees the document -- so dropping the field
+    // here could destroy a live handle. The URL stays as inert data until the
+    // app-side converter ingests it or empties the reference.
+    const urlOnly = speechAction({ audioUrl: 'https://cdn.example.com/a.mp3' });
+    const out = migrate(docWithActions([urlOnly], '0.1.0')) as ReturnType<typeof docWithActions>;
     expect(out[DSL_VERSION_KEY]).toBe(DSL_VERSION);
-    const action = out.scenes[0].actions[0] as Record<string, unknown>;
-    expect(action).not.toHaveProperty('audioUrl');
-    expect(action).not.toHaveProperty('audioId');
-    expect(action.text).toBe('Hello');
+    expect(out.scenes[0].actions[0]).toEqual(urlOnly);
   });
 
   it('preserves a co-present audioId/audioUrl pair verbatim', () => {
@@ -348,14 +344,14 @@ describe('0.1.0 -> 0.2.0 ladder entry (audioUrl abolition)', () => {
   });
 
   it('lifts unversioned (0.0.0) documents through both entries', () => {
-    const out = migrate(
-      docWithActions([speechAction({ audioUrl: 'https://cdn.example.com/a.mp3' })]),
-    ) as ReturnType<typeof docWithActions>;
+    const urlOnly = speechAction({ audioUrl: 'https://cdn.example.com/a.mp3' });
+    const out = migrate(docWithActions([urlOnly])) as ReturnType<typeof docWithActions>;
     expect(out[DSL_VERSION_KEY]).toBe(DSL_VERSION);
-    expect(out.scenes[0].actions[0]).not.toHaveProperty('audioUrl');
+    expect(out.scenes[0].actions[0]).toEqual(urlOnly);
   });
 
-  it('does not mutate its input, and copies only the actions it changes', () => {
+  it('does not mutate its input and returns it by identity', () => {
+    // The entry is a pure stamp: nothing is copied because nothing changes.
     const pair = speechAction({
       audioId: 'tts_s0_a1',
       audioUrl: 'https://cdn.example.com/a.mp3',
@@ -365,10 +361,8 @@ describe('0.1.0 -> 0.2.0 ladder entry (audioUrl abolition)', () => {
     const snapshot = structuredClone(input);
     const out = migrate(input) as ReturnType<typeof docWithActions>;
     expect(input).toEqual(snapshot);
-    // The untouched pair action rides through by reference; only the action
-    // that lost a field is copied.
     expect(out.scenes[0].actions[0]).toBe(pair);
-    expect(out.scenes[0].actions[1]).not.toBe(urlOnly);
+    expect(out.scenes[0].actions[1]).toBe(urlOnly);
   });
 });
 

@@ -410,7 +410,7 @@ describe('PlaybackEngine action navigation', () => {
 
     expect(engine.getMode()).toBe('playing');
     expect(player.play).toHaveBeenCalledTimes(1);
-    expect(player.play).toHaveBeenCalledWith('');
+    expect(player.play).toHaveBeenCalledWith('', undefined);
     expect(engine.getSnapshot().actionIndex).toBe(2);
   });
 

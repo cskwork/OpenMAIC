@@ -121,8 +121,12 @@ export function setSpeechTextClearAudioById(actions: Action[], id: string, text:
     ...a,
     text,
     audioInvalidated: true,
-  } as Action & { audioId?: string; audioInvalidated?: boolean };
+  } as Action & { audioId?: string; audioUrl?: string; audioInvalidated?: boolean };
   delete cleaned.audioId;
+  // The legacy URL of an unconverted pair points at the old wording's
+  // narration just as much as the id does; keeping it would let a later
+  // conversion ingest superseded audio for the new text.
+  delete cleaned.audioUrl;
   next[index] = cleaned;
   return next;
 }

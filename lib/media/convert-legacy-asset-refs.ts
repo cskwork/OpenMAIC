@@ -57,6 +57,7 @@ const log = createLogger('LegacyAssetConversion');
  * switched to the converted shape in the same delivery unit.
  */
 type LegacySpeechAction = SpeechAction & { audioUrl?: string };
+export type { LegacySpeechAction };
 
 /**
  * Outcome of reaching for the bytes behind a legacy `audioUrl`. The fetch is
@@ -118,7 +119,13 @@ async function defaultDeps(): Promise<LegacyAssetConversionDeps> {
       try {
         const response = await fetch(url);
         if (response.ok) return { kind: 'ok', blob: await response.blob() };
-        return { kind: response.status >= 400 && response.status < 500 ? 'dead' : 'unavailable' };
+        // Only definitive absence empties the reference. A 408 or 429 is
+        // transient by definition, a 401 or 403 may clear on a credential
+        // refresh, and any of them would make the deletion permanent for a
+        // temporary condition.
+        return {
+          kind: response.status === 404 || response.status === 410 ? 'dead' : 'unavailable',
+        };
       } catch {
         return { kind: 'unavailable' };
       }
@@ -189,27 +196,32 @@ export async function convertDocumentAssetRefs(
   const stageId = document.stage.id;
   // One allocation per logical legacy ref, shared across every slot, manifest
   // key, and speech action that names it -- they already shared one byte
-  // store. Null caches a negative lookup so an unusable row is read once.
-  const allocationByRef = new Map<string, string | null>();
+  // store. The map holds the in-flight promise, not just the settled value:
+  // slides convert concurrently, and caching only completed allocations would
+  // let two slides naming one ref each allocate their own asset.
+  const allocationByRef = new Map<string, Promise<string | null>>();
   const report: LegacyAssetConversionReport = { converted: 0, emptied: 0, kept: 0 };
   let changed = false;
 
   /** Allocate (once) for a placeholder with local bytes; null when unusable. */
-  const allocateMediaRef = async (ref: string): Promise<string | null> => {
-    if (allocationByRef.has(ref)) return allocationByRef.get(ref) ?? null;
-    const record = await resolvedDeps.getMediaRecord(stageId, ref);
-    if (!usableMediaRecord(record)) {
-      allocationByRef.set(ref, null);
-      report.kept += 1;
-      return null;
-    }
-    const blob = record.blob.type
-      ? record.blob
-      : new Blob([record.blob], { type: record.mimeType });
-    const assetId = await resolvedDeps.putAsset(blob, mediaMeta(record, blob));
-    allocationByRef.set(ref, assetId);
-    report.converted += 1;
-    return assetId;
+  const allocateMediaRef = (ref: string): Promise<string | null> => {
+    const inFlight = allocationByRef.get(ref);
+    if (inFlight) return inFlight;
+    const pending = (async (): Promise<string | null> => {
+      const record = await resolvedDeps.getMediaRecord(stageId, ref);
+      if (!usableMediaRecord(record)) {
+        report.kept += 1;
+        return null;
+      }
+      const blob = record.blob.type
+        ? record.blob
+        : new Blob([record.blob], { type: record.mimeType });
+      const assetId = await resolvedDeps.putAsset(blob, mediaMeta(record, blob));
+      report.converted += 1;
+      return assetId;
+    })();
+    allocationByRef.set(ref, pending);
+    return pending;
   };
 
   const convertSlide = async <T extends SlideLike>(slide: T): Promise<T> => {
@@ -251,11 +263,12 @@ export async function convertDocumentAssetRefs(
     const record = audioId ? await resolvedDeps.getAudioRecord(audioId) : undefined;
     if (audioId && record?.blob && record.blob.size > 0) {
       // Several speech actions can share one derived id; they shared one
-      // audioFiles row, so they collapse into one allocated asset.
-      const cached = allocationByRef.get(audioId);
-      const assetId =
-        cached ??
-        (await (async () => {
+      // audioFiles row, so they collapse into one allocated asset. Speech
+      // actions convert sequentially today, but the cache is the same
+      // promise-keyed one the concurrent slide path uses.
+      const pendingAudio =
+        allocationByRef.get(audioId) ??
+        (async (): Promise<string | null> => {
           const allocated = await resolvedDeps.putAsset(
             record.blob,
             audioMeta(record.blob, record, speech),
@@ -264,13 +277,18 @@ export async function convertDocumentAssetRefs(
           // converges exporters and import/export onto the pool; mirror the
           // row under the allocated id, keyed like the generation write path.
           await resolvedDeps.putAudioRecord({ ...record, id: allocated, stageId });
-          allocationByRef.set(audioId, allocated);
+          report.converted += 1;
           return allocated;
-        })());
+        })();
+      allocationByRef.set(audioId, pendingAudio);
+      const assetId = await pendingAudio;
+      if (!assetId) {
+        report.kept += 1;
+        return action;
+      }
       const next: LegacySpeechAction = { ...speech, audioId: assetId };
       delete next.audioUrl;
       changed = true;
-      report.converted += 1;
       return next;
     }
 

@@ -160,6 +160,34 @@ describe('slide placeholder conversion', () => {
     expect(result.report.converted).toBe(1);
   });
 
+  test('concurrent slides naming one ref share a single in-flight allocation', async () => {
+    // Whiteboard slides convert under Promise.all: a slow byte source must not
+    // let two slides each allocate their own asset for the same placeholder.
+    const { mediaRows, pool, deps } = makeHarness();
+    mediaRows.set('stage-1:gen_img_1', mediaRecord());
+    const slowGet: LegacyAssetConversionDeps['getMediaRecord'] = async (stageId, ref) => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return mediaRows.get(`${stageId}:${ref}`);
+    };
+    const doc = document({
+      stage: stage({
+        whiteboard: [
+          { id: 'wb1', elements: [{ id: 'el1', type: 'image', src: 'gen_img_1' }] },
+          { id: 'wb2', elements: [{ id: 'el2', type: 'image', src: 'gen_img_1' }] },
+          { id: 'wb3', elements: [{ id: 'el3', type: 'image', src: 'gen_img_1' }] },
+        ] as Stage['whiteboard'],
+      }),
+    });
+
+    const result = await convertDocumentAssetRefs(doc, { ...deps, getMediaRecord: slowGet });
+
+    expect(pool.size).toBe(1);
+    const [assetId] = [...pool.keys()];
+    for (const slide of result.document.stage.whiteboard ?? []) {
+      expect(slide.elements[0]).toMatchObject({ src: assetId });
+    }
+  });
+
   test('background image placeholders convert like element refs', async () => {
     const { mediaRows, pool, deps } = makeHarness();
     mediaRows.set('stage-1:gen_img_bg', mediaRecord());

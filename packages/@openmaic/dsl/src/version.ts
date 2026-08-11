@@ -158,52 +158,29 @@ export interface DslMigration {
 }
 
 /**
- * The 0.1.0 → 0.2.0 transform: the field-level half of the `SpeechAction.audioUrl`
- * abolition. 0.2.0 removes `audioUrl` from the contract -- a raw URL bakes in
- * the deployment that minted it and an expiry assumption, so it cannot travel
- * with the document. The other half (ingesting the bytes behind a URL and
- * rewriting the reference to an allocated asset id) is not a pure transform's
- * job: it is the app-side reference converter's, which runs on every document
- * the app opens before that document is ever saved at 0.2.0. This ladder entry
- * therefore only covers documents the converter never reached, and it is
- * deliberately limited to the one case a pure function can decide without
- * losing a live handle:
+ * The 0.1.0 → 0.2.0 step is deliberately a pure stamp: it changes no field.
  *
- * - `audioUrl` with NO `audioId` beside it: the URL was the whole reference.
- *   The pure layer cannot fetch it (reachability is unknowable here), and a
- *   dead URL must never be carried into the new format -- so the field is
- *   dropped and the reference left unset, exactly the outcome the converter
- *   produces for a URL that no longer resolves.
- * - `audioUrl` beside an `audioId` (co-present pair): kept verbatim. The
- *   audioId may be a dangling derived id whose only live handle is the URL
- *   next to it; removing the URL on the version bump alone would destroy that
- *   handle. The pair collapses to one allocated asset id only inside the
- *   converter, which can check local bytes and probe the URL. Until then the
- *   pair is inert data: no 0.2.0 consumer reads `audioUrl`.
+ * 0.2.0 removes `audioUrl` from the contract -- a raw URL bakes in the
+ * deployment that minted it and an expiry assumption, so it cannot travel
+ * with the document. But removing it from *data* is not a pure transform's
+ * job. The URL may be the only live handle for the narration (a dangling
+ * derived `audioId` beside it, or no `audioId` at all), and whether it is
+ * live is a reachability question only the app-side reference converter can
+ * answer, by checking local bytes and probing the URL. The ladder runs on
+ * every document read, before the converter ever sees the document, so a
+ * ladder entry that dropped `audioUrl` in any case would destroy a possibly
+ * live handle before the one component that can probe it gets the chance.
  *
- * Pure and non-mutating: actions and scenes are copied only when a field is
- * actually dropped.
+ * What this means for documents the converter never reached: they are
+ * stamped 0.2.0 with any legacy `audioUrl` still present as inert data. No
+ * 0.2.0 consumer reads the field, and the converter removes it -- ingesting
+ * the bytes, or emptying the reference when the URL is dead -- the first
+ * time the app opens the document. A strict external validator that rejects
+ * unknown fields may refuse such a document in the meantime; that is the
+ * accepted cost of never dropping a live handle silently.
  */
-function dropUrlOnlySpeechRefs(doc: unknown): unknown {
-  if (!isObject(doc) || !Array.isArray(doc.scenes)) return doc;
-  let scenesChanged = false;
-  const scenes = doc.scenes.map((scene: unknown) => {
-    if (!isObject(scene) || !Array.isArray(scene.actions)) return scene;
-    let actionsChanged = false;
-    const actions = scene.actions.map((action: unknown) => {
-      if (!isObject(action) || action.type !== 'speech') return action;
-      if (typeof action.audioUrl !== 'string' || action.audioUrl === '') return action;
-      if (typeof action.audioId === 'string' && action.audioId !== '') return action;
-      const { audioUrl: _dropped, ...rest } = action;
-      void _dropped;
-      actionsChanged = true;
-      return rest;
-    });
-    if (!actionsChanged) return scene;
-    scenesChanged = true;
-    return { ...scene, actions };
-  });
-  return scenesChanged ? { ...doc, scenes } : doc;
+function stampAudioUrlAbolition(doc: unknown): unknown {
+  return doc;
 }
 
 /**
@@ -220,14 +197,14 @@ function dropUrlOnlySpeechRefs(doc: unknown): unknown {
  * 0.1.0. The entry exists to wire the pipeline end to end and to give real
  * documents a version stamp to migrate forward from.
  *
- * The second entry is the first real transform: the 0.2.0 `audioUrl` abolition.
- * It does only the field-level half, for documents the app-side reference
- * converter never reached -- see {@link dropUrlOnlySpeechRefs} for the case
- * split and why the co-present pair is out of a pure migration's reach.
+ * The second entry stamps the 0.2.0 `audioUrl` abolition. It is a pure stamp
+ * like the first: only the app-side reference converter may remove the field,
+ * because only it can tell a live handle from a dead one -- see
+ * {@link stampAudioUrlAbolition}.
  */
 export const DSL_MIGRATIONS: readonly DslMigration[] = [
   { from: UNVERSIONED_DSL_VERSION, to: INITIAL_DSL_VERSION, migrate: (doc) => doc },
-  { from: INITIAL_DSL_VERSION, to: '0.2.0', migrate: dropUrlOnlySpeechRefs },
+  { from: INITIAL_DSL_VERSION, to: '0.2.0', migrate: stampAudioUrlAbolition },
 ];
 
 /**

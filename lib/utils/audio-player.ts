@@ -49,14 +49,32 @@ export class AudioPlayer {
    * superseded narration; the Dexie `audioFiles` table remains the fallback
    * for legacy and imported rows that were never pool-backed.
    *
+   * Conversion to allocated ids is best-effort: a document whose conversion
+   * was skipped (the lock-free load path) or deferred (a transient fetch
+   * failure) still holds its legacy pair, and an `audioId` with no local
+   * bytes is not silence while the URL beside it may still be live. That URL
+   * is the fallback of last resort, fetched at playback time; a converted
+   * document never carries one.
+   *
    * @param audioId Audio asset reference (allocated asset id, or a legacy TTS-derived id)
+   * @param legacyUrl The legacy `audioUrl` of an unconverted pair, if present
    * @returns true if audio started playing, false if no audio (TTS disabled or not generated)
    */
-  public async play(audioId: string): Promise<boolean> {
+  public async play(audioId: string, legacyUrl?: string): Promise<boolean> {
     const requestToken = ++this.requestToken;
     try {
-      const blob = await resolveBytes(audioId);
+      let blob = await resolveBytes(audioId);
       if (requestToken !== this.requestToken) return false;
+
+      if (!blob && legacyUrl) {
+        try {
+          const response = await fetch(legacyUrl);
+          blob = response.ok ? await response.blob() : null;
+        } catch {
+          blob = null;
+        }
+        if (requestToken !== this.requestToken) return false;
+      }
 
       if (!blob) {
         // Pre-generated audio does not exist (generation failed), skip silently
