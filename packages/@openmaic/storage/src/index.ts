@@ -50,9 +50,12 @@ export {
   EXCLUDED_RENDERABLE_TYPES,
   type AssetBytes,
   type AssetIdentity,
+  type AssetIndirectRead,
+  type AssetIndirectReadRequest,
   type AssetPrincipal,
   type AssetStore,
 } from './asset/types.js';
+export type { AssetByteStore, AssetSignedReadHeaders } from './asset/byte-store.js';
 export {
   ASSET_PG_SCHEMA,
   PgAssetStore,
