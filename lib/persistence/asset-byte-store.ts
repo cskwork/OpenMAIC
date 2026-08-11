@@ -10,6 +10,18 @@
 import { PgAssetByteStore } from '@openmaic/storage/asset/pg-bytes';
 import type { AssetByteStore, Queryable } from '@openmaic/storage/asset/pg';
 
+// Tracing anchors for the standalone build. The store implementations below
+// reach both packages through deliberately untraced dynamic imports (they
+// are optional peers of the storage package), so without a literal reference
+// here the shipped image cannot resolve them. The thunks are never called:
+// module resolution still happens only on first S3 use, and both packages
+// are server-external, so nothing is bundled either.
+const _assetSdkTraceAnchors = {
+  client: () => import('@aws-sdk/client-s3'),
+  presigner: () => import('@aws-sdk/s3-request-presigner'),
+};
+void _assetSdkTraceAnchors;
+
 const S3_RESERVED_PREFIXES = ['xn--', 'sthree-', 'amzn-s3-demo-'];
 const S3_RESERVED_SUFFIXES = ['-s3alias', '--ol-s3', '.mrap', '--x-s3', '--table-s3'];
 

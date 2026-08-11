@@ -110,8 +110,9 @@ function requestsDescriptor(req: IncomingMessage): boolean {
   const accept = req.headers.accept;
   if (typeof accept !== 'string') return false;
   return accept.split(',').some((range) => {
+    // Media types are case-insensitive; the constant is lowercase.
     const [type, ...params] = range.split(';');
-    if (type?.trim() !== ASSET_DESCRIPTOR_MEDIA_TYPE) return false;
+    if (type?.trim().toLowerCase() !== ASSET_DESCRIPTOR_MEDIA_TYPE) return false;
     // An explicit q=0 rejects the descriptor even though the range matches.
     const quality = params
       .map((param) => param.split('='))

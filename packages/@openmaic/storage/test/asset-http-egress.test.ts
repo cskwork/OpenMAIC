@@ -154,6 +154,20 @@ describe('asset byte egress', () => {
     expect(response.status).toBe(302);
   });
 
+  test('media type matching is case-insensitive, as HTTP requires', async () => {
+    const indirect = vi.fn(async () => ({ url: 'https://objects.example/signed', revision: 3 }));
+    const { url } = await serve(stubStore({ indirect }), { byteEgress: 'redirect' });
+
+    const response = await fetch(`${url}/assets/ast_example/content`, {
+      headers: { accept: 'Application/Vnd.OpenMAIC.Asset-Descriptor+JSON' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe(
+      'application/vnd.openmaic.asset-descriptor+json',
+    );
+  });
+
   test('mints the URL under the same authorization and labelling as a direct read', async () => {
     let seen:
       | { principal: AssetPrincipal; ref: string; request: AssetIndirectReadRequest }
