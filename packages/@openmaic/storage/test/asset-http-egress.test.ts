@@ -102,23 +102,25 @@ describe('asset byte egress', () => {
     // the credential variance, with no body.
     expect(response.headers.get('x-asset-revision')).toBe('3');
     expect(response.headers.get('cache-control')).toBe('private, no-store');
-    expect(response.headers.get('vary')).toBe('Cookie, Authorization, X-Asset-Egress');
+    expect(response.headers.get('vary')).toBe('Cookie, Authorization, Accept');
     expect(await response.text()).toBe('');
   });
 
   test('answers a descriptor request with the signed URL in a JSON body, never a redirect', async () => {
-    // The packaged client asks for this shape: it fetches the signed URL
+    // The packaged client asks for this shape through Accept -- CORS-safelisted,
+    // so the negotiation adds no preflight -- and fetches the signed URL
     // itself, so its credential headers never approach the object store.
     const indirect = vi.fn(async () => ({ url: 'https://objects.example/signed', revision: 3 }));
     const { url } = await serve(stubStore({ indirect }), { byteEgress: 'redirect' });
 
     const response = await fetch(`${url}/assets/ast_example/content`, {
-      headers: { 'x-asset-egress': 'descriptor' },
+      headers: { accept: 'application/vnd.openmaic.asset-descriptor+json' },
     });
 
     expect(response.status).toBe(200);
-    expect(response.headers.get('content-type')).toBe('application/json');
-    expect(response.headers.get('x-asset-egress')).toBe('descriptor');
+    expect(response.headers.get('content-type')).toBe(
+      'application/vnd.openmaic.asset-descriptor+json',
+    );
     expect(response.headers.get('x-asset-revision')).toBe('3');
     expect(response.headers.get('location')).toBeNull();
     expect(await response.json()).toEqual({

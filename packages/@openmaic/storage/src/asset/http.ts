@@ -3,6 +3,7 @@ import { assertHttpBaseUrl } from '../http/base-url.js';
 import { assertJsonValue } from '../runtime/json-value.js';
 import { ObjectUrlCache } from './blob.js';
 import type { AssetId } from './id.js';
+import { ASSET_DESCRIPTOR_MEDIA_TYPE } from './types.js';
 
 export interface HttpAssetHeadersContext {
   method: string;
@@ -205,11 +206,12 @@ export class HttpAssetStore implements StorageProvider {
     const headers = await this.headers(method, path, body !== undefined);
     if (body !== undefined) headers['content-type'] = body.type;
     if (method === 'GET') {
-      // Advertise descriptor support on the byte read: a redirect-egress
-      // server then answers with the signed URL in a JSON body instead of a
-      // 302 the platform fetch would follow with these headers attached,
-      // custom credential headers included.
-      headers['x-asset-egress'] = 'descriptor';
+      // Ask for a descriptor answer on the byte read: a redirect-egress
+      // server then returns the signed URL in a JSON body instead of a 302
+      // the platform fetch would follow with these headers attached, custom
+      // credential headers included. Accept is CORS-safelisted, so the
+      // negotiation adds no preflight.
+      headers['accept'] = ASSET_DESCRIPTOR_MEDIA_TYPE;
     }
     try {
       return await this.fetchImpl(`${this.baseUrl}${path}`, {
@@ -370,7 +372,7 @@ export class HttpAssetStore implements StorageProvider {
     }
     let identity: ObjectUrlIdentity | null = null;
     let bytes: ArrayBuffer;
-    if (response.headers.get('x-asset-egress') === 'descriptor') {
+    if (response.headers.get('content-type')?.startsWith(ASSET_DESCRIPTOR_MEDIA_TYPE)) {
       // Indirect egress, answered as a descriptor rather than a redirect.
       // Following a 302 would forward this request's headers -- the
       // deployment's custom credential headers included; only Authorization

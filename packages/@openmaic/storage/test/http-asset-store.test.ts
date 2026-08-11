@@ -982,8 +982,7 @@ describe('HttpAssetStore snapshot behavior', () => {
       return new Response(JSON.stringify({ url: 'https://objects.example/signed', revision: 7 }), {
         status: 200,
         headers: {
-          'content-type': 'application/json',
-          'x-asset-egress': 'descriptor',
+          'content-type': 'application/vnd.openmaic.asset-descriptor+json',
           'x-asset-revision': '7',
         },
       });
@@ -1001,7 +1000,9 @@ describe('HttpAssetStore snapshot behavior', () => {
 
     const [byteGet, signedGet] = seen;
     expect(byteGet?.method).toBe('GET');
-    expect(new Headers(byteGet?.headers).get('x-asset-egress')).toBe('descriptor');
+    expect(new Headers(byteGet?.headers).get('accept')).toBe(
+      'application/vnd.openmaic.asset-descriptor+json',
+    );
     expect(signedGet?.url).toBe('https://objects.example/signed');
     expect(new Headers(signedGet?.headers).get('x-api-key')).toBeNull();
     expect(signedGet?.headers).toBeUndefined();
@@ -1017,7 +1018,7 @@ describe('HttpAssetStore snapshot behavior', () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async () => {
       return new Response(JSON.stringify({ url: 'https://objects.example/signed' }), {
         status: 200,
-        headers: { 'content-type': 'application/json', 'x-asset-egress': 'descriptor' },
+        headers: { 'content-type': 'application/vnd.openmaic.asset-descriptor+json' },
       });
     });
     const store = new HttpAssetStore({ baseUrl: 'https://assets.invalid', fetch });

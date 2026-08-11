@@ -2,6 +2,7 @@ import type { IncomingMessage, RequestListener, ServerResponse } from 'node:http
 import type { AssetMeta } from '@openmaic/dsl';
 import type { AssetId } from '../asset/id.js';
 import {
+  ASSET_DESCRIPTOR_MEDIA_TYPE,
   AssetNotFoundError,
   AssetQuotaExceededError,
   DEFAULT_RENDERABLE_TYPES,
@@ -102,6 +103,37 @@ class AssetHttpError extends Error {
 
 function validationFailure(message: string): AssetHttpError {
   return new AssetHttpError(400, 'VALIDATION_FAILED', message);
+}
+
+/** Whether the caller asked for a descriptor answer over a redirect. */
+function requestsDescriptor(req: IncomingMessage): boolean {
+  const accept = req.headers.accept;
+  return typeof accept === 'string' && accept.includes(ASSET_DESCRIPTOR_MEDIA_TYPE);
+}
+
+/**
+ * The descriptor answer to an indirect byte read: the signed URL and the
+ * revision in a JSON body, under the vendor media type that both identifies
+ * the shape and, being CORS-safelisted in `Accept`, costs no preflight.
+ */
+function sendDescriptor(
+  req: IncomingMessage,
+  res: ServerResponse,
+  indirect: AssetIndirectRead,
+): void {
+  res.sendDate = false;
+  const encoded = JSON.stringify({ url: indirect.url, revision: indirect.revision });
+  res.writeHead(200, {
+    'content-type': ASSET_DESCRIPTOR_MEDIA_TYPE,
+    ...(req.method === 'GET' || req.method === 'HEAD'
+      ? { 'content-length': String(Buffer.byteLength(encoded)) }
+      : {}),
+    'x-asset-revision': String(indirect.revision),
+    'cache-control': 'private, no-store',
+    vary: 'Cookie, Authorization, Accept',
+    'access-control-expose-headers': 'X-Asset-Revision, X-Error-Code',
+  });
+  res.end(req.method === 'HEAD' ? undefined : encoded);
 }
 
 function payloadTooLarge(message: string): AssetHttpError {
@@ -550,27 +582,16 @@ async function route(
         if (!Number.isSafeInteger(indirect.revision) || indirect.revision < 1) {
           throw new Error('@openmaic/storage: asset store returned a malformed revision');
         }
-        if (req.headers['x-asset-egress'] === 'descriptor') {
+        if (requestsDescriptor(req)) {
           // A descriptor answer instead of the redirect. A platform fetch
           // follows a 302 with the original request's headers -- only
           // Authorization is stripped across origins -- so following one
           // would forward this deployment's custom credential headers to the
-          // object store's origin. A client that sends the descriptor
-          // request header fetches the signed URL itself, with none of those
-          // headers, and takes the revision from the descriptor body.
-          sendJson(
-            req,
-            res,
-            200,
-            { url: indirect.url, revision: indirect.revision },
-            {
-              'x-asset-egress': 'descriptor',
-              'x-asset-revision': String(indirect.revision),
-              'cache-control': 'private, no-store',
-              vary: 'Cookie, Authorization, X-Asset-Egress',
-              'access-control-expose-headers': 'X-Asset-Revision, X-Error-Code, X-Asset-Egress',
-            },
-          );
+          // object store's origin. The client asks for this shape through
+          // Accept, a CORS-safelisted header that adds no preflight, fetches
+          // the signed URL itself with none of those headers, and takes the
+          // revision from the descriptor body.
+          sendDescriptor(req, res, indirect);
           return;
         }
         // The 302 repeats the read route's posture: it is as per-principal and
@@ -586,7 +607,7 @@ async function route(
           location: indirect.url,
           'x-asset-revision': String(indirect.revision),
           'cache-control': 'private, no-store',
-          vary: 'Cookie, Authorization, X-Asset-Egress',
+          vary: 'Cookie, Authorization, Accept',
           'access-control-expose-headers': 'X-Asset-Revision, X-Error-Code',
         });
         res.end();

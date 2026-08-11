@@ -334,3 +334,12 @@ export interface AssetIndirectRead {
   /** The registry entry revision, from the same read that minted the URL. */
   readonly revision: number;
 }
+
+/**
+ * The vendor media type of an indirect-egress descriptor answer. A client
+ * asks for it through `Accept` -- a CORS-safelisted header, so the
+ * negotiation never adds a preflight -- and the server marks the descriptor
+ * response with it as `Content-Type`, so a stored asset can never parse as a
+ * descriptor.
+ */
+export const ASSET_DESCRIPTOR_MEDIA_TYPE = 'application/vnd.openmaic.asset-descriptor+json';
