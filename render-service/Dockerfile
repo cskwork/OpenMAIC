@@ -5,7 +5,16 @@
 # glibc/Debian than on musl/Alpine. Producer's beginFrame capture requires the
 # old headless shell binary; regular Chromium exposes the resolver path but then
 # rejects HeadlessExperimental.beginFrame and silently falls back to screenshots.
-FROM node:22-bookworm-slim AS base
+FROM node:22.22.2-bookworm-slim@sha256:f3a68cf41a855d227d1b0ab832bed9749469ef38cf4f58182fb8c893bc462383 AS base
+
+ARG CHROMIUM_VERSION=151.0.7922.71-1~deb12u1
+ARG FFMPEG_VERSION=7:5.1.9-0+deb12u1
+ARG IPTABLES_VERSION=1.8.9-2
+ARG CA_CERTIFICATES_VERSION=20230311+deb12u1
+ARG FONTS_LIBERATION_VERSION=1:1.07.4-11
+ARG FONTS_NOTO_CORE_VERSION=20201225-1
+ARG FONTS_NOTO_COLOR_EMOJI_VERSION=2.042-0+deb12u1
+ARG FONTS_NOTO_CJK_VERSION=1:20220127+repack1-1
 
 ENV PUPPETEER_SKIP_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-headless-shell \
@@ -17,14 +26,14 @@ ENV PUPPETEER_SKIP_DOWNLOAD=true \
 # TLS for any asset the composition might still reference before lockdown.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-     chromium-headless-shell \
-     ffmpeg \
-     iptables \
-     ca-certificates \
-     fonts-liberation \
-     fonts-noto-core \
-     fonts-noto-color-emoji \
-     fonts-noto-cjk \
+     "chromium-headless-shell=${CHROMIUM_VERSION}" \
+     "ffmpeg=${FFMPEG_VERSION}" \
+     "iptables=${IPTABLES_VERSION}" \
+     "ca-certificates=${CA_CERTIFICATES_VERSION}" \
+     "fonts-liberation=${FONTS_LIBERATION_VERSION}" \
+     "fonts-noto-core=${FONTS_NOTO_CORE_VERSION}" \
+     "fonts-noto-color-emoji=${FONTS_NOTO_COLOR_EMOJI_VERSION}" \
+     "fonts-noto-cjk=${FONTS_NOTO_CJK_VERSION}" \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -59,9 +68,8 @@ ENV PORT=9000 \
     PRODUCER_TMP_PROJECT_DIR=/tmp/openmaic-renders \
     HOME=/app \
     XDG_CACHE_HOME=/app/.cache \
-    PRODUCER_BROWSER_GPU_MODE=hardware \
     PRODUCER_HEADLESS_SHELL_PATH=/usr/bin/chromium-headless-shell \
-    RENDER_REQUIRE_BEGINFRAME=false
+    RENDER_RESOURCE_PROFILE=standard
 
 # NOTE: we intentionally do NOT set `USER render` here. The container starts as
 # root so the entrypoint can install the iptables egress lockdown (needs

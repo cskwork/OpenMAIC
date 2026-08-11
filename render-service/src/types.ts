@@ -18,6 +18,26 @@ export interface RenderOptions {
   format: 'mp4';
 }
 
+export interface RuntimeVersions {
+  service: string;
+  producer: string;
+  node: string;
+  chromium: string;
+  chromiumPath: string;
+  ffmpeg: string;
+  ffmpegPath: string;
+  containerImage: string | null;
+}
+
+export interface RenderExecutionMetrics {
+  resourceProfile: 'standard' | 'low-memory';
+  requestedCaptureMode: 'beginframe' | 'screenshot';
+  actualCaptureMode: string;
+  requestedWorkers: number;
+  actualWorkers: number | null;
+  versions: RuntimeVersions;
+}
+
 /**
  * A render job's observable state. `progress` is 0..1 (producer's native
  * range); the HTTP layer surfaces it as-is and the client scales to a percent.
@@ -31,6 +51,7 @@ export interface RenderJobRecord {
   currentStage: string;
   framesRendered?: number;
   totalFrames?: number;
+  metrics?: RenderExecutionMetrics;
   error?: string;
   createdAtMs: number;
   updatedAtMs: number;

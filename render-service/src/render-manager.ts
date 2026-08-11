@@ -18,7 +18,12 @@ import { join } from 'node:path';
 import { createRenderJob, executeRenderJob, type RenderConfigInput } from '@hyperframes/producer';
 import type { JobStore } from './job-store.js';
 import type { ArtifactStore } from './artifact-store.js';
-import type { RenderJobRecord, RenderOptions } from './types.js';
+import type {
+  RenderExecutionMetrics,
+  RenderJobRecord,
+  RenderOptions,
+  RuntimeVersions,
+} from './types.js';
 import { config } from './config.js';
 
 /** Thrown when admission control rejects a submission (mapped to HTTP 429). */
@@ -68,6 +73,32 @@ export function assertRequiredCaptureMode(
   }
 }
 
+export function buildRenderExecutionMetrics(
+  actualCaptureMode: string | undefined,
+  actualWorkers: number | undefined,
+  versions: RuntimeVersions,
+): RenderExecutionMetrics {
+  return {
+    resourceProfile: config.resourceProfile.name,
+    requestedCaptureMode: config.resourceProfile.requestedCaptureMode,
+    actualCaptureMode: actualCaptureMode ?? 'unknown',
+    requestedWorkers: config.producerWorkers,
+    actualWorkers: actualWorkers ?? null,
+    versions,
+  };
+}
+
+const UNKNOWN_RUNTIME_VERSIONS: RuntimeVersions = {
+  service: 'unknown',
+  producer: 'unknown',
+  node: process.version,
+  chromium: 'unknown',
+  chromiumPath: 'unknown',
+  ffmpeg: 'unknown',
+  ffmpegPath: 'unknown',
+  containerImage: null,
+};
+
 export class RenderManager {
   private running = 0;
   private readonly queue: QueuedJob[] = [];
@@ -81,6 +112,7 @@ export class RenderManager {
   constructor(
     private readonly jobs: JobStore,
     private readonly artifacts: ArtifactStore,
+    private readonly runtimeVersions: RuntimeVersions = UNKNOWN_RUNTIME_VERSIONS,
   ) {}
 
   /** Total jobs occupying the system: reserved + queued + running. */
@@ -215,28 +247,46 @@ export class RenderManager {
 
       const job = createRenderJob(buildProducerJobConfig(options));
 
-      await executeRenderJob(
-        job,
-        projectDir,
-        outputPath,
-        async (j) => {
-          // Producer mutates the same `job` object; mirror the fields we expose.
-          // Producer's `progress` is 0..100; our HTTP contract is 0..1, so
-          // normalize here (clamped) — success is set to 1 below.
-          const progress =
-            typeof j.progress === 'number' ? Math.max(0, Math.min(1, j.progress / 100)) : 0;
-          await this.jobs.update(id, {
-            status: 'running',
-            progress,
-            currentStage: j.currentStage || j.status,
-            ...(typeof j.framesRendered === 'number' ? { framesRendered: j.framesRendered } : {}),
-            ...(typeof j.totalFrames === 'number' ? { totalFrames: j.totalFrames } : {}),
-          });
-        },
-        abort.signal,
-      );
+      const updateMetrics = async (): Promise<RenderExecutionMetrics> => {
+        // Producer mutates the same `job` object, including perfSummary on
+        // capture failures. Persist the observed mode/worker count before the
+        // error path turns the job terminal so failed fallbacks remain visible.
+        const metrics = buildRenderExecutionMetrics(
+          job.perfSummary?.drawElement?.mode ?? job.perfSummary?.observability?.capture.captureMode,
+          job.perfSummary?.workers ?? job.perfSummary?.observability?.capture.workerCount,
+          this.runtimeVersions,
+        );
+        await this.jobs.update(id, { metrics });
+        return metrics;
+      };
 
-      assertRequiredCaptureMode(job.perfSummary?.drawElement?.mode, config.requireBeginFrame);
+      try {
+        await executeRenderJob(
+          job,
+          projectDir,
+          outputPath,
+          async (j) => {
+            // Producer's `progress` is 0..100; our HTTP contract is 0..1, so
+            // normalize here (clamped) — success is set to 1 below.
+            const progress =
+              typeof j.progress === 'number' ? Math.max(0, Math.min(1, j.progress / 100)) : 0;
+            await this.jobs.update(id, {
+              status: 'running',
+              progress,
+              currentStage: j.currentStage || j.status,
+              ...(typeof j.framesRendered === 'number' ? { framesRendered: j.framesRendered } : {}),
+              ...(typeof j.totalFrames === 'number' ? { totalFrames: j.totalFrames } : {}),
+            });
+          },
+          abort.signal,
+        );
+      } catch (error) {
+        await updateMetrics();
+        throw error;
+      }
+
+      const metrics = await updateMetrics();
+      assertRequiredCaptureMode(metrics.actualCaptureMode, config.requireBeginFrame);
 
       if (abort.signal.aborted) {
         // Deadline overrun is a failure, not a user cancellation.
