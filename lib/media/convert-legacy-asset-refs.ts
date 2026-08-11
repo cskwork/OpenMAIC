@@ -45,6 +45,7 @@ import type { Action, SpeechAction } from '@/lib/types/action';
 import type { AppScene, Stage } from '@/lib/types/stage';
 import { makeScene } from '@/lib/types/stage';
 import type { AudioFileRecord, MediaFileRecord } from '@/lib/utils/database';
+import { fetchMediaUrl } from './fetch-media-url';
 import { isGeneratedMediaPlaceholder } from './media-ref';
 import { slideMediaReferenceSlots } from './slide-media-slots';
 
@@ -227,9 +228,12 @@ async function defaultDeps(): Promise<LegacyAssetConversionDeps> {
     removeAsset: (ref) => removeAsset(ref),
     fetchLegacyUrl: async (url) => {
       try {
-        // Bounded wait: conversion runs on the document load path, and one
-        // stalled URL must not hold the document lock indefinitely.
-        const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+        // Cross-origin URLs go through the same-origin media proxy: a plain
+        // fetch is CORS-blocked exactly where an <audio> element would still
+        // play, and the proxy carries the SSRF guard and its response limit.
+        // Bounded either way: conversion runs on the document load path, and
+        // one stalled URL must not hold the document lock indefinitely.
+        const response = await fetchMediaUrl(url, 15_000);
         if (response.ok) return { kind: 'ok', blob: await response.blob() };
         // Only definitive absence empties the reference. A 408 or 429 is
         // transient by definition, a 401 or 403 may clear on a credential

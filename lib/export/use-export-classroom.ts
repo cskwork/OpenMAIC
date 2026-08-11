@@ -17,6 +17,7 @@ import {
 } from './classroom-zip-types';
 import { collectAudioFiles, collectMediaFiles, actionsToManifest } from './classroom-zip-utils';
 import { mapWithConcurrency } from '@/lib/media/convert-legacy-asset-refs';
+import { fetchMediaUrl } from '@/lib/media/fetch-media-url';
 import type { SpeechAction } from '@/lib/types/action';
 import { createLogger } from '@/lib/logger';
 import {
@@ -99,9 +100,11 @@ export function useExportClassroom() {
       }
       const fetchedLegacy = await mapWithConcurrency([...uniqueLegacyUrls], 4, async (url) => {
         try {
-          // Bounded wait, like the load-path converter: one stalled legacy
-          // endpoint must not wedge the whole export.
-          const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+          // Cross-origin URLs go through the same-origin media proxy, as the
+          // rest of this exporter's asset inlining already does: a plain
+          // fetch is CORS-blocked exactly where an <audio> element would
+          // still play. Bounded either way, like the load-path converter.
+          const response = await fetchMediaUrl(url, 15_000);
           if (!response.ok) return { url, blob: null };
           return { url, blob: await response.blob() };
         } catch {

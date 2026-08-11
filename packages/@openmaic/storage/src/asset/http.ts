@@ -194,7 +194,12 @@ export class HttpAssetStore implements StorageProvider {
     return headers;
   }
 
-  private async fetchResponse(method: string, path: string, body?: Blob): Promise<Response> {
+  private async fetchResponse(
+    method: string,
+    path: string,
+    body?: Blob,
+    timeoutMs?: number,
+  ): Promise<Response> {
     if (this.closed) {
       throw new HttpAssetStoreError(
         0,
@@ -211,6 +216,7 @@ export class HttpAssetStore implements StorageProvider {
         ...(this.credentials === undefined ? {} : { credentials: this.credentials }),
         ...(method === 'GET' || method === 'HEAD' ? { cache: 'no-store' as RequestCache } : {}),
         ...(body === undefined ? {} : { body }),
+        ...(timeoutMs === undefined ? {} : { signal: AbortSignal.timeout(timeoutMs) }),
       });
     } catch {
       throw new HttpAssetStoreError(
@@ -446,6 +452,28 @@ export class HttpAssetStore implements StorageProvider {
     this.inFlight.delete(id);
     this.identities.delete(id);
     await this.urls.invalidate(id);
+  }
+
+  /**
+   * Metadata-only existence probe: a HEAD against the byte route, never a
+   * byte download or a minted URL. Bounded, so a stalled server cannot hang
+   * a migration-time check; an unclassifiable answer falls back to a full
+   * resolve, exactly like the warm path.
+   */
+  async exists(id: AssetRef): Promise<boolean> {
+    const encoded = addressableSegment(id);
+    if (encoded === null) return false;
+    const response = await this.fetchResponse(
+      'HEAD',
+      `/assets/${encoded}/content`,
+      undefined,
+      15_000,
+    );
+    if (response.ok) return response.status === 200;
+    const code = response.headers.get('x-error-code');
+    if (response.status === 404 && code === 'ASSET_NOT_FOUND') return false;
+    if (code !== null) throw await this.httpError(response);
+    return (await this.resolve(id)) !== null;
   }
 
   async remove(id: AssetRef): Promise<void> {
