@@ -253,6 +253,7 @@ type TtsStatus = 'none' | 'ready' | 'generating' | 'error';
 function SpeechTtsBar({
   actionId,
   audioId,
+  audioUrl,
   audioInvalidated,
   sceneOrder,
   language,
@@ -263,6 +264,8 @@ function SpeechTtsBar({
 }: {
   actionId: string;
   audioId?: string;
+  /** The legacy URL of an unconverted pair: narration exists until conversion removes it. */
+  audioUrl?: string;
   audioInvalidated?: boolean;
   sceneOrder: number;
   language?: string;
@@ -317,7 +320,9 @@ function SpeechTtsBar({
           ? undefined
           : await resolveLegacySpeechAudioId(sceneOrder, { id: actionId, audioInvalidated });
         const candidateId = lookupId ?? legacyId;
-        const has = candidateId ? await audioExists(candidateId) : false;
+        // An unconverted pair's legacy URL is narration that exists: the id
+        // lookup may find nothing while the URL is still live.
+        const has = (candidateId ? await audioExists(candidateId) : false) || !!audioUrl;
         if (alive) {
           setReadAudioId(has ? candidateId : undefined);
           setStatus((s) => (s === 'generating' ? s : has ? 'ready' : 'none'));
@@ -337,13 +342,15 @@ function SpeechTtsBar({
     return () => {
       alive = false;
     };
-  }, [lookupId, actionId, sceneOrder, audioInvalidated, refreshKey, regenerating]);
+  }, [lookupId, actionId, sceneOrder, audioInvalidated, audioUrl, refreshKey, regenerating]);
 
   useEffect(() => () => stopPreview(), [stopPreview]);
 
   const preview = async () => {
     stopPreview();
-    const src = readAudioId ? await audioObjectUrl(readAudioId) : null;
+    // The legacy URL of an unconverted pair is the narration when no pool or
+    // Dexie id resolved.
+    const src = readAudioId ? await audioObjectUrl(readAudioId) : (audioUrl ?? null);
     if (!src) return;
     objUrlRef.current = src;
     const a = new Audio(src);
@@ -425,6 +432,7 @@ function SpeechClip({
   index,
   actionId,
   audioId,
+  audioUrl,
   audioInvalidated,
   sceneOrder,
   language,
@@ -447,6 +455,7 @@ function SpeechClip({
   index: number;
   actionId: string;
   audioId?: string;
+  audioUrl?: string;
   audioInvalidated?: boolean;
   sceneOrder: number;
   language?: string;
@@ -544,6 +553,7 @@ function SpeechClip({
         <SpeechTtsBar
           actionId={actionId}
           audioId={audioId}
+          audioUrl={audioUrl}
           audioInvalidated={audioInvalidated}
           sceneOrder={sceneOrder}
           language={language}
@@ -1315,6 +1325,7 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
                               index={si}
                               actionId={key}
                               audioId={(action as { audioId?: string }).audioId}
+                              audioUrl={(action as { audioUrl?: string }).audioUrl}
                               audioInvalidated={
                                 (action as { audioInvalidated?: boolean }).audioInvalidated
                               }

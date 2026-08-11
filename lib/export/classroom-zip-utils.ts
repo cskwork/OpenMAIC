@@ -89,7 +89,17 @@ export function actionsToManifest(
   return actions.map((action) => {
     if (action.type === 'speech') {
       const speech = action as SpeechAction;
-      const { audioId, ...rest } = speech;
+      // A legacy audioUrl never enters the manifest: the type is gone from
+      // the contract, but an unconverted document can still carry one at
+      // runtime, and a bare rest-spread would export it.
+      const {
+        audioId,
+        audioUrl: _legacyAudioUrl,
+        ...rest
+      } = speech as SpeechAction & {
+        audioUrl?: string;
+      };
+      void _legacyAudioUrl;
       const audioRef = audioId ? audioIdToPath.get(audioId) : undefined;
       return {
         ...rest,
