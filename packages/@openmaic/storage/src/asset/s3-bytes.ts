@@ -329,12 +329,23 @@ export class S3AssetByteStore implements AssetByteStore {
    * ownership and existence, and a probing store would make the cost of a
    * read vary with prior presence.
    */
-  async signReadUrl(hash: ContentHash, headers: AssetSignedReadHeaders): Promise<string> {
+  async signReadUrl(
+    hash: ContentHash,
+    headers: AssetSignedReadHeaders,
+  ): Promise<string | undefined> {
     // Resolved outside the try for the same reason as the write path: a
     // missing optional dependency reports itself by name rather than being
     // flattened into an opaque "sign failed".
     const commands = await this.commands();
-    const signer = await this.signer();
+    let signer: S3AssetByteStoreSigner;
+    try {
+      signer = await this.signer();
+    } catch {
+      // An unresolvable optional presigner means this layer cannot sign after
+      // all, which is a capability answer, not a failed read: decline, and the
+      // caller falls back to serving the bytes directly.
+      return undefined;
+    }
     try {
       return await signer.sign(
         this.client,

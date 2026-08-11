@@ -239,8 +239,9 @@ describe('S3AssetByteStore URL signing', () => {
       cacheControl: 'private, no-store',
       expiresInSeconds: 60,
     });
+    expect(url).toBeDefined();
 
-    const signed = new URL(url);
+    const signed = new URL(url!);
     expect(signed.hostname).toBe('lazy-signing.s3.us-east-1.amazonaws.com');
     expect(signed.pathname).toBe(`/${contentHash}`);
     expect(signed.searchParams.get('response-content-type')).toBe('image/png');

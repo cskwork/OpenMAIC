@@ -180,7 +180,9 @@ test('byte operations never resolve the presigner; only signing does', async () 
   expect(presignerResolutions).toBe(1);
 });
 
-test('an unresolvable presigner fails signing by naming the optional dependency', async () => {
+test('an unresolvable presigner declines signing, so the caller falls back to direct bytes', async () => {
+  // A byte layer that cannot sign answers "cannot sign", not a failed read:
+  // the contract's fallback is that the caller serves the bytes directly.
   vi.doMock('@aws-sdk/s3-request-presigner', () => {
     throw new Error('Cannot find module');
   });
@@ -203,5 +205,5 @@ test('an unresolvable presigner fails signing by naming the optional dependency'
       cacheControl: 'private, no-store',
       expiresInSeconds: 60,
     }),
-  ).rejects.toThrow(/@aws-sdk\/s3-request-presigner/);
+  ).resolves.toBeUndefined();
 });
