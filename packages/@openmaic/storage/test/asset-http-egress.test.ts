@@ -234,14 +234,16 @@ describe('asset byte egress', () => {
     ).toThrow(/signedUrlTtlSeconds requires byteEgress "redirect"/);
   });
 
-  test('a signed URL lifetime beyond the presigning maximum is rejected at construction', () => {
+  test('a signed URL lifetime that could outlive its object is rejected at construction', () => {
+    // The collector can delete an object one grace period after its last
+    // reference goes; a URL still valid then would error at the object store.
     expect(() =>
       createAssetHttpHandler(stubStore(), {
         authenticate: async () => PRINCIPAL,
         byteEgress: 'redirect',
-        signedUrlTtlSeconds: 604_801,
+        signedUrlTtlSeconds: 901,
       }),
-    ).toThrow(/seven-day presigning maximum/);
+    ).toThrow(/far below the reclamation grace period/);
   });
 
   test('a malformed egress mode is rejected at construction', () => {

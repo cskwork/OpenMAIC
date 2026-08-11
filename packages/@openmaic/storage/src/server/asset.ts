@@ -38,12 +38,14 @@ export type AssetByteEgress = 'direct' | 'redirect';
 export const DEFAULT_SIGNED_URL_TTL_SECONDS = 60;
 
 /**
- * Seven days: the SigV4 presigning maximum, and so the longest lifetime the
- * shipped signer can honor. A longer configured lifetime would mint a
- * redirect whose target the object store rejects, turning a successful read
- * into an object-store error, so it is rejected at construction instead.
+ * Fifteen minutes: the longest lifetime the handler will mint. The signed URL
+ * must expire far earlier than the byte reclamation grace period -- one hour
+ * by default -- or a URL minted against a referenced object could outlive it:
+ * the last reference goes, the grace elapses, the collector deletes the
+ * object, and the still-valid URL errors at the object store. A deployment
+ * that shortens its grace below this cap must lower the TTL to match.
  */
-export const MAX_SIGNED_URL_TTL_SECONDS = 604_800;
+export const MAX_SIGNED_URL_TTL_SECONDS = 900;
 
 /** Options for the asset registry HTTP contract handler. */
 export interface AssetHttpHandlerOptions {
@@ -653,7 +655,7 @@ export function createAssetHttpHandler(
     }
     if (options.signedUrlTtlSeconds > MAX_SIGNED_URL_TTL_SECONDS) {
       throw new Error(
-        '@openmaic/storage: signedUrlTtlSeconds exceeds the seven-day presigning maximum',
+        '@openmaic/storage: signedUrlTtlSeconds must stay far below the reclamation grace period',
       );
     }
   }
