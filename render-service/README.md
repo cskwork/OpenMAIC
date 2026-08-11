@@ -135,7 +135,7 @@ npm start
 
 ## Resource profiles
 
-The default `standard` CPU profile is the supported 1080p / 30 fps / standard
+The default `standard` CPU profile is the intended 1080p / 30 fps / standard
 quality path: BeginFrame is required, producer workers are fixed at one, and the
 service admits one render plus one archive extraction at a time. It requires at
 least 10 GiB of host/cgroup memory. A missing headless shell, insufficient
@@ -160,7 +160,7 @@ memory, and observed Node, producer, Chromium, and FFmpeg versions. A completed
 or capture-mode-rejected job reports requested versus actual capture mode and
 worker count with the same version record.
 
-The fixed 720p short-sample comparison that motivated these profiles was:
+The previous fixed 720p short-sample comparison that motivated these profiles was:
 
 | Capture path | Workers | Result |
 | --- | ---: | --- |
@@ -173,6 +173,15 @@ These measurements justify the one-worker standard, not a general latency SLA.
 The full 1080p sample took 696.9 s with one worker, with capture about 75.5% and
 encode about 20.6% of runtime. Four-worker 1080p/4K and multi-job profiles remain
 unsupported until their combined correctness and memory bounds are validated.
+
+The current local issue #1092 long-run benchmark has not reproduced a successful
+comparison yet: both the one-worker BeginFrame and screenshot cases terminate in
+Chromium 151 with `Target closed` before producing comparable outputs. Therefore
+fresh output parity across these profiles is still unverified, and the profiles
+remain draft validation targets rather than a claim that the issue's benchmark
+and parity acceptance criteria have passed. The benchmark implementation and its
+outputs remain in the separate local benchmark worktree and are not part of this
+service change.
 
 ## Scalability
 

@@ -23,6 +23,7 @@ describe('resource profiles', () => {
       PRODUCER_FORCE_SCREENSHOT: 'false',
       PRODUCER_BROWSER_GPU_MODE: 'software',
       PRODUCER_ENABLE_BROWSER_POOL: 'false',
+      PRODUCER_EXPECTED_CHROMIUM_MAJOR: '151',
       RENDER_REQUIRE_BEGINFRAME: 'true',
     });
   });
@@ -42,6 +43,9 @@ describe('resource profiles', () => {
       PRODUCER_LOW_MEMORY_MODE: 'true',
       PRODUCER_FORCE_SCREENSHOT: 'true',
       PRODUCER_BROWSER_GPU_MODE: 'software',
+      PRODUCER_MAX_WORKERS: '1',
+      PRODUCER_ENABLE_BROWSER_POOL: 'false',
+      PRODUCER_EXPECTED_CHROMIUM_MAJOR: '151',
       RENDER_REQUIRE_BEGINFRAME: 'false',
     });
   });

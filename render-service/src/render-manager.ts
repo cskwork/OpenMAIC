@@ -15,7 +15,12 @@
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createRenderJob, executeRenderJob, type RenderConfigInput } from '@hyperframes/producer';
+import {
+  createRenderJob,
+  executeRenderJob,
+  type RenderConfigInput,
+  type RenderJob,
+} from '@hyperframes/producer';
 import type { JobStore } from './job-store.js';
 import type { ArtifactStore } from './artifact-store.js';
 import type {
@@ -86,6 +91,19 @@ export function buildRenderExecutionMetrics(
     actualWorkers: actualWorkers ?? null,
     versions,
   };
+}
+
+export function buildRenderExecutionMetricsFromJob(
+  job: Pick<RenderJob, 'perfSummary' | 'errorDetails'>,
+  versions: RuntimeVersions,
+): RenderExecutionMetrics {
+  const capture =
+    job.perfSummary?.observability?.capture ?? job.errorDetails?.observability?.capture;
+  return buildRenderExecutionMetrics(
+    job.perfSummary?.drawElement?.mode ?? capture?.captureMode,
+    job.perfSummary?.workers ?? capture?.workerCount,
+    versions,
+  );
 }
 
 const UNKNOWN_RUNTIME_VERSIONS: RuntimeVersions = {
@@ -248,14 +266,10 @@ export class RenderManager {
       const job = createRenderJob(buildProducerJobConfig(options));
 
       const updateMetrics = async (): Promise<RenderExecutionMetrics> => {
-        // Producer mutates the same `job` object, including perfSummary on
-        // capture failures. Persist the observed mode/worker count before the
-        // error path turns the job terminal so failed fallbacks remain visible.
-        const metrics = buildRenderExecutionMetrics(
-          job.perfSummary?.drawElement?.mode ?? job.perfSummary?.observability?.capture.captureMode,
-          job.perfSummary?.workers ?? job.perfSummary?.observability?.capture.workerCount,
-          this.runtimeVersions,
-        );
+        // Producer mutates the same `job` object. Successful renders expose a
+        // perf summary; hard failures expose the same capture selection through
+        // errorDetails observability. Persist either before the job is terminal.
+        const metrics = buildRenderExecutionMetricsFromJob(job, this.runtimeVersions);
         await this.jobs.update(id, { metrics });
         return metrics;
       };

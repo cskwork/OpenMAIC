@@ -14,52 +14,69 @@ export interface ResourceProfile {
   maxConcurrency: 1;
   maxConcurrentExtractions: 1;
   minimumMemoryBytes: number;
-  producerEnvironment: Readonly<Record<string, string>>;
+}
+
+const COMMON_LIMITS = {
+  producerWorkers: 1,
+  maxConcurrency: 1,
+  maxConcurrentExtractions: 1,
+} as const;
+
+function defineProfile(
+  name: ResourceProfileName,
+  requestedCaptureMode: RequestedCaptureMode,
+  minimumMemoryBytes: number,
+): ResourceProfile {
+  return {
+    name,
+    requestedCaptureMode,
+    requireBeginFrame: requestedCaptureMode === 'beginframe',
+    ...COMMON_LIMITS,
+    minimumMemoryBytes,
+  };
 }
 
 const PROFILES: Record<ResourceProfileName, ResourceProfile> = {
-  standard: {
-    name: 'standard',
-    requestedCaptureMode: 'beginframe',
-    requireBeginFrame: true,
-    producerWorkers: 1,
-    maxConcurrency: 1,
-    maxConcurrentExtractions: 1,
-    minimumMemoryBytes: 10 * GIB,
-    producerEnvironment: {
-      PRODUCER_MAX_WORKERS: '1',
-      PRODUCER_LOW_MEMORY_MODE: 'false',
-      PRODUCER_FORCE_SCREENSHOT: 'false',
-      // The producer's software selector uses SwiftShader and keeps BeginFrame
-      // eligible with no host GPU or device passthrough.
-      PRODUCER_BROWSER_GPU_MODE: 'software',
-      PRODUCER_ENABLE_BROWSER_POOL: 'false',
-      PRODUCER_EXPECTED_CHROMIUM_MAJOR: '151',
-      RENDER_REQUIRE_BEGINFRAME: 'true',
-    },
-  },
-  'low-memory': {
-    name: 'low-memory',
-    requestedCaptureMode: 'screenshot',
-    requireBeginFrame: false,
-    producerWorkers: 1,
-    maxConcurrency: 1,
-    maxConcurrentExtractions: 1,
-    minimumMemoryBytes: 4 * GIB,
-    producerEnvironment: {
-      PRODUCER_MAX_WORKERS: '1',
-      PRODUCER_LOW_MEMORY_MODE: 'true',
-      PRODUCER_FORCE_SCREENSHOT: 'true',
-      PRODUCER_BROWSER_GPU_MODE: 'software',
-      PRODUCER_ENABLE_BROWSER_POOL: 'false',
-      PRODUCER_EXPECTED_CHROMIUM_MAJOR: '151',
-      RENDER_REQUIRE_BEGINFRAME: 'false',
-    },
-  },
+  standard: defineProfile('standard', 'beginframe', 10 * GIB),
+  'low-memory': defineProfile('low-memory', 'screenshot', 4 * GIB),
 };
 
+function requiredProducerEnvironment(profile: ResourceProfile): Record<string, string> {
+  const screenshot = profile.requestedCaptureMode === 'screenshot';
+  return {
+    PRODUCER_MAX_WORKERS: String(profile.producerWorkers),
+    PRODUCER_LOW_MEMORY_MODE: String(screenshot),
+    PRODUCER_FORCE_SCREENSHOT: String(screenshot),
+    // The producer's software selector uses SwiftShader and keeps BeginFrame
+    // eligible with no host GPU or device passthrough.
+    PRODUCER_BROWSER_GPU_MODE: 'software',
+    PRODUCER_ENABLE_BROWSER_POOL: 'false',
+    PRODUCER_EXPECTED_CHROMIUM_MAJOR: '151',
+    RENDER_REQUIRE_BEGINFRAME: String(profile.requireBeginFrame),
+  };
+}
+
 function assertCompatibleEnvironment(profile: ResourceProfile, env: NodeJS.ProcessEnv): void {
-  for (const [name, required] of Object.entries(profile.producerEnvironment)) {
+  const producerEnvironment = requiredProducerEnvironment(profile);
+  const constraints = [
+    ...Object.entries(producerEnvironment).map(([name, required]) => ({
+      name,
+      required,
+      exportToProducer: true,
+    })),
+    {
+      name: 'RENDER_MAX_CONCURRENCY',
+      required: String(profile.maxConcurrency),
+      exportToProducer: false,
+    },
+    {
+      name: 'RENDER_MAX_CONCURRENT_EXTRACTIONS',
+      required: String(profile.maxConcurrentExtractions),
+      exportToProducer: false,
+    },
+  ];
+
+  for (const { name, required, exportToProducer } of constraints) {
     const configured = env[name];
     if (configured !== undefined && configured !== required) {
       throw new Error(
@@ -67,21 +84,7 @@ function assertCompatibleEnvironment(profile: ResourceProfile, env: NodeJS.Proce
           `received ${configured}. Select a different resource profile instead of overriding it.`,
       );
     }
-    env[name] = required;
-  }
-
-  const serviceLimits = {
-    RENDER_MAX_CONCURRENCY: String(profile.maxConcurrency),
-    RENDER_MAX_CONCURRENT_EXTRACTIONS: String(profile.maxConcurrentExtractions),
-  };
-  for (const [name, required] of Object.entries(serviceLimits)) {
-    const configured = env[name];
-    if (configured !== undefined && configured !== required) {
-      throw new Error(
-        `RENDER_RESOURCE_PROFILE=${profile.name} requires ${name}=${required}; ` +
-          `received ${configured}.`,
-      );
-    }
+    if (exportToProducer) env[name] = required;
   }
 }
 
