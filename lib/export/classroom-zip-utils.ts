@@ -85,13 +85,15 @@ export function actionsToManifest(
   actions: Action[],
   audioIdToPath: Map<string, string>,
   agentIdToIndex: Map<string, number> = new Map(),
+  audioUrlToPath: Map<string, string> = new Map(),
 ): ManifestAction[] {
   return actions.map((action) => {
     if (action.type === 'speech') {
       const speech = action as SpeechAction;
       // A legacy audioUrl never enters the manifest: the type is gone from
       // the contract, but an unconverted document can still carry one at
-      // runtime, and a bare rest-spread would export it.
+      // runtime, and a bare rest-spread would export it. Its bytes travel
+      // instead, fetched at export time and mapped to their own zip path.
       const {
         audioId,
         audioUrl: _legacyAudioUrl,
@@ -99,8 +101,9 @@ export function actionsToManifest(
       } = speech as SpeechAction & {
         audioUrl?: string;
       };
-      void _legacyAudioUrl;
-      const audioRef = audioId ? audioIdToPath.get(audioId) : undefined;
+      const audioRef =
+        (audioId ? audioIdToPath.get(audioId) : undefined) ??
+        (_legacyAudioUrl ? audioUrlToPath.get(_legacyAudioUrl) : undefined);
       return {
         ...rest,
         ...(audioRef ? { audioRef } : {}),

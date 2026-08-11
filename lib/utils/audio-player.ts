@@ -66,6 +66,7 @@ export class AudioPlayer {
       let blob = await resolveBytes(audioId);
       if (requestToken !== this.requestToken) return false;
 
+      let directUrl: string | undefined;
       if (!blob && legacyUrl) {
         try {
           const response = await fetch(legacyUrl);
@@ -74,9 +75,14 @@ export class AudioPlayer {
           blob = null;
         }
         if (requestToken !== this.requestToken) return false;
+        if (!blob) {
+          // A cross-origin legacy URL without CORS headers cannot be fetched,
+          // but a media element is not CORS-bound: hand it the URL directly.
+          directUrl = legacyUrl;
+        }
       }
 
-      if (!blob) {
+      if (!blob && !directUrl) {
         // Pre-generated audio does not exist (generation failed), skip silently
         return false;
       }
@@ -89,8 +95,8 @@ export class AudioPlayer {
       this.audio = new Audio();
 
       // Set audio source
-      const blobUrl = URL.createObjectURL(blob);
-      this.audio.src = blobUrl;
+      const blobUrl = blob ? URL.createObjectURL(blob) : undefined;
+      this.audio.src = blobUrl ?? (directUrl as string);
       if (this.muted) this.audio.volume = 0;
       else this.audio.volume = this.volume;
 
@@ -100,7 +106,7 @@ export class AudioPlayer {
 
       // Set ended callback
       this.audio.addEventListener('ended', () => {
-        URL.revokeObjectURL(blobUrl);
+        if (blobUrl) URL.revokeObjectURL(blobUrl);
         this.onEndedCallback?.();
       });
 
@@ -110,11 +116,11 @@ export class AudioPlayer {
       try {
         await this.audio.play();
       } catch (playError) {
-        URL.revokeObjectURL(blobUrl);
+        if (blobUrl) URL.revokeObjectURL(blobUrl);
         throw playError;
       }
       if (requestToken !== this.requestToken) {
-        URL.revokeObjectURL(blobUrl);
+        if (blobUrl) URL.revokeObjectURL(blobUrl);
         return false;
       }
       // Re-apply after play() — some browsers reset during load

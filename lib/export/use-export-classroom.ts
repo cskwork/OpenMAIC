@@ -78,6 +78,33 @@ export function useExportClassroom() {
         audioIdToPath.set(af.record.id, af.zipPath);
       }
 
+      // 5b. Fetch legacy audio URLs that no local row backs. An unconverted
+      // document can carry narration only as an audioUrl; the field itself
+      // never enters the manifest, so its bytes must.
+      const audioUrlToPath = new Map<string, string>();
+      const legacyAudioBlobs: Array<{ zipPath: string; blob: Blob; format: string }> = [];
+      for (const scene of scenes) {
+        for (const action of scene.actions ?? []) {
+          if (action.type !== 'speech') continue;
+          const legacyUrl = (action as { audioUrl?: string }).audioUrl;
+          if (!legacyUrl || audioUrlToPath.has(legacyUrl)) continue;
+          const stampedId = (action as SpeechAction).audioId;
+          if (stampedId && audioIdToPath.has(stampedId)) continue;
+          try {
+            const response = await fetch(legacyUrl);
+            if (!response.ok) continue;
+            const blob = await response.blob();
+            const format = blob.type.split('/')[1] || 'mp3';
+            const zipPath = `audio/legacy-${legacyAudioBlobs.length + 1}.${format}`;
+            audioUrlToPath.set(legacyUrl, zipPath);
+            legacyAudioBlobs.push({ zipPath, blob, format });
+          } catch {
+            // A legacy URL that will not fetch exports without its audio:
+            // the same outcome the converter gives a dead URL.
+          }
+        }
+      }
+
       // 6. Build manifest
       const manifestStage: ManifestStage = {
         name: latestName,
@@ -113,7 +140,7 @@ export function useExportClassroom() {
             order: scene.order,
             content,
             actions: scene.actions
-              ? actionsToManifest(scene.actions, audioIdToPath, agentIdToIndex)
+              ? actionsToManifest(scene.actions, audioIdToPath, agentIdToIndex, audioUrlToPath)
               : undefined,
             whiteboards: scene.whiteboards,
             ...(scene.multiAgent?.enabled
@@ -141,6 +168,9 @@ export function useExportClassroom() {
           duration: af.record.duration,
           voice: af.record.voice,
         };
+      }
+      for (const legacy of legacyAudioBlobs) {
+        mediaIndex[legacy.zipPath] = { type: 'audio', format: legacy.format };
       }
       for (const mf of mediaFiles) {
         mediaIndex[mf.zipPath] = {
@@ -180,6 +210,9 @@ export function useExportClassroom() {
       // 9. Add media blobs to ZIP
       for (const af of audioFiles) {
         zip.file(af.zipPath, af.record.blob);
+      }
+      for (const legacy of legacyAudioBlobs) {
+        zip.file(legacy.zipPath, legacy.blob);
       }
       for (const mf of mediaFiles) {
         zip.file(mf.zipPath, mf.record.blob);

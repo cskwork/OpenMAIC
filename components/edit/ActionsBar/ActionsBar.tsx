@@ -349,8 +349,9 @@ function SpeechTtsBar({
   const preview = async () => {
     stopPreview();
     // The legacy URL of an unconverted pair is the narration when no pool or
-    // Dexie id resolved.
-    const src = readAudioId ? await audioObjectUrl(readAudioId) : (audioUrl ?? null);
+    // Dexie id resolved -- or when the resolved id turns out to have no local
+    // bytes, which is exactly the dangling-id case the URL survives for.
+    const src = (readAudioId ? await audioObjectUrl(readAudioId) : null) ?? audioUrl ?? null;
     if (!src) return;
     objUrlRef.current = src;
     const a = new Audio(src);
