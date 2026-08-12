@@ -366,47 +366,43 @@ async function migrateLocked(
   expectedGeneration: number,
 ): Promise<DocumentAccessResult> {
   // Lock order: the per-stage document lock is acquired by the caller before
-  // this global shared epoch. This matches the established per-stage -> global
-  // order and prevents clearDatabase from interleaving with migration commit.
-  return withRuntimeStorageSharedLock(async () => {
-    const store = resolveStore(deps);
-    const existing = await store.loadDocument(stageId);
-    if (existing) {
-      assertValidDestination(stageId, existing);
-      const snapshot = await getLegacyDocumentStore(deps).read(stageId);
-      if (snapshot) {
-        const kv = resolveKv(deps);
-        const markerKey = `${MARKER_PREFIX}${stageId}`;
-        if (!(await kv.get<MigrationMarker>(markerKey, 'device'))) {
-          try {
-            assertMigrationVerified(canonicalize(snapshot), existing, deps.migrateDsl);
-          } catch (error) {
-            log.warn(
-              `Legacy snapshot diverges from authoritative destination for stage ${stageId}; migration marker was not written`,
-              error,
-            );
-            // The destination remains authoritative; convert and persist it
-            // exactly like the main exit so diverged documents are not
-            // stranded with legacy references forever.
-            const converted = await convertLoadedDocument(existing, deps);
-            const settled = await saveConvertedDocument(
-              store,
-              stageId,
-              existing,
-              converted,
-              deps,
-              expectedGeneration,
-            );
-            return { document: settled, readOnlyLegacy: false };
-          }
+  // the global shared epoch (entered below, only for each commit). This
+  // matches the established per-stage -> global order and prevents
+  // clearDatabase from interleaving with migration commit.
+  const store = resolveStore(deps);
+  const existing = await store.loadDocument(stageId);
+  if (existing) {
+    assertValidDestination(stageId, existing);
+    const snapshot = await getLegacyDocumentStore(deps).read(stageId);
+    // finishMigrationMetadata runs when the marker already exists or the
+    // snapshot verifies; a diverged snapshot skips it, so the destination is
+    // converted and persisted exactly like the main exit and diverged
+    // documents are not stranded with legacy references forever.
+    let metadataPending = false;
+    if (snapshot) {
+      const kv = resolveKv(deps);
+      const markerKey = `${MARKER_PREFIX}${stageId}`;
+      if (await kv.get<MigrationMarker>(markerKey, 'device')) {
+        metadataPending = true;
+      } else {
+        try {
+          assertMigrationVerified(canonicalize(snapshot), existing, deps.migrateDsl);
+          metadataPending = true;
+        } catch (error) {
+          log.warn(
+            `Legacy snapshot diverges from authoritative destination for stage ${stageId}; migration marker was not written`,
+            error,
+          );
         }
-        await finishMigrationMetadata(snapshot, kv);
       }
-      // Lazy reference conversion on open: rewrite legacy media handles to
-      // allocated asset ids and save the converted document back under the
-      // same lock. An unconverted document is returned as-is (identity), so
-      // already-converted documents pay no write.
-      const converted = await convertLoadedDocument(existing, deps);
+    }
+    // Conversion runs OUTSIDE the maintenance lock: URL probing can consume
+    // the full aggregate budget, and a shared lock held that long makes
+    // clearDatabase's five-second exclusive acquisition fail on an unrelated
+    // slow URL. Only the fence-checked commit needs the exclusion.
+    const converted = await convertLoadedDocument(existing, deps);
+    return withRuntimeStorageSharedLock(async () => {
+      if (snapshot && metadataPending) await finishMigrationMetadata(snapshot, resolveKv(deps));
       const settled = await saveConvertedDocument(
         store,
         stageId,
@@ -416,16 +412,19 @@ async function migrateLocked(
         expectedGeneration,
       );
       return { document: settled, readOnlyLegacy: false };
-    }
+    });
+  }
 
-    const snapshot = await getLegacyDocumentStore(deps).read(stageId);
-    if (!snapshot) return { document: null, readOnlyLegacy: false };
-    // Convert the canonicalized legacy aggregate BEFORE it is first saved, so
-    // the destination is born with allocated asset ids where bytes are
-    // available. The verification below migrates `expected` through the pure
-    // ladder before comparing, so a kept co-present pair (which the ladder
-    // preserves) verifies consistently.
-    const expected = await convertLoadedDocument(canonicalize(snapshot), deps);
+  const snapshot = await getLegacyDocumentStore(deps).read(stageId);
+  if (!snapshot) return { document: null, readOnlyLegacy: false };
+  // Convert the canonicalized legacy aggregate BEFORE it is first saved, so
+  // the destination is born with allocated asset ids where bytes are
+  // available. The verification below migrates `expected` through the pure
+  // ladder before comparing, so a kept co-present pair (which the ladder
+  // preserves) verifies consistently. Same lock discipline as above: probe
+  // outside, commit inside.
+  const expected = await convertLoadedDocument(canonicalize(snapshot), deps);
+  return withRuntimeStorageSharedLock(async () => {
     if ((await readGeneration(deps.kv)) !== expectedGeneration) {
       throw new DocumentStorageGenerationChangedError(stageId);
     }

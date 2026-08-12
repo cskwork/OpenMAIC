@@ -130,14 +130,25 @@ export async function mapWithConcurrency<T, R>(
 ): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let next = 0;
+  // The first rejection stops the pool from scheduling new work, and the
+  // pool is joined before the error propagates: a caller degrading to the
+  // unconverted document never leaves siblings still committing effects.
+  let failed = false;
+  let failure: unknown;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
+    while (next < items.length && !failed) {
       const index = next;
       next += 1;
-      results[index] = await fn(items[index], index);
+      try {
+        results[index] = await fn(items[index], index);
+      } catch (error) {
+        failed = true;
+        failure = error;
+      }
     }
   });
   await Promise.all(workers);
+  if (failed) throw failure;
   return results;
 }
 
@@ -145,9 +156,14 @@ export async function mapWithConcurrency<T, R>(
  * Thrown when the caller's liveness check fails mid-conversion. Callers that
  * degrade to the unconverted document (the classroom fetch path) treat this
  * like any converter failure; the document load path never passes a check.
+ * Carries the fresh allocations made before the abort, so a caller that
+ * discards the result can roll them back instead of stranding them.
  */
 export class LegacyConversionAbortedError extends Error {
   override readonly name = 'LegacyConversionAbortedError';
+  constructor(readonly allocatedIds: readonly string[]) {
+    super('legacy asset conversion aborted');
+  }
 }
 
 export interface LegacyAssetConversionReport {
@@ -164,6 +180,12 @@ export interface LegacyAssetConversionResult {
   /** False when nothing was rewritten -- the input is returned by identity. */
   changed: boolean;
   report: LegacyAssetConversionReport;
+  /**
+   * Ids this pass freshly allocated (reused mirrors are not listed). A caller
+   * that ends up rejecting the converted document -- a superseded classroom
+   * load -- rolls these back, so a discarded payload leaves no pool entries.
+   */
+  allocatedIds: string[];
 }
 
 /**
@@ -316,6 +338,14 @@ function audioMeta(
 type SlideLike = Pick<Slide, 'background' | 'elements'>;
 
 /**
+ * Total wall-clock budget for legacy URL probes in one conversion pass. Each
+ * probe is individually capped; this caps the aggregate, so a document full
+ * of stalled URLs cannot hold the load path for (count / concurrency) times
+ * the per-probe timeout.
+ */
+const URL_PROBE_BUDGET_MS = 60_000;
+
+/**
  * Convert every legacy media reference in a loaded document to an allocated
  * asset id. The input document is never mutated; the side effects are pool
  * ingests and Dexie compatibility mirror writes.
@@ -325,13 +355,6 @@ type SlideLike = Pick<Slide, 'background' | 'elements'>;
  * last, so a failure mid-conversion never leaves the persisted document
  * pointing at bytes that were never stored.
  */
-/**
- * Total wall-clock budget for legacy URL probes in one conversion pass. Each
- * probe is individually capped; this caps the aggregate, so a document full
- * of stalled URLs cannot hold the load path for (count / concurrency) times
- * the per-probe timeout.
- */
-const URL_PROBE_BUDGET_MS = 60_000;
 
 export async function convertDocumentAssetRefs(
   document: AppDocument,
@@ -345,11 +368,13 @@ export async function convertDocumentAssetRefs(
   // multiply that cap by the clip count. One shared budget bounds the whole
   // pass; what is left converts on a later open.
   const urlProbeBudgetEndsAt = Date.now() + URL_PROBE_BUDGET_MS;
+  /** Ids this pass freshly allocated, for callers that need a rollback list. */
+  const allocatedIds: string[] = [];
   // Liveness probe for callers whose own work can be superseded mid-flight
   // (a classroom load): a stale conversion must stop producing side effects
   // as soon as its result is known to be unwanted, not after the last fetch.
   const assertContinuing = (): void => {
-    if (shouldContinue && !shouldContinue()) throw new LegacyConversionAbortedError();
+    if (shouldContinue && !shouldContinue()) throw new LegacyConversionAbortedError(allocatedIds);
   };
   // One allocation per logical legacy ref, shared across every slot, manifest
   // key, and speech action that names it -- they already shared one byte
@@ -390,6 +415,7 @@ export async function convertDocumentAssetRefs(
         ? record.blob
         : new Blob([record.blob], { type: record.mimeType });
       const assetId = await resolvedDeps.putAsset(blob, mediaMeta(record, blob));
+      allocatedIds.push(assetId);
       try {
         // Liveness is rechecked at the commit boundary: an abort between the
         // allocation and its mirror compensates the allocation, exactly like
@@ -478,6 +504,7 @@ export async function convertDocumentAssetRefs(
             record.blob,
             audioMeta(record.blob, record, speech),
           );
+          allocatedIds.push(allocated);
           try {
             // Liveness is rechecked at the commit boundary, like the media path.
             assertContinuing();
@@ -545,6 +572,7 @@ export async function convertDocumentAssetRefs(
               fetched.blob,
               audioMeta(fetched.blob, undefined, speech),
             );
+            allocatedIds.push(assetId);
             try {
               // Liveness is rechecked at the commit boundary, like the media path.
               assertContinuing();
@@ -674,7 +702,7 @@ export async function convertDocumentAssetRefs(
     }
   }
 
-  if (!changed) return { document, changed: false, report };
+  if (!changed) return { document, changed: false, report, allocatedIds };
 
   const nextStage: Stage =
     whiteboard !== stage.whiteboard || videoManifest !== stage.videoManifest
@@ -689,5 +717,10 @@ export async function convertDocumentAssetRefs(
     `Converted legacy asset refs for ${stageId}: ${report.converted} converted, ` +
       `${report.emptied} emptied (dead URL), ${report.kept} kept (bytes unavailable)`,
   );
-  return { document: { ...document, stage: nextStage, scenes }, changed: true, report };
+  return {
+    document: { ...document, stage: nextStage, scenes },
+    changed: true,
+    report,
+    allocatedIds,
+  };
 }

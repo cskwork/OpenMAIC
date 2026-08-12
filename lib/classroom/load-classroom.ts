@@ -25,6 +25,13 @@ import {
 export interface ClassroomPayload {
   stage: Stage;
   scenes: Scene[];
+  /**
+   * Pool assets this payload's conversion freshly allocated. A caller that
+   * discards the payload (a superseded load, a rejected hydration) must roll
+   * these back; otherwise they would outlive the classroom they were made
+   * for.
+   */
+  allocatedAssetIds?: string[];
 }
 
 interface Logger {
@@ -136,13 +143,27 @@ export async function runClassroomLoad<TMediaTasks = unknown>({
 
       if (classroom) {
         const { stage, scenes } = classroom;
+        // A discarded payload must not keep what its conversion allocated:
+        // roll the fresh allocations back whenever the load is superseded or
+        // the hydration rejects the payload as stale.
+        const rollbackPayloadAllocations = async () => {
+          if (!classroom.allocatedAssetIds?.length) return;
+          const { removeAsset } = await import('@/lib/media/asset-pool');
+          for (const id of classroom.allocatedAssetIds) {
+            await removeAsset(id).catch(() => undefined);
+          }
+        };
         const applied = await applyFallbackScenes({ loadToken, stage, scenes });
-        if (!isCurrent()) return;
+        if (!isCurrent()) {
+          await rollbackPayloadAllocations();
+          return;
+        }
         if (!applied) {
           log.info('Stage changed during server-side fallback hydration, skipping load:', {
             requestedStageId: stage.id,
             latestStageId: getCurrentStage()?.id,
           });
+          await rollbackPayloadAllocations();
           return;
         }
         log.info('Loaded from server-side storage:', classroomId);
@@ -267,8 +288,9 @@ export async function fetchClassroomFromApi(
   // allocated asset ids and the raw URLs are never stored. Conversion failure
   // degrades to the unconverted payload rather than blocking the load -- the
   // document load path retries conversion on the next open.
+  const { convertDocumentAssetRefs, LegacyConversionAbortedError } =
+    await import('@/lib/media/convert-legacy-asset-refs');
   try {
-    const { convertDocumentAssetRefs } = await import('@/lib/media/convert-legacy-asset-refs');
     // The guard travels into the conversion: a load superseded mid-fetch
     // stops producing side effects as soon as it is known to be unwanted,
     // and the abort degrades to the unconverted payload like any failure.
@@ -277,8 +299,20 @@ export async function fetchClassroomFromApi(
       undefined,
       shouldConvert,
     );
-    return { stage: converted.document.stage, scenes: converted.document.scenes };
-  } catch {
+    return {
+      stage: converted.document.stage,
+      scenes: converted.document.scenes,
+      allocatedAssetIds: converted.allocatedIds,
+    };
+  } catch (error) {
+    if (error instanceof LegacyConversionAbortedError) {
+      // The caller is discarding this payload: roll back whatever the aborted
+      // pass allocated so a stale load leaves nothing in the pool.
+      const { removeAsset } = await import('@/lib/media/asset-pool');
+      for (const id of error.allocatedIds) {
+        await removeAsset(id).catch(() => undefined);
+      }
+    }
     return json.classroom;
   }
 }

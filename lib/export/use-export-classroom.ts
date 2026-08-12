@@ -15,9 +15,12 @@ import {
   type ManifestScene,
   type MediaIndexEntry,
 } from './classroom-zip-types';
-import { collectAudioFiles, collectMediaFiles, actionsToManifest } from './classroom-zip-utils';
-import { mapWithConcurrency } from '@/lib/media/convert-legacy-asset-refs';
-import { fetchMediaUrl } from '@/lib/media/fetch-media-url';
+import {
+  collectAudioFiles,
+  collectMediaFiles,
+  actionsToManifest,
+  collectLegacyAudioForExport,
+} from './classroom-zip-utils';
 import type { SpeechAction } from '@/lib/types/action';
 import { createLogger } from '@/lib/logger';
 import {
@@ -82,44 +85,11 @@ export function useExportClassroom() {
 
       // 5b. Fetch legacy audio URLs that no local row backs. An unconverted
       // document can carry narration only as an audioUrl; the field itself
-      // never enters the manifest, so its bytes must. Unique URLs first,
-      // then a bounded fetch: awaiting each in turn would multiply the
-      // per-request timeout by the clip count on a stalled endpoint.
-      const audioUrlToPath = new Map<string, string>();
-      const legacyAudioBlobs: Array<{ zipPath: string; blob: Blob; format: string }> = [];
-      const uniqueLegacyUrls = new Set<string>();
-      for (const scene of scenes) {
-        for (const action of scene.actions ?? []) {
-          if (action.type !== 'speech') continue;
-          const legacyUrl = (action as { audioUrl?: string }).audioUrl;
-          if (!legacyUrl) continue;
-          const stampedId = (action as SpeechAction).audioId;
-          if (stampedId && audioIdToPath.has(stampedId)) continue;
-          uniqueLegacyUrls.add(legacyUrl);
-        }
-      }
-      const fetchedLegacy = await mapWithConcurrency([...uniqueLegacyUrls], 4, async (url) => {
-        try {
-          // Cross-origin URLs go through the same-origin media proxy, as the
-          // rest of this exporter's asset inlining already does: a plain
-          // fetch is CORS-blocked exactly where an <audio> element would
-          // still play. Bounded either way, like the load-path converter.
-          const response = await fetchMediaUrl(url, 15_000);
-          if (!response.ok) return { url, blob: null };
-          return { url, blob: await response.blob() };
-        } catch {
-          // A legacy URL that will not fetch exports without its audio:
-          // the same outcome the converter gives a dead URL.
-          return { url, blob: null };
-        }
-      });
-      for (const { url, blob } of fetchedLegacy) {
-        if (!blob) continue;
-        const format = blob.type.split('/')[1] || 'mp3';
-        const zipPath = `audio/legacy-${legacyAudioBlobs.length + 1}.${format}`;
-        audioUrlToPath.set(url, zipPath);
-        legacyAudioBlobs.push({ zipPath, blob, format });
-      }
+      // never enters the manifest, so its bytes must.
+      const { audioUrlToPath, blobs: legacyAudioBlobs } = await collectLegacyAudioForExport(
+        scenes,
+        audioIdToPath,
+      );
 
       // 6. Build manifest
       const manifestStage: ManifestStage = {

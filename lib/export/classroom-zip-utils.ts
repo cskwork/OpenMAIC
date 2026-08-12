@@ -5,6 +5,8 @@ import type { AudioFileRecord, MediaFileRecord } from '@/lib/utils/database';
 import type { Scene } from '@/lib/types/stage';
 import { isConcreteMediaAddress } from '@/lib/media/resolve-media-ref';
 import { resolveAudioBlob } from '@/lib/media/resolve-audio-bytes';
+import { fetchMediaUrl } from '@/lib/media/fetch-media-url';
+import { mapWithConcurrency } from '@/lib/media/convert-legacy-asset-refs';
 import { withAssetUrl } from '@/lib/media/use-asset-url';
 
 // ─── Export: Collect Media ─────────────────────────────────────
@@ -80,6 +82,59 @@ export async function collectMediaFiles(stageId: string): Promise<CollectedMedia
 }
 
 // ─── Export: Action Serialization ──────────────────────────────
+
+/** Bytes fetched from a legacy audio URL during export, with its assigned archive path. */
+export interface LegacyAudioBlob {
+  zipPath: string;
+  blob: Blob;
+  format: string;
+}
+
+/**
+ * Fetch the legacy audio URLs no local row backs, so an unconverted
+ * document's narration still reaches the archive: the field itself never
+ * enters the manifest, so its bytes must. Cross-origin URLs go through the
+ * same-origin media proxy (CORS-locked exactly where an <audio> element
+ * would still play), unique URLs first, then a bounded concurrent fetch so a
+ * stalled endpoint costs one timeout rather than one per clip. URLs that
+ * will not fetch are skipped -- the same outcome the converter gives a dead
+ * URL.
+ */
+export async function collectLegacyAudioForExport(
+  scenes: readonly Scene[],
+  audioIdToPath: Map<string, string>,
+): Promise<{ audioUrlToPath: Map<string, string>; blobs: LegacyAudioBlob[] }> {
+  const uniqueLegacyUrls = new Set<string>();
+  for (const scene of scenes) {
+    for (const action of scene.actions ?? []) {
+      if (action.type !== 'speech') continue;
+      const legacyUrl = (action as { audioUrl?: string }).audioUrl;
+      if (!legacyUrl) continue;
+      const stampedId = (action as SpeechAction).audioId;
+      if (stampedId && audioIdToPath.has(stampedId)) continue;
+      uniqueLegacyUrls.add(legacyUrl);
+    }
+  }
+  const blobs: LegacyAudioBlob[] = [];
+  const audioUrlToPath = new Map<string, string>();
+  const fetched = await mapWithConcurrency([...uniqueLegacyUrls], 4, async (url) => {
+    try {
+      const response = await fetchMediaUrl(url, 15_000);
+      if (!response.ok) return { url, blob: null };
+      return { url, blob: await response.blob() };
+    } catch {
+      return { url, blob: null };
+    }
+  });
+  for (const { url, blob } of fetched) {
+    if (!blob) continue;
+    const format = blob.type.split('/')[1] || 'mp3';
+    const zipPath = `audio/legacy-${blobs.length + 1}.${format}`;
+    audioUrlToPath.set(url, zipPath);
+    blobs.push({ zipPath, blob, format });
+  }
+  return { audioUrlToPath, blobs };
+}
 
 export function actionsToManifest(
   actions: Action[],
