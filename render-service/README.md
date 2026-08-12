@@ -174,14 +174,8 @@ The full 1080p sample took 696.9 s with one worker, with capture about 75.5% and
 encode about 20.6% of runtime. Four-worker 1080p/4K and multi-job profiles remain
 unsupported until their combined correctness and memory bounds are validated.
 
-The current local issue #1092 long-run benchmark has not reproduced a successful
-comparison yet: both the one-worker BeginFrame and screenshot cases terminate in
-Chromium 151 with `Target closed` before producing comparable outputs. Therefore
-fresh output parity across these profiles is still unverified, and the profiles
-remain draft validation targets rather than a claim that the issue's benchmark
-and parity acceptance criteria have passed. The benchmark implementation and its
-outputs remain in the separate local benchmark worktree and are not part of this
-service change.
+Output parity must be verified separately for each validated profile before
+claiming parity acceptance.
 
 ## Scalability
 
