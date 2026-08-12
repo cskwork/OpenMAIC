@@ -366,20 +366,33 @@ async function migrateLocked(
   expectedGeneration: number,
 ): Promise<DocumentAccessResult> {
   // Lock order: the per-stage document lock is acquired by the caller before
-  // the global shared epoch (entered below, only for each commit). This
-  // matches the established per-stage -> global order and prevents
-  // clearDatabase from interleaving with migration commit.
+  // the global shared epoch. This matches the established per-stage -> global
+  // order and prevents clearDatabase from interleaving with migration commit.
   const store = resolveStore(deps);
-  const existing = await store.loadDocument(stageId);
-  if (existing) {
-    assertValidDestination(stageId, existing);
-    const snapshot = await getLegacyDocumentStore(deps).read(stageId);
+
+  // Phase 1, shared lock: the reads. They are cheap, and they must be inside
+  // the lock because clearDatabase bumps the generation before it deletes,
+  // so a read outside the lock can observe content whose epoch already moved
+  // and match the fence anyway.
+  const probe = await withRuntimeStorageSharedLock(async () => {
+    let existing: AppDocument | null = null;
+    let snapshot: LegacyDocumentSnapshot | null = null;
+    try {
+      existing = await store.loadDocument(stageId);
+      if (existing) assertValidDestination(stageId, existing);
+      snapshot = await getLegacyDocumentStore(deps).read(stageId);
+    } catch (error) {
+      // A clear that landed mid-read closes the database out from under it.
+      // The phase-3 fence redoes the reads inside the lock.
+      if (!(error instanceof Error && error.name === 'DatabaseClosedError')) throw error;
+      return null;
+    }
     // finishMigrationMetadata runs when the marker already exists or the
     // snapshot verifies; a diverged snapshot skips it, so the destination is
     // converted and persisted exactly like the main exit and diverged
     // documents are not stranded with legacy references forever.
     let metadataPending = false;
-    if (snapshot) {
+    if (existing && snapshot) {
       const kv = resolveKv(deps);
       const markerKey = `${MARKER_PREFIX}${stageId}`;
       if (await kv.get<MigrationMarker>(markerKey, 'device')) {
@@ -396,44 +409,86 @@ async function migrateLocked(
         }
       }
     }
-    // Conversion runs OUTSIDE the maintenance lock: URL probing can consume
-    // the full aggregate budget, and a shared lock held that long makes
-    // clearDatabase's five-second exclusive acquisition fail on an unrelated
-    // slow URL. Only the fence-checked commit needs the exclusion.
-    const converted = await convertLoadedDocument(existing, deps);
-    return withRuntimeStorageSharedLock(async () => {
-      if (snapshot && metadataPending) await finishMigrationMetadata(snapshot, resolveKv(deps));
+    return {
+      existing,
+      snapshot,
+      metadataPending,
+      generation: await readGeneration(deps.kv),
+    };
+  });
+
+  if (probe !== null && probe.existing === null && probe.snapshot === null) {
+    return { document: null, readOnlyLegacy: false };
+  }
+
+  // Phase 2, no lock: the expensive part. URL probing can consume the full
+  // aggregate budget, and a shared lock held that long fails clearDatabase's
+  // five-second exclusive acquisition on an unrelated slow URL.
+  const converted = probe?.existing ? await convertLoadedDocument(probe.existing, deps) : null;
+  // The birth path converts the canonicalized legacy aggregate before it is
+  // first saved, so the destination is born with allocated asset ids where
+  // bytes are available. The verification migrates `expected` through the
+  // pure ladder before comparing, so a kept co-present pair (which the
+  // ladder preserves) verifies consistently.
+  const expected =
+    probe && !probe.existing && probe.snapshot
+      ? await convertLoadedDocument(canonicalize(probe.snapshot), deps)
+      : null;
+
+  // Phase 3, shared lock: fence, reconcile, commit.
+  return withRuntimeStorageSharedLock(async () => {
+    const currentGeneration = await readGeneration(deps.kv);
+    if (probe === null || currentGeneration !== probe.generation) {
+      // The probe raced an epoch change (or never read at all): redo the
+      // reads inside the lock and answer from what is actually there. This
+      // path converts under the lock, which is slow only in the rare case it
+      // exists for.
+      const current = await store.loadDocument(stageId);
+      if (current) {
+        assertValidDestination(stageId, current);
+        const fresh = await convertLoadedDocument(current, deps);
+        const settled = await saveConvertedDocument(
+          store,
+          stageId,
+          current,
+          fresh,
+          deps,
+          currentGeneration,
+        );
+        return { document: settled, readOnlyLegacy: false };
+      }
+      const freshSnapshot = await getLegacyDocumentStore(deps).read(stageId);
+      if (!freshSnapshot) return { document: null, readOnlyLegacy: false };
+      const freshExpected = await convertLoadedDocument(canonicalize(freshSnapshot), deps);
+      await store.saveDocument(freshExpected);
+      const actual = await store.loadDocument(stageId);
+      if (!actual) throw new Error(`Legacy migration lost document ${JSON.stringify(stageId)}`);
+      assertMigrationVerified(freshExpected, actual, deps.migrateDsl);
+      await finishMigrationMetadata(freshSnapshot, resolveKv(deps));
+      return { document: actual, readOnlyLegacy: false };
+    }
+
+    if (probe.existing && converted) {
+      if (probe.snapshot && probe.metadataPending) {
+        await finishMigrationMetadata(probe.snapshot, resolveKv(deps));
+      }
       const settled = await saveConvertedDocument(
         store,
         stageId,
-        existing,
+        probe.existing,
         converted,
         deps,
-        expectedGeneration,
+        probe.generation,
       );
       return { document: settled, readOnlyLegacy: false };
-    });
-  }
-
-  const snapshot = await getLegacyDocumentStore(deps).read(stageId);
-  if (!snapshot) return { document: null, readOnlyLegacy: false };
-  // Convert the canonicalized legacy aggregate BEFORE it is first saved, so
-  // the destination is born with allocated asset ids where bytes are
-  // available. The verification below migrates `expected` through the pure
-  // ladder before comparing, so a kept co-present pair (which the ladder
-  // preserves) verifies consistently. Same lock discipline as above: probe
-  // outside, commit inside.
-  const expected = await convertLoadedDocument(canonicalize(snapshot), deps);
-  return withRuntimeStorageSharedLock(async () => {
-    if ((await readGeneration(deps.kv)) !== expectedGeneration) {
-      throw new DocumentStorageGenerationChangedError(stageId);
     }
+
+    if (!probe.snapshot || !expected) return { document: null, readOnlyLegacy: false };
     await store.saveDocument(expected);
     const actual = await store.loadDocument(stageId);
     if (!actual) throw new Error(`Legacy migration lost document ${JSON.stringify(stageId)}`);
     assertMigrationVerified(expected, actual, deps.migrateDsl);
-
-    await finishMigrationMetadata(snapshot, resolveKv(deps));
+    await finishMigrationMetadata(probe.snapshot, resolveKv(deps));
     return { document: actual, readOnlyLegacy: false };
   });
 }
