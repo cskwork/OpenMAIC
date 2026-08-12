@@ -34,6 +34,27 @@ export interface ClassroomPayload {
   allocatedAssetIds?: string[];
 }
 
+/**
+ * Undo a discarded payload's conversion side effects: the pool entries, and
+ * the Dexie compatibility rows keyed by them (audio by the allocated id,
+ * media by the stage-scoped compound key). Idempotent and best-effort.
+ */
+async function rollbackConvertedAllocations(
+  stageId: string,
+  allocatedIds: readonly string[],
+): Promise<void> {
+  if (allocatedIds.length === 0) return;
+  const [{ removeAsset }, { db }] = await Promise.all([
+    import('@/lib/media/asset-pool'),
+    import('@/lib/utils/database'),
+  ]);
+  for (const id of allocatedIds) {
+    await removeAsset(id).catch(() => undefined);
+    await db.audioFiles.delete(id).catch(() => undefined);
+    await db.mediaFiles.delete(`${stageId}:${id}`).catch(() => undefined);
+  }
+}
+
 interface Logger {
   info: (...args: unknown[]) => void;
   warn: (...args: unknown[]) => void;
@@ -139,23 +160,26 @@ export async function runClassroomLoad<TMediaTasks = unknown>({
       // this load is still the current one; a superseded load fetches the
       // payload but never converts it.
       const classroom = await fetchClassroom(classroomId, isCurrent);
-      if (!isCurrent()) return;
+      // A discarded payload must not keep what its conversion allocated.
+      // Rollback ownership lives ahead of every discard point: supersession
+      // can land between the conversion's last liveness check and any of the
+      // returns below, and the ledger also covers the Dexie compatibility
+      // rows, not just the pool entries.
+      const rollbackPayload = async () => {
+        if (classroom) {
+          await rollbackConvertedAllocations(classroom.stage.id, classroom.allocatedAssetIds ?? []);
+        }
+      };
+      if (!isCurrent()) {
+        await rollbackPayload();
+        return;
+      }
 
       if (classroom) {
         const { stage, scenes } = classroom;
-        // A discarded payload must not keep what its conversion allocated:
-        // roll the fresh allocations back whenever the load is superseded or
-        // the hydration rejects the payload as stale.
-        const rollbackPayloadAllocations = async () => {
-          if (!classroom.allocatedAssetIds?.length) return;
-          const { removeAsset } = await import('@/lib/media/asset-pool');
-          for (const id of classroom.allocatedAssetIds) {
-            await removeAsset(id).catch(() => undefined);
-          }
-        };
         const applied = await applyFallbackScenes({ loadToken, stage, scenes });
         if (!isCurrent()) {
-          await rollbackPayloadAllocations();
+          await rollbackPayload();
           return;
         }
         if (!applied) {
@@ -163,7 +187,7 @@ export async function runClassroomLoad<TMediaTasks = unknown>({
             requestedStageId: stage.id,
             latestStageId: getCurrentStage()?.id,
           });
-          await rollbackPayloadAllocations();
+          await rollbackPayload();
           return;
         }
         log.info('Loaded from server-side storage:', classroomId);
@@ -288,8 +312,11 @@ export async function fetchClassroomFromApi(
   // allocated asset ids and the raw URLs are never stored. Conversion failure
   // degrades to the unconverted payload rather than blocking the load -- the
   // document load path retries conversion on the next open.
-  const { convertDocumentAssetRefs, LegacyConversionAbortedError } =
-    await import('@/lib/media/convert-legacy-asset-refs');
+  const { convertDocumentAssetRefs } = await import('@/lib/media/convert-legacy-asset-refs');
+  // The pass shares its allocation ledger with us, so every failure mode --
+  // a liveness abort or an ordinary worker error -- rolls back what it
+  // committed, not just the aborts.
+  const allocated: string[] = [];
   try {
     // The guard travels into the conversion: a load superseded mid-fetch
     // stops producing side effects as soon as it is known to be unwanted,
@@ -298,21 +325,17 @@ export async function fetchClassroomFromApi(
       { ...json.classroom },
       undefined,
       shouldConvert,
+      allocated,
     );
     return {
       stage: converted.document.stage,
       scenes: converted.document.scenes,
       allocatedAssetIds: converted.allocatedIds,
     };
-  } catch (error) {
-    if (error instanceof LegacyConversionAbortedError) {
-      // The caller is discarding this payload: roll back whatever the aborted
-      // pass allocated so a stale load leaves nothing in the pool.
-      const { removeAsset } = await import('@/lib/media/asset-pool');
-      for (const id of error.allocatedIds) {
-        await removeAsset(id).catch(() => undefined);
-      }
-    }
+  } catch {
+    // The caller is discarding this payload: roll back whatever the pass
+    // committed so a stale or failed load leaves nothing behind.
+    await rollbackConvertedAllocations(json.classroom.stage.id, allocated);
     return json.classroom;
   }
 }

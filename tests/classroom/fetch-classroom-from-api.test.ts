@@ -2,18 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // Exercises the real fetchClassroomFromApi: the /api/classroom JSON boundary,
 // the dynamic converter import, degradation on converter failure, and the
-// abort rollback of converter side effects.
+// rollback of conversion side effects through the shared ledger.
 const mocks = vi.hoisted(() => ({
   convertMock: vi.fn(),
   removeAssetMock: vi.fn().mockResolvedValue(undefined),
-  LegacyConversionAbortedError: class extends Error {
-    readonly name = 'LegacyConversionAbortedError';
-    constructor(readonly allocatedIds: readonly string[]) {
-      super('legacy asset conversion aborted');
-    }
-  },
 }));
-const { convertMock, removeAssetMock, LegacyConversionAbortedError } = mocks;
+const { convertMock, removeAssetMock } = mocks;
 
 vi.mock('@/lib/utils/stage-storage', () => ({
   saveStageData: vi.fn().mockResolvedValue(undefined),
@@ -22,7 +16,6 @@ vi.mock('@/lib/utils/stage-storage', () => ({
 }));
 vi.mock('@/lib/media/convert-legacy-asset-refs', () => ({
   convertDocumentAssetRefs: (...args: unknown[]) => convertMock(...args),
-  LegacyConversionAbortedError,
 }));
 vi.mock('@/lib/media/asset-pool', () => ({
   removeAsset: (...args: unknown[]) => removeAssetMock(...args),
@@ -75,11 +68,12 @@ describe('fetchClassroomFromApi', () => {
   it('rolls back allocations when the load is superseded mid-conversion', async () => {
     stubClassroomApi();
     convertMock.mockImplementation(
-      (_doc: unknown, _deps: unknown, shouldContinue?: () => boolean) => {
+      (_doc: unknown, _deps: unknown, shouldContinue?: () => boolean, ledger?: string[]) => {
         if (shouldContinue && !shouldContinue()) {
-          return Promise.reject(new LegacyConversionAbortedError(['ast_stale']));
+          ledger?.push('ast_stale');
+          return Promise.reject(new Error('conversion aborted'));
         }
-        return Promise.resolve({ document: payload, allocatedIds: [] });
+        return Promise.resolve({ document: payload, allocatedIds: ledger ?? [] });
       },
     );
     // Current at the pre-conversion gate, superseded by the time the

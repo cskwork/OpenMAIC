@@ -203,16 +203,20 @@ export async function createVideoTimelineDeps(input: {
   const { stage, scenes, skipGeometry = false } = input;
 
   // Audio: load only the records referenced by speech actions.
-  const audioIds = new Set<string>();
-  const legacyAudioUrls = new Set<string>();
+  const speechPairs: Array<{ audioId?: string; audioUrl?: string }> = [];
   for (const scene of scenes) {
     for (const action of scene.actions ?? []) {
       if (action.type !== 'speech') continue;
       const speech = action as SpeechAction;
-      if (speech.audioId) audioIds.add(speech.audioId);
-      const legacyUrl = (speech as { audioUrl?: string }).audioUrl;
-      if (legacyUrl) legacyAudioUrls.add(legacyUrl);
+      speechPairs.push({
+        audioId: speech.audioId || undefined,
+        audioUrl: (speech as { audioUrl?: string }).audioUrl || undefined,
+      });
     }
+  }
+  const audioIds = new Set<string>();
+  for (const pair of speechPairs) {
+    if (pair.audioId) audioIds.add(pair.audioId);
   }
   const audioById = new Map<string, AudioFileRecord>();
   for (const audioId of audioIds) {
@@ -226,7 +230,17 @@ export async function createVideoTimelineDeps(input: {
   // An unconverted document can carry narration only as a legacy URL: the
   // playback paths fall back to it, and the export must too, or a playable
   // clip renders as missing. Fetched bytes are keyed by the URL itself, which
-  // the lookup below prefers exactly when no id resolves.
+  // the lookup below prefers exactly when no id resolves. A URL is fetched
+  // only when its action's id produced no usable bytes -- server-backed
+  // conversion deliberately retains these URLs, and fetching them anyway
+  // would double-download every clip.
+  const legacyAudioUrls = new Set<string>();
+  for (const pair of speechPairs) {
+    if (!pair.audioUrl) continue;
+    const record = pair.audioId ? audioById.get(pair.audioId) : undefined;
+    if (record && (record.blob?.size > 0 || record.ossKey)) continue;
+    legacyAudioUrls.add(pair.audioUrl);
+  }
   await mapWithConcurrency([...legacyAudioUrls], PROBE_CONCURRENCY, async (url) => {
     try {
       const response = await fetchMediaUrl(url, 15_000);

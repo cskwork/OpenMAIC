@@ -360,6 +360,7 @@ export async function convertDocumentAssetRefs(
   document: AppDocument,
   deps?: LegacyAssetConversionDeps,
   shouldContinue?: () => boolean,
+  ledger?: string[],
 ): Promise<LegacyAssetConversionResult> {
   const resolvedDeps = deps ?? (await defaultDeps());
   const stageId = document.stage.id;
@@ -368,8 +369,12 @@ export async function convertDocumentAssetRefs(
   // multiply that cap by the clip count. One shared budget bounds the whole
   // pass; what is left converts on a later open.
   const urlProbeBudgetEndsAt = Date.now() + URL_PROBE_BUDGET_MS;
-  /** Ids this pass freshly allocated, for callers that need a rollback list. */
-  const allocatedIds: string[] = [];
+  /**
+   * Ids this pass freshly allocated. A caller may share the array to own the
+   * rollback itself: any failure path -- liveness abort or an ordinary worker
+   * error -- then still compensates what the pass committed.
+   */
+  const allocatedIds = ledger ?? [];
   // Liveness probe for callers whose own work can be superseded mid-flight
   // (a classroom load): a stale conversion must stop producing side effects
   // as soon as its result is known to be unwanted, not after the last fetch.
@@ -407,7 +412,7 @@ export async function convertDocumentAssetRefs(
       const keyedRef = record.id.startsWith(`${stageId}:`)
         ? record.id.slice(stageId.length + 1)
         : undefined;
-      if (keyedRef && keyedRef !== ref && (await resolvedDeps.assetRefExists(keyedRef))) {
+      if (keyedRef && keyedRef !== ref && (await existsOnce(keyedRef))) {
         report.converted += 1;
         return keyedRef;
       }
@@ -463,6 +468,20 @@ export async function convertDocumentAssetRefs(
   };
 
   const retainUrl = resolvedDeps.retainLegacyUrl === true;
+  // The per-open probe is one HEAD per speech action under the document
+  // lock, so existence answers are memoized within the pass, and an
+  // allocated-shape id is trusted without one. The prefix is not validation
+  // (the package's id domain is deliberately opaque); a false negative costs
+  // a probe, and legacy ids never take the allocation shape.
+  const existsMemo = new Map<string, Promise<boolean>>();
+  const existsOnce = (ref: string): Promise<boolean> => {
+    const pending = existsMemo.get(ref);
+    if (pending) return pending;
+    const probe = resolvedDeps.assetRefExists(ref);
+    existsMemo.set(ref, probe);
+    return probe;
+  };
+  const hasAllocatedShape = (ref: string): boolean => ref.startsWith('ast_');
 
   const convertSpeechAction = async (action: Action): Promise<Action> => {
     assertContinuing();
@@ -472,7 +491,9 @@ export async function convertDocumentAssetRefs(
     const audioUrl = speech.audioUrl || undefined;
     if (!audioId && !audioUrl) return action;
 
-    if (audioId && (await resolvedDeps.assetRefExists(audioId))) {
+    const poolBacked =
+      audioId !== undefined && (hasAllocatedShape(audioId) || (await existsOnce(audioId)));
+    if (audioId && poolBacked) {
       // Already converted (pool-backed). Only a stale co-present URL remains
       // to drop -- unless the pool is server-backed, where the URL is the
       // cross-browser recovery handle and stays as inert data.
@@ -481,6 +502,16 @@ export async function convertDocumentAssetRefs(
       delete next.audioUrl;
       changed = true;
       return next;
+    }
+
+    if (retainUrl && audioId && audioUrl && hasAllocatedShape(audioId)) {
+      // Another principal's converted narration: this reader's partition
+      // misses the id, but the retained URL still plays locally. Rewriting
+      // the shared document to a reader-private allocation would strand it
+      // for the owner and ping-pong the reference between browsers, so the
+      // action stays exactly as it is.
+      report.kept += 1;
+      return action;
     }
 
     const record = audioId ? await resolvedDeps.getAudioRecord(audioId) : undefined;
@@ -496,7 +527,7 @@ export async function convertDocumentAssetRefs(
           // mirrored this row; reuse its allocation instead of orphaning a
           // twin entry on every retry.
           const mirrored = await resolvedDeps.getMirroredAudioRecord(stageId, { audioId });
-          if (mirrored && (await resolvedDeps.assetRefExists(mirrored.id))) {
+          if (mirrored && (await existsOnce(mirrored.id))) {
             report.converted += 1;
             return mirrored.id;
           }
@@ -557,7 +588,7 @@ export async function convertDocumentAssetRefs(
             audioId,
             audioUrl,
           });
-          if (mirrored && (await resolvedDeps.assetRefExists(mirrored.id))) {
+          if (mirrored && (await existsOnce(mirrored.id))) {
             report.converted += 1;
             return { kind: 'allocated', assetId: mirrored.id };
           }
