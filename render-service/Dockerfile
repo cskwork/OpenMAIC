@@ -15,6 +15,7 @@ ARG FONTS_LIBERATION_VERSION=1:1.07.4-11
 ARG FONTS_NOTO_CORE_VERSION=20201225-1
 ARG FONTS_NOTO_COLOR_EMOJI_VERSION=2.042-0+deb12u1
 ARG FONTS_NOTO_CJK_VERSION=1:20220127+repack1-1
+ARG DEBIAN_SNAPSHOT=20260731T162426Z
 
 ENV PUPPETEER_SKIP_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-headless-shell \
@@ -23,9 +24,19 @@ ENV PUPPETEER_SKIP_DOWNLOAD=true \
 # chromium-headless-shell + ffmpeg + the fonts/libs a headless Chrome needs to
 # render text and composite frames. iptables lets the entrypoint lock down egress
 # (block the untrusted Chromium from reaching the app); ca-certificates covers
-# TLS for any asset the composition might still reference before lockdown.
-RUN apt-get update \
+# TLS for any asset the composition might still reference before lockdown. All
+# apt indexes come from one dated, signed snapshot so exact versions remain
+# installable after they rotate out of the live Debian mirrors. HTTP bootstraps
+# the slim image (which has no CA bundle yet); apt still verifies Release files.
+RUN printf '%s\n' \
+     "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT} bookworm main" \
+     "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT} bookworm-updates main" \
+     "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT} bookworm-security main" \
+     > /etc/apt/sources.list \
+  && rm -f /etc/apt/sources.list.d/debian.sources \
+  && apt-get update \
   && apt-get install -y --no-install-recommends \
+     "chromium-common=${CHROMIUM_VERSION}" \
      "chromium-headless-shell=${CHROMIUM_VERSION}" \
      "ffmpeg=${FFMPEG_VERSION}" \
      "iptables=${IPTABLES_VERSION}" \

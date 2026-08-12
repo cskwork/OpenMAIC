@@ -40,8 +40,14 @@ describe('render-service container contract', () => {
       'node:22.22.2-bookworm-slim@sha256:f3a68cf41a855d227d1b0ab832bed9749469ef38cf4f58182fb8c893bc462383',
     );
     expect(dockerfile).toContain('CHROMIUM_VERSION=151.0.7922.71-1~deb12u1');
+    expect(dockerfile).toContain('"chromium-common=${CHROMIUM_VERSION}"');
     expect(dockerfile).toContain('FFMPEG_VERSION=7:5.1.9-0+deb12u1');
     expect(dockerfile).toContain('FONTS_NOTO_CORE_VERSION=20201225-1');
+    expect(dockerfile).toContain('DEBIAN_SNAPSHOT=20260731T162426Z');
+    expect(dockerfile).toContain('http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}');
+    expect(dockerfile).toContain(
+      'http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}',
+    );
 
     const packageJson = read('package.json');
     expect(packageJson).toContain('"@hyperframes/producer": "0.7.60"');
