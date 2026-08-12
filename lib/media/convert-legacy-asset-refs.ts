@@ -110,6 +110,16 @@ export interface LegacyAssetConversionDeps {
   removeAsset(ref: string): Promise<void>;
   /** Fetch (and thereby probe) a legacy `audioUrl`. */
   fetchLegacyUrl(url: string): Promise<LegacyUrlFetch>;
+  /**
+   * Keep the legacy `audioUrl` on converted actions as inert recovery data.
+   * Set when the asset pool is server-backed: assets are partitioned by the
+   * minting browser's learner key while documents are not, so another
+   * browser can open the document but cannot resolve narration stored under
+   * a different principal. The retained URL is never read by 0.2.0 writers;
+   * playback, preview, and video export use it as the fallback of last
+   * resort, and ZIP export strips it after fetching its bytes.
+   */
+  retainLegacyUrl?: boolean;
 }
 
 /** Run each job through at most `limit` workers, preserving input order. */
@@ -200,14 +210,25 @@ export async function findLegacyMediaRecord(
 
 /** The default production wiring: Dexie legacy tables plus the app asset pool. */
 async function defaultDeps(): Promise<LegacyAssetConversionDeps> {
-  const [{ db, mediaFileKey }, { putAsset, removeAsset }, { assetRefExists }] = await Promise.all([
+  const [
+    { db, mediaFileKey },
+    { putAsset, removeAsset },
+    { assetRefExists },
+    { isAssetPoolServerBacked },
+  ] = await Promise.all([
     import('@/lib/utils/database'),
     import('./asset-pool'),
     import('./use-asset-url'),
+    import('./asset-pool-config'),
   ]);
   return {
     putAsset: (blob, meta) => putAsset(blob, meta),
     assetRefExists: (ref) => assetRefExists(ref),
+    // A server-backed pool partitions by the minting browser's learner key
+    // while documents are global; converted narration keeps its URL as the
+    // cross-browser recovery handle. A local pool resolves for anyone on the
+    // device, and the field is dropped.
+    retainLegacyUrl: isAssetPoolServerBacked(),
     getMediaRecord: (stageId, ref) =>
       findLegacyMediaRecord(db, mediaFileKey, stageId, ref, assetRefExists),
     getAudioRecord: (audioId) => db.audioFiles.get(audioId),
@@ -415,6 +436,8 @@ export async function convertDocumentAssetRefs(
     return clone;
   };
 
+  const retainUrl = resolvedDeps.retainLegacyUrl === true;
+
   const convertSpeechAction = async (action: Action): Promise<Action> => {
     assertContinuing();
     if (action.type !== 'speech') return action;
@@ -425,8 +448,9 @@ export async function convertDocumentAssetRefs(
 
     if (audioId && (await resolvedDeps.assetRefExists(audioId))) {
       // Already converted (pool-backed). Only a stale co-present URL remains
-      // to drop; the pair collapsed when the id was allocated.
-      if (!audioUrl) return action;
+      // to drop -- unless the pool is server-backed, where the URL is the
+      // cross-browser recovery handle and stays as inert data.
+      if (!audioUrl || retainUrl) return action;
       const next: LegacySpeechAction = { ...speech };
       delete next.audioUrl;
       changed = true;
@@ -482,7 +506,10 @@ export async function convertDocumentAssetRefs(
         return action;
       }
       const next: LegacySpeechAction = { ...speech, audioId: assetId };
-      delete next.audioUrl;
+      // A server-backed pool partitions by the minting browser, so the URL
+      // stays as the cross-browser recovery handle; a local pool resolves
+      // everywhere this browser goes, and the URL is dropped.
+      if (!retainUrl) delete next.audioUrl;
       changed = true;
       return next;
     }
@@ -548,7 +575,7 @@ export async function convertDocumentAssetRefs(
       const outcome = await pendingUrl;
       if (outcome.kind === 'allocated') {
         const next: LegacySpeechAction = { ...speech, audioId: outcome.assetId };
-        delete next.audioUrl;
+        if (!retainUrl) delete next.audioUrl;
         changed = true;
         return next;
       }

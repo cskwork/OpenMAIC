@@ -133,13 +133,31 @@ async function saveConvertedDocument(
   converted: AppDocument,
   deps: DocumentMigrationDeps,
   expectedGeneration: number,
-): Promise<void> {
-  if (converted === existing) return;
+): Promise<AppDocument> {
+  if (converted === existing) return existing;
   if ((await readGeneration(deps.kv)) !== expectedGeneration) {
     throw new DocumentStorageGenerationChangedError(stageId);
   }
   try {
+    // Conversion may have spent seconds probing legacy URLs, and the document
+    // lock does not coordinate independent browsers: another client can have
+    // written while we converted. Reload and reconcile instead of blindly
+    // overwriting -- a fresh read that differs from what we converted gets
+    // its own conversion pass, and that is what we save.
+    const latest = await store.loadDocument(stageId);
+    if (
+      latest &&
+      !isEqual(
+        omitUndefinedObjectMembers(stripDocument(latest)),
+        omitUndefinedObjectMembers(stripDocument(existing)),
+      )
+    ) {
+      const reConverted = await convertLoadedDocument(latest, deps);
+      await store.saveDocument(reConverted);
+      return reConverted;
+    }
     await store.saveDocument(converted);
+    return converted;
   } catch (error) {
     // Best-effort: a readable document must not fail to open because the
     // save-back did (quota pressure, a transient write error). The converted
@@ -151,6 +169,7 @@ async function saveConvertedDocument(
       `Converted document ${JSON.stringify(stageId)} could not be saved back; will retry on next open`,
       error,
     );
+    return converted;
   }
 }
 
@@ -276,6 +295,15 @@ export function migrateDocumentForVerification(
   return outline === undefined ? migrated : { ...migrated, outline };
 }
 
+/** The comparable projection of a document: scenes order-independent, envelope fields aside. */
+function stripDocument(document: AppDocument): unknown {
+  return {
+    stage: document.stage,
+    scenes: [...document.scenes].sort((a, b) => a.order - b.order),
+    outline: document.outline,
+  };
+}
+
 function assertMigrationVerified(
   expected: AppDocument,
   actual: AppDocument,
@@ -283,15 +311,10 @@ function assertMigrationVerified(
 ): void {
   assertValidDestination(expected.stage.id, actual);
   const migratedExpected = migrateDocumentForVerification(expected, migrateDsl);
-  const strip = (document: AppDocument) => ({
-    stage: document.stage,
-    scenes: [...document.scenes].sort((a, b) => a.order - b.order),
-    outline: document.outline,
-  });
   if (
     !isEqual(
-      omitUndefinedObjectMembers(strip(actual)),
-      omitUndefinedObjectMembers(strip(migratedExpected)),
+      omitUndefinedObjectMembers(stripDocument(actual)),
+      omitUndefinedObjectMembers(stripDocument(migratedExpected)),
     )
   ) {
     throw new Error(
@@ -366,7 +389,7 @@ async function migrateLocked(
             // exactly like the main exit so diverged documents are not
             // stranded with legacy references forever.
             const converted = await convertLoadedDocument(existing, deps);
-            await saveConvertedDocument(
+            const settled = await saveConvertedDocument(
               store,
               stageId,
               existing,
@@ -374,7 +397,7 @@ async function migrateLocked(
               deps,
               expectedGeneration,
             );
-            return { document: converted, readOnlyLegacy: false };
+            return { document: settled, readOnlyLegacy: false };
           }
         }
         await finishMigrationMetadata(snapshot, kv);
@@ -384,8 +407,15 @@ async function migrateLocked(
       // same lock. An unconverted document is returned as-is (identity), so
       // already-converted documents pay no write.
       const converted = await convertLoadedDocument(existing, deps);
-      await saveConvertedDocument(store, stageId, existing, converted, deps, expectedGeneration);
-      return { document: converted, readOnlyLegacy: false };
+      const settled = await saveConvertedDocument(
+        store,
+        stageId,
+        existing,
+        converted,
+        deps,
+        expectedGeneration,
+      );
+      return { document: settled, readOnlyLegacy: false };
     }
 
     const snapshot = await getLegacyDocumentStore(deps).read(stageId);

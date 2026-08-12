@@ -637,4 +637,52 @@ describe('legacy document migration', () => {
     expect(second.document?.stage.name).toBe('converted');
     expect((await realStore.loadDocument('stage-1'))?.stage.name).toBe('converted');
   });
+
+  test('a concurrent write during conversion is reconciled, not overwritten', async () => {
+    // The conversion window can span seconds of URL probing; another browser
+    // writing in that window must not have its edit clobbered by the stale
+    // conversion save. The save path reloads, converts the fresh document,
+    // and returns that.
+    const realStore = store();
+    await realStore.saveDocument({
+      dslVersion: DSL_VERSION,
+      stage: { id: 'stage-1', name: 'Migrated', createdAt: 100, updatedAt: 200 },
+      scenes: [],
+    });
+    let loads = 0;
+    const racingStore = new Proxy(realStore, {
+      get(target, property) {
+        if (property === 'loadDocument') {
+          return async (id: string) => {
+            loads += 1;
+            const doc = await target.loadDocument(id);
+            if (loads === 2 && doc) {
+              // A concurrent editor renamed the stage while conversion ran.
+              return { ...doc, stage: { ...doc.stage, name: 'concurrent edit' } };
+            }
+            return doc;
+          };
+        }
+        return Reflect.get(target, property);
+      },
+    });
+    const convert = (doc: AppDocument): Promise<AppDocument> =>
+      Promise.resolve({ ...doc, stage: { ...doc.stage, description: 'converted' } });
+
+    const result = await accessDocument('stage-1', {
+      store: racingStore,
+      kv: new MemoryKv(),
+      legacyStore: legacy(null),
+      lockManager: lockManager(),
+      convertAssetRefs: convert,
+    });
+
+    // The opened document is the reconciled one: the concurrent edit survives
+    // and the conversion applies on top of it.
+    expect(result.document?.stage.name).toBe('concurrent edit');
+    expect(result.document?.stage.description).toBe('converted');
+    const persisted = await realStore.loadDocument('stage-1');
+    expect(persisted?.stage.name).toBe('concurrent edit');
+    expect(persisted?.stage.description).toBe('converted');
+  });
 });

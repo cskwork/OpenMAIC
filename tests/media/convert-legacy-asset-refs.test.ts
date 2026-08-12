@@ -280,6 +280,30 @@ describe('slide placeholder conversion', () => {
     expect(audioRows.get(assetId)?.originAudioId).toBe('tts_s0_a1');
   });
 
+  test('retainLegacyUrl keeps the URL on converted actions as inert recovery data', async () => {
+    // Server-backed pools partition by the minting browser while documents
+    // are global: the URL is the cross-browser recovery handle and stays.
+    const { pool, urlFetches, deps } = makeHarness();
+    const url = 'https://server.example.com/audio/retained.mp3';
+    urlFetches.set(url, { kind: 'ok', blob: new Blob(['retained-audio'], { type: 'audio/mpeg' }) });
+    const doc = document({
+      scenes: [slideScene([speech({ id: 'a1', audioId: 'tts_s0_a1', audioUrl: url })])],
+    });
+
+    const result = await convertDocumentAssetRefs(doc, { ...deps, retainLegacyUrl: true });
+
+    const action = result.document.scenes[0].actions?.[0] as unknown as Record<string, unknown>;
+    const [assetId] = [...pool.keys()];
+    expect(action.audioId).toBe(assetId);
+    expect(action.audioUrl).toBe(url);
+    // And the retained field does not defeat idempotency: a second pass is a no-op.
+    const twice = await convertDocumentAssetRefs(result.document, {
+      ...deps,
+      retainLegacyUrl: true,
+    });
+    expect(twice.changed).toBe(false);
+  });
+
   test('speech conversion spans scenes through one pool, preserving order', async () => {
     const { pool, urlFetches, deps } = makeHarness();
     const url = 'https://server.example.com/audio/across.mp3';
