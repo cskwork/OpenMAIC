@@ -230,11 +230,12 @@ describe('local bounded chunk executor', () => {
     const paths = setup();
     await materializeProject(paths.projectDir);
     const stale = await createRenderPlan({ ...paths, options, chunkCount: 3 }, deps());
+    const localPlanPath = `${stale.planDir}.local.json`;
     const localPlan = JSON.parse(
-      await readFile(join(stale.planDir, 'local-plan.json'), 'utf8'),
+      await readFile(localPlanPath, 'utf8'),
     ) as { planHash: string };
     await writeFile(
-      join(stale.planDir, 'local-plan.json'),
+      localPlanPath,
       JSON.stringify({ ...localPlan, planHash: 'stale' }),
     );
     await expect(

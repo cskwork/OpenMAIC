@@ -255,6 +255,8 @@ async function main(): Promise<void> {
             chunkCount: config.chunkCount,
             chunkWorkers: config.chunkWorkers,
             maxParallelChunks: config.maxParallelChunks,
+            ...(config.chunkSizeFrames > 0 ? { chunkSizeFrames: config.chunkSizeFrames } : {}),
+            ...(config.targetChunkFrames > 0 ? { targetChunkFrames: config.targetChunkFrames } : {}),
           },
         }
       : {}),

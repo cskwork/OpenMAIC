@@ -283,7 +283,14 @@ function chunkPath(
 ): string {
   const extension =
     format === 'mp4' ? 'mp4' : format === 'mov' ? 'mov' : format === 'webm' ? 'webm' : 'frames';
-  return join(planDir, 'chunks', `${String(index).padStart(6, '0')}.${extension}`);
+  return join(`${resolve(planDir)}.chunks`, `${String(index).padStart(6, '0')}.${extension}`);
+}
+
+// The producer fingerprints every file inside planDir. Keep the executor's
+// local cache envelope beside the producer plan so it cannot invalidate the
+// producer's immutable plan hash.
+function localPlanPath(planDir: string): string {
+  return `${resolve(planDir)}.local.json`;
 }
 
 function assertPlanDirectory(planDir: string, projectDir: string): void {
@@ -452,7 +459,8 @@ export async function createRenderPlan(
   assertPlanDirectory(planDir, request.projectDir);
   const projectDir = resolve(request.projectDir);
   const projectHash = hashProjectDir(projectDir);
-  if (await exists(join(planDir, 'local-plan.json'))) {
+  const localPath = localPlanPath(planDir);
+  if (await exists(localPath)) {
     try {
       const existing = await readImmutableRenderPlan(planDir);
       if (
@@ -472,6 +480,7 @@ export async function createRenderPlan(
       // A stale or partial plan is replaced below.
     }
     await rm(planDir, { recursive: true, force: true });
+    await rm(localPath, { force: true });
   }
   await mkdir(planDir, { recursive: true });
   const dimensions = await readCompositionDimensions(projectDir);
@@ -580,7 +589,7 @@ export async function createRenderPlan(
       chunks: plan.chunks,
     }),
   };
-  await writeFile(join(planDir, 'local-plan.json'), `${JSON.stringify(envelope, null, 2)}\n`);
+  await writeFile(localPath, `${JSON.stringify(envelope, null, 2)}\n`);
   return plan;
 }
 
@@ -723,7 +732,7 @@ export async function executeRenderChunks(
 
 export async function readImmutableRenderPlan(planDir: string): Promise<ImmutableRenderPlan> {
   const raw = JSON.parse(
-    await readFile(join(resolve(planDir), 'local-plan.json'), 'utf8'),
+    await readFile(localPlanPath(planDir), 'utf8'),
   ) as PlanEnvelope;
   if (raw.schemaVersion !== CHUNK_PLAN_SCHEMA_VERSION) {
     throw new ChunkExecutorError('stale_chunk', 'Unsupported local render plan schema');

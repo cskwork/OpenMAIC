@@ -269,6 +269,20 @@ export class RenderCoordinator {
           force: true,
         },
       ).catch(() => {}),
+      rm(
+        `${join(
+          dirname(dir),
+          `.render-plan-${createHash('sha256').update(dir).digest('hex').slice(0, 12)}`,
+        )}.local.json`,
+        { force: true },
+      ).catch(() => {}),
+      rm(
+        `${join(
+          dirname(dir),
+          `.render-plan-${createHash('sha256').update(dir).digest('hex').slice(0, 12)}`,
+        )}.chunks`,
+        { recursive: true, force: true },
+      ).catch(() => {}),
     ]);
   }
 }

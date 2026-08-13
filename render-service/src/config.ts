@@ -53,6 +53,10 @@ export const config = {
   chunkCount: intEnv('RENDER_CHUNK_COUNT', 1),
   chunkWorkers: intEnv('RENDER_CHUNK_WORKERS', resourceProfile.producerWorkers),
   maxParallelChunks: intEnv('RENDER_MAX_PARALLEL_CHUNKS', 1),
+  /** Optional fixed frame count for each planned chunk. */
+  chunkSizeFrames: intEnv('RENDER_CHUNK_SIZE_FRAMES', 0),
+  /** Optional target frame count used by the producer planner. */
+  targetChunkFrames: intEnv('RENDER_TARGET_CHUNK_FRAMES', 0),
   /** Fail a job if the selected profile requires BeginFrame and producer reports otherwise. */
   requireBeginFrame: resourceProfile.requireBeginFrame,
   /** Active (queued+running) jobs allowed per client identity. 0 disables the guard. */
