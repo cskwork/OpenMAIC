@@ -27,6 +27,7 @@ import type { AppDocument, AppDocumentOutline, AppStage } from './persistence-ty
 import { readGeneration } from './storage-generation';
 import { getDocumentStore } from './store';
 import { validateAppScene, validateAppStage } from './validators';
+import { collectStageAssetRefs } from '@/lib/media/collect-stage-asset-refs';
 
 export interface LegacyDocumentSnapshot {
   stage: StageRecord;
@@ -101,13 +102,14 @@ const log = createLogger('DocumentMigration');
 async function convertLoadedDocument(
   document: AppDocument,
   deps: DocumentMigrationDeps,
+  ledger?: string[],
 ): Promise<AppDocument> {
   try {
     const convert =
       deps.convertAssetRefs ??
       (async (value: AppDocument) => {
         const { convertDocumentAssetRefs } = await import('@/lib/media/convert-legacy-asset-refs');
-        return (await convertDocumentAssetRefs(value)).document;
+        return (await convertDocumentAssetRefs(value, undefined, undefined, ledger)).document;
       });
     return await convert(document);
   } catch (error) {
@@ -133,7 +135,7 @@ async function saveConvertedDocument(
   converted: AppDocument,
   deps: DocumentMigrationDeps,
   expectedGeneration: number,
-): Promise<AppDocument> {
+): Promise<AppDocument | null> {
   if (converted === existing) return existing;
   if ((await readGeneration(deps.kv)) !== expectedGeneration) {
     throw new DocumentStorageGenerationChangedError(stageId);
@@ -145,8 +147,14 @@ async function saveConvertedDocument(
     // overwriting -- a fresh read that differs from what we converted gets
     // its own conversion pass, and that is what we save.
     const latest = await store.loadDocument(stageId);
+    if (!latest) {
+      // The document was deleted while conversion ran. That is a concurrent
+      // deletion, not a save target: saving the stale snapshot would recreate
+      // the wiped document. The caller's cleanup rolls the conversion's side
+      // effects back.
+      return null;
+    }
     if (
-      latest &&
       !isEqual(
         omitUndefinedObjectMembers(stripDocument(latest)),
         omitUndefinedObjectMembers(stripDocument(existing)),
@@ -423,8 +431,13 @@ async function migrateLocked(
 
   // Phase 2, no lock: the expensive part. URL probing can consume the full
   // aggregate budget, and a shared lock held that long fails clearDatabase's
-  // five-second exclusive acquisition on an unrelated slow URL.
-  const converted = probe?.existing ? await convertLoadedDocument(probe.existing, deps) : null;
+  // five-second exclusive acquisition on an unrelated slow URL. Every pass
+  // shares one ledger so a discarded or superseded result still owns its
+  // side effects.
+  const passLedger: string[] = [];
+  const converted = probe?.existing
+    ? await convertLoadedDocument(probe.existing, deps, passLedger)
+    : null;
   // The birth path converts the canonicalized legacy aggregate before it is
   // first saved, so the destination is born with allocated asset ids where
   // bytes are available. The verification migrates `expected` through the
@@ -432,11 +445,31 @@ async function migrateLocked(
   // ladder preserves) verifies consistently.
   const expected =
     probe && !probe.existing && probe.snapshot
-      ? await convertLoadedDocument(canonicalize(probe.snapshot), deps)
+      ? await convertLoadedDocument(canonicalize(probe.snapshot), deps, passLedger)
       : null;
 
   // Phase 3, shared lock: fence, reconcile, commit.
   return withRuntimeStorageSharedLock(async () => {
+    // Every exit rolls back the ledger entries the returned document does
+    // not reference: a null answer (a concurrent deletion, an epoch change)
+    // releases them all, and a reconciled or redone document keeps exactly
+    // what it uses.
+    const cleanup = async (finalDoc: AppDocument | null): Promise<void> => {
+      if (passLedger.length === 0) return;
+      const { rollbackConvertedAllocations } =
+        await import('@/lib/media/convert-legacy-asset-refs');
+      if (!finalDoc) {
+        await rollbackConvertedAllocations(stageId, passLedger);
+        return;
+      }
+      const referenced = collectStageAssetRefs(finalDoc, {
+        mediaRows: [],
+        audioRows: [],
+      }).referenced;
+      const orphans = passLedger.filter((id) => !referenced.has(id));
+      await rollbackConvertedAllocations(stageId, orphans);
+    };
+
     const currentGeneration = await readGeneration(deps.kv);
     if (probe === null || currentGeneration !== probe.generation) {
       // The probe raced an epoch change (or never read at all): redo the
@@ -446,7 +479,7 @@ async function migrateLocked(
       const current = await store.loadDocument(stageId);
       if (current) {
         assertValidDestination(stageId, current);
-        const fresh = await convertLoadedDocument(current, deps);
+        const fresh = await convertLoadedDocument(current, deps, passLedger);
         const settled = await saveConvertedDocument(
           store,
           stageId,
@@ -455,16 +488,25 @@ async function migrateLocked(
           deps,
           currentGeneration,
         );
+        await cleanup(settled);
         return { document: settled, readOnlyLegacy: false };
       }
       const freshSnapshot = await getLegacyDocumentStore(deps).read(stageId);
-      if (!freshSnapshot) return { document: null, readOnlyLegacy: false };
-      const freshExpected = await convertLoadedDocument(canonicalize(freshSnapshot), deps);
+      if (!freshSnapshot) {
+        await cleanup(null);
+        return { document: null, readOnlyLegacy: false };
+      }
+      const freshExpected = await convertLoadedDocument(
+        canonicalize(freshSnapshot),
+        deps,
+        passLedger,
+      );
       await store.saveDocument(freshExpected);
       const actual = await store.loadDocument(stageId);
       if (!actual) throw new Error(`Legacy migration lost document ${JSON.stringify(stageId)}`);
       assertMigrationVerified(freshExpected, actual, deps.migrateDsl);
       await finishMigrationMetadata(freshSnapshot, resolveKv(deps));
+      await cleanup(actual);
       return { document: actual, readOnlyLegacy: false };
     }
 
@@ -480,15 +522,20 @@ async function migrateLocked(
         deps,
         probe.generation,
       );
+      await cleanup(settled);
       return { document: settled, readOnlyLegacy: false };
     }
 
-    if (!probe.snapshot || !expected) return { document: null, readOnlyLegacy: false };
+    if (!probe.snapshot || !expected) {
+      await cleanup(null);
+      return { document: null, readOnlyLegacy: false };
+    }
     await store.saveDocument(expected);
     const actual = await store.loadDocument(stageId);
     if (!actual) throw new Error(`Legacy migration lost document ${JSON.stringify(stageId)}`);
     assertMigrationVerified(expected, actual, deps.migrateDsl);
     await finishMigrationMetadata(probe.snapshot, resolveKv(deps));
+    await cleanup(actual);
     return { document: actual, readOnlyLegacy: false };
   });
 }

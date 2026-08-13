@@ -230,6 +230,42 @@ export async function findLegacyMediaRecord(
   return exact ?? mirror;
 }
 
+/**
+ * Undo a discarded conversion's side effects: the pool entries, and the
+ * Dexie compatibility rows keyed by them (audio by the allocated id, media
+ * by the stage-scoped compound key). Idempotent and best-effort.
+ */
+export async function rollbackConvertedAllocations(
+  stageId: string,
+  allocatedIds: readonly string[],
+): Promise<void> {
+  if (allocatedIds.length === 0) return;
+  const [{ removeAsset }, { db }] = await Promise.all([
+    import('./asset-pool'),
+    import('@/lib/utils/database'),
+  ]);
+  for (const id of allocatedIds) {
+    await removeAsset(id).catch(() => undefined);
+    await db.audioFiles.delete(id).catch(() => undefined);
+    await db.mediaFiles.delete(`${stageId}:${id}`).catch(() => undefined);
+  }
+}
+
+/**
+ * Whether a reference is the server classroom media transport: a
+ * `/api/classroom-media/...` URL, relative or absolute. Server generation
+ * rewrites placeholders to these before the document reaches a client, and
+ * the bytes behind them are exactly what conversion must ingest.
+ */
+export function isClassroomMediaUrl(ref: string | undefined): ref is string {
+  if (!ref) return false;
+  try {
+    return new URL(ref, 'http://local.invalid').pathname.startsWith('/api/classroom-media/');
+  } catch {
+    return false;
+  }
+}
+
 /** The default production wiring: Dexie legacy tables plus the app asset pool. */
 async function defaultDeps(): Promise<LegacyAssetConversionDeps> {
   const [
@@ -290,11 +326,6 @@ async function defaultDeps(): Promise<LegacyAssetConversionDeps> {
       }
     },
   };
-}
-
-/** A media row is a usable byte source only when it holds real bytes. */
-function usableMediaRecord(record: MediaFileRecord | undefined): record is MediaFileRecord {
-  return !!record && !record.error && !!record.blob && record.blob.size > 0;
 }
 
 function mediaMeta(record: MediaFileRecord, blob: Blob): AssetMeta {
@@ -396,13 +427,29 @@ export async function convertDocumentAssetRefs(
   const report: LegacyAssetConversionReport = { converted: 0, emptied: 0, kept: 0 };
   let changed = false;
 
-  /** Allocate (once) for a placeholder with local bytes; null when unusable. */
+  /** Allocate (once) for a placeholder with local or CDN bytes; null when unusable. */
   const allocateMediaRef = (ref: string): Promise<string | null> => {
     const inFlight = allocationByRef.get(ref);
     if (inFlight) return inFlight;
     const pending = (async (): Promise<string | null> => {
       const record = await resolvedDeps.getMediaRecord(stageId, ref);
-      if (!usableMediaRecord(record)) {
+      // A zero-length local blob with an ossKey is an evicted row: the CDN
+      // copy is the live byte source, and export already treats it that way.
+      let source: Blob | undefined;
+      const usable = !!record && !record.error && !!record.blob && record.blob.size > 0;
+      if (usable) {
+        source = record.blob.type
+          ? record.blob
+          : new Blob([record.blob], { type: record.mimeType });
+      } else if (record && record.ossKey) {
+        const fetched = await resolvedDeps.fetchLegacyUrl(record.ossKey);
+        if (fetched.kind === 'ok') {
+          source = fetched.blob.type
+            ? fetched.blob
+            : new Blob([fetched.blob], { type: record.mimeType });
+        }
+      }
+      if (!record || !source) {
         report.kept += 1;
         return null;
       }
@@ -416,10 +463,7 @@ export async function convertDocumentAssetRefs(
         report.converted += 1;
         return keyedRef;
       }
-      const blob = record.blob.type
-        ? record.blob
-        : new Blob([record.blob], { type: record.mimeType });
-      const assetId = await resolvedDeps.putAsset(blob, mediaMeta(record, blob));
+      const assetId = await resolvedDeps.putAsset(source, mediaMeta(record, source));
       allocatedIds.push(assetId);
       try {
         // Liveness is rechecked at the commit boundary: an abort between the
@@ -447,15 +491,66 @@ export async function convertDocumentAssetRefs(
     return pending;
   };
 
+  /** Allocate (once) for a server classroom media transport URL. */
+  const allocateUrlMediaRef = (url: string): Promise<string | null> => {
+    const inFlight = allocationByRef.get(url);
+    if (inFlight) return inFlight;
+    const pending = (async (): Promise<string | null> => {
+      if (Date.now() > urlProbeBudgetEndsAt) return null;
+      const fetched = await resolvedDeps.fetchLegacyUrl(url);
+      if (fetched.kind !== 'ok') {
+        report.kept += 1;
+        return null;
+      }
+      const isVideo = /\.(mp4|webm|mov)(\?|#|$)/i.test(url);
+      const assetId = await resolvedDeps.putAsset(fetched.blob, {
+        contentType: fetched.blob.type || undefined,
+        mediaType: isVideo ? 'video' : 'image',
+        origin: 'classroom-media-url',
+      });
+      allocatedIds.push(assetId);
+      try {
+        assertContinuing();
+        // Mirror like the placeholder path, so export and stage deletion see
+        // the same rows they see for any converted media.
+        await resolvedDeps.putMediaRecord(stageId, assetId, {
+          id: `${stageId}:${assetId}`,
+          stageId,
+          type: isVideo ? 'video' : 'image',
+          blob: fetched.blob,
+          mimeType: fetched.blob.type || (isVideo ? 'video/mp4' : 'image/png'),
+          size: fetched.blob.size,
+          prompt: '',
+          params: '{}',
+          createdAt: Date.now(),
+          placeholderRef: url,
+        });
+      } catch (error) {
+        await resolvedDeps.removeAsset(assetId).catch(() => undefined);
+        throw error;
+      }
+      report.converted += 1;
+      return assetId;
+    })();
+    allocationByRef.set(url, pending);
+    return pending;
+  };
+
   const convertSlide = async <T extends SlideLike>(slide: T): Promise<T> => {
     assertContinuing();
     const slots = [...slideMediaReferenceSlots(slide)];
     const rewrites: Array<{ index: number; assetId: string }> = [];
     for (let index = 0; index < slots.length; index += 1) {
       const ref = slots[index].read();
-      if (!isGeneratedMediaPlaceholder(ref)) continue;
-      const assetId = await allocateMediaRef(ref);
-      if (assetId) rewrites.push({ index, assetId });
+      if (isGeneratedMediaPlaceholder(ref)) {
+        const assetId = await allocateMediaRef(ref);
+        if (assetId) rewrites.push({ index, assetId });
+      } else if (isClassroomMediaUrl(ref)) {
+        // Server classrooms ship media as transport URLs; ingest their bytes
+        // rather than persisting a deployment-specific address.
+        const assetId = await allocateUrlMediaRef(ref);
+        if (assetId) rewrites.push({ index, assetId });
+      }
     }
     if (rewrites.length === 0) return slide;
     // Rewrite on a clone so the caller's document is never mutated. Slot
@@ -515,7 +610,10 @@ export async function convertDocumentAssetRefs(
     }
 
     const record = audioId ? await resolvedDeps.getAudioRecord(audioId) : undefined;
-    if (audioId && record?.blob && record.blob.size > 0) {
+    const recordHasBytes = !!record && record.blob.size > 0;
+    // An evicted row (empty blob, live ossKey) still has its bytes on the CDN;
+    // export already treats ossKey as the live source, and conversion does too.
+    if (audioId && record && (recordHasBytes || record.ossKey)) {
       // Several speech actions can share one derived id; they shared one
       // audioFiles row, so they collapse into one allocated asset. Speech
       // actions convert concurrently, and the cache is the same
@@ -531,10 +629,13 @@ export async function convertDocumentAssetRefs(
             report.converted += 1;
             return mirrored.id;
           }
-          const allocated = await resolvedDeps.putAsset(
-            record.blob,
-            audioMeta(record.blob, record, speech),
-          );
+          let source: Blob | undefined = recordHasBytes ? record.blob : undefined;
+          if (!source && record.ossKey) {
+            const fetched = await resolvedDeps.fetchLegacyUrl(record.ossKey);
+            if (fetched.kind === 'ok') source = fetched.blob;
+          }
+          if (!source) return null;
+          const allocated = await resolvedDeps.putAsset(source, audioMeta(source, record, speech));
           allocatedIds.push(allocated);
           try {
             // Liveness is rechecked at the commit boundary, like the media path.
@@ -717,8 +818,10 @@ export async function convertDocumentAssetRefs(
     let manifestChanged = false;
     const nextManifest: typeof videoManifest = {};
     for (const [key, entry] of Object.entries(videoManifest)) {
-      if (isGeneratedMediaPlaceholder(key)) {
-        const assetId = await allocateMediaRef(key);
+      if (isGeneratedMediaPlaceholder(key) || isClassroomMediaUrl(key)) {
+        const assetId = isGeneratedMediaPlaceholder(key)
+          ? await allocateMediaRef(key)
+          : await allocateUrlMediaRef(key);
         if (assetId) {
           nextManifest[assetId] = entry;
           manifestChanged = true;

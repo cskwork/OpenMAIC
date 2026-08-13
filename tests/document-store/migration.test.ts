@@ -685,4 +685,46 @@ describe('legacy document migration', () => {
     expect(persisted?.stage.name).toBe('concurrent edit');
     expect(persisted?.stage.description).toBe('converted');
   });
+
+  test('a concurrent deletion during conversion is honored, not resurrected', async () => {
+    // The reload finds the document gone: saving the stale converted
+    // snapshot would recreate a wiped classroom, so the save is skipped and
+    // the load observes the deletion.
+    const realStore = store();
+    await realStore.saveDocument({
+      dslVersion: DSL_VERSION,
+      stage: { id: 'stage-1', name: 'Migrated', createdAt: 100, updatedAt: 200 },
+      scenes: [],
+    });
+    let loads = 0;
+    const deletingStore = new Proxy(realStore, {
+      get(target, property) {
+        if (property === 'loadDocument') {
+          return async (id: string) => {
+            loads += 1;
+            if (loads === 2) return null; // deleted while conversion ran
+            return target.loadDocument(id);
+          };
+        }
+        return Reflect.get(target, property);
+      },
+    });
+    const convert = (doc: AppDocument): Promise<AppDocument> =>
+      Promise.resolve({ ...doc, stage: { ...doc.stage, description: 'converted' } });
+
+    const result = await accessDocument('stage-1', {
+      store: deletingStore,
+      kv: new MemoryKv(),
+      legacyStore: legacy(null),
+      lockManager: lockManager(),
+      convertAssetRefs: convert,
+    });
+
+    expect(result.document).toBeNull();
+    // Nothing was saved back: the persisted document is the original,
+    // untouched by the conversion that was about to overwrite it.
+    const persisted = await realStore.loadDocument('stage-1');
+    expect(persisted?.stage.name).toBe('Migrated');
+    expect(persisted?.stage).not.toHaveProperty('description');
+  });
 });
