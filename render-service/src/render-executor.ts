@@ -225,15 +225,23 @@ export class InProcessExecutor implements RenderExecutor {
           ...request.chunkExecution,
         };
         const result = await this.chunkExecutor(chunkRequest);
+        const observedModes = [
+          ...new Set(result.chunks.map((chunk) => chunk.captureMode).filter(Boolean)),
+        ];
+        const actualCaptureMode =
+          observedModes.length === 1 ? observedModes[0]! : result.plan.captureMode;
         const chunkMetrics: RenderExecutionMetrics = {
           resourceProfile: config.resourceProfile.name,
           requestedCaptureMode: config.resourceProfile.requestedCaptureMode,
-          actualCaptureMode: result.plan.captureMode,
+          actualCaptureMode,
           requestedWorkers: config.producerWorkers,
           actualWorkers: result.plan.chunkWorkers,
           versions: this.runtimeVersions,
         };
-        if (this.requireBeginFrame && result.plan.captureMode !== 'beginframe') {
+        if (
+          this.requireBeginFrame &&
+          (observedModes.length !== 1 || actualCaptureMode !== 'beginframe')
+        ) {
           return {
             status: 'failed',
             failure: {

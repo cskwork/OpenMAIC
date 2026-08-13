@@ -99,6 +99,7 @@ describe('InProcessExecutor', () => {
           captureStageMs: 5,
           encodeStageMs: 3,
           workers: 1,
+          captureMode: 'beginframe' as const,
           perfPath: '/tmp/chunk-0.mp4.perf.json',
         },
         {
@@ -112,6 +113,7 @@ describe('InProcessExecutor', () => {
           captureStageMs: 6,
           encodeStageMs: 4,
           workers: 1,
+          captureMode: 'beginframe' as const,
           perfPath: '/tmp/chunk-1.mp4.perf.json',
         },
       ],

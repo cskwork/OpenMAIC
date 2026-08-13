@@ -134,7 +134,7 @@ export interface ChunkExecutionRequest {
 export interface ChunkExecutionResult {
   plan: ImmutableRenderPlan;
   assembly: AssembleResult;
-  chunks: readonly ChunkResult[];
+  chunks: readonly (ChunkResult & { captureMode?: string })[];
   totalElapsedMs: number;
   stages: { planMs: number; chunksMs: number; assembleMs: number };
 }
