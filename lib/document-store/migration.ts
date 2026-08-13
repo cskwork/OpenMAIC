@@ -501,7 +501,14 @@ async function migrateLocked(
         deps,
         passLedger,
       );
-      await store.saveDocument(freshExpected);
+      try {
+        await store.saveDocument(freshExpected);
+      } catch (error) {
+        // A failed first save leaves the pass's side effects unattached;
+        // roll them back before the error surfaces.
+        await cleanup(null);
+        throw error;
+      }
       const actual = await store.loadDocument(stageId);
       if (!actual) throw new Error(`Legacy migration lost document ${JSON.stringify(stageId)}`);
       assertMigrationVerified(freshExpected, actual, deps.migrateDsl);
@@ -530,7 +537,14 @@ async function migrateLocked(
       await cleanup(null);
       return { document: null, readOnlyLegacy: false };
     }
-    await store.saveDocument(expected);
+    try {
+      await store.saveDocument(expected);
+    } catch (error) {
+      // A failed first save leaves the pass's side effects unattached;
+      // roll them back before the error surfaces.
+      await cleanup(null);
+      throw error;
+    }
     const actual = await store.loadDocument(stageId);
     if (!actual) throw new Error(`Legacy migration lost document ${JSON.stringify(stageId)}`);
     assertMigrationVerified(expected, actual, deps.migrateDsl);
