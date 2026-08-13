@@ -24,6 +24,14 @@ function intEnvAllowZero(name: string, fallback: number): number {
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
+function boolEnv(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) return fallback;
+  if (raw === 'true' || raw === '1' || raw === 'on') return true;
+  if (raw === 'false' || raw === '0' || raw === 'off') return false;
+  return fallback;
+}
+
 const MB = 1024 * 1024;
 const resourceProfile = resolveResourceProfile();
 
@@ -40,6 +48,11 @@ export const config = {
   maxConcurrentExtractions: resourceProfile.maxConcurrentExtractions,
   /** Explicit per-job worker count fixed by the selected resource profile. */
   producerWorkers: resourceProfile.producerWorkers,
+  /** Opt-in local plan → chunk → assemble path; HTTP contract remains unchanged. */
+  chunkExecutionEnabled: boolEnv('RENDER_CHUNK_EXECUTION', false),
+  chunkCount: intEnv('RENDER_CHUNK_COUNT', 1),
+  chunkWorkers: intEnv('RENDER_CHUNK_WORKERS', resourceProfile.producerWorkers),
+  maxParallelChunks: intEnv('RENDER_MAX_PARALLEL_CHUNKS', 1),
   /** Fail a job if the selected profile requires BeginFrame and producer reports otherwise. */
   requireBeginFrame: resourceProfile.requireBeginFrame,
   /** Active (queued+running) jobs allowed per client identity. 0 disables the guard. */

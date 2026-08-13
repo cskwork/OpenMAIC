@@ -6,9 +6,9 @@
  * extraction: reserve(identity) atomically claims a slot, submit() consumes it,
  * and release() undoes it when extraction fails.
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { ArtifactStore } from './artifact-store.js';
 import { config } from './config.js';
 import type { JobStore } from './job-store.js';
@@ -257,7 +257,19 @@ export class RenderCoordinator {
 
   /** Best-effort recursive delete of a job's unzipped project dir. */
   async cleanupProject(dir: string): Promise<void> {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
+    await Promise.all([
+      rm(dir, { recursive: true, force: true }).catch(() => {}),
+      rm(
+        join(
+          dirname(dir),
+          `.render-plan-${createHash('sha256').update(dir).digest('hex').slice(0, 12)}`,
+        ),
+        {
+          recursive: true,
+          force: true,
+        },
+      ).catch(() => {}),
+    ]);
   }
 }
 
