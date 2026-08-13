@@ -1016,6 +1016,48 @@ describe('HttpAssetStore snapshot behavior', () => {
     expect(seen[seen.length - 1]?.method).toBe('HEAD');
   });
 
+  test('a signed URL whose object is gone is a miss, not a malformed response', async () => {
+    // Reclamation landing between the mint and the fetch: the entry was owned
+    // and readable when the descriptor was issued, so the object store's 404
+    // reports the same physical state a direct read reports as a miss. What a
+    // read means must not depend on the deployment's egress setting.
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      if (String(input) === 'https://objects.example/collected') {
+        return new Response('NoSuchKey', { status: 404 });
+      }
+      return new Response(
+        JSON.stringify({ url: 'https://objects.example/collected', revision: 7 }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/vnd.openmaic.asset-descriptor+json' },
+        },
+      );
+    });
+    const store = new HttpAssetStore({ baseUrl: 'https://assets.invalid', fetch });
+    stores.push(store);
+
+    await expect(store.resolve('asset')).resolves.toBeNull();
+  });
+
+  test('a signed URL failing for any other reason stays a malformed response', async () => {
+    // A 403 is not a miss: with S3 it is what a missing object looks like when
+    // the signing identity lacks s3:ListBucket, and it is equally what a real
+    // credential fault looks like. Reporting it as a miss would hide the fault.
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      if (String(input) === 'https://objects.example/denied') {
+        return new Response('AccessDenied', { status: 403 });
+      }
+      return new Response(JSON.stringify({ url: 'https://objects.example/denied', revision: 7 }), {
+        status: 200,
+        headers: { 'content-type': 'application/vnd.openmaic.asset-descriptor+json' },
+      });
+    });
+    const store = new HttpAssetStore({ baseUrl: 'https://assets.invalid', fetch });
+    stores.push(store);
+
+    await expect(store.resolve('asset')).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' });
+  });
+
   test('a malformed egress descriptor fails as MALFORMED_RESPONSE', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async () => {
       return new Response(JSON.stringify({ url: 'https://objects.example/signed' }), {

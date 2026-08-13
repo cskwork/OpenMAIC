@@ -1,6 +1,7 @@
 import type { IncomingMessage, RequestListener, ServerResponse } from 'node:http';
 import type { AssetMeta } from '@openmaic/dsl';
 import type { AssetId } from '../asset/id.js';
+import { assertSignedUrlTtlWithinGrace } from '../asset/collector.js';
 import {
   ASSET_DESCRIPTOR_MEDIA_TYPE,
   AssetNotFoundError,
@@ -33,18 +34,51 @@ export type AssetHttpAuthorize = (
  * the object, and objects are hash-keyed -- is specified in the asset HTTP
  * contract; read it before enabling this.
  */
-export type AssetByteEgress = 'direct' | 'redirect';
+export type AssetByteEgress = 'direct' | AssetIndirectByteEgress;
+
+/**
+ * Indirect byte egress, together with the reclamation grace it must stay
+ * below.
+ *
+ * `collectionGraceMs` is required, and that is the whole point of this shape.
+ * A signed URL must expire far earlier than the bytes it names can be
+ * collected, or a reader authorized at mint time errors at the object store:
+ * the last reference goes, the grace elapses, the collector deletes the
+ * object, and the still-valid URL now points at nothing. The handler and the
+ * collector are configured separately, so nothing else on this side knows the
+ * grace a deployment runs. Carrying it here lets the handler check the
+ * invariant at construction, with both numbers in hand, which makes the
+ * unsafe combination unrepresentable rather than merely detectable by a
+ * consumer who remembers to look.
+ */
+export interface AssetIndirectByteEgress {
+  readonly mode: 'redirect';
+  /**
+   * Lifetime of a minted signed URL, in seconds. Defaults to
+   * {@link DEFAULT_SIGNED_URL_TTL_SECONDS}, and deliberately short: the signed
+   * URL is a bearer credential for its whole lifetime. Must be at most a tenth
+   * of `collectionGraceMs`, and at most {@link MAX_SIGNED_URL_TTL_SECONDS}.
+   */
+  readonly signedUrlTtlSeconds?: number;
+  /**
+   * The reclamation grace this deployment runs its {@link AssetCollector}
+   * with, in milliseconds. Must be the same value the collector receives; a
+   * number invented here would validate the invariant against a grace nothing
+   * enforces.
+   */
+  readonly collectionGraceMs: number;
+}
 
 /** The shortest signed URL lifetime that still covers a redirect round trip. */
 export const DEFAULT_SIGNED_URL_TTL_SECONDS = 60;
 
 /**
- * Fifteen minutes: the longest lifetime the handler will mint. The signed URL
- * must expire far earlier than the byte reclamation grace period -- one hour
- * by default -- or a URL minted against a referenced object could outlive it:
- * the last reference goes, the grace elapses, the collector deletes the
- * object, and the still-valid URL errors at the object store. A deployment
- * that shortens its grace below this cap must lower the TTL to match.
+ * Fifteen minutes: the longest lifetime the handler will mint, whatever the
+ * grace allows. This ceiling is about the signer rather than the collector --
+ * a signed URL is a bearer credential for its whole lifetime, and the shipped
+ * SigV4 signer has its own bounds -- so it stands alongside the grace ratio
+ * rather than in place of it. The two bite in different deployments: the ratio
+ * constrains a short grace, this ceiling constrains a long one.
  */
 export const MAX_SIGNED_URL_TTL_SECONDS = 900;
 
@@ -63,16 +97,12 @@ export interface AssetHttpHandlerOptions {
   maxMetaBytes?: number;
   /** Multipart frame-count limit. Defaults to 8. */
   maxParts?: number;
-  /** Byte `GET` egress. Defaults to `direct`; see {@link AssetByteEgress}. */
-  byteEgress?: AssetByteEgress;
   /**
-   * Lifetime of a minted signed URL, in seconds. Defaults to 60. Valid only
-   * with `byteEgress: 'redirect'`, and deliberately short: the signed URL is
-   * a bearer credential for its whole lifetime. Capped at
-   * {@link MAX_SIGNED_URL_TTL_SECONDS}, the longest lifetime the shipped
-   * signer can honor.
+   * Byte `GET` egress. Defaults to `direct`; see {@link AssetByteEgress}. The
+   * signed URL lifetime lives inside the indirect variant rather than beside
+   * it, so it cannot be set without the grace that bounds it.
    */
-  signedUrlTtlSeconds?: number;
+  byteEgress?: AssetByteEgress;
 }
 
 export const DEFAULT_MAX_ASSET_REQUEST_BYTES = 33 * 1024 * 1024;
@@ -478,7 +508,9 @@ async function route(
     maxAssetBytes: number;
     maxMetaBytes: number;
     maxParts: number;
-    byteEgress: AssetByteEgress;
+    // Resolved: the option's grace has already been checked against the
+    // lifetime, so the routing path only needs the mode.
+    byteEgress: 'direct' | 'redirect';
     signedUrlTtlSeconds: number;
   },
 ): Promise<void> {
@@ -706,21 +738,29 @@ export function createAssetHttpHandler(
     throw new Error('@openmaic/storage: renderableTypes must contain exact media types');
   }
 
-  const byteEgress = options.byteEgress ?? 'direct';
-  if (byteEgress !== 'direct' && byteEgress !== 'redirect') {
-    throw new Error('@openmaic/storage: byteEgress must be "direct" or "redirect"');
-  }
-  const signedUrlTtlSeconds = options.signedUrlTtlSeconds ?? DEFAULT_SIGNED_URL_TTL_SECONDS;
-  if (options.signedUrlTtlSeconds !== undefined) {
-    assertPositiveSafeInteger(options.signedUrlTtlSeconds, 'signedUrlTtlSeconds');
-    if (byteEgress !== 'redirect') {
-      throw new Error('@openmaic/storage: signedUrlTtlSeconds requires byteEgress "redirect"');
-    }
-    if (options.signedUrlTtlSeconds > MAX_SIGNED_URL_TTL_SECONDS) {
+  const egress = options.byteEgress ?? 'direct';
+  let byteEgress: 'direct' | 'redirect' = 'direct';
+  let signedUrlTtlSeconds = DEFAULT_SIGNED_URL_TTL_SECONDS;
+  if (egress !== 'direct') {
+    if (typeof egress !== 'object' || egress === null || egress.mode !== 'redirect') {
       throw new Error(
-        '@openmaic/storage: signedUrlTtlSeconds must stay far below the reclamation grace period',
+        '@openmaic/storage: byteEgress must be "direct" or { mode: "redirect", collectionGraceMs }',
       );
     }
+    byteEgress = 'redirect';
+    if (egress.signedUrlTtlSeconds !== undefined) {
+      assertPositiveSafeInteger(egress.signedUrlTtlSeconds, 'signedUrlTtlSeconds');
+      if (egress.signedUrlTtlSeconds > MAX_SIGNED_URL_TTL_SECONDS) {
+        throw new Error(
+          `@openmaic/storage: signedUrlTtlSeconds must not exceed ${MAX_SIGNED_URL_TTL_SECONDS}`,
+        );
+      }
+      signedUrlTtlSeconds = egress.signedUrlTtlSeconds;
+    }
+    // Both numbers are in hand here, which is why the grace is a required
+    // field: the invariant is enforced where the feature is enabled, not
+    // delegated to a helper the consumer has to remember to call.
+    assertSignedUrlTtlWithinGrace(signedUrlTtlSeconds, egress.collectionGraceMs);
   }
 
   const config = {

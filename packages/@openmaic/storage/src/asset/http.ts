@@ -426,6 +426,19 @@ export class HttpAssetStore implements StorageProvider {
           '@openmaic/storage: asset HTTP request failed',
         );
       }
+      if (byteResponse.status === 404) {
+        // A miss reported by the byte layer instead of by the registry, and
+        // answered exactly as a registry miss is above. The entry was owned and
+        // readable when the URL was minted, so the only way its bytes are gone
+        // is reclamation landing between the mint and this fetch -- the same
+        // physical state the direct path reports as a miss, because the byte
+        // layer's contract calls an absent object a miss rather than an error.
+        // Reporting MALFORMED_RESPONSE here would make one state read
+        // differently depending on the deployment's egress setting.
+        this.identities.delete(id);
+        await this.urls.invalidate(id);
+        return { url: null, retry: false };
+      }
       if (!byteResponse.ok) {
         throw malformed(
           byteResponse.status,

@@ -12,6 +12,13 @@ import { createAssetHttpHandler, type AssetHttpHandlerOptions } from '../src/ser
 const PRINCIPAL: AssetPrincipal = { key: 'principal-a' };
 const BYTES = new Uint8Array([1, 2, 3, 4]);
 
+/**
+ * Indirect egress against the package's default one-hour grace. Enabling it
+ * requires declaring the grace, so every test below states the reclamation
+ * window its signed URLs live inside rather than inheriting a guess.
+ */
+const REDIRECT = { mode: 'redirect', collectionGraceMs: 60 * 60 * 1000 } as const;
+
 interface StubStoreOptions {
   mime?: string;
   revision?: number;
@@ -92,7 +99,7 @@ describe('asset byte egress', () => {
 
   test('answers 302 with a signed Location when opted in and the store can sign', async () => {
     const indirect = vi.fn(async () => ({ url: 'https://objects.example/signed', revision: 3 }));
-    const { url } = await serve(stubStore({ indirect }), { byteEgress: 'redirect' });
+    const { url } = await serve(stubStore({ indirect }), { byteEgress: REDIRECT });
 
     const response = await getBytes(url);
 
@@ -111,7 +118,7 @@ describe('asset byte egress', () => {
     // so the negotiation adds no preflight -- and fetches the signed URL
     // itself, so its credential headers never approach the object store.
     const indirect = vi.fn(async () => ({ url: 'https://objects.example/signed', revision: 3 }));
-    const { url } = await serve(stubStore({ indirect }), { byteEgress: 'redirect' });
+    const { url } = await serve(stubStore({ indirect }), { byteEgress: REDIRECT });
 
     const response = await fetch(`${url}/assets/ast_example/content`, {
       headers: { accept: 'application/vnd.openmaic.asset-descriptor+json' },
@@ -131,7 +138,7 @@ describe('asset byte egress', () => {
 
   test('a descriptor range with q=0 selects the redirect instead', async () => {
     const indirect = vi.fn(async () => ({ url: 'https://objects.example/signed', revision: 3 }));
-    const { url } = await serve(stubStore({ indirect }), { byteEgress: 'redirect' });
+    const { url } = await serve(stubStore({ indirect }), { byteEgress: REDIRECT });
 
     const response = await fetch(`${url}/assets/ast_example/content`, {
       redirect: 'manual',
@@ -144,7 +151,7 @@ describe('asset byte egress', () => {
 
   test('a longer media type containing the descriptor token selects the redirect', async () => {
     const indirect = vi.fn(async () => ({ url: 'https://objects.example/signed', revision: 3 }));
-    const { url } = await serve(stubStore({ indirect }), { byteEgress: 'redirect' });
+    const { url } = await serve(stubStore({ indirect }), { byteEgress: REDIRECT });
 
     const response = await fetch(`${url}/assets/ast_example/content`, {
       redirect: 'manual',
@@ -156,7 +163,7 @@ describe('asset byte egress', () => {
 
   test('media type matching is case-insensitive, as HTTP requires', async () => {
     const indirect = vi.fn(async () => ({ url: 'https://objects.example/signed', revision: 3 }));
-    const { url } = await serve(stubStore({ indirect }), { byteEgress: 'redirect' });
+    const { url } = await serve(stubStore({ indirect }), { byteEgress: REDIRECT });
 
     const response = await fetch(`${url}/assets/ast_example/content`, {
       headers: { accept: 'Application/Vnd.OpenMAIC.Asset-Descriptor+JSON' },
@@ -178,7 +185,7 @@ describe('asset byte egress', () => {
         return { url: 'https://objects.example/signed', revision: 7 };
       },
     );
-    const { url } = await serve(stubStore({ indirect }), { byteEgress: 'redirect' });
+    const { url } = await serve(stubStore({ indirect }), { byteEgress: REDIRECT });
 
     const response = await getBytes(url);
 
@@ -207,8 +214,7 @@ describe('asset byte egress', () => {
       },
     );
     const { url } = await serve(stubStore({ indirect }), {
-      byteEgress: 'redirect',
-      signedUrlTtlSeconds: 5,
+      byteEgress: { ...REDIRECT, signedUrlTtlSeconds: 5 },
     });
 
     const response = await getBytes(url);
@@ -219,7 +225,7 @@ describe('asset byte egress', () => {
 
   test('falls back to direct bytes when the store declines to sign', async () => {
     const indirect = vi.fn(async () => undefined);
-    const { url } = await serve(stubStore({ indirect }), { byteEgress: 'redirect' });
+    const { url } = await serve(stubStore({ indirect }), { byteEgress: REDIRECT });
 
     const response = await getBytes(url);
 
@@ -229,7 +235,7 @@ describe('asset byte egress', () => {
   });
 
   test('falls back to direct bytes when the store has no indirect resolution', async () => {
-    const { url } = await serve(stubStore(), { byteEgress: 'redirect' });
+    const { url } = await serve(stubStore(), { byteEgress: REDIRECT });
 
     const response = await getBytes(url);
 
@@ -239,7 +245,7 @@ describe('asset byte egress', () => {
 
   test('a miss under indirect egress is the same 404 as a direct miss', async () => {
     const indirect = vi.fn(async () => null);
-    const { url } = await serve(stubStore({ indirect }), { byteEgress: 'redirect' });
+    const { url } = await serve(stubStore({ indirect }), { byteEgress: REDIRECT });
 
     const response = await getBytes(url);
 
@@ -250,7 +256,7 @@ describe('asset byte egress', () => {
   test('authorization runs before any URL is minted', async () => {
     const indirect = vi.fn(async () => ({ url: 'https://objects.example/signed', revision: 3 }));
     const denied = await serve(stubStore({ indirect }), {
-      byteEgress: 'redirect',
+      byteEgress: REDIRECT,
       authorizeAssets: async () => false,
     });
 
@@ -261,7 +267,7 @@ describe('asset byte egress', () => {
     expect(indirect).not.toHaveBeenCalled();
 
     const unauthenticated = await serve(stubStore({ indirect }), {
-      byteEgress: 'redirect',
+      byteEgress: REDIRECT,
       authenticate: async () => undefined,
     });
 
@@ -275,7 +281,7 @@ describe('asset byte egress', () => {
     const indirect = vi.fn(async () => ({ url: 'https://objects.example/signed', revision: 3 }));
     const store = stubStore({ indirect });
     const resolve = vi.spyOn(store, 'resolve');
-    const { url } = await serve(store, { byteEgress: 'redirect' });
+    const { url } = await serve(store, { byteEgress: REDIRECT });
 
     const response = await getBytes(url, 'HEAD');
 
@@ -287,25 +293,45 @@ describe('asset byte egress', () => {
     expect(resolve).not.toHaveBeenCalled();
   });
 
-  test('a signed URL lifetime requires the redirect egress it configures', () => {
+  test('a signed URL lifetime above the handler ceiling is rejected at construction', () => {
     expect(() =>
       createAssetHttpHandler(stubStore(), {
         authenticate: async () => PRINCIPAL,
-        signedUrlTtlSeconds: 5,
+        // Inside a very long grace, so only the handler's own ceiling refuses it.
+        byteEgress: { mode: 'redirect', collectionGraceMs: 30 * 24 * 3600 * 1000 },
       }),
-    ).toThrow(/signedUrlTtlSeconds requires byteEgress "redirect"/);
+    ).not.toThrow();
+    expect(() =>
+      createAssetHttpHandler(stubStore(), {
+        authenticate: async () => PRINCIPAL,
+        byteEgress: {
+          mode: 'redirect',
+          collectionGraceMs: 30 * 24 * 3600 * 1000,
+          signedUrlTtlSeconds: 901,
+        },
+      }),
+    ).toThrow(/signedUrlTtlSeconds must not exceed 900/);
   });
 
   test('a signed URL lifetime that could outlive its object is rejected at construction', () => {
     // The collector can delete an object one grace period after its last
     // reference goes; a URL still valid then would error at the object store.
+    // The grace is a required part of enabling indirect egress precisely so
+    // this is decided here rather than left to a consumer to check.
     expect(() =>
       createAssetHttpHandler(stubStore(), {
         authenticate: async () => PRINCIPAL,
-        byteEgress: 'redirect',
-        signedUrlTtlSeconds: 901,
+        byteEgress: { mode: 'redirect', collectionGraceMs: 30_000, signedUrlTtlSeconds: 60 },
       }),
-    ).toThrow(/far below the reclamation grace period/);
+    ).toThrow(/must stay far below the collection grace period/);
+    // The default lifetime is checked against the grace too, not only an
+    // explicitly configured one.
+    expect(() =>
+      createAssetHttpHandler(stubStore(), {
+        authenticate: async () => PRINCIPAL,
+        byteEgress: { mode: 'redirect', collectionGraceMs: 30_000 },
+      }),
+    ).toThrow(/must stay far below the collection grace period/);
   });
 
   test('a malformed egress mode is rejected at construction', () => {
@@ -314,7 +340,14 @@ describe('asset byte egress', () => {
         authenticate: async () => PRINCIPAL,
         byteEgress: 'proxy' as never,
       }),
-    ).toThrow(/byteEgress must be "direct" or "redirect"/);
+    ).toThrow(/byteEgress must be "direct" or \{ mode: "redirect", collectionGraceMs \}/);
+    // The old flat shape, in case a consumer carries it forward.
+    expect(() =>
+      createAssetHttpHandler(stubStore(), {
+        authenticate: async () => PRINCIPAL,
+        byteEgress: 'redirect' as never,
+      }),
+    ).toThrow(/byteEgress must be "direct" or \{ mode: "redirect", collectionGraceMs \}/);
   });
 
   test('the descriptor media type is reserved from the renderable allowlist', () => {
