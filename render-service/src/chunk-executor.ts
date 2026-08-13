@@ -4,6 +4,7 @@
  * module owns the local plan/chunk/assemble lifecycle and its retry contract.
  */
 import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { access, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import {
@@ -71,6 +72,8 @@ export interface ImmutableRenderPlan {
   chunkCount: number;
   maxParallelChunks: number;
   chunkWorkers: number;
+  chunkSizeFrames?: number;
+  targetChunkFrames?: number;
   totalFrames: number;
   fps: number;
   width: number;
@@ -159,6 +162,8 @@ interface PlanEnvelope {
     options: RenderOptions;
     chunkWorkers: number;
     maxParallelChunks: number;
+    chunkSizeFrames?: number;
+    targetChunkFrames?: number;
     runtimeVersions: { node: string; chromium: string };
   };
   producer: PlanResult;
@@ -185,6 +190,21 @@ function positiveInteger(value: number | undefined, fallback: number, name: stri
   return result;
 }
 
+async function abortable<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return operation;
+  if (signal.aborted) throw new ChunkExecutorError('chunk_execution_failed', 'Render cancelled');
+  return Promise.race([
+    operation,
+    new Promise<T>((_, reject) => {
+      signal.addEventListener(
+        'abort',
+        () => reject(new ChunkExecutorError('chunk_execution_failed', 'Render cancelled')),
+        { once: true },
+      );
+    }),
+  ]);
+}
+
 function digest(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
@@ -208,10 +228,11 @@ async function readCompositionDimensions(
 async function outputDigest(path: string): Promise<string> {
   const info = await stat(path).catch(() => null);
   if (!info) throw new ChunkExecutorError('missing_chunk', `Chunk output is missing: ${path}`);
-  if (info.isFile())
-    return createHash('sha256')
-      .update(await readFile(path))
-      .digest('hex');
+  if (info.isFile()) {
+    const hash = createHash('sha256');
+    for await (const chunk of createReadStream(path)) hash.update(chunk);
+    return hash.digest('hex');
+  }
   const entries = await readdir(path, { withFileTypes: true });
   const names = entries
     .filter((entry) => entry.isFile())
@@ -219,11 +240,9 @@ async function outputDigest(path: string): Promise<string> {
     .sort();
   const parts: string[] = [];
   for (const name of names) {
-    parts.push(
-      `${name}\0${createHash('sha256')
-        .update(await readFile(join(path, name)))
-        .digest('hex')}`,
-    );
+    const hash = createHash('sha256');
+    for await (const chunk of createReadStream(join(path, name))) hash.update(chunk);
+    parts.push(`${name}\0${hash.digest('hex')}`);
   }
   return createHash('sha256').update(parts.join('\0')).digest('hex');
 }
@@ -425,6 +444,10 @@ export function freezeRenderPlan(
     chunkCount: envelope.producer.chunkCount,
     maxParallelChunks: envelope.input.maxParallelChunks,
     chunkWorkers: envelope.input.chunkWorkers,
+    ...(envelope.input.chunkSizeFrames ? { chunkSizeFrames: envelope.input.chunkSizeFrames } : {}),
+    ...(envelope.input.targetChunkFrames
+      ? { targetChunkFrames: envelope.input.targetChunkFrames }
+      : {}),
     totalFrames: envelope.producer.totalFrames,
     fps: envelope.producer.fps,
     width: envelope.producer.width,
@@ -482,6 +505,9 @@ export async function createRenderPlan(
         existing.chunkCount === chunkCount &&
         existing.chunkWorkers === chunkWorkers &&
         existing.maxParallelChunks === maxParallelChunks &&
+        existing.chunkSizeFrames === request.chunkSizeFrames &&
+        existing.targetChunkFrames === request.targetChunkFrames &&
+        existing.outputPath === resolve(request.outputPath) &&
         existing.nodeVersion === runtimeVersions.node &&
         existing.chromiumVersion === runtimeVersions.chromium
       ) {
@@ -557,6 +583,8 @@ export async function createRenderPlan(
       options: { ...request.options },
       chunkWorkers,
       maxParallelChunks,
+      ...(request.chunkSizeFrames ? { chunkSizeFrames: request.chunkSizeFrames } : {}),
+      ...(request.targetChunkFrames ? { targetChunkFrames: request.targetChunkFrames } : {}),
       runtimeVersions,
     },
     producer: result,
@@ -574,6 +602,8 @@ export async function createRenderPlan(
       options: { ...request.options },
       chunkWorkers,
       maxParallelChunks,
+      ...(request.chunkSizeFrames ? { chunkSizeFrames: request.chunkSizeFrames } : {}),
+      ...(request.targetChunkFrames ? { targetChunkFrames: request.targetChunkFrames } : {}),
       runtimeVersions,
     },
     producer: result,
@@ -627,10 +657,13 @@ async function renderOne(
   let lastError: unknown;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
-      const result = await (dependencies.renderChunk ?? defaultDeps.renderChunk)(
-        plan.planDir,
-        chunk.index,
-        chunk.outputPath,
+      const result = await abortable(
+        (dependencies.renderChunk ?? defaultDeps.renderChunk)(
+          plan.planDir,
+          chunk.index,
+          chunk.outputPath,
+        ),
+        signal,
       );
       if (signal?.aborted)
         throw new ChunkExecutorError('chunk_execution_failed', 'Render cancelled');
@@ -776,14 +809,6 @@ export async function inspectChunkOutput(
 }
 
 /** Object-oriented adapter for callers that want a reusable bounded executor. */
-export class LocalChunkExecutor {
-  constructor(private readonly defaults: LocalChunkExecutorOptions = {}) {}
-
-  execute(request: ChunkExecutionRequest): Promise<ChunkExecutionResult> {
-    return executeRenderChunks({ ...this.defaults, ...request }, this.defaults.dependencies);
-  }
-}
-
 export class BoundedChunkExecutor implements ChunkRenderExecutor {
   constructor(private readonly defaults: LocalChunkExecutorOptions = {}) {}
 

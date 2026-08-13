@@ -225,6 +225,26 @@ export class InProcessExecutor implements RenderExecutor {
           ...request.chunkExecution,
         };
         const result = await this.chunkExecutor(chunkRequest);
+        const chunkMetrics: RenderExecutionMetrics = {
+          resourceProfile: config.resourceProfile.name,
+          requestedCaptureMode: config.resourceProfile.requestedCaptureMode,
+          actualCaptureMode: result.plan.captureMode,
+          requestedWorkers: config.producerWorkers,
+          actualWorkers: result.plan.chunkWorkers,
+          versions: this.runtimeVersions,
+        };
+        if (this.requireBeginFrame && result.plan.captureMode !== 'beginframe') {
+          return {
+            status: 'failed',
+            failure: {
+              code: 'unsupported_capture_mode',
+              message:
+                `Producer did not resolve beginFrame capture (actual=${result.plan.captureMode}). ` +
+                'Check PRODUCER_HEADLESS_SHELL_PATH and Chromium compatibility.',
+            },
+            metrics: chunkMetrics,
+          };
+        }
         return {
           status: 'succeeded',
           performance: {
@@ -233,14 +253,7 @@ export class InProcessExecutor implements RenderExecutor {
             workers: result.plan.chunkWorkers,
             totalFrames: result.plan.totalFrames,
           },
-          metrics: {
-            resourceProfile: config.resourceProfile.name,
-            requestedCaptureMode: config.resourceProfile.requestedCaptureMode,
-            actualCaptureMode: result.plan.captureMode,
-            requestedWorkers: config.producerWorkers,
-            actualWorkers: result.plan.chunkWorkers,
-            versions: this.runtimeVersions,
-          },
+          metrics: chunkMetrics,
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

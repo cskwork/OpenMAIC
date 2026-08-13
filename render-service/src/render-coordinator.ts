@@ -24,6 +24,13 @@ import type {
 /** Thrown when admission control rejects a submission (mapped to HTTP 429). */
 export class RenderRejectedError extends Error {}
 
+function planPathForProject(dir: string): string {
+  return join(
+    dirname(dir),
+    `.render-plan-${createHash('sha256').update(dir).digest('hex').slice(0, 12)}`,
+  );
+}
+
 /** An accepted admission slot, returned by RenderCoordinator.reserve. */
 export interface Reservation {
   identity: string;
@@ -259,30 +266,9 @@ export class RenderCoordinator {
   async cleanupProject(dir: string): Promise<void> {
     await Promise.all([
       rm(dir, { recursive: true, force: true }).catch(() => {}),
-      rm(
-        join(
-          dirname(dir),
-          `.render-plan-${createHash('sha256').update(dir).digest('hex').slice(0, 12)}`,
-        ),
-        {
-          recursive: true,
-          force: true,
-        },
-      ).catch(() => {}),
-      rm(
-        `${join(
-          dirname(dir),
-          `.render-plan-${createHash('sha256').update(dir).digest('hex').slice(0, 12)}`,
-        )}.local.json`,
-        { force: true },
-      ).catch(() => {}),
-      rm(
-        `${join(
-          dirname(dir),
-          `.render-plan-${createHash('sha256').update(dir).digest('hex').slice(0, 12)}`,
-        )}.chunks`,
-        { recursive: true, force: true },
-      ).catch(() => {}),
+      rm(planPathForProject(dir), { recursive: true, force: true }).catch(() => {}),
+      rm(`${planPathForProject(dir)}.local.json`, { force: true }).catch(() => {}),
+      rm(`${planPathForProject(dir)}.chunks`, { recursive: true, force: true }).catch(() => {}),
     ]);
   }
 }
