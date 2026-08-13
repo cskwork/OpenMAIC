@@ -189,6 +189,57 @@ describe('local bounded chunk executor', () => {
     expect(calls).toBe(3);
   });
 
+  it('drains sibling chunks after one worker fails', async () => {
+    const paths = setup();
+    await materializeProject(paths.projectDir);
+    let siblingSettled = false;
+    await expect(
+      executeRenderChunks(
+        { ...paths, options, chunkCount: 3, maxParallelChunks: 2 },
+        deps({
+          renderChunk: async (_planDir, index, outputPath) => {
+            if (index === 0) throw new Error('injected failure');
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            siblingSettled = true;
+            throw new Error('sibling failure');
+          },
+        }),
+      ),
+    ).rejects.toThrow('Chunk 0 failed');
+    expect(siblingSettled).toBe(true);
+  });
+
+  it('does not retry a chunk after cancellation', async () => {
+    const paths = setup();
+    await materializeProject(paths.projectDir);
+    const controller = new AbortController();
+    let calls = 0;
+    let started!: () => void;
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let release!: () => void;
+    const settled = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const execution = executeRenderChunks(
+      { ...paths, options, chunkCount: 3, maxParallelChunks: 1, signal: controller.signal },
+      deps({
+        renderChunk: async () => {
+          calls += 1;
+          started();
+          await settled;
+          throw new Error('cancelled render');
+        },
+      }),
+    );
+    await startedPromise;
+    controller.abort();
+    release();
+    await expect(execution).rejects.toThrow('Render cancelled');
+    expect(calls).toBe(1);
+  });
+
   it('retries only the failed chunk and validates missing, duplicate, and mismatched sets', async () => {
     const paths = setup();
     await materializeProject(paths.projectDir);
