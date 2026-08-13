@@ -835,24 +835,24 @@ describe('embedded persistence route', () => {
     expect((handlerOptions[0] as { byteEgress?: unknown }).byteEgress).toBe('redirect');
   });
 
-  it('fails loud when redirect egress is combined with a too-short collection grace', async () => {
+  it('degrades to direct egress with a warning when the collection grace is too short', async () => {
     // A signed URL must never outlive its object: with the default 60-second
     // lifetime, a grace below ten minutes can collect the object while the
-    // URL is still valid.
+    // URL is still valid. The asset backend is optional, so the
+    // misconfiguration falls back to direct bytes instead of failing the
+    // shared handler.
     const handlerOptions: unknown[] = [];
     mockEgressWiring(handlerOptions, 'postgres://egress-grace-test');
     vi.stubEnv('ASSET_BYTE_EGRESS', 'redirect');
     vi.stubEnv('ASSET_COLLECTION_GRACE_MS', '30000');
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const response = await requestThroughRoute();
 
-    expect(response.status).toBe(500);
-    expect(handlerOptions).toHaveLength(0);
-    expect(error.mock.calls[0]?.[1]).toMatchObject({
-      message: expect.stringContaining('ten times'),
-    });
-    error.mockRestore();
+    expect(response.status).toBe(204);
+    expect((handlerOptions[0] as { byteEgress?: unknown }).byteEgress).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('ten times'));
+    warn.mockRestore();
   });
 
   it('treats an empty collection grace as unset, like the collector does', async () => {
@@ -1007,5 +1007,115 @@ describe('embedded persistence route', () => {
       signReadUrl?: (hash: string, headers: unknown) => Promise<unknown>;
     };
     expect(byteStore.signReadUrl).toBeUndefined();
+  });
+});
+
+describe('embedded persistence route -- real handler boundary', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.unstubAllEnvs();
+    vi.stubEnv('ASSET_S3_BUCKET', '');
+  });
+
+  // The composed path the mocked tests cannot see: the route's Fetch<->Node
+  // adapter, the real createStorageHttpHandler, and the egress option wiring,
+  // against an in-memory asset store.
+  function wireRealHandler(stores: unknown[]) {
+    // Earlier tests register a canned 204 mock for the server module; the
+    // point of this test is the real handler, so un-mock it explicitly.
+    vi.doUnmock('@openmaic/storage/server');
+    vi.doMock('@openmaic/storage/runtime/pg', () => ({
+      ensureSchema: vi.fn().mockResolvedValue(undefined),
+      PgRuntimeStore: class {},
+    }));
+    vi.doMock('@openmaic/storage/document/pg', () => ({
+      ensureDocumentSchema: vi.fn().mockResolvedValue(undefined),
+      PgDocumentStore: class {},
+    }));
+    vi.doMock('@openmaic/storage/asset/pg-bytes', () => ({
+      PgAssetByteStore: class {},
+    }));
+    vi.doMock('@openmaic/storage/asset/pg', () => ({
+      ensureAssetSchema: vi.fn().mockResolvedValue(undefined),
+      PgAssetStore: class {
+        constructor(_queryable: unknown, _options: unknown) {
+          stores.push(this);
+        }
+        private entries = new Map<string, { bytes: Uint8Array; mime: string; revision: number }>();
+        async put(principal: { key: string }, data: Blob, meta?: { contentType?: string }) {
+          const id = `ast_mem_${this.entries.size + 1}`;
+          this.entries.set(`${principal.key}:${id}`, {
+            bytes: new Uint8Array(await data.arrayBuffer()),
+            mime: meta?.contentType ?? data.type ?? '',
+            revision: 1,
+          });
+          return id;
+        }
+        async identify(principal: { key: string }, ref: string) {
+          const entry = this.entries.get(`${principal.key}:${ref}`);
+          return entry
+            ? { mime: entry.mime, revision: entry.revision, byteLength: entry.bytes.byteLength }
+            : null;
+        }
+        async resolve(principal: { key: string }, ref: string) {
+          const entry = this.entries.get(`${principal.key}:${ref}`);
+          return entry ? { bytes: entry.bytes, mime: entry.mime, revision: entry.revision } : null;
+        }
+        async remove() {}
+        async replace(principal: { key: string }, ref: string, data: Blob) {
+          const key = `${principal.key}:${ref}`;
+          const entry = this.entries.get(key);
+          if (!entry) return 0;
+          const revision = entry.revision + 1;
+          this.entries.set(key, {
+            bytes: new Uint8Array(await data.arrayBuffer()),
+            mime: entry.mime,
+            revision,
+          });
+          return revision;
+        }
+      },
+    }));
+    vi.doMock('@openmaic/storage/server/reference', () => ({
+      nodePostgresTransaction: vi.fn(() => vi.fn()),
+    }));
+    vi.stubEnv('DATABASE_URL', 'postgres://boundary-test');
+    vi.stubEnv('PERSISTENCE_DEV_TOKEN', 'test-token');
+  }
+
+  const authed = (path: string, extraHeaders: Record<string, string> = {}) =>
+    new Request(`http://localhost/api/persistence${path}`, {
+      headers: { authorization: 'Bearer test-token', ...extraHeaders },
+    });
+
+  it('serves a stored asset through the real handler and route adapter', async () => {
+    const stores: Array<{
+      put(principal: { key: string }, data: Blob, meta?: { contentType?: string }): Promise<string>;
+    }> = [];
+    wireRealHandler(stores);
+    const { handlePersistenceRequest } = await import('@/app/api/persistence/[...path]/route');
+    const deps = { poolFactory: () => ({ end: vi.fn().mockResolvedValue(undefined) }) as never };
+
+    // First request initializes the handler and the store.
+    const first = await handlePersistenceRequest(authed('/runtime/sessions'), deps);
+    expect(first.status).not.toBe(500);
+    const store = stores[0]!;
+    const id = await store.put(
+      { key: 'anon:test' },
+      new Blob(['real-bytes'], { type: 'text/plain' }),
+      {
+        contentType: 'image/png',
+      },
+    );
+
+    const response = await handlePersistenceRequest(
+      authed(`/assets/${id}/content`, { 'x-learner-key': 'anon:test' }),
+      deps,
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('image/png');
+    expect(response.headers.get('x-asset-revision')).toBe('1');
+    expect(Buffer.from(await response.arrayBuffer()).toString()).toBe('real-bytes');
   });
 });

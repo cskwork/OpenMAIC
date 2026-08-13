@@ -65,6 +65,7 @@ export {
 export { PgAssetByteStore } from './asset/pg-bytes.js';
 export {
   AssetCollector,
+  assertSignedUrlTtlWithinGrace,
   DEFAULT_ASSET_COLLECTION_BATCH_SIZE,
   DEFAULT_ASSET_COLLECTION_GRACE_MS,
   type AssetCollectionPass,

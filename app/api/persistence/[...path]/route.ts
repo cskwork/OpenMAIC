@@ -59,28 +59,26 @@ function configuredAssetByteEgress(value: string | undefined): 'redirect' | unde
  * outlives its object turns a valid read into an object-store error. The
  * handler mints URLs with a 60-second default lifetime, so the deployment's
  * grace -- ASSET_COLLECTION_GRACE_MS, one hour by default -- must sit far
- * above it. Ten times is the floor; anything less is a misconfiguration
- * worth failing loudly over, since the alternative is reads that die quietly
- * minutes after they were authorized.
+ * above it. Ten times is the floor. A violation degrades to direct egress
+ * with a loud warning rather than failing initialization: the asset backend
+ * is optional, and its misconfiguration must never take document and
+ * runtime traffic down with it.
  */
-function assertEgressWithinCollectionGrace(egress: 'redirect' | undefined): void {
-  if (egress !== 'redirect') return;
+function egressWithinCollectionGrace(egress: 'redirect' | undefined): 'redirect' | undefined {
+  if (egress !== 'redirect') return undefined;
   // Empty means unset, matching the collector's own durationEnv parsing.
   const raw = process.env.ASSET_COLLECTION_GRACE_MS?.trim();
   const graceMs = raw === undefined || raw === '' ? DEFAULT_ASSET_COLLECTION_GRACE_MS : Number(raw);
-  if (!Number.isSafeInteger(graceMs) || graceMs < 0) {
-    throw new Error(
-      'Invalid ASSET_COLLECTION_GRACE_MS: expected a non-negative safe integer of milliseconds',
-    );
-  }
   const ttlMs = DEFAULT_SIGNED_URL_TTL_SECONDS * 1000;
-  if (graceMs < ttlMs * 10) {
-    throw new Error(
-      `ASSET_BYTE_EGRESS=redirect requires ASSET_COLLECTION_GRACE_MS to be at least ten times ` +
-        `the signed URL lifetime (${DEFAULT_SIGNED_URL_TTL_SECONDS}s); got ${graceMs}ms. ` +
-        'Raise the grace period or use direct egress.',
+  if (!Number.isSafeInteger(graceMs) || graceMs < ttlMs * 10) {
+    console.warn(
+      `ASSET_BYTE_EGRESS=redirect requires ASSET_COLLECTION_GRACE_MS to be a safe integer ` +
+        `at least ten times the signed URL lifetime (${DEFAULT_SIGNED_URL_TTL_SECONDS}s); ` +
+        `got ${raw ?? 'unset'}. Falling back to direct byte egress.`,
     );
+    return undefined;
   }
+  return 'redirect';
 }
 
 async function createPersistenceHandler(
@@ -120,8 +118,9 @@ async function createPersistenceHandler(
     // runs from instrumentation.ts instead, over the byte store this same
     // lib/persistence/asset-byte-store selection produces, so the collector
     // always deletes through the layer the request path wrote through.
-    const byteEgress = configuredAssetByteEgress(process.env.ASSET_BYTE_EGRESS);
-    assertEgressWithinCollectionGrace(byteEgress);
+    const byteEgress = egressWithinCollectionGrace(
+      configuredAssetByteEgress(process.env.ASSET_BYTE_EGRESS),
+    );
     return createStorageHttpHandler(runtimeStore, documentStore, {
       authenticate: authenticatePersistenceRequest,
       authorizeMerge: async () => false,

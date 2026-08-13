@@ -7,6 +7,26 @@ import type { Queryable, WithTransaction } from '../runtime/pg.js';
 export const DEFAULT_ASSET_COLLECTION_GRACE_MS = 60 * 60 * 1000;
 
 /**
+ * The invariant between indirect egress and reclamation: a signed URL must
+ * expire far earlier than the bytes it names can be collected, or a reader
+ * authorized at mint time errors at the object store. The handler and the
+ * collector are configured separately, so a deployment wiring both calls
+ * this once; ten times the lifetime is the floor.
+ */
+export function assertSignedUrlTtlWithinGrace(ttlSeconds: number, graceMs: number): void {
+  if (
+    !Number.isSafeInteger(ttlSeconds) ||
+    ttlSeconds < 1 ||
+    !Number.isSafeInteger(graceMs) ||
+    graceMs < ttlSeconds * 1000 * 10
+  ) {
+    throw new Error(
+      '@openmaic/storage: the signed URL lifetime must stay far below the collection grace period',
+    );
+  }
+}
+
+/**
  * One thousand blobs per pass.
  *
  * Ordinary churn produces far fewer than this between two scheduled passes, so
