@@ -190,19 +190,12 @@ function positiveInteger(value: number | undefined, fallback: number, name: stri
   return result;
 }
 
-async function abortable<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) return operation;
-  if (signal.aborted) throw new ChunkExecutorError('chunk_execution_failed', 'Render cancelled');
-  return Promise.race([
-    operation,
-    new Promise<T>((_, reject) => {
-      signal.addEventListener(
-        'abort',
-        () => reject(new ChunkExecutorError('chunk_execution_failed', 'Render cancelled')),
-        { once: true },
-      );
-    }),
-  ]);
+async function settleProducer<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  // producer@0.7.60 has no cancellation parameter. Await it to settle before
+  // releasing the coordinator slot or cleaning the plan directory.
+  const result = await operation;
+  if (signal?.aborted) throw new ChunkExecutorError('chunk_execution_failed', 'Render cancelled');
+  return result;
 }
 
 function digest(value: unknown): string {
@@ -320,7 +313,7 @@ function assertPlanDirectory(planDir: string, projectDir: string): void {
   }
 }
 
-type ChunkSidecar = ChunkResult & { planHash?: string };
+type ChunkSidecar = ChunkResult & { planHash?: string; captureMode?: string };
 
 async function defaultReadChunkResult(path: string): Promise<ChunkSidecar | null> {
   try {
@@ -387,6 +380,12 @@ async function verifyChunkOutput(
       `Chunk ${chunk.index} has no matching plan/hash sidecar for plan ${planHash}`,
     );
   }
+  if (sidecar.captureMode !== undefined && sidecar.captureMode !== 'beginframe') {
+    throw new ChunkExecutorError(
+      'mismatched_chunk',
+      `Chunk ${chunk.index} used unsupported capture mode ${sidecar.captureMode}`,
+    );
+  }
 }
 
 function toDistributedConfig(
@@ -416,17 +415,28 @@ async function mapBounded<T>(
   signal?: AbortSignal,
 ): Promise<void> {
   let cursor = 0;
+  let firstError: unknown;
   const run = async (): Promise<void> => {
     while (true) {
-      if (signal?.aborted)
-        throw new ChunkExecutorError('chunk_execution_failed', 'Render cancelled');
+      if (signal?.aborted) {
+        firstError ??= new ChunkExecutorError('chunk_execution_failed', 'Render cancelled');
+        return;
+      }
+      if (firstError !== undefined) return;
       const index = cursor++;
       const value = values[index];
       if (value === undefined) return;
-      await worker(value);
+      try {
+        await worker(value);
+      } catch (error) {
+        firstError ??= error;
+        return;
+      }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, () => run()));
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, () => run());
+  await Promise.all(workers);
+  if (firstError !== undefined) throw firstError;
 }
 
 export function freezeRenderPlan(
@@ -502,7 +512,7 @@ export async function createRenderPlan(
         existing.options.fps === request.options.fps &&
         existing.options.quality === request.options.quality &&
         existing.options.format === request.options.format &&
-        existing.chunkCount === chunkCount &&
+        existing.chunkCount <= chunkCount &&
         existing.chunkWorkers === chunkWorkers &&
         existing.maxParallelChunks === maxParallelChunks &&
         existing.chunkSizeFrames === request.chunkSizeFrames &&
@@ -542,12 +552,7 @@ export async function createRenderPlan(
     if (previousWorkers === undefined) delete process.env.PRODUCER_MAX_WORKERS;
     else process.env.PRODUCER_MAX_WORKERS = previousWorkers;
   }
-  if (result.chunkCount !== chunkCount) {
-    throw new ChunkExecutorError(
-      'mismatched_chunk',
-      `Producer returned ${result.chunkCount} chunks; requested ${chunkCount}`,
-    );
-  }
+  const resolvedChunkCount = result.chunkCount;
   const chunksJson = JSON.parse(
     await readFile(join(planDir, 'meta', 'chunks.json'), 'utf8'),
   ) as Array<{
@@ -556,7 +561,7 @@ export async function createRenderPlan(
     endFrame: number;
   }>;
   if (
-    chunksJson.length !== result.chunkCount ||
+    chunksJson.length !== resolvedChunkCount ||
     chunksJson.some((chunk, index) => chunk.index !== index || chunk.endFrame <= chunk.startFrame)
   ) {
     throw new ChunkExecutorError('mismatched_chunk', 'Producer returned invalid chunk boundaries');
@@ -587,7 +592,7 @@ export async function createRenderPlan(
       ...(request.targetChunkFrames ? { targetChunkFrames: request.targetChunkFrames } : {}),
       runtimeVersions,
     },
-    producer: result,
+    producer: { ...result, chunkCount: resolvedChunkCount },
     assets,
     fonts,
     runtime,
@@ -606,7 +611,7 @@ export async function createRenderPlan(
       ...(request.targetChunkFrames ? { targetChunkFrames: request.targetChunkFrames } : {}),
       runtimeVersions,
     },
-    producer: result,
+    producer: { ...result, chunkCount: resolvedChunkCount },
     chunks: plan.chunks,
     assets: plan.assets,
     fonts: plan.fonts,
@@ -621,9 +626,11 @@ export async function createRenderPlan(
         options: { ...request.options },
         chunkWorkers,
         maxParallelChunks,
+        ...(request.chunkSizeFrames ? { chunkSizeFrames: request.chunkSizeFrames } : {}),
+        ...(request.targetChunkFrames ? { targetChunkFrames: request.targetChunkFrames } : {}),
         runtimeVersions,
       },
-      producer: result,
+      producer: { ...result, chunkCount: resolvedChunkCount },
       assets: plan.assets,
       fonts: plan.fonts,
       runtime: plan.runtime,
@@ -657,7 +664,7 @@ async function renderOne(
   let lastError: unknown;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
-      const result = await abortable(
+      const result = await settleProducer(
         (dependencies.renderChunk ?? defaultDeps.renderChunk)(
           plan.planDir,
           chunk.index,
@@ -670,6 +677,9 @@ async function renderOne(
       await verifyChunkOutput(chunk, plan.planHash, result);
       return result;
     } catch (error) {
+      if (signal?.aborted) {
+        throw new ChunkExecutorError('chunk_execution_failed', 'Render cancelled');
+      }
       if (error instanceof ChunkExecutorError && error.code !== 'chunk_execution_failed')
         throw error;
       lastError = error;
