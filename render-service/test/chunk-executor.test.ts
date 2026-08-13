@@ -107,9 +107,10 @@ function deps(overrides: Partial<ChunkExecutorDependencies> = {}): ChunkExecutor
       await writeFile(outputPath, bytes);
       const sha256 = (await import('node:crypto')).createHash('sha256').update(bytes).digest('hex');
       const result = fakeChunkResult(outputPath, index, sha256);
+      const { outputPath: _outputPath, perfPath: _perfPath, ...sidecar } = result;
       await writeFile(
         `${outputPath}.perf.json`,
-        JSON.stringify({ ...result, planHash: 'producer-plan-hash' }),
+        JSON.stringify({ ...sidecar, planHash: 'producer-plan-hash' }),
       );
       return result;
     },
@@ -231,13 +232,8 @@ describe('local bounded chunk executor', () => {
     await materializeProject(paths.projectDir);
     const stale = await createRenderPlan({ ...paths, options, chunkCount: 3 }, deps());
     const localPlanPath = `${stale.planDir}.local.json`;
-    const localPlan = JSON.parse(
-      await readFile(localPlanPath, 'utf8'),
-    ) as { planHash: string };
-    await writeFile(
-      localPlanPath,
-      JSON.stringify({ ...localPlan, planHash: 'stale' }),
-    );
+    const localPlan = JSON.parse(await readFile(localPlanPath, 'utf8')) as { planHash: string };
+    await writeFile(localPlanPath, JSON.stringify({ ...localPlan, planHash: 'stale' }));
     await expect(
       import('../src/chunk-executor.js').then(({ readImmutableRenderPlan }) =>
         readImmutableRenderPlan(stale.planDir),

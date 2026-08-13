@@ -306,7 +306,18 @@ type ChunkSidecar = ChunkResult & { planHash?: string };
 async function defaultReadChunkResult(path: string): Promise<ChunkSidecar | null> {
   try {
     const sidecarPath = path.endsWith('.perf.json') ? path : `${path}.perf.json`;
-    return JSON.parse(await readFile(sidecarPath, 'utf8')) as ChunkSidecar;
+    const raw = JSON.parse(await readFile(sidecarPath, 'utf8')) as ChunkSidecar;
+    // Producer perf sidecars intentionally omit filesystem-specific paths.
+    // Reattach the paths from the sidecar location so completed chunks can be
+    // reused across retries without weakening output identity checks.
+    const outputPath = sidecarPath.endsWith('.perf.json')
+      ? sidecarPath.slice(0, -'.perf.json'.length)
+      : path;
+    return {
+      ...raw,
+      outputPath: raw.outputPath ?? outputPath,
+      perfPath: raw.perfPath ?? sidecarPath,
+    };
   } catch {
     return null;
   }
@@ -731,9 +742,7 @@ export async function executeRenderChunks(
 }
 
 export async function readImmutableRenderPlan(planDir: string): Promise<ImmutableRenderPlan> {
-  const raw = JSON.parse(
-    await readFile(localPlanPath(planDir), 'utf8'),
-  ) as PlanEnvelope;
+  const raw = JSON.parse(await readFile(localPlanPath(planDir), 'utf8')) as PlanEnvelope;
   if (raw.schemaVersion !== CHUNK_PLAN_SCHEMA_VERSION) {
     throw new ChunkExecutorError('stale_chunk', 'Unsupported local render plan schema');
   }
