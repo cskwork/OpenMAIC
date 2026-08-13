@@ -1000,8 +1000,10 @@ describe('HttpAssetStore snapshot behavior', () => {
 
     const [byteGet, signedGet] = seen;
     expect(byteGet?.method).toBe('GET');
+    // The descriptor is preferred, but bytes stay acceptable: a strict
+    // negotiating layer must never see a descriptor-only demand.
     expect(new Headers(byteGet?.headers).get('accept')).toBe(
-      'application/vnd.openmaic.asset-descriptor+json',
+      'application/vnd.openmaic.asset-descriptor+json, */*;q=0.9',
     );
     expect(signedGet?.url).toBe('https://objects.example/signed');
     expect(new Headers(signedGet?.headers).get('x-api-key')).toBeNull();

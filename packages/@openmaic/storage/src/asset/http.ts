@@ -206,12 +206,13 @@ export class HttpAssetStore implements StorageProvider {
     const headers = await this.headers(method, path, body !== undefined);
     if (body !== undefined) headers['content-type'] = body.type;
     if (method === 'GET') {
-      // Ask for a descriptor answer on the byte read: a redirect-egress
-      // server then returns the signed URL in a JSON body instead of a 302
-      // the platform fetch would follow with these headers attached, custom
-      // credential headers included. Accept is CORS-safelisted, so the
-      // negotiation adds no preflight.
-      headers['accept'] = ASSET_DESCRIPTOR_MEDIA_TYPE;
+      // Ask for a descriptor answer on the byte read, while still accepting
+      // ordinary bytes: a redirect-egress server returns the signed URL in a
+      // JSON body, and a direct or non-signing one serves the bytes as
+      // before. Advertising only the descriptor would let a strict
+      // negotiating layer answer 406; the wildcard keeps bytes acceptable.
+      // Accept is CORS-safelisted, so the negotiation adds no preflight.
+      headers['accept'] = `${ASSET_DESCRIPTOR_MEDIA_TYPE}, */*;q=0.9`;
     }
     try {
       return await this.fetchImpl(`${this.baseUrl}${path}`, {

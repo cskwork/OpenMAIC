@@ -1000,15 +1000,12 @@ describe('embedded persistence route', () => {
     const response = await requestThroughRoute();
     expect(response.status).toBe(204);
 
+    // With no bucket configured the layer is known to be PostgreSQL, so the
+    // wrapper does not advertise the method at all: resolveIndirect's
+    // feature-detect fails fast instead of taking a lock just to decline.
     const byteStore = (assetOptions[0] as { byteStore?: unknown }).byteStore as {
-      signReadUrl(hash: string, headers: unknown): Promise<unknown>;
+      signReadUrl?: (hash: string, headers: unknown) => Promise<unknown>;
     };
-    await expect(
-      byteStore.signReadUrl('sha256-x', {
-        contentType: 'image/png',
-        cacheControl: 'private, no-store',
-        expiresInSeconds: 60,
-      }),
-    ).resolves.toBeUndefined();
+    expect(byteStore.signReadUrl).toBeUndefined();
   });
 });
