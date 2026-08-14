@@ -4,14 +4,15 @@ import { resolveResourceProfile, validateResourceProfileStartup } from '../src/r
 const GIB = 1024 ** 3;
 
 describe('resource profiles', () => {
-  it('resolves the standard profile to one BeginFrame worker and bounded service concurrency', () => {
+  it('resolves standard to prefer BeginFrame while allowing compatibility fallback', () => {
     const env: NodeJS.ProcessEnv = {};
     const profile = resolveResourceProfile(env);
 
     expect(profile).toMatchObject({
       name: 'standard',
+      capturePolicy: 'prefer-beginframe',
       requestedCaptureMode: 'beginframe',
-      requireBeginFrame: true,
+      requireBeginFrame: false,
       producerWorkers: 1,
       maxConcurrency: 1,
       maxConcurrentExtractions: 1,
@@ -24,7 +25,7 @@ describe('resource profiles', () => {
       PRODUCER_BROWSER_GPU_MODE: 'software',
       PRODUCER_ENABLE_BROWSER_POOL: 'false',
       PRODUCER_EXPECTED_CHROMIUM_MAJOR: '151',
-      RENDER_REQUIRE_BEGINFRAME: 'true',
+      RENDER_REQUIRE_BEGINFRAME: 'false',
     });
   });
 
@@ -34,6 +35,7 @@ describe('resource profiles', () => {
 
     expect(profile).toMatchObject({
       name: 'low-memory',
+      capturePolicy: 'screenshot-only',
       requestedCaptureMode: 'screenshot',
       requireBeginFrame: false,
       producerWorkers: 1,

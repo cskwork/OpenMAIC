@@ -122,7 +122,9 @@ describe('POST /render buffering/extraction bound', () => {
       ok: true,
       resourceProfile: {
         name: 'standard',
+        capturePolicy: 'prefer-beginframe',
         requestedCaptureMode: 'beginframe',
+        requireBeginFrame: false,
         producerWorkers: 1,
         maxConcurrency: 1,
         minimumMemoryMiB: 10 * 1024,

@@ -31,6 +31,7 @@ export interface RuntimeVersions {
 
 export interface RenderExecutionMetrics {
   resourceProfile: 'standard' | 'low-memory';
+  capturePolicy: 'prefer-beginframe' | 'screenshot-only';
   requestedCaptureMode: 'beginframe' | 'screenshot';
   actualCaptureMode: string;
   requestedWorkers: number;
