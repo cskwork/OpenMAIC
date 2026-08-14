@@ -24,7 +24,6 @@ import {
   buildChildTurnPrompt,
   buildNativeChildPrompt,
   buildNativeChildTurnPrompt,
-  createVisibleSpeechDeltaSanitizer,
   extractLastAssistantText,
   sanitizeVisibleSpeech,
   toHistoryMessages,
@@ -120,6 +119,15 @@ function isLikelyRawStructuredFallback(content: string): boolean {
   // defense. Delegate to the shared structural classifier rather than the old
   // brittle substring checks so brace-less JSON fragments are caught too.
   return looksLikeStructuredFragment(content);
+}
+
+function isLikelyNativeStructuredFallback(content: string): boolean {
+  if (looksLikeStructuredFragment(content)) return true;
+  const withoutFence = content
+    .trim()
+    .replace(/^```(?:[a-z][\w-]*)?\s*/i, '')
+    .replace(/```\s*$/, '');
+  return looksLikeStructuredFragment(withoutFence);
 }
 
 function requireString(
@@ -734,7 +742,6 @@ export function buildCallAgentTool(opts: {
             ]
           : [];
         const availableToolNames = nativeTools.map((tool) => tool.name);
-        const sanitizeNativeDelta = createVisibleSpeechDeltaSanitizer();
         let nativeResult: Awaited<ReturnType<typeof runNativeChild>>;
         try {
           nativeResult = await runNativeChild({
@@ -762,14 +769,14 @@ export function buildCallAgentTool(opts: {
             history: toHistoryMessages(opts.body.messages),
             abortSignal: childAbort.signal,
             timeoutMs: 60_000,
-            maxToolExecutions: Math.min(opts.maxActionsPerAgent, 2),
             maxToolCallAttempts: 4,
             maxProviderTransports: 5,
-            onVisibleTextDelta: async (delta) => {
-              const visibleDelta = sanitizeNativeDelta(delta);
-              if (!visibleDelta) return '';
-              await opts.send({ type: 'text_delta', data: { content: visibleDelta, messageId } });
-              return visibleDelta;
+            onVisibleText: async (assistantTurnText) => {
+              if (isLikelyNativeStructuredFallback(assistantTurnText)) return '';
+              const visibleText = sanitizeVisibleSpeech(assistantTurnText);
+              if (!visibleText || isLikelyNativeStructuredFallback(visibleText)) return '';
+              await opts.send({ type: 'text_delta', data: { content: visibleText, messageId } });
+              return visibleText;
             },
             onDispatchedAction: () => {
               actionCount += 1;

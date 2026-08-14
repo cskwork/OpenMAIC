@@ -32,10 +32,10 @@ function finish(finishReason: string) {
   return { type: 'finish', finishReason, totalUsage: ZERO_USAGE };
 }
 
-function spotlightCall(elementId = 'current-element') {
+function spotlightCall(elementId = 'current-element', toolCallId = 'spotlight-1') {
   return {
     type: 'tool-call',
-    toolCallId: 'spotlight-1',
+    toolCallId,
     toolName: 'spotlight',
     input: { elementId, dimOpacity: 0.5 },
   };
@@ -136,6 +136,7 @@ function makeHarness(
       elementIds: readonly string[];
     };
     body?: StatelessChatRequest;
+    maxActionsPerAgent?: number;
   } = {},
 ) {
   const agent = options.agent ?? teacher;
@@ -160,7 +161,7 @@ function makeHarness(
     getAgentTurnCount: () => summaries.length,
     getAgentResponses: () => summaries,
     getWhiteboardLedger: () => [],
-    maxActionsPerAgent: 8,
+    maxActionsPerAgent: options.maxActionsPerAgent ?? 8,
     enableWhiteboardTools: true,
     childRuntimeMode: 'native',
     enableNativeChildSpotlight: options.spotlightEnabled ?? true,
@@ -318,6 +319,37 @@ describe('Native Child production consumer', () => {
     });
   });
 
+  it('does not use the Legacy action limit as a Native execution budget', async () => {
+    useResponses([
+      [spotlightCall('current-element', 'spotlight-1'), finish('tool-calls')],
+      [spotlightCall('current-element', 'spotlight-2'), finish('tool-calls')],
+      [{ type: 'text-delta', text: 'Both pointers were accepted.' }, finish('stop')],
+    ]);
+    const harness = makeHarness({
+      evidence: sceneEvidence(),
+      maxActionsPerAgent: 1,
+    });
+
+    const result = await execute(harness);
+
+    expect(mocks.streamLLM).toHaveBeenCalledTimes(3);
+    expect(harness.events.filter((event) => event.type === 'action')).toHaveLength(2);
+    expect(harness.onActionDone).toHaveBeenCalledTimes(2);
+    expect(result).not.toHaveProperty('isError');
+    expect(result).toMatchObject({
+      details: {
+        text: 'Both pointers were accepted.',
+        nativeChildRun: {
+          status: 'completed',
+          attemptCount: 2,
+          executionCount: 2,
+          dispatchedActionCount: 2,
+          providerTransportCount: 3,
+        },
+      },
+    });
+  });
+
   it('allows action-only completion without emitting fabricated text', async () => {
     useResponses([[spotlightCall(), finish('tool-calls')], [finish('stop')]]);
     const harness = makeHarness({ evidence: sceneEvidence() });
@@ -362,6 +394,87 @@ describe('Native Child production consumer', () => {
         availableToolNames: [],
         nativeChildRun: { status: 'completed' },
       },
+    });
+  });
+
+  it('buffers and suppresses a streamed Legacy JSON fallback before visible delivery', async () => {
+    useResponses([
+      [
+        { type: 'text-delta', text: '[{"type":"action","name":"spot' },
+        { type: 'text-delta', text: 'light","params":{"elementId":"current-element"}}]' },
+        finish('stop'),
+      ],
+    ]);
+    const harness = makeHarness({ evidence: sceneEvidence() });
+
+    const result = await execute(harness);
+
+    expect(harness.events.filter((event) => event.type === 'text_delta')).toEqual([]);
+    expect(harness.events.filter((event) => event.type === 'action')).toEqual([]);
+    expect(harness.onActionDone).not.toHaveBeenCalled();
+    expect(harness.summaries).toEqual([
+      expect.objectContaining({ contentPreview: '', actionCount: 0 }),
+    ]);
+    expect(result).toMatchObject({
+      isError: true,
+      details: {
+        text: '',
+        nativeChildRun: {
+          status: 'failed',
+          stopReason: 'native_empty_response',
+          attemptCount: 0,
+          executionCount: 0,
+          dispatchedActionCount: 0,
+          providerTransportCount: 1,
+        },
+      },
+    });
+  });
+
+  it('suppresses fenced structured fallback but preserves natural bracketed speech', async () => {
+    useResponses([
+      [
+        { type: 'text-delta', text: '```json\n{"type":"text","content":"internal"}\n```' },
+        finish('stop'),
+      ],
+      [{ type: 'text-delta', text: '[重点] 这里要看清楚因果关系。' }, finish('stop')],
+    ]);
+    const harness = makeHarness({ evidence: sceneEvidence() });
+
+    const structured = await execute(harness);
+    const natural = await harness.tool.execute('delegate-2', {
+      agentId: teacher.id,
+      instruction: 'Continue with natural speech.',
+    });
+
+    expect(structured).toMatchObject({
+      isError: true,
+      details: { text: '', nativeChildRun: { stopReason: 'native_empty_response' } },
+    });
+    expect(natural).not.toHaveProperty('isError');
+    expect(natural).toMatchObject({ details: { text: '[重点] 这里要看清楚因果关系。' } });
+    expect(
+      harness.events.filter((event) => event.type === 'text_delta').map((event) => event.data),
+    ).toEqual([{ content: '[重点] 这里要看清楚因果关系。', messageId: expect.any(String) }]);
+  });
+
+  it('suppresses a truncated structured fallback instead of streaming its prefix', async () => {
+    useResponses([
+      [
+        { type: 'text-delta', text: '[{"type":"action","name":"spotlight","params":{' },
+        { type: 'text-delta', text: '"elementId":"current-element"' },
+        finish('stop'),
+      ],
+    ]);
+    const harness = makeHarness({ evidence: sceneEvidence() });
+
+    const result = await execute(harness);
+
+    expect(harness.events.filter((event) => event.type === 'text_delta')).toEqual([]);
+    expect(harness.events.filter((event) => event.type === 'action')).toEqual([]);
+    expect(result).toMatchObject({
+      isError: true,
+      details: { text: '', nativeChildRun: { stopReason: 'native_empty_response' } },
     });
   });
 

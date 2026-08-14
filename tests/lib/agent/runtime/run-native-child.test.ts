@@ -145,7 +145,6 @@ function run(options: Partial<Parameters<typeof runNativeChild>[0]> = {}) {
     tools: [tool],
     allowedToolNames: new Set(['demo']),
     timeoutMs: 1_000,
-    maxToolExecutions: 2,
     maxToolCallAttempts: 4,
     maxProviderTransports: 5,
     ...options,
@@ -164,7 +163,7 @@ describe('runNativeChild', () => {
       streamFn: scriptedStream([call('call-1'), text('Visible completion.')], contexts, true),
       tools: [demoTool(execute)],
       onDispatchedAction,
-      onVisibleTextDelta: (delta) => delta,
+      onVisibleText: (text) => text,
     });
 
     expect(result).toMatchObject({
@@ -235,7 +234,7 @@ describe('runNativeChild', () => {
     await expect(
       run({
         streamFn: deltaStream('###'),
-        onVisibleTextDelta: () => '',
+        onVisibleText: () => '',
       }),
     ).resolves.toMatchObject({
       status: 'failed',
@@ -358,24 +357,30 @@ describe('runNativeChild', () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it('makes execution exhaustion terminal without a continuation transport', async () => {
+  it('does not impose a generic execution budget and continues after every admitted call', async () => {
     const execute = vi.fn(async () => ({
       content: [{ type: 'text' as const, text: 'ok' }],
       details: {},
     }));
     const result = await run({
-      streamFn: scriptedStream([call('call-1')]),
+      streamFn: scriptedStream([
+        call('call-1'),
+        call('call-2'),
+        call('call-3'),
+        call('call-4'),
+        text('continued after four executions'),
+      ]),
       tools: [demoTool(execute)],
-      maxToolExecutions: 1,
     });
 
     expect(result).toMatchObject({
-      status: 'exhausted',
-      stopReason: 'native_tool_execution_budget',
-      attemptCount: 1,
-      executionCount: 1,
-      providerTransportCount: 1,
+      status: 'completed',
+      visibleOutput: 'continued after four executions',
+      attemptCount: 4,
+      executionCount: 4,
+      providerTransportCount: 5,
     });
+    expect(execute).toHaveBeenCalledTimes(4);
   });
 
   it('settles a never-resolving transport at the internal deadline', async () => {
@@ -500,7 +505,7 @@ describe('runNativeChild', () => {
   it('bounds a never-resolving visible-text callback with the same deadline', async () => {
     const result = await run({
       streamFn: deltaStream('pending delivery'),
-      onVisibleTextDelta: () => new Promise(() => {}),
+      onVisibleText: () => new Promise(() => {}),
       timeoutMs: 10,
     });
 

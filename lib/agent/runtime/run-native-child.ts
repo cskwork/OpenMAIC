@@ -24,7 +24,6 @@ const EMPTY_USAGE = {
 type InternalTerminalCause =
   | 'native_duplicate_tool_call'
   | 'native_tool_attempt_budget'
-  | 'native_tool_execution_budget'
   | 'native_provider_transport_budget';
 
 export interface NativeChildRunResult {
@@ -46,10 +45,9 @@ export interface RunNativeChildOptions {
   history?: AgentMessage[];
   abortSignal?: AbortSignal;
   timeoutMs: number;
-  maxToolExecutions: number;
   maxToolCallAttempts: number;
   maxProviderTransports: number;
-  onVisibleTextDelta?: (delta: string) => Promise<string> | string;
+  onVisibleText?: (text: string) => Promise<string> | string;
   onDispatchedAction?: () => void;
 }
 
@@ -184,6 +182,15 @@ function assistantText(messages: AgentMessage[]): string {
     .trim();
 }
 
+function assistantMessageText(message: Extract<AgentMessage, { role: 'assistant' }>): string {
+  return message.content
+    .filter(
+      (content): content is Extract<typeof content, { type: 'text' }> => content.type === 'text',
+    )
+    .map((content) => content.text)
+    .join('');
+}
+
 function isDispatchedActionResult(result: AgentToolResult<unknown>): boolean {
   return Boolean(
     result.details &&
@@ -195,9 +202,6 @@ function isDispatchedActionResult(result: AgentToolResult<unknown>): boolean {
 export async function runNativeChild(opts: RunNativeChildOptions): Promise<NativeChildRunResult> {
   if (!Number.isFinite(opts.timeoutMs) || opts.timeoutMs <= 0) {
     throw new Error('runNativeChild requires a positive finite timeoutMs');
-  }
-  if (!Number.isInteger(opts.maxToolExecutions) || opts.maxToolExecutions <= 0) {
-    throw new Error('runNativeChild requires a positive maxToolExecutions');
   }
   if (!Number.isInteger(opts.maxToolCallAttempts) || opts.maxToolCallAttempts <= 0) {
     throw new Error('runNativeChild requires a positive maxToolCallAttempts');
@@ -227,14 +231,10 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Nativ
     return true;
   };
 
-  const boundedTools = opts.tools.map(
+  const trackedTools = opts.tools.map(
     (tool): AgentTool => ({
       ...tool,
       execute: async (toolCallId, params, signal, onUpdate) => {
-        if (executionCount >= opts.maxToolExecutions) {
-          claimInternalTerminal('native_tool_execution_budget');
-          throw new Error('Native Child tool execution budget exhausted.');
-        }
         executionCount += 1;
         return executeWithAbort(() => tool.execute(toolCallId, params, signal, onUpdate), signal);
       },
@@ -256,7 +256,7 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Nativ
   const child = buildAgent({
     streamFn: boundedStreamFn,
     systemPrompt: opts.systemPrompt,
-    tools: boundedTools,
+    tools: trackedTools,
     allowedToolNames: opts.allowedToolNames,
     history: opts.history,
     afterToolCall: (context) => {
@@ -268,10 +268,6 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Nativ
         countedDispatchedToolCallIds.add(context.toolCall.id);
         dispatchedActionCount += 1;
         opts.onDispatchedAction?.();
-      }
-      if (executionCount >= opts.maxToolExecutions) {
-        claimInternalTerminal('native_tool_execution_budget');
-        return { terminate: true };
       }
       return undefined;
     },
@@ -297,14 +293,14 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Nativ
       return;
     }
 
-    if (
-      event.type === 'message_update' &&
-      event.assistantMessageEvent.type === 'text_delta' &&
-      opts.onVisibleTextDelta
-    ) {
-      const delta = event.assistantMessageEvent.delta;
+    if (event.type === 'message_end' && event.message.role === 'assistant' && opts.onVisibleText) {
+      // Buffer the complete assistant turn before caller-owned classification and
+      // delivery. Streaming partial deltas here can expose a JSON/tool fallback
+      // before enough content exists to recognize and suppress it.
+      const text = assistantMessageText(event.message);
+      if (!text) return;
       const forwarded = await executeWithAbort(
-        () => Promise.resolve(opts.onVisibleTextDelta!(delta)),
+        () => Promise.resolve(opts.onVisibleText!(text)),
         signal,
       );
       visibleOutput += forwarded;
@@ -346,7 +342,7 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Nativ
   // When the caller owns visible delivery, its returned deltas are the source of
   // truth. Falling back to the raw assistant message in that mode could report
   // text that the caller deliberately filtered and never dispatched.
-  if (!visibleOutput && !opts.onVisibleTextDelta) visibleOutput = assistantText(messages);
+  if (!visibleOutput && !opts.onVisibleText) visibleOutput = assistantText(messages);
 
   const base = {
     visibleOutput,
