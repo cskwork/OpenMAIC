@@ -108,9 +108,9 @@ services:
       # per-user identity (see render-service/README.md).
       - RENDER_MAX_JOBS_PER_USER=0
     # Bound RAM: each render (Chromium + FFmpeg + archive expansion) is memory-heavy.
-    # The standard profile requires 10 GiB. For the explicit low-memory profile,
+    # The standard profile requires 8 GiB. For the explicit low-memory profile,
     # set RENDER_RESOURCE_PROFILE=low-memory and RENDER_SERVICE_MEMORY_LIMIT=4g.
-    mem_limit: ${RENDER_SERVICE_MEMORY_LIMIT:-10g}
+    mem_limit: ${RENDER_SERVICE_MEMORY_LIMIT:-8g}
     # Chromium media/frame work can exceed Docker's 64 MiB default shared-memory
     # mount. This is a ceiling inside the selected profile cgroup, not eager allocation.
     shm_size: 2gb

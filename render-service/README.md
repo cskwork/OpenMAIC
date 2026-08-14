@@ -34,7 +34,7 @@ poll, then download. Job ids are opaque.
 | Var                                      | Default                     | Meaning                                                                                                                                                                                                                                                                                                                                                             |
 | ---------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PORT`                                   | `9000`                      | Listen port.                                                                                                                                                                                                                                                                                                                                                        |
-| `RENDER_RESOURCE_PROFILE`                | `standard`                  | `standard` prefers BeginFrame, permits producer compatibility fallback to screenshot, and requires 10 GiB; `low-memory` forces screenshot capture and requires 4 GiB. Both fix one producer worker, one render, and one extraction.                                                                                                                                    |
+| `RENDER_RESOURCE_PROFILE`                | `standard`                  | `standard` prefers BeginFrame, permits producer compatibility fallback to screenshot, and requires 8 GiB; `low-memory` forces screenshot capture and requires 4 GiB. Both fix one producer worker, one render, and one extraction.                                                                                                                                     |
 | `RENDER_MAX_CONCURRENCY`                 | profile: `1`                | Must match the selected profile. Renders beyond the single execution slot queue FIFO.                                                                                                                                                                                                                                                                               |
 | `RENDER_MAX_CONCURRENT_EXTRACTIONS`      | profile: `1`                | Must match the selected profile; bounds archive expansion to one 512 MiB expanded archive at a time.                                                                                                                                                                                                                                                                |
 | `RENDER_MAX_JOBS_PER_USER`               | `1`                         | Active jobs allowed per client identity (0 disables the guard — see note below).                                                                                                                                                                                                                                                                                    |
@@ -119,7 +119,7 @@ docker compose --profile video-export up --build
 ### Standalone (development)
 
 Requires Node 22, Chromium's old headless shell, and FFmpeg on `PATH`. The
-standard profile checks for 10 GiB of available host/cgroup memory before
+standard profile checks for 8 GiB of available host/cgroup memory before
 listening:
 
 ```bash
@@ -139,7 +139,7 @@ The default `standard` CPU profile is the intended 1080p / 30 fps / standard
 quality path: it prefers BeginFrame, while allowing producer to select screenshot
 for compatibility-sensitive compositions such as iframe GenUI. Producer workers
 are fixed at one, and the service admits one render plus one archive extraction
-at a time. It requires at least 10 GiB of host/cgroup memory and an existing
+at a time. It requires at least 8 GiB of host/cgroup memory and an existing
 headless shell so ordinary compositions remain BeginFrame-eligible. No host GPU
 is required or requested; Chromium uses its software/SwiftShader selector.
 

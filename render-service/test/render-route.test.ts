@@ -127,7 +127,7 @@ describe('POST /render buffering/extraction bound', () => {
         requireBeginFrame: false,
         producerWorkers: 1,
         maxConcurrency: 1,
-        minimumMemoryMiB: 10 * 1024,
+        minimumMemoryMiB: 8 * 1024,
       },
       versions: runtimeVersions,
     });

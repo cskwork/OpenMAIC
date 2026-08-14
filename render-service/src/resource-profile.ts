@@ -43,7 +43,7 @@ function defineProfile(
 }
 
 const PROFILES: Record<ResourceProfileName, ResourceProfile> = {
-  standard: defineProfile('standard', 'prefer-beginframe', 10 * GIB),
+  standard: defineProfile('standard', 'prefer-beginframe', 8 * GIB),
   'low-memory': defineProfile('low-memory', 'screenshot-only', 4 * GIB),
 };
 
