@@ -1016,14 +1016,52 @@ describe('HttpAssetStore snapshot behavior', () => {
     expect(seen[seen.length - 1]?.method).toBe('HEAD');
   });
 
+  test('a redirect answer to the descriptor byte GET is never followed and fails closed', async () => {
+    // The descriptor GET is sent with redirect: 'manual', so a server that
+    // ignores the negotiation (or is misconfigured) and answers 302 is
+    // surfaced as the 3xx it is rather than followed -- following would
+    // forward the deployment's custom credential headers to the redirect
+    // target, and the target must never see them or a request.
+    const seen: Array<{ url: string; init: RequestInit | undefined }> = [];
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      seen.push({ url: String(input), init });
+      return new Response(null, {
+        status: 302,
+        headers: { location: 'https://objects.example/elsewhere' },
+      });
+    });
+    const store = new HttpAssetStore({
+      baseUrl: 'https://assets.invalid',
+      fetch,
+      headers: () => ({ 'x-learner-key': 'deployment-secret' }),
+    });
+    stores.push(store);
+
+    await expect(store.resolve('asset')).rejects.toMatchObject({
+      code: 'MALFORMED_RESPONSE',
+      status: 302,
+    });
+    // Exactly one request: the redirect target was never fetched, so nothing
+    // of the deployment's headers went anywhere.
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.url).toBe('https://assets.invalid/assets/asset/content');
+    expect(seen[0]?.init?.redirect).toBe('manual');
+  });
+
   test('a signed URL whose object is gone is a miss, not a malformed response', async () => {
     // Reclamation landing between the mint and the fetch: the entry was owned
     // and readable when the descriptor was issued, so the object store's 404
-    // reports the same physical state a direct read reports as a miss. What a
-    // read means must not depend on the deployment's egress setting.
+    // confirming a missing object reports the same physical state a direct
+    // read reports as a miss. What a read means must not depend on the
+    // deployment's egress setting.
     const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
       if (String(input) === 'https://objects.example/collected') {
-        return new Response('NoSuchKey', { status: 404 });
+        return new Response(
+          '<?xml version="1.0" encoding="UTF-8"?>' +
+            '<Error><Code>NoSuchKey</Code>' +
+            '<Message>The specified key does not exist.</Message></Error>',
+          { status: 404, headers: { 'content-type': 'application/xml' } },
+        );
       }
       return new Response(
         JSON.stringify({ url: 'https://objects.example/collected', revision: 7 }),
@@ -1037,6 +1075,35 @@ describe('HttpAssetStore snapshot behavior', () => {
     stores.push(store);
 
     await expect(store.resolve('asset')).resolves.toBeNull();
+  });
+
+  test.each([
+    // S3/MinIO name a wrong bucket with a code of their own, not NoSuchKey.
+    [
+      'an XML body naming another code',
+      '<?xml version="1.0" encoding="UTF-8"?><Error>' +
+        '<Code>NoSuchBucket</Code><Message>The specified bucket does not exist.</Message>' +
+        '</Error>',
+    ],
+    // A text body is not the documented XML error shape.
+    ['a plain-text body', 'NoSuchKey'],
+    ['an empty body', ''],
+  ])('a signed 404 with %s fails loud, never as a miss', async (_label, body) => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      if (String(input) === 'https://objects.example/failure') {
+        return new Response(body, { status: 404 });
+      }
+      return new Response(JSON.stringify({ url: 'https://objects.example/failure', revision: 7 }), {
+        status: 200,
+        headers: { 'content-type': 'application/vnd.openmaic.asset-descriptor+json' },
+      });
+    });
+    const store = new HttpAssetStore({ baseUrl: 'https://assets.invalid', fetch });
+    stores.push(store);
+
+    await expect(store.resolve('asset')).rejects.toMatchObject({
+      code: 'MALFORMED_RESPONSE',
+    });
   });
 
   test('a signed URL failing for any other reason stays a malformed response', async () => {

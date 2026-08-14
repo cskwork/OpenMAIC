@@ -44,6 +44,7 @@ export {
 } from './asset/http.js';
 export { newAssetId, toAssetId, type AssetId } from './asset/id.js';
 export {
+  ASSET_DESCRIPTOR_MEDIA_TYPE,
   AssetNotFoundError,
   AssetQuotaExceededError,
   DEFAULT_RENDERABLE_TYPES,
