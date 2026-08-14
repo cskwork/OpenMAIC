@@ -26,11 +26,22 @@ import type {
   SpotlightAction,
   LaserAction,
 } from '@openmaic/dsl';
-import type { AssetMeta, AssetSource, GeometryProbe, TimingProbe } from '@/lib/video-export';
+import type {
+  AssetMeta,
+  AssetSource,
+  GeometryProbe,
+  InteractiveHtmlSource,
+  TimingProbe,
+} from '@/lib/video-export';
 import type { Scene, SlideContent } from '@/lib/types/stage';
 import { isMediaPlaceholder } from '@/lib/store/media-generation';
 import { measureSlideElementGeometry, type MeasuredGeometry } from '@openmaic/renderer/snapshot';
 import { db, type AudioFileRecord, type MediaFileRecord } from '@/lib/utils/database';
+import {
+  emptyPreparedInteractiveHtmlSet,
+  prepareInteractiveHtmlScenes,
+  type PreparedInteractiveHtmlSet,
+} from './prepare-interactive-html';
 import { useMediaGenerationStore } from '@/lib/store/media-generation';
 import { resolveVideoMediaForElement } from '@/lib/media/media-task-resolution';
 import { resolveAudioBlob } from '@/lib/media/resolve-audio-bytes';
@@ -44,12 +55,15 @@ export interface VideoTimelineRecords {
   mediaByElementId: Map<string, MediaFileRecord>;
   /** Probed video durations (ms) by `elementId`; absent when unprobeable. */
   videoDurationMsByElementId: Map<string, number>;
+  /** Prepared self-contained HTML pages, addressable by asset id. */
+  interactiveHtml: PreparedInteractiveHtmlSet;
 }
 
 export interface VideoTimelineDeps {
   timing: TimingProbe;
   assets: AssetSource;
   geometry: GeometryProbe;
+  interactive: InteractiveHtmlSource;
   records: VideoTimelineRecords;
 }
 
@@ -199,8 +213,14 @@ export async function createVideoTimelineDeps(input: {
    * the burned-in video. Defaults to false (full geometry for the ZIP/render).
    */
   skipGeometry?: boolean;
+  /** Skip HTML inlining for subtitle-only compilation. */
+  skipInteractiveHtml?: boolean;
 }): Promise<VideoTimelineDeps> {
-  const { stage, scenes, skipGeometry = false } = input;
+  const { stage, scenes, skipGeometry = false, skipInteractiveHtml = false } = input;
+
+  const interactiveHtml = skipInteractiveHtml
+    ? emptyPreparedInteractiveHtmlSet()
+    : await prepareInteractiveHtmlScenes(scenes);
 
   // Audio: load only the records referenced by speech actions.
   const speechPairs: Array<{ audioId?: string; audioUrl?: string }> = [];
@@ -458,6 +478,7 @@ export async function createVideoTimelineDeps(input: {
     timing,
     assets,
     geometry,
-    records: { audioById, mediaByElementId, videoDurationMsByElementId },
+    interactive: interactiveHtml,
+    records: { audioById, mediaByElementId, videoDurationMsByElementId, interactiveHtml },
   };
 }
