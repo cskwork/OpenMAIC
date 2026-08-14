@@ -6,7 +6,7 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { access, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import {
   assemble as producerAssemble,
   plan as producerPlan,
@@ -18,6 +18,7 @@ import {
   type PlanResult,
 } from '@hyperframes/producer/distributed';
 import type { RenderOptions, RenderProgress } from './types.js';
+import { config } from './config.js';
 
 export const CHUNK_PLAN_SCHEMA_VERSION = 1 as const;
 export const DEFAULT_CHUNK_COUNT = 1;
@@ -70,6 +71,8 @@ export interface ImmutableRenderPlan {
   outputPath: string;
   options: RenderOptions;
   chunkCount: number;
+  /** Requested fan-out before producer resolves its effective chunk count. */
+  requestedChunkCount?: number;
   maxParallelChunks: number;
   chunkWorkers: number;
   chunkSizeFrames?: number;
@@ -139,20 +142,6 @@ export interface ChunkExecutionResult {
   stages: { planMs: number; chunksMs: number; assembleMs: number };
 }
 
-export interface LocalChunkExecutorOptions {
-  chunkCount?: number;
-  chunkWorkers?: number;
-  maxParallelChunks?: number;
-  chunkSizeFrames?: number;
-  targetChunkFrames?: number;
-  planDir?: string;
-  dependencies?: ChunkExecutorDependencies;
-}
-
-export interface ChunkRenderExecutor {
-  execute(request: ChunkExecutionRequest): Promise<ChunkExecutionResult>;
-}
-
 interface PlanEnvelope {
   schemaVersion: typeof CHUNK_PLAN_SCHEMA_VERSION;
   input: {
@@ -162,6 +151,7 @@ interface PlanEnvelope {
     options: RenderOptions;
     chunkWorkers: number;
     maxParallelChunks: number;
+    requestedChunkCount?: number;
     chunkSizeFrames?: number;
     targetChunkFrames?: number;
     runtimeVersions: { node: string; chromium: string };
@@ -190,8 +180,21 @@ function positiveInteger(value: number | undefined, fallback: number, name: stri
   return result;
 }
 
+function profileBoundedInteger(
+  value: number | undefined,
+  fallback: number,
+  name: string,
+  maximum: number,
+): number {
+  const result = positiveInteger(value, fallback, name);
+  if (result > maximum) {
+    throw new TypeError(`${name} must be <= ${maximum} for ${config.resourceProfile.name}`);
+  }
+  return result;
+}
+
 async function settleProducer<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
-  // producer@0.7.60 has no cancellation parameter. Await it to settle before
+  // The producer distributed API has no cancellation parameter. Await it to settle before
   // releasing the coordinator slot or cleaning the plan directory.
   const result = await operation;
   if (signal?.aborted) throw new ChunkExecutorError('chunk_execution_failed', 'Render cancelled');
@@ -452,6 +455,9 @@ export function freezeRenderPlan(
     outputPath: envelope.input.outputPath,
     options: Object.freeze({ ...envelope.input.options }),
     chunkCount: envelope.producer.chunkCount,
+    ...(envelope.input.requestedChunkCount !== undefined
+      ? { requestedChunkCount: envelope.input.requestedChunkCount }
+      : {}),
     maxParallelChunks: envelope.input.maxParallelChunks,
     chunkWorkers: envelope.input.chunkWorkers,
     ...(envelope.input.chunkSizeFrames ? { chunkSizeFrames: envelope.input.chunkSizeFrames } : {}),
@@ -479,11 +485,17 @@ export async function createRenderPlan(
   request: RenderPlanInput,
   dependencies: ChunkExecutorDependencies = {},
 ): Promise<ImmutableRenderPlan> {
-  const chunkWorkers = positiveInteger(request.chunkWorkers, DEFAULT_CHUNK_WORKERS, 'chunkWorkers');
-  const maxParallelChunks = positiveInteger(
+  const chunkWorkers = profileBoundedInteger(
+    request.chunkWorkers,
+    DEFAULT_CHUNK_WORKERS,
+    'chunkWorkers',
+    config.resourceProfile.maxChunkWorkers,
+  );
+  const maxParallelChunks = profileBoundedInteger(
     request.maxParallelChunks,
     request.chunkCount ?? DEFAULT_CHUNK_COUNT,
     'maxParallelChunks',
+    config.resourceProfile.maxParallelChunks,
   );
   const chunkCount = positiveInteger(request.chunkCount, maxParallelChunks, 'chunkCount');
   const runtimeVersions = request.runtimeVersions ?? {
@@ -512,7 +524,7 @@ export async function createRenderPlan(
         existing.options.fps === request.options.fps &&
         existing.options.quality === request.options.quality &&
         existing.options.format === request.options.format &&
-        existing.chunkCount <= chunkCount &&
+        (existing.requestedChunkCount ?? existing.chunkCount) === chunkCount &&
         existing.chunkWorkers === chunkWorkers &&
         existing.maxParallelChunks === maxParallelChunks &&
         existing.chunkSizeFrames === request.chunkSizeFrames &&
@@ -588,6 +600,7 @@ export async function createRenderPlan(
       options: { ...request.options },
       chunkWorkers,
       maxParallelChunks,
+      requestedChunkCount: chunkCount,
       ...(request.chunkSizeFrames ? { chunkSizeFrames: request.chunkSizeFrames } : {}),
       ...(request.targetChunkFrames ? { targetChunkFrames: request.targetChunkFrames } : {}),
       runtimeVersions,
@@ -607,6 +620,7 @@ export async function createRenderPlan(
       options: { ...request.options },
       chunkWorkers,
       maxParallelChunks,
+      requestedChunkCount: chunkCount,
       ...(request.chunkSizeFrames ? { chunkSizeFrames: request.chunkSizeFrames } : {}),
       ...(request.targetChunkFrames ? { targetChunkFrames: request.targetChunkFrames } : {}),
       runtimeVersions,
@@ -626,6 +640,7 @@ export async function createRenderPlan(
         options: { ...request.options },
         chunkWorkers,
         maxParallelChunks,
+        requestedChunkCount: chunkCount,
         ...(request.chunkSizeFrames ? { chunkSizeFrames: request.chunkSizeFrames } : {}),
         ...(request.targetChunkFrames ? { targetChunkFrames: request.targetChunkFrames } : {}),
         runtimeVersions,
@@ -785,7 +800,8 @@ export async function executeRenderChunks(
 }
 
 export async function readImmutableRenderPlan(planDir: string): Promise<ImmutableRenderPlan> {
-  const raw = JSON.parse(await readFile(localPlanPath(planDir), 'utf8')) as PlanEnvelope;
+  const resolvedPlanDir = resolve(planDir);
+  const raw = JSON.parse(await readFile(localPlanPath(resolvedPlanDir), 'utf8')) as PlanEnvelope;
   if (raw.schemaVersion !== CHUNK_PLAN_SCHEMA_VERSION) {
     throw new ChunkExecutorError('stale_chunk', 'Unsupported local render plan schema');
   }
@@ -804,28 +820,34 @@ export async function readImmutableRenderPlan(planDir: string): Promise<Immutabl
   if (raw.planHash !== raw.producer.planHash) {
     throw new ChunkExecutorError('stale_chunk', 'Producer plan hash mismatch');
   }
+  if (resolve(raw.producer.planDir) !== resolvedPlanDir) {
+    throw new ChunkExecutorError(
+      'stale_chunk',
+      'Producer plan directory does not match requested plan',
+    );
+  }
+  if (raw.producer.chunkCount !== raw.chunks.length) {
+    throw new ChunkExecutorError(
+      'stale_chunk',
+      'Plan chunk count does not match producer metadata',
+    );
+  }
+  const chunkRoot = `${resolvedPlanDir}.chunks${sep}`;
+  const seen = new Set<number>();
+  raw.chunks.forEach((chunk, index) => {
+    if (
+      chunk.index !== index ||
+      seen.has(chunk.index) ||
+      chunk.startFrame < 0 ||
+      chunk.endFrame <= chunk.startFrame ||
+      !resolve(chunk.outputPath).startsWith(chunkRoot)
+    ) {
+      throw new ChunkExecutorError(
+        'stale_chunk',
+        'Plan contains invalid chunk boundaries or output paths',
+      );
+    }
+    seen.add(chunk.index);
+  });
   return freezeRenderPlan(raw);
 }
-
-export async function inspectChunkOutput(
-  path: string,
-): Promise<{ exists: boolean; bytes: number }> {
-  try {
-    const info = await stat(path);
-    return { exists: true, bytes: info.isFile() ? info.size : 0 };
-  } catch {
-    return { exists: false, bytes: 0 };
-  }
-}
-
-/** Object-oriented adapter for callers that want a reusable bounded executor. */
-export class BoundedChunkExecutor implements ChunkRenderExecutor {
-  constructor(private readonly defaults: LocalChunkExecutorOptions = {}) {}
-
-  execute(request: ChunkExecutionRequest): Promise<ChunkExecutionResult> {
-    return executeRenderChunks({ ...this.defaults, ...request }, this.defaults.dependencies);
-  }
-}
-
-export const planRender = createRenderPlan;
-export const renderChunks = executeRenderChunks;

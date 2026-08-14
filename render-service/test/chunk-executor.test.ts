@@ -240,6 +240,29 @@ describe('local bounded chunk executor', () => {
     expect(calls).toBe(1);
   });
 
+  it('does not reuse a plan created for a different requested fan-out', async () => {
+    const paths = setup();
+    await materializeProject(paths.projectDir);
+    let plans = 0;
+    const dependencies = deps({
+      plan: async (...args) => {
+        plans += 1;
+        return deps().plan!(...args);
+      },
+    });
+    await createRenderPlan({ ...paths, options, chunkCount: 2 }, dependencies);
+    await createRenderPlan({ ...paths, options, chunkCount: 4 }, dependencies);
+    expect(plans).toBe(2);
+  });
+
+  it('rejects chunk settings above the selected resource profile limit', async () => {
+    const paths = setup();
+    await materializeProject(paths.projectDir);
+    await expect(createRenderPlan({ ...paths, options, chunkWorkers: 2 }, deps())).rejects.toThrow(
+      /chunkWorkers must be <= 1/,
+    );
+  });
+
   it('retries only the failed chunk and validates missing, duplicate, and mismatched sets', async () => {
     const paths = setup();
     await materializeProject(paths.projectDir);

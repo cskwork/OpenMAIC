@@ -12,6 +12,14 @@ function intEnv(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+function boundedIntEnv(name: string, fallback: number, maximum: number): number {
+  const value = intEnv(name, fallback);
+  if (value > maximum) {
+    throw new Error(`${name}=${value} exceeds the resource profile limit of ${maximum}`);
+  }
+  return value;
+}
+
 /**
  * Like {@link intEnv} but accepts 0 as a valid value (still rejects negatives /
  * non-numeric). Used for knobs where 0 has a distinct meaning — e.g. a per-user
@@ -51,8 +59,16 @@ export const config = {
   /** Opt-in local plan → chunk → assemble path; HTTP contract remains unchanged. */
   chunkExecutionEnabled: boolEnv('RENDER_CHUNK_EXECUTION', false),
   chunkCount: intEnv('RENDER_CHUNK_COUNT', 1),
-  chunkWorkers: intEnv('RENDER_CHUNK_WORKERS', resourceProfile.producerWorkers),
-  maxParallelChunks: intEnv('RENDER_MAX_PARALLEL_CHUNKS', 1),
+  chunkWorkers: boundedIntEnv(
+    'RENDER_CHUNK_WORKERS',
+    resourceProfile.producerWorkers,
+    resourceProfile.maxChunkWorkers,
+  ),
+  maxParallelChunks: boundedIntEnv(
+    'RENDER_MAX_PARALLEL_CHUNKS',
+    1,
+    resourceProfile.maxParallelChunks,
+  ),
   /** Optional fixed frame count for each planned chunk. */
   chunkSizeFrames: intEnv('RENDER_CHUNK_SIZE_FRAMES', 0),
   /** Optional target frame count used by the producer planner. */

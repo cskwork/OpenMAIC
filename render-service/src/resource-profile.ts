@@ -13,6 +13,9 @@ export interface ResourceProfile {
   producerWorkers: 1;
   maxConcurrency: 1;
   maxConcurrentExtractions: 1;
+  /** Hard local chunk fan-out limits for the selected memory/CPU profile. */
+  maxChunkWorkers: number;
+  maxParallelChunks: number;
   minimumMemoryBytes: number;
 }
 
@@ -26,6 +29,7 @@ function defineProfile(
   name: ResourceProfileName,
   requestedCaptureMode: RequestedCaptureMode,
   minimumMemoryBytes: number,
+  maxParallelChunks: number,
 ): ResourceProfile {
   return {
     name,
@@ -33,12 +37,14 @@ function defineProfile(
     requireBeginFrame: requestedCaptureMode === 'beginframe',
     ...COMMON_LIMITS,
     minimumMemoryBytes,
+    maxChunkWorkers: 1,
+    maxParallelChunks,
   };
 }
 
 const PROFILES: Record<ResourceProfileName, ResourceProfile> = {
-  standard: defineProfile('standard', 'beginframe', 10 * GIB),
-  'low-memory': defineProfile('low-memory', 'screenshot', 4 * GIB),
+  standard: defineProfile('standard', 'beginframe', 10 * GIB, 4),
+  'low-memory': defineProfile('low-memory', 'screenshot', 4 * GIB, 1),
 };
 
 function requiredProducerEnvironment(profile: ResourceProfile): Record<string, string> {
@@ -157,6 +163,8 @@ export function publicResourceProfile(profile: ResourceProfile) {
     producerWorkers: profile.producerWorkers,
     maxConcurrency: profile.maxConcurrency,
     maxConcurrentExtractions: profile.maxConcurrentExtractions,
+    maxChunkWorkers: profile.maxChunkWorkers,
+    maxParallelChunks: profile.maxParallelChunks,
     minimumMemoryMiB: profile.minimumMemoryBytes / 1024 ** 2,
   } as const;
 }
