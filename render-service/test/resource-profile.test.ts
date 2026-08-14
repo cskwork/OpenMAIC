@@ -68,6 +68,12 @@ describe('resource profiles', () => {
         RENDER_MAX_CONCURRENCY: '2',
       }),
     ).toThrow(/requires RENDER_MAX_CONCURRENCY=1/);
+    expect(() =>
+      resolveResourceProfile({
+        RENDER_RESOURCE_PROFILE: 'standard',
+        RENDER_REQUIRE_BEGINFRAME: 'true',
+      }),
+    ).toThrow(/requires RENDER_REQUIRE_BEGINFRAME=false/);
   });
 
   it('fails before startup when memory is below the selected profile minimum', () => {

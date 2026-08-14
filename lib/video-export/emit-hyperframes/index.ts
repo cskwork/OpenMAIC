@@ -252,17 +252,25 @@ function placeholderContent(scene: VideoTimelineScene, reason: string, reasonAtt
 }
 
 /** The base layer for one scene: snapshot, packaged frozen HTML, or placeholder. */
+function sceneBaseId(scene: VideoTimelineScene): string {
+  return `scene-${scene.index + 1}-base`;
+}
+
+function interactiveBaseContentId(scene: VideoTimelineScene): string {
+  return `${sceneBaseId(scene)}-content`;
+}
+
 function renderBase(scene: VideoTimelineScene, labels: VideoExportLabels): string {
   const start = sec(scene.startMs);
   const duration = sec(scene.durationMs);
-  const id = `scene-${scene.index + 1}-base`;
+  const id = sceneBaseId(scene);
   const clip = `id="${id}" class="clip" data-start="${start}" data-duration="${duration}" data-track-index="0"`;
   if (scene.base.kind === 'slide-snapshot' && scene.base.assetRef) {
     return `<img ${clip} src="${escapeHtml(assetUrl(scene.base.assetRef))}" alt="" style="position:absolute;left:0;top:0;width:100%;height:100%;object-fit:contain" />`;
   }
   if (scene.base.kind === 'visual-segments') return '';
   if (scene.base.kind === 'interactive-html' && scene.base.assetRef) {
-    const contentId = `${id}-content`;
+    const contentId = interactiveBaseContentId(scene);
     const fallback = placeholderContent(
       scene,
       labels.interactive.fallback,
@@ -294,7 +302,7 @@ function renderBase(scene: VideoTimelineScene, labels: VideoExportLabels): strin
  */
 function interactiveBaseVisibilityStatements(scene: VideoTimelineScene): string[] {
   if (scene.base.kind !== 'interactive-html' || !scene.base.assetRef) return [];
-  const id = `scene-${scene.index + 1}-base-content`;
+  const id = interactiveBaseContentId(scene);
   const start = sec(scene.startMs);
   const end = sec(scene.startMs + scene.durationMs);
   return [`tl.set('#${id}',{autoAlpha:1},${start});`, `tl.set('#${id}',{autoAlpha:0},${end});`];

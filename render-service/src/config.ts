@@ -40,7 +40,7 @@ export const config = {
   maxConcurrentExtractions: resourceProfile.maxConcurrentExtractions,
   /** Explicit per-job worker count fixed by the selected resource profile. */
   producerWorkers: resourceProfile.producerWorkers,
-  /** Strict-mode hook; current profiles prefer or force a mode without rejecting fallback. */
+  /** Explicit false guard so inherited env cannot turn screenshot fallback rejection back on. */
   requireBeginFrame: resourceProfile.requireBeginFrame,
   /** Active (queued+running) jobs allowed per client identity. 0 disables the guard. */
   maxJobsPerUser: intEnvAllowZero('RENDER_MAX_JOBS_PER_USER', 1),
