@@ -19,10 +19,14 @@
  * - Speech `audioId` with an `audioFiles` row: ingest, rewrite, and mirror the
  *   row under the new id (Dexie stays a deliberate compatibility copy until
  *   Part 3 converges exporters onto the pool). A co-present `audioUrl`
- *   collapses into the same single asset: the pair names one narration.
+ *   collapses into the same single asset: the pair names one narration, and
+ *   the URL is dropped once the id is confirmed resolvable.
  * - Co-present pair whose `audioId` is dangling (no pool entry, no Dexie row):
  *   the URL is the only live handle, so it is fetched and ingested; the
- *   `audioId` becomes the allocated id and the URL is dropped.
+ *   `audioId` becomes the allocated id and the URL is dropped. An
+ *   allocation-shaped `audioId` carrying a co-present URL is probed before
+ *   the URL is dropped: an imported or cross-browser document can name an id
+ *   this pool never minted, and the co-present URL is then the live handle.
  * - An `audioUrl` that no longer resolves (a definitive HTTP refusal):
  *   converts to NO asset and an emptied reference -- a dead URL is never
  *   carried into the new format.
@@ -110,16 +114,6 @@ export interface LegacyAssetConversionDeps {
   removeAsset(ref: string): Promise<void>;
   /** Fetch (and thereby probe) a legacy `audioUrl`. */
   fetchLegacyUrl(url: string): Promise<LegacyUrlFetch>;
-  /**
-   * Keep the legacy `audioUrl` on converted actions as inert recovery data.
-   * Set when the asset pool is server-backed: assets are partitioned by the
-   * minting browser's learner key while documents are not, so another
-   * browser can open the document but cannot resolve narration stored under
-   * a different principal. The retained URL is never read by 0.2.0 writers;
-   * playback, preview, and video export use it as the fallback of last
-   * resort, and ZIP export strips it after fetching its bytes.
-   */
-  retainLegacyUrl?: boolean;
 }
 
 /** Run each job through at most `limit` workers, preserving input order. */
@@ -268,10 +262,11 @@ export function isClassroomMediaUrl(ref: string | undefined): ref is string {
 
 /**
  * Whether a document still carries server classroom media transport URLs
- * anywhere the converter rewrites. Used to recognize a payload whose
- * conversion is incomplete -- or a persisted document that predates
- * conversion -- so the server-fallback load path never applies or persists a
- * deployment-specific address.
+ * anywhere the converter rewrites -- including speech actions' `audioUrl`,
+ * whose bytes the converter ingests regardless of URL shape. Used to recognize
+ * a payload whose conversion is incomplete -- or a persisted document that
+ * predates conversion -- so the server-fallback load path never applies or
+ * persists a deployment-specific address.
  */
 export function containsClassroomMediaUrls(document: AppDocument): boolean {
   const slideContainsTransport = (slide: SlideLike): boolean =>
@@ -282,31 +277,26 @@ export function containsClassroomMediaUrls(document: AppDocument): boolean {
   return document.scenes.some(
     (scene) =>
       (scene.content.type === 'slide' && slideContainsTransport(scene.content.canvas)) ||
-      scene.whiteboards?.some(slideContainsTransport) === true,
+      scene.whiteboards?.some(slideContainsTransport) === true ||
+      // A speech action that still carries an audioUrl after conversion means
+      // audio conversion did not complete; the URL is a transport handle the
+      // converter rewrites, so it must not pass the completeness guard.
+      scene.actions?.some(
+        (action) => action.type === 'speech' && Boolean((action as LegacySpeechAction).audioUrl),
+      ) === true,
   );
 }
 
 /** The default production wiring: Dexie legacy tables plus the app asset pool. */
 async function defaultDeps(): Promise<LegacyAssetConversionDeps> {
-  const [
-    { db, mediaFileKey },
-    { putAsset, removeAsset },
-    { assetRefExists },
-    { isAssetPoolServerBacked },
-  ] = await Promise.all([
+  const [{ db, mediaFileKey }, { putAsset, removeAsset }, { assetRefExists }] = await Promise.all([
     import('@/lib/utils/database'),
     import('./asset-pool'),
     import('./use-asset-url'),
-    import('./asset-pool-config'),
   ]);
   return {
     putAsset: (blob, meta) => putAsset(blob, meta),
     assetRefExists: (ref) => assetRefExists(ref),
-    // A server-backed pool partitions by the minting browser's learner key
-    // while documents are global; converted narration keeps its URL as the
-    // cross-browser recovery handle. A local pool resolves for anyone on the
-    // device, and the field is dropped.
-    retainLegacyUrl: isAssetPoolServerBacked(),
     getMediaRecord: (stageId, ref) =>
       findLegacyMediaRecord(db, mediaFileKey, stageId, ref, assetRefExists),
     getAudioRecord: (audioId) => db.audioFiles.get(audioId),
@@ -418,8 +408,11 @@ export async function convertDocumentAssetRefs(
   // The URL probes are the only network-bound work here, and each is already
   // individually capped, but a document full of stalled URLs would still
   // multiply that cap by the clip count. One shared budget bounds the whole
-  // pass; what is left converts on a later open.
+  // pass; what is left converts on a later open. Every probe -- including the
+  // ossKey recovery fetches -- routes through it, or several stalled CDN
+  // fetches could exceed the advertised aggregate conversion budget.
   const urlProbeBudgetEndsAt = Date.now() + URL_PROBE_BUDGET_MS;
+  const withinUrlProbeBudget = (): boolean => Date.now() <= urlProbeBudgetEndsAt;
   /**
    * Ids this pass freshly allocated. A caller may share the array to own the
    * rollback itself: any failure path -- liveness abort or an ordinary worker
@@ -438,7 +431,7 @@ export async function convertDocumentAssetRefs(
   // slides convert concurrently, and caching only completed allocations would
   // let two slides naming one ref each allocate their own asset.
   const allocationByRef = new Map<string, Promise<string | null>>();
-  /** Outcome of the URL-backed speech path, cached per dangling pair. */
+  /** Outcome of the URL-backed speech path, cached per dangling (id, url) pair. */
   type UrlOutcome =
     | { readonly kind: 'allocated'; readonly assetId: string }
     | { readonly kind: 'dead' }
@@ -461,7 +454,7 @@ export async function convertDocumentAssetRefs(
         source = record.blob.type
           ? record.blob
           : new Blob([record.blob], { type: record.mimeType });
-      } else if (record && record.ossKey) {
+      } else if (record && record.ossKey && withinUrlProbeBudget()) {
         const fetched = await resolvedDeps.fetchLegacyUrl(record.ossKey);
         if (fetched.kind === 'ok') {
           source = fetched.blob.type
@@ -516,7 +509,7 @@ export async function convertDocumentAssetRefs(
     const inFlight = allocationByRef.get(url);
     if (inFlight) return inFlight;
     const pending = (async (): Promise<string | null> => {
-      if (Date.now() > urlProbeBudgetEndsAt) return null;
+      if (!withinUrlProbeBudget()) return null;
       const fetched = await resolvedDeps.fetchLegacyUrl(url);
       if (fetched.kind !== 'ok') {
         report.kept += 1;
@@ -582,12 +575,14 @@ export async function convertDocumentAssetRefs(
     return clone;
   };
 
-  const retainUrl = resolvedDeps.retainLegacyUrl === true;
-  // The per-open probe is one HEAD per speech action under the document
-  // lock, so existence answers are memoized within the pass, and an
-  // allocated-shape id is trusted without one. The prefix is not validation
-  // (the package's id domain is deliberately opaque); a false negative costs
-  // a probe, and legacy ids never take the allocation shape.
+  // Existence answers are memoized within the pass, so a probe costs one
+  // request per unique id per pass, never per action. A probe only happens
+  // when a recovery handle is at stake: an allocation-shaped id with no
+  // co-present URL is trusted without one (nothing droppable is lost if the
+  // trust is wrong -- the read was a miss either way), while a co-present URL
+  // is dropped only after the probe confirms the id resolves, because an
+  // imported or cross-browser document can name an id this pool never minted
+  // and the URL is then the only live handle.
   const existsMemo = new Map<string, Promise<boolean>>();
   const existsOnce = (ref: string): Promise<boolean> => {
     const pending = existsMemo.get(ref);
@@ -606,27 +601,24 @@ export async function convertDocumentAssetRefs(
     const audioUrl = speech.audioUrl || undefined;
     if (!audioId && !audioUrl) return action;
 
+    // Pool-backed means the id resolves in the current pool. For an
+    // allocation-shaped id with nothing beside it, the shape alone suffices
+    // (see above); any other id -- or an id whose drop would take a live URL
+    // with it -- is confirmed by the memoized per-pass probe. An id the pool
+    // does not hold is not treated as converted, and the co-present URL falls
+    // through to the dangling branch below as the live handle.
     const poolBacked =
-      audioId !== undefined && (hasAllocatedShape(audioId) || (await existsOnce(audioId)));
+      audioId !== undefined &&
+      (hasAllocatedShape(audioId) && audioUrl === undefined ? true : await existsOnce(audioId));
     if (audioId && poolBacked) {
       // Already converted (pool-backed). Only a stale co-present URL remains
-      // to drop -- unless the pool is server-backed, where the URL is the
-      // cross-browser recovery handle and stays as inert data.
-      if (!audioUrl || retainUrl) return action;
+      // to drop; the id was confirmed resolvable above, so the URL is safe to
+      // discard.
+      if (!audioUrl) return action;
       const next: LegacySpeechAction = { ...speech };
       delete next.audioUrl;
       changed = true;
       return next;
-    }
-
-    if (retainUrl && audioId && audioUrl && hasAllocatedShape(audioId)) {
-      // Another principal's converted narration: this reader's partition
-      // misses the id, but the retained URL still plays locally. Rewriting
-      // the shared document to a reader-private allocation would strand it
-      // for the owner and ping-pong the reference between browsers, so the
-      // action stays exactly as it is.
-      report.kept += 1;
-      return action;
     }
 
     const record = audioId ? await resolvedDeps.getAudioRecord(audioId) : undefined;
@@ -650,7 +642,7 @@ export async function convertDocumentAssetRefs(
             return mirrored.id;
           }
           let source: Blob | undefined = recordHasBytes ? record.blob : undefined;
-          if (!source && record.ossKey) {
+          if (!source && record.ossKey && withinUrlProbeBudget()) {
             const fetched = await resolvedDeps.fetchLegacyUrl(record.ossKey);
             if (fetched.kind === 'ok') source = fetched.blob;
           }
@@ -685,20 +677,24 @@ export async function convertDocumentAssetRefs(
         return action;
       }
       const next: LegacySpeechAction = { ...speech, audioId: assetId };
-      // A server-backed pool partitions by the minting browser, so the URL
-      // stays as the cross-browser recovery handle; a local pool resolves
-      // everywhere this browser goes, and the URL is dropped.
-      if (!retainUrl) delete next.audioUrl;
+      // The id now resolves (freshly allocated); the co-present URL is
+      // dropped unconditionally -- it is never needed once the allocated id
+      // is confirmed resolvable.
+      delete next.audioUrl;
       changed = true;
       return next;
     }
 
     if (audioUrl) {
       // The audioId is dangling (or absent): the URL is the only live handle.
-      // Actions sharing one pair also share this allocation, cached like the
-      // local-byte paths -- otherwise each would fetch identical bytes and
-      // receive its own twin entry.
-      const urlKey = audioId ?? audioUrl;
+      // Actions sharing one pair (id AND url) also share this allocation,
+      // cached like the local-byte paths -- otherwise each would fetch
+      // identical bytes and receive its own twin entry. The pair, not the id
+      // alone, is the cache key: two actions sharing an id but carrying
+      // different urls are different logical references, and keying on the id
+      // would reuse the first fetch's outcome for the second url -- assigning
+      // the wrong bytes or propagating a dead outcome to a live URL.
+      const urlKey = `${audioId ?? ''}\u0000${audioUrl}`;
       const pendingUrl =
         urlOutcomeByRef.get(urlKey) ??
         (async (): Promise<UrlOutcome> => {
@@ -713,7 +709,7 @@ export async function convertDocumentAssetRefs(
             report.converted += 1;
             return { kind: 'allocated', assetId: mirrored.id };
           }
-          if (Date.now() > urlProbeBudgetEndsAt) {
+          if (!withinUrlProbeBudget()) {
             // The document cannot wait for every stalled URL; the rest of
             // this pass converts on a later open.
             return { kind: 'unavailable' };
@@ -755,7 +751,7 @@ export async function convertDocumentAssetRefs(
       const outcome = await pendingUrl;
       if (outcome.kind === 'allocated') {
         const next: LegacySpeechAction = { ...speech, audioId: outcome.assetId };
-        if (!retainUrl) delete next.audioUrl;
+        delete next.audioUrl;
         changed = true;
         return next;
       }

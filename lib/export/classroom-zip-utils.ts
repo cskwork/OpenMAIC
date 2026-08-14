@@ -65,11 +65,27 @@ async function pooledBytesForRef(ref: string): Promise<Blob | null> {
   }
 }
 
+function mediaRefFromRow(record: MediaFileRecord): string {
+  return record.id.includes(':') ? record.id.split(':').slice(1).join(':') : record.id;
+}
+
 export async function collectMediaFiles(stageId: string): Promise<CollectedMedia[]> {
   const records = await db.mediaFiles.where('stageId').equals(stageId).toArray();
+  // A converted asset exists as two rows: the legacy row (keyed by the
+  // original gen_* placeholder) and the allocated-id compatibility mirror
+  // (placeholderRef retained). The document now references the mirror, so the
+  // ZIP must ship each logical asset once -- the mirror -- and skip the legacy
+  // row it mirrors: importing the archive would otherwise materialize an
+  // unreferenced duplicate and inflate the round trip. Audio avoids this by
+  // deriving its rows from the document's speech actions instead of
+  // enumerating the table.
+  const supersededLegacyRefs = new Set(
+    records.map(mediaRefFromRow).filter((ref) => records.some((row) => row.placeholderRef === ref)),
+  );
   const collected: CollectedMedia[] = [];
   for (const record of records) {
-    const elementId = record.id.includes(':') ? record.id.split(':').slice(1).join(':') : record.id;
+    const elementId = mediaRefFromRow(record);
+    if (supersededLegacyRefs.has(elementId)) continue;
     const ext = record.mimeType?.split('/')[1] || 'jpg';
     const pooled = await pooledBytesForRef(elementId);
     collected.push({

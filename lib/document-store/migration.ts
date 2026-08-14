@@ -143,7 +143,10 @@ async function convertLoadedDocument(
  * write fails loud instead. A no-op conversion (identity) pays no write. The
  * caller's allocation ledger is shared with the reconciliation pass: assets
  * the re-conversion allocates for a concurrent edit must be rolled back if
- * that save fails, exactly like the pass's own allocations.
+ * that save fails, exactly like the pass's own allocations. A failed save-back
+ * rolls the whole ledger and returns the unconverted document: durable storage
+ * still holds the legacy references, so the fresh allocations are orphans, and
+ * returning them would let repeated opens accumulate quota.
  */
 async function saveConvertedDocument(
   store: DocumentStore<AppScene, AppStage>,
@@ -186,16 +189,26 @@ async function saveConvertedDocument(
     return converted;
   } catch (error) {
     // Best-effort: a readable document must not fail to open because the
-    // save-back did (quota pressure, a transient write error). The converted
-    // document still opens, unconverted legacy references keep their
-    // playback fallbacks, and the next open retries both. The generation
-    // fence above stays fatal: it is a cross-tab write race, not a
-    // persistence hiccup.
+    // save-back did (quota pressure, a transient write error). The write
+    // never landed, so durable storage still holds the legacy references:
+    // act as if conversion never happened -- roll the pass's allocations
+    // back here and return the unconverted document, so the next open
+    // retries both cleanly. Returning the converted document would keep its
+    // ledger allocations alive while storage still names the legacy refs,
+    // and repeated opens could accumulate additional orphaned assets. The
+    // generation fence above stays fatal: it is a cross-tab write race, not
+    // a persistence hiccup.
     log.warn(
-      `Converted document ${JSON.stringify(stageId)} could not be saved back; will retry on next open`,
+      `Converted document ${JSON.stringify(stageId)} could not be saved back; ` +
+        'rolling back its allocations and retrying on the next open',
       error,
     );
-    return converted;
+    if (ledger && ledger.length > 0) {
+      const { rollbackConvertedAllocations } =
+        await import('@/lib/media/convert-legacy-asset-refs');
+      await rollbackConvertedAllocations(stageId, ledger);
+    }
+    return existing;
   }
 }
 

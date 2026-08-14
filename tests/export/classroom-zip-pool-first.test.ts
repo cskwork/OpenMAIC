@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  rows: [] as Array<{ id: string; stageId: string; blob: Blob; mimeType?: string }>,
+  rows: [] as Array<{
+    id: string;
+    stageId: string;
+    blob: Blob;
+    mimeType?: string;
+    placeholderRef?: string;
+  }>,
   poolResolve: vi.fn(),
   poolRelease: vi.fn(),
 }));
@@ -90,5 +96,43 @@ describe('classroom ZIP media collection', () => {
 
     expect(await collected[0].record.blob.text()).toBe('legacy-bytes');
     expect(collected[0].zipPath).toBe('media/gen_img_1.png');
+  });
+
+  it('ships each converted logical asset once, preferring the allocated-id mirror', async () => {
+    // A converted asset exists as two rows: the legacy gen_* row and the
+    // allocated-id compatibility mirror (placeholderRef retained). The ZIP
+    // must carry the mirror -- the document now references it -- and skip the
+    // legacy row, or importing the archive would materialize an unreferenced
+    // duplicate. Unconverted siblings keep their legacy rows.
+    mocks.rows.push(
+      {
+        id: 'stage-1:gen_img_1',
+        stageId: 'stage-1',
+        blob: new Blob(['legacy-bytes'], { type: 'image/png' }),
+        mimeType: 'image/png',
+      },
+      {
+        id: 'stage-1:ast_converted_1',
+        stageId: 'stage-1',
+        blob: new Blob(['mirror-bytes'], { type: 'image/png' }),
+        mimeType: 'image/png',
+        placeholderRef: 'gen_img_1',
+      },
+      {
+        id: 'stage-1:gen_vid_1',
+        stageId: 'stage-1',
+        blob: new Blob(['video-bytes'], { type: 'video/mp4' }),
+        mimeType: 'video/mp4',
+      },
+    );
+    mocks.poolResolve.mockResolvedValue(null);
+
+    const collected = await collectMediaFiles('stage-1');
+
+    expect(collected.map((entry) => entry.zipPath).sort()).toEqual([
+      'media/ast_converted_1.png',
+      'media/gen_vid_1.mp4',
+    ]);
+    expect(await collected[0].record.blob.text()).toBe('mirror-bytes');
   });
 });

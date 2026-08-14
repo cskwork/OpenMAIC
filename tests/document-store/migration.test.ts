@@ -23,16 +23,31 @@ import { validateAppScene, validateAppStage } from '@/lib/document-store/validat
 // The migration layer compensates a discarded conversion's side effects
 // through the converter's rollback helper; spy on it so tests can pin exactly
 // which allocations a failed pass rolls back. (The real helper needs a real
-// pool, which this suite does not provide; the converter suite owns it.)
-const { rollbackSpy } = vi.hoisted(() => ({ rollbackSpy: vi.fn() }));
+// pool, which this suite does not provide; the converter suite owns it.) The
+// suite's stand-in store lets a test converter perform REAL allocations --
+// pool entries plus audio/media compatibility rows -- and asserts the failed
+// pass actually cleans them up: the mocked helper mirrors the real one's
+// semantics (removeAsset plus the two Dexie row deletions) against it.
+const { rollbackSpy, allocationState } = vi.hoisted(() => ({
+  rollbackSpy: vi.fn(),
+  allocationState: {
+    pool: new Set<string>(),
+    audioRows: new Set<string>(),
+    mediaRows: new Set<string>(),
+  },
+}));
 vi.mock('@/lib/media/convert-legacy-asset-refs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/media/convert-legacy-asset-refs')>();
   return {
     ...actual,
-    rollbackConvertedAllocations: (
-      ...args: Parameters<typeof actual.rollbackConvertedAllocations>
-    ) => {
-      rollbackSpy(...args);
+    rollbackConvertedAllocations: (stageId: string, ids: readonly string[]): Promise<void> => {
+      rollbackSpy(stageId, ids);
+      for (const id of ids) {
+        allocationState.pool.delete(id);
+        allocationState.audioRows.delete(id);
+        allocationState.mediaRows.delete(`${stageId}:${id}`);
+      }
+      return Promise.resolve();
     },
   };
 });
@@ -605,9 +620,12 @@ describe('legacy document migration', () => {
     expect((await documentStore.loadDocument('stage-1'))?.stage).not.toHaveProperty('description');
   });
 
-  test('a save-back failure does not break loading the converted document', async () => {
-    // Quota pressure or a transient write error must not fail the read: the
-    // converted document opens anyway, and the next open retries the save.
+  test('a save-back failure returns the unconverted document and retries on the next open', async () => {
+    // Quota pressure or a transient write error must not fail the read, but
+    // the failed save also means durable storage still holds the legacy
+    // references: acting as if conversion never happened returns the
+    // unconverted document, so the next open retries cleanly instead of
+    // accumulating orphaned allocations.
     const realStore = store();
     await realStore.saveDocument({
       dslVersion: DSL_VERSION,
@@ -641,7 +659,9 @@ describe('legacy document migration', () => {
       lockManager: lockManager(),
       convertAssetRefs: convert,
     });
-    expect(first.document?.stage.name).toBe('converted');
+    // The failed write is treated as if conversion never happened: the opened
+    // document is the unconverted one, not the converted rewrite.
+    expect(first.document?.stage.name).toBe('Migrated');
     // Nothing persisted from the failed write.
     expect((await realStore.loadDocument('stage-1'))?.stage.name).toBe('Migrated');
 
@@ -654,6 +674,112 @@ describe('legacy document migration', () => {
     });
     expect(second.document?.stage.name).toBe('converted');
     expect((await realStore.loadDocument('stage-1'))?.stage.name).toBe('converted');
+  });
+
+  test("a save-back failure rolls back the converter's real allocations and compatibility rows", async () => {
+    // Finding: the test converter must do REAL work -- allocate pool entries
+    // and write audio/media compatibility rows -- or a failed save-back could
+    // leak the fresh ids while durable storage still holds the legacy
+    // references, letting repeated opens accumulate orphaned assets. A failed
+    // save must roll the pass ledger back (pool entries and mirror rows) and
+    // return the unconverted document; the next open then retries cleanly.
+    const realStore = store();
+    await realStore.saveDocument({
+      dslVersion: DSL_VERSION,
+      stage: { id: 'stage-1', name: 'Migrated', createdAt: 100, updatedAt: 200 },
+      scenes: [],
+    });
+    let writes = 0;
+    const flakyStore = new Proxy(realStore, {
+      get(target, property) {
+        if (property === 'saveDocument') {
+          return (document: AppDocument) => {
+            writes += 1;
+            if (writes === 1) return Promise.reject(new Error('quota exceeded'));
+            return target.saveDocument(document);
+          };
+        }
+        return Reflect.get(target, property);
+      },
+    });
+    allocationState.pool.clear();
+    allocationState.audioRows.clear();
+    allocationState.mediaRows.clear();
+    rollbackSpy.mockClear();
+    let calls = 0;
+    const convert = (doc: AppDocument, ledger?: string[]): Promise<AppDocument> => {
+      calls += 1;
+      // A genuine conversion pass: one pool entry per allocated id, one audio
+      // compatibility row and one media compatibility row keyed by it, all
+      // recorded on the caller's ledger for rollback.
+      const id = `ast_saveback_${calls}`;
+      allocationState.pool.add(id);
+      allocationState.audioRows.add(id);
+      allocationState.mediaRows.add(`stage-1:${id}`);
+      ledger?.push(id);
+      const baseScene = doc.scenes[0] ?? {
+        id: 'scene-1',
+        stageId: 'stage-1',
+        type: 'slide',
+        title: 'Scene',
+        order: 0,
+        content: { type: 'slide', canvas: { id: 'canvas-1', elements: [] } } as never,
+        whiteboard: [{ id: 'whiteboard-1', elements: [] }] as never,
+        createdAt: 100,
+        updatedAt: 200,
+      };
+      const scenes = [
+        {
+          ...baseScene,
+          actions: [
+            ...(baseScene.actions ?? []),
+            { id: 'a1', type: 'speech' as const, text: 'Hi', audioId: id },
+          ],
+        },
+      ];
+      return Promise.resolve({
+        ...doc,
+        stage: { ...doc.stage, name: 'converted', description: 'converted' },
+        scenes,
+      });
+    };
+
+    const first = await accessDocument('stage-1', {
+      store: flakyStore,
+      kv: new MemoryKv(),
+      legacyStore: legacy(null),
+      lockManager: lockManager(),
+      convertAssetRefs: convert,
+    });
+
+    // The failed write is treated as if conversion never happened: the opened
+    // document is the unconverted one, and every fresh allocation -- pool
+    // entry and both compatibility rows -- was rolled back, not leaked.
+    expect(first.document?.stage.name).toBe('Migrated');
+    expect(first.document?.stage).not.toHaveProperty('description');
+    expect(allocationState.pool.size).toBe(0);
+    expect(allocationState.audioRows.size).toBe(0);
+    expect(allocationState.mediaRows.size).toBe(0);
+    expect(rollbackSpy).toHaveBeenCalledWith('stage-1', ['ast_saveback_1']);
+    // Nothing persisted from the failed write.
+    expect((await realStore.loadDocument('stage-1'))?.stage.name).toBe('Migrated');
+
+    // The next open retries cleanly: the pass allocates again, the save-back
+    // succeeds, and the conversion's own reference keeps the allocation alive
+    // (only failure rolls it back).
+    const second = await accessDocument('stage-1', {
+      store: flakyStore,
+      kv: new MemoryKv(),
+      legacyStore: legacy(null),
+      lockManager: lockManager(),
+      convertAssetRefs: convert,
+    });
+    expect(calls).toBe(2);
+    expect(second.document?.stage.name).toBe('converted');
+    expect((await realStore.loadDocument('stage-1'))?.stage.name).toBe('converted');
+    expect(allocationState.pool.has('ast_saveback_2')).toBe(true);
+    expect(allocationState.audioRows.has('ast_saveback_2')).toBe(true);
+    expect(allocationState.mediaRows.has('stage-1:ast_saveback_2')).toBe(true);
   });
 
   test('a concurrent write during conversion is reconciled, not overwritten', async () => {
@@ -751,6 +877,9 @@ describe('legacy document migration', () => {
     // during save) must share the caller's allocation ledger. If its save
     // fails, its fresh allocations are untracked and can never be cleaned
     // up. The ledger must carry them so the pass's cleanup compensates them.
+    // The failed save also returns the UNCONVERTED document (finding: act as
+    // if conversion never happened), never the first pass's conversion whose
+    // allocations were rolled back.
     const realStore = store();
     await realStore.saveDocument({
       dslVersion: DSL_VERSION,
@@ -793,10 +922,13 @@ describe('legacy document migration', () => {
       convertAssetRefs: convert,
     });
 
-    // The reconciled save failed; the opened document is the first pass's
-    // conversion, and cleanup compensated BOTH passes' allocations.
-    expect(result.document?.stage.description).toBe('converted');
+    // The save failed, so the opened document is the unconverted original --
+    // never the first pass's conversion, whose allocations were rolled back.
+    expect(result.document?.stage.name).toBe('Migrated');
+    expect(result.document?.stage).not.toHaveProperty('description');
     expect(calls).toBe(2);
+    // Cleanup compensated BOTH passes' allocations: the first pass's and the
+    // reconciliation's fresh ids.
     const rolledBackIds = rollbackSpy.mock.calls.flatMap((args) => args[1] as string[]);
     expect(rolledBackIds).toContain('ast_first');
     expect(rolledBackIds).toContain('ast_reconciled');
