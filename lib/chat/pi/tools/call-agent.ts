@@ -121,13 +121,21 @@ function isLikelyRawStructuredFallback(content: string): boolean {
   return looksLikeStructuredFragment(content);
 }
 
-function isLikelyNativeStructuredFallback(content: string): boolean {
-  if (looksLikeStructuredFragment(content)) return true;
-  const withoutFence = content
-    .trim()
-    .replace(/^```(?:[a-z][\w-]*)?\s*/i, '')
-    .replace(/```\s*$/, '');
+function looksLikeNativeStructuredCandidate(content: string): boolean {
+  const trimmed = content.trim();
+  if (looksLikeStructuredFragment(trimmed)) return true;
+  const withoutFence = trimmed.replace(/^```(?:[a-z][\w-]*)?\s*/i, '').replace(/```\s*$/, '');
   return looksLikeStructuredFragment(withoutFence);
+}
+
+function isLikelyNativeStructuredFallback(content: string): boolean {
+  // A model may preface a Legacy JSON fallback with a short explanation. Check
+  // every line-start suffix so a standalone structured block still fails
+  // closed, while an inline JSON example inside natural speech stays visible.
+  const lines = content.split(/\r?\n/);
+  return lines.some((_line, index) =>
+    looksLikeNativeStructuredCandidate(lines.slice(index).join('\n')),
+  );
 }
 
 function requireString(
