@@ -20,8 +20,8 @@ import {
   collectMediaFiles,
   actionsToManifest,
   collectLegacyAudioForExport,
+  collectMissingAudioRefs,
 } from './classroom-zip-utils';
-import type { SpeechAction } from '@/lib/types/action';
 import { createLogger } from '@/lib/logger';
 import {
   inlineHtmlAssets,
@@ -167,17 +167,14 @@ export function useExportClassroom() {
         };
       }
 
-      // Check for missing audio references
-      for (const scene of scenes) {
-        for (const action of scene.actions ?? []) {
-          if (action.type === 'speech') {
-            const audioId = (action as SpeechAction).audioId;
-            if (audioId && !audioIdToPath.has(audioId)) {
-              const missingPath = `audio/${audioId}.mp3`;
-              mediaIndex[missingPath] = { type: 'audio', missing: true };
-            }
-          }
-        }
+      // Check for missing audio references. A legacy audioUrl recovered by
+      // the pass above travels under its own zip path, so it is not missing.
+      for (const { missingPath } of collectMissingAudioRefs(
+        scenes,
+        audioIdToPath,
+        audioUrlToPath,
+      )) {
+        mediaIndex[missingPath] = { type: 'audio', missing: true };
       }
 
       // 8. Assemble manifest

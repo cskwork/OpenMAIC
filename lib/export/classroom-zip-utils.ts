@@ -184,6 +184,32 @@ interface RewriteManifestActionOptions {
   fallbackDiscussionAgentIndex?: number;
 }
 
+/**
+ * Speech references that would dangle in the exported ZIP: an audioId with no
+ * archive row and no recovered fallback. A legacy audioUrl that WAS recovered
+ * travels under its own zip path (`actionsToManifest` maps the action to it),
+ * so the same narration must not also be flagged missing under a phantom
+ * `audio/${audioId}.mp3` path.
+ */
+export function collectMissingAudioRefs(
+  scenes: readonly Scene[],
+  audioIdToPath: Map<string, string>,
+  audioUrlToPath: Map<string, string>,
+): Array<{ audioId: string; missingPath: string }> {
+  const missing: Array<{ audioId: string; missingPath: string }> = [];
+  for (const scene of scenes) {
+    for (const action of scene.actions ?? []) {
+      if (action.type !== 'speech') continue;
+      const speech = action as SpeechAction & { audioUrl?: string };
+      const audioId = speech.audioId;
+      if (!audioId || audioIdToPath.has(audioId)) continue;
+      if (speech.audioUrl && audioUrlToPath.has(speech.audioUrl)) continue;
+      missing.push({ audioId, missingPath: `audio/${audioId}.mp3` });
+    }
+  }
+  return missing;
+}
+
 export function rewriteAudioRefsToIds(
   actions: ManifestAction[],
   audioRefMap: Record<string, string>,

@@ -20,7 +20,11 @@ vi.mock('@/lib/media/resolve-audio-bytes', () => ({ resolveAudioBlob: vi.fn() })
 vi.mock('@/lib/media/use-asset-url', () => ({ withAssetUrl: vi.fn() }));
 vi.mock('@/lib/media/resolve-media-ref', () => ({ isConcreteMediaAddress: vi.fn() }));
 
-import { actionsToManifest, collectLegacyAudioForExport } from '@/lib/export/classroom-zip-utils';
+import {
+  actionsToManifest,
+  collectLegacyAudioForExport,
+  collectMissingAudioRefs,
+} from '@/lib/export/classroom-zip-utils';
 import type { Scene } from '@/lib/types/stage';
 
 function sceneWithSpeech(actions: unknown[]): Scene {
@@ -97,5 +101,64 @@ describe('legacy audio URL export', () => {
     expect(blobs).toHaveLength(0);
     expect(manifest[0]).not.toHaveProperty('audioRef');
     expect(manifest[0]).not.toHaveProperty('audioUrl');
+  });
+
+  it('does not flag a recovered legacy audioUrl as missing (the archive carries it)', async () => {
+    // Finding: the missing-audio pass checked only audioIdToPath, so a
+    // dangling audioId whose audioUrl WAS recovered produced a valid
+    // recovered entry PLUS a false missing:true entry for the same narration.
+    const url = 'https://server.example.com/audio/recovered.mp3';
+    fetchMediaUrlMock.mockResolvedValue(
+      new Response(new Blob(['narration-bytes'], { type: 'audio/mpeg' }), { status: 200 }),
+    );
+    const action = {
+      id: 'a1',
+      type: 'speech',
+      text: 'Hi',
+      audioId: 'tts_dangling',
+      audioUrl: url,
+    };
+    const scenes = [sceneWithSpeech([action])];
+
+    const { audioUrlToPath } = await collectLegacyAudioForExport(scenes, new Map());
+
+    expect(collectMissingAudioRefs(scenes, new Map(), audioUrlToPath)).toEqual([]);
+  });
+
+  it('flags a dangling audioId whose legacy URL could not be recovered', async () => {
+    const url = 'https://server.example.com/audio/gone.mp3';
+    fetchMediaUrlMock.mockResolvedValue(new Response(null, { status: 404 }));
+    const action = {
+      id: 'a1',
+      type: 'speech',
+      text: 'Hi',
+      audioId: 'tts_dangling',
+      audioUrl: url,
+    };
+    const scenes = [sceneWithSpeech([action])];
+
+    const { audioUrlToPath } = await collectLegacyAudioForExport(scenes, new Map());
+
+    expect(collectMissingAudioRefs(scenes, new Map(), audioUrlToPath)).toEqual([
+      { audioId: 'tts_dangling', missingPath: 'audio/tts_dangling.mp3' },
+    ]);
+  });
+
+  it('flags a bare dangling audioId with no legacy URL', () => {
+    const action = { id: 'a1', type: 'speech', text: 'Hi', audioId: 'tts_bare' };
+    const scenes = [sceneWithSpeech([action])];
+
+    expect(collectMissingAudioRefs(scenes, new Map(), new Map())).toEqual([
+      { audioId: 'tts_bare', missingPath: 'audio/tts_bare.mp3' },
+    ]);
+  });
+
+  it('skips an audioId that already has bytes in the archive', () => {
+    const action = { id: 'a1', type: 'speech', text: 'Hi', audioId: 'ast_have' };
+    const scenes = [sceneWithSpeech([action])];
+
+    expect(
+      collectMissingAudioRefs(scenes, new Map([['ast_have', 'audio/ast_have.mp3']]), new Map()),
+    ).toEqual([]);
   });
 });

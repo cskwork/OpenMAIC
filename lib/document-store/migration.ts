@@ -59,11 +59,25 @@ export interface DocumentMigrationDeps {
   storageSharedLockHeld?: boolean;
 }
 
+export interface DocumentMutationOptions {
+  /**
+   * A wholesale replacement (import, backup restore) overwrites the whole
+   * aggregate. Skipping the eager conversion avoids allocating assets for
+   * content the callback will immediately replace -- those allocations would
+   * otherwise be orphaned by the very save that lands next.
+   */
+  mode?: 'update' | 'replace';
+  /** Fail instead of falling back to the lock-free/LWW path. */
+  requireLock?: boolean;
+}
+
 /**
  * Rewrites a loaded document's legacy media references to allocated asset ids,
- * returning the input by identity when nothing converted.
+ * returning the input by identity when nothing converted. The optional ledger
+ * collects every id the pass freshly allocates, so the caller can roll the
+ * side effects back if the converted document is never committed.
  */
-export type AssetRefConverter = (document: AppDocument) => Promise<AppDocument>;
+export type AssetRefConverter = (document: AppDocument, ledger?: string[]) => Promise<AppDocument>;
 
 export interface DocumentAccessResult {
   document: AppDocument | null;
@@ -111,7 +125,7 @@ async function convertLoadedDocument(
         const { convertDocumentAssetRefs } = await import('@/lib/media/convert-legacy-asset-refs');
         return (await convertDocumentAssetRefs(value, undefined, undefined, ledger)).document;
       });
-    return await convert(document);
+    return await convert(document, ledger);
   } catch (error) {
     log.warn(
       `Legacy asset conversion failed for document ${JSON.stringify(document.stage.id)}; ` +
@@ -126,7 +140,10 @@ async function convertLoadedDocument(
  * Persist a converted document, fenced by the storage generation exactly like
  * the legacy-migration save below: a conversion write that lands after a
  * clearDatabase would resurrect a document the user asked to wipe, so the
- * write fails loud instead. A no-op conversion (identity) pays no write.
+ * write fails loud instead. A no-op conversion (identity) pays no write. The
+ * caller's allocation ledger is shared with the reconciliation pass: assets
+ * the re-conversion allocates for a concurrent edit must be rolled back if
+ * that save fails, exactly like the pass's own allocations.
  */
 async function saveConvertedDocument(
   store: DocumentStore<AppScene, AppStage>,
@@ -135,6 +152,7 @@ async function saveConvertedDocument(
   converted: AppDocument,
   deps: DocumentMigrationDeps,
   expectedGeneration: number,
+  ledger?: string[],
 ): Promise<AppDocument | null> {
   if (converted === existing) return existing;
   if ((await readGeneration(deps.kv)) !== expectedGeneration) {
@@ -160,7 +178,7 @@ async function saveConvertedDocument(
         omitUndefinedObjectMembers(stripDocument(existing)),
       )
     ) {
-      const reConverted = await convertLoadedDocument(latest, deps);
+      const reConverted = await convertLoadedDocument(latest, deps, ledger);
       await store.saveDocument(reConverted);
       return reConverted;
     }
@@ -487,6 +505,7 @@ async function migrateLocked(
           fresh,
           deps,
           currentGeneration,
+          passLedger,
         );
         await cleanup(settled);
         return { document: settled, readOnlyLegacy: false };
@@ -528,6 +547,7 @@ async function migrateLocked(
         converted,
         deps,
         probe.generation,
+        passLedger,
       );
       await cleanup(settled);
       return { document: settled, readOnlyLegacy: false };
@@ -630,29 +650,42 @@ export function mutateDocument<T>(
   stageId: string,
   work: (document: AppDocument | null, store: DocumentStore<AppScene, AppStage>) => Promise<T>,
   deps: DocumentMigrationDeps = {},
+  options: DocumentMutationOptions = {},
 ): Promise<T> {
   const entryGeneration = readGeneration(deps.kv);
   const mutateLocked = async (): Promise<T> => {
     const expectedGeneration = await entryGeneration;
-    const access = await migrateLocked(stageId, deps, expectedGeneration);
-    return work(access.document, generationGuardedStore(stageId, expectedGeneration, deps));
+    // A wholesale replacement never needs the current aggregate: eager
+    // conversion would allocate assets for content the callback immediately
+    // replaces, orphaning them. The callback writes the replacement itself.
+    const document =
+      options.mode === 'replace'
+        ? null
+        : (await migrateLocked(stageId, deps, expectedGeneration)).document;
+    return work(document, generationGuardedStore(stageId, expectedGeneration, deps));
   };
   return withDocumentLock(stageId, mutateLocked, deps).catch(async (error: unknown) => {
     if (!(error instanceof DocumentLockUnavailableError)) throw error;
+    // Some callers must never degrade to lock-free allocation (a server
+    // fallback converting and committing a fresh document): without
+    // cross-realm exclusion, two realms could allocate competing asset sets.
+    if (options.requireLock) throw error;
 
     // Migration is never attempted without cross-realm exclusion. A
     // destination-backed document (or a genuinely new id) can still accept
     // the product's established lock-free/LWW risk; a legacy-only document
     // stays read-only so two authorities cannot fork.
+    const expectedGeneration = await entryGeneration;
+    if (options.mode === 'replace') {
+      return work(null, generationGuardedStore(stageId, expectedGeneration, deps));
+    }
     const store = resolveStore(deps);
     const destination = await store.loadDocument(stageId);
     if (destination) {
       assertValidDestination(stageId, destination);
-      const expectedGeneration = await entryGeneration;
       return work(destination, generationGuardedStore(stageId, expectedGeneration, deps));
     }
     if (await getLegacyDocumentStore(deps).read(stageId)) throw error;
-    const expectedGeneration = await entryGeneration;
     return work(null, generationGuardedStore(stageId, expectedGeneration, deps));
   });
 }

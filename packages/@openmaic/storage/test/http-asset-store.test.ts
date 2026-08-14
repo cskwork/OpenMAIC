@@ -1044,3 +1044,47 @@ describe('asset handler construction', () => {
     ).toThrow(/multipart framing/);
   });
 });
+
+describe('HttpAssetStore bounded exists fallback', () => {
+  test('exists() rejects within the probe timeout when the fallback GET stalls', async () => {
+    // An unclassifiable HEAD falls back to a full resolve; that fallback GET
+    // must be bounded like the probe, or a stalled persistence endpoint can
+    // hold migration/conversion indefinitely.
+    const stalledFetch = ((
+      _input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      if (init?.method === 'HEAD') return Promise.resolve(new Response(null, { status: 500 }));
+      // GET: hang until the caller's abort signal fires.
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () =>
+          reject(init.signal?.reason ?? new Error('aborted')),
+        );
+      });
+    }) as typeof fetch;
+    const store = new HttpAssetStore({
+      baseUrl: 'https://assets.test',
+      fetch: stalledFetch,
+      probeTimeoutMs: 30,
+    });
+
+    await expect(store.exists('ast_stalled')).rejects.toMatchObject({
+      code: 'HTTP_REQUEST_FAILED',
+    });
+  });
+
+  test('exists() still resolves through the bounded fallback GET when the HEAD is unclassifiable', async () => {
+    const fetchImpl = ((_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      if (init?.method === 'HEAD') return Promise.resolve(new Response(null, { status: 500 }));
+      return Promise.resolve(
+        new Response(new Blob(['bytes']), {
+          status: 200,
+          headers: { 'content-type': 'text/plain', 'x-asset-revision': 'rev-1' },
+        }),
+      );
+    }) as typeof fetch;
+    const store = new HttpAssetStore({ baseUrl: 'https://assets.test', fetch: fetchImpl });
+
+    await expect(store.exists('ast_present')).resolves.toBe(true);
+  });
+});

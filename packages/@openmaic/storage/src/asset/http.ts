@@ -22,6 +22,12 @@ export interface HttpAssetStoreOptions {
   headers?: HttpAssetHeadersHook;
   /** Passed through to fetch unchanged. */
   credentials?: RequestCredentials;
+  /**
+   * Timeout (ms) for metadata-only existence probes (`exists`) and their
+   * fallback resolution. Migration-time checks must never wait on a stalled
+   * persistence endpoint indefinitely; playback resolution is unaffected.
+   */
+  probeTimeoutMs?: number;
 }
 
 interface ErrorResponseBody {
@@ -152,6 +158,7 @@ export class HttpAssetStore implements StorageProvider {
   private readonly identities = new Map<AssetRef, ObjectUrlIdentity>();
   private readonly inFlight = new Map<AssetRef, Promise<string | null>>();
   private readonly generations = new Map<AssetRef, number>();
+  private readonly probeTimeoutMs: number;
   private closed = false;
 
   constructor(options: HttpAssetStoreOptions) {
@@ -163,6 +170,7 @@ export class HttpAssetStore implements StorageProvider {
     this.fetchImpl = selectedFetch.bind(globalThis);
     this.headersHook = options.headers;
     this.credentials = options.credentials;
+    this.probeTimeoutMs = options.probeTimeoutMs ?? 15_000;
   }
 
   private generation(id: AssetRef): number {
@@ -355,9 +363,15 @@ export class HttpAssetStore implements StorageProvider {
   private async get(
     id: AssetRef,
     encoded: string,
+    timeoutMs?: number,
   ): Promise<{ url: string | null; retry: boolean }> {
     const generation = this.generation(id);
-    const response = await this.fetchResponse('GET', `/assets/${encoded}/content`);
+    const response = await this.fetchResponse(
+      'GET',
+      `/assets/${encoded}/content`,
+      undefined,
+      timeoutMs,
+    );
     if (!response.ok) {
       const error = await this.httpError(response);
       if (error.status === 404 && error.code === 'ASSET_NOT_FOUND') {
@@ -401,11 +415,20 @@ export class HttpAssetStore implements StorageProvider {
     return { url, retry: false };
   }
 
-  private async resolveFresh(id: AssetRef, encoded: string): Promise<string | null> {
+  private async resolveFresh(
+    id: AssetRef,
+    encoded: string,
+    timeoutMs?: number,
+  ): Promise<string | null> {
     while (true) {
       const known = this.identities.get(id);
       if (known !== undefined) {
-        const response = await this.fetchResponse('HEAD', `/assets/${encoded}/content`);
+        const response = await this.fetchResponse(
+          'HEAD',
+          `/assets/${encoded}/content`,
+          undefined,
+          timeoutMs,
+        );
         if (response.ok) {
           const identity = response.status === 200 ? responseIdentity(response) : null;
           if (identity !== null && sameIdentity(known, identity)) {
@@ -423,7 +446,7 @@ export class HttpAssetStore implements StorageProvider {
           // A HEAD error without a classifiable code falls back to GET.
         }
       }
-      const result = await this.get(id, encoded);
+      const result = await this.get(id, encoded, timeoutMs);
       if (!result.retry) return result.url;
     }
   }
@@ -458,7 +481,7 @@ export class HttpAssetStore implements StorageProvider {
    * Metadata-only existence probe: a HEAD against the byte route, never a
    * byte download or a minted URL. Bounded, so a stalled server cannot hang
    * a migration-time check; an unclassifiable answer falls back to a full
-   * resolve, exactly like the warm path.
+   * resolve, which is bounded the same way.
    */
   async exists(id: AssetRef): Promise<boolean> {
     const encoded = addressableSegment(id);
@@ -467,13 +490,16 @@ export class HttpAssetStore implements StorageProvider {
       'HEAD',
       `/assets/${encoded}/content`,
       undefined,
-      15_000,
+      this.probeTimeoutMs,
     );
     if (response.ok) return response.status === 200;
     const code = response.headers.get('x-error-code');
     if (response.status === 404 && code === 'ASSET_NOT_FOUND') return false;
     if (code !== null) throw await this.httpError(response);
-    return (await this.resolve(id)) !== null;
+    // An unclassifiable HEAD is not a definitive miss; resolve decides. The
+    // fallback GET is bounded like the probe, so a stalled persistence
+    // endpoint cannot hold migration/conversion indefinitely.
+    return (await this.resolveFresh(id, encoded, this.probeTimeoutMs)) !== null;
   }
 
   async remove(id: AssetRef): Promise<void> {

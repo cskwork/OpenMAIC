@@ -37,6 +37,12 @@ vi.mock('@/lib/utils/stage-storage', () => ({
   loadStageData: vi.fn().mockResolvedValue(null),
 }));
 
+// The loader must never delete pool assets itself: conversion ownership
+// transfers to the committed document at fetch time. Mock the pool so a
+// regression that reintroduces loader-side rollback is caught.
+const { removeAssetMock } = vi.hoisted(() => ({ removeAssetMock: vi.fn() }));
+vi.mock('@/lib/media/asset-pool', () => ({ removeAsset: removeAssetMock }));
+
 // Omitting `generatedAgentConfigs` models a document written before roster
 // persistence existed (field absent) — distinct from an explicit `[]`, which
 // is an authoritative empty roster.
@@ -153,6 +159,7 @@ function makeDeps(overrides: Partial<Parameters<typeof runClassroomLoad>[0]> = {
 // The fruitless-probe memo is session-scoped module state; isolate tests.
 beforeEach(() => {
   resetLegacyAgentFallbackProbes();
+  removeAssetMock.mockClear();
 });
 
 describe('runClassroomLoad', () => {
@@ -688,6 +695,31 @@ describe('runClassroomLoad', () => {
     expect(deps.loadRestoredMediaTasks).not.toHaveBeenCalled();
     expect(deps.applyGeneratedAgents).not.toHaveBeenCalled();
     expect(deps.setLoading).not.toHaveBeenCalled();
+  });
+
+  it('does not delete committed assets when superseded after the fallback applied (ownership stays with the document)', async () => {
+    // The fetch path commits the converted document -- and with it every
+    // allocation -- under the per-stage lock BEFORE this loader applies the
+    // fallback. A supersession in the apply window must therefore never roll
+    // the allocations back: the in-flight fallback save still references
+    // them. The loader itself must not touch the asset pool at all.
+    const applied = deferred<boolean>();
+    const { deps, setCurrent } = makeDeps({
+      fetchClassroom: vi.fn().mockResolvedValue({
+        stage: makeStage('stage-a'),
+        scenes: [makeScene('scene-a', 'stage-a')],
+      }),
+      applyFallbackScenes: vi.fn().mockReturnValue(applied.promise),
+    });
+
+    const loading = runClassroomLoad(deps);
+    await vi.waitFor(() => expect(deps.applyFallbackScenes).toHaveBeenCalled());
+
+    setCurrent(false);
+    applied.resolve(true);
+    await loading;
+
+    expect(removeAssetMock).not.toHaveBeenCalled();
   });
 
   it('does not apply media tasks when superseded after the media read', async () => {

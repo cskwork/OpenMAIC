@@ -266,6 +266,26 @@ export function isClassroomMediaUrl(ref: string | undefined): ref is string {
   }
 }
 
+/**
+ * Whether a document still carries server classroom media transport URLs
+ * anywhere the converter rewrites. Used to recognize a payload whose
+ * conversion is incomplete -- or a persisted document that predates
+ * conversion -- so the server-fallback load path never applies or persists a
+ * deployment-specific address.
+ */
+export function containsClassroomMediaUrls(document: AppDocument): boolean {
+  const slideContainsTransport = (slide: SlideLike): boolean =>
+    [...slideMediaReferenceSlots(slide)].some((slot) => isClassroomMediaUrl(slot.read()));
+
+  if (document.stage.whiteboard?.some(slideContainsTransport)) return true;
+  if (Object.keys(document.stage.videoManifest ?? {}).some(isClassroomMediaUrl)) return true;
+  return document.scenes.some(
+    (scene) =>
+      (scene.content.type === 'slide' && slideContainsTransport(scene.content.canvas)) ||
+      scene.whiteboards?.some(slideContainsTransport) === true,
+  );
+}
+
 /** The default production wiring: Dexie legacy tables plus the app asset pool. */
 async function defaultDeps(): Promise<LegacyAssetConversionDeps> {
   const [

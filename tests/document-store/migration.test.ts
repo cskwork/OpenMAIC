@@ -12,12 +12,30 @@ import { describe, expect, test, vi } from 'vitest';
 import {
   accessDocument,
   migrateDocumentForVerification,
+  mutateDocument,
   type LegacyDocumentSnapshot,
   type LegacyDocumentStore,
 } from '@/lib/document-store/migration';
 import type { AppDocument } from '@/lib/document-store/persistence-types';
 import type { AppScene } from '@/lib/types/stage';
 import { validateAppScene, validateAppStage } from '@/lib/document-store/validators';
+
+// The migration layer compensates a discarded conversion's side effects
+// through the converter's rollback helper; spy on it so tests can pin exactly
+// which allocations a failed pass rolls back. (The real helper needs a real
+// pool, which this suite does not provide; the converter suite owns it.)
+const { rollbackSpy } = vi.hoisted(() => ({ rollbackSpy: vi.fn() }));
+vi.mock('@/lib/media/convert-legacy-asset-refs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/media/convert-legacy-asset-refs')>();
+  return {
+    ...actual,
+    rollbackConvertedAllocations: (
+      ...args: Parameters<typeof actual.rollbackConvertedAllocations>
+    ) => {
+      rollbackSpy(...args);
+    },
+  };
+});
 
 class MemoryKv implements KVStore {
   readonly values = new Map<string, unknown>();
@@ -725,6 +743,112 @@ describe('legacy document migration', () => {
     // untouched by the conversion that was about to overwrite it.
     const persisted = await realStore.loadDocument('stage-1');
     expect(persisted?.stage.name).toBe('Migrated');
+    expect(persisted?.stage).not.toHaveProperty('description');
+  });
+
+  test('rolls back the reconciliation pass through the shared ledger when its save fails', async () => {
+    // Finding: the reconciliation conversion (a concurrent edit detected
+    // during save) must share the caller's allocation ledger. If its save
+    // fails, its fresh allocations are untracked and can never be cleaned
+    // up. The ledger must carry them so the pass's cleanup compensates them.
+    const realStore = store();
+    await realStore.saveDocument({
+      dslVersion: DSL_VERSION,
+      stage: { id: 'stage-1', name: 'Migrated', createdAt: 100, updatedAt: 200 },
+      scenes: [],
+    });
+    let loads = 0;
+    const racingStore = new Proxy(realStore, {
+      get(target, property) {
+        if (property === 'loadDocument') {
+          return async (id: string) => {
+            loads += 1;
+            const doc = await target.loadDocument(id);
+            if (loads === 2 && doc) {
+              // A concurrent editor renamed the stage while conversion ran.
+              return { ...doc, stage: { ...doc.stage, name: 'concurrent edit' } };
+            }
+            return doc;
+          };
+        }
+        if (property === 'saveDocument') {
+          return () => Promise.reject(new Error('quota exceeded'));
+        }
+        return Reflect.get(target, property);
+      },
+    });
+    rollbackSpy.mockClear();
+    let calls = 0;
+    const convert = (doc: AppDocument, ledger?: string[]): Promise<AppDocument> => {
+      calls += 1;
+      ledger?.push(calls === 1 ? 'ast_first' : 'ast_reconciled');
+      return Promise.resolve({ ...doc, stage: { ...doc.stage, description: 'converted' } });
+    };
+
+    const result = await accessDocument('stage-1', {
+      store: racingStore,
+      kv: new MemoryKv(),
+      legacyStore: legacy(null),
+      lockManager: lockManager(),
+      convertAssetRefs: convert,
+    });
+
+    // The reconciled save failed; the opened document is the first pass's
+    // conversion, and cleanup compensated BOTH passes' allocations.
+    expect(result.document?.stage.description).toBe('converted');
+    expect(calls).toBe(2);
+    const rolledBackIds = rollbackSpy.mock.calls.flatMap((args) => args[1] as string[]);
+    expect(rolledBackIds).toContain('ast_first');
+    expect(rolledBackIds).toContain('ast_reconciled');
+  });
+
+  test('a wholesale replacement skips eager conversion of the replaced document', async () => {
+    // Finding: mutateDocument eagerly converts the existing document before
+    // every mutation callback, including wholesale replacements (import,
+    // backup restore). Assets allocated for content the callback immediately
+    // replaces would be orphaned by the very save that lands next.
+    const documentStore = store();
+    await documentStore.saveDocument({
+      dslVersion: DSL_VERSION,
+      stage: { id: 'stage-1', name: 'Pre-existing', createdAt: 100, updatedAt: 200 },
+      scenes: [],
+    });
+    const convertAssetRefs = vi.fn(async (document: AppDocument) => ({
+      ...document,
+      stage: { ...document.stage, description: 'eagerly converted' },
+    }));
+    const replacement: AppDocument = {
+      dslVersion: DSL_VERSION,
+      stage: { id: 'stage-1', name: 'Restored', createdAt: 300, updatedAt: 400 },
+      scenes: [],
+    };
+    let seenExisting: AppDocument | null | undefined;
+    const deps = {
+      store: documentStore,
+      kv: new MemoryKv(),
+      legacyStore: legacy(null),
+      lockManager: lockManager(),
+      convertAssetRefs,
+    };
+
+    const result = await mutateDocument(
+      'stage-1',
+      async (existing, store) => {
+        seenExisting = existing;
+        await store.saveDocument(replacement);
+        return 'committed';
+      },
+      deps,
+      { mode: 'replace' },
+    );
+
+    expect(result).toBe('committed');
+    // The eager conversion never ran, and the callback owned the whole
+    // aggregate instead of receiving the converted current document.
+    expect(convertAssetRefs).not.toHaveBeenCalled();
+    expect(seenExisting).toBeNull();
+    const persisted = await documentStore.loadDocument('stage-1');
+    expect(persisted?.stage.name).toBe('Restored');
     expect(persisted?.stage).not.toHaveProperty('description');
   });
 });

@@ -16,7 +16,8 @@ import {
 import type { MediaFileRecord } from '@/lib/utils/database';
 import { unmarkStageDeleted } from '@/lib/utils/deleted-stages';
 import type { GeneratedAgentConfig, Scene, Stage } from '@/lib/types/stage';
-import type { PPTElement } from '@openmaic/dsl';
+import type { DocumentMigrationDeps } from '@/lib/document-store/migration';
+import { DSL_VERSION, type PPTElement } from '@openmaic/dsl';
 import {
   collectDocumentMediaElements,
   withDocumentLegacyVideoRecovery,
@@ -25,34 +26,6 @@ import {
 export interface ClassroomPayload {
   stage: Stage;
   scenes: Scene[];
-  /**
-   * Pool assets this payload's conversion freshly allocated. A caller that
-   * discards the payload (a superseded load, a rejected hydration) must roll
-   * these back; otherwise they would outlive the classroom they were made
-   * for.
-   */
-  allocatedAssetIds?: string[];
-}
-
-/**
- * Undo a discarded payload's conversion side effects: the pool entries, and
- * the Dexie compatibility rows keyed by them (audio by the allocated id,
- * media by the stage-scoped compound key). Idempotent and best-effort.
- */
-async function rollbackConvertedAllocations(
-  stageId: string,
-  allocatedIds: readonly string[],
-): Promise<void> {
-  if (allocatedIds.length === 0) return;
-  const [{ removeAsset }, { db }] = await Promise.all([
-    import('@/lib/media/asset-pool'),
-    import('@/lib/utils/database'),
-  ]);
-  for (const id of allocatedIds) {
-    await removeAsset(id).catch(() => undefined);
-    await db.audioFiles.delete(id).catch(() => undefined);
-    await db.mediaFiles.delete(`${stageId}:${id}`).catch(() => undefined);
-  }
 }
 
 interface Logger {
@@ -156,38 +129,22 @@ export async function runClassroomLoad<TMediaTasks = unknown>({
 
     if (!getCurrentStage()) {
       log.info('No IndexedDB data, trying server-side storage for:', classroomId);
-      // Conversion has pool and Dexie side effects, so it runs only while
-      // this load is still the current one; a superseded load fetches the
-      // payload but never converts it.
+      // The fetch path converts and commits under the per-stage document lock.
+      // Once it returns, the document owns every allocation; a later
+      // navigation may discard only this in-memory apply, never the durable
+      // assets -- so nothing here rolls allocations back.
       const classroom = await fetchClassroom(classroomId, isCurrent);
-      // A discarded payload must not keep what its conversion allocated.
-      // Rollback ownership lives ahead of every discard point: supersession
-      // can land between the conversion's last liveness check and any of the
-      // returns below, and the ledger also covers the Dexie compatibility
-      // rows, not just the pool entries.
-      const rollbackPayload = async () => {
-        if (classroom) {
-          await rollbackConvertedAllocations(classroom.stage.id, classroom.allocatedAssetIds ?? []);
-        }
-      };
-      if (!isCurrent()) {
-        await rollbackPayload();
-        return;
-      }
+      if (!isCurrent()) return;
 
       if (classroom) {
         const { stage, scenes } = classroom;
         const applied = await applyFallbackScenes({ loadToken, stage, scenes });
-        if (!isCurrent()) {
-          await rollbackPayload();
-          return;
-        }
+        if (!isCurrent()) return;
         if (!applied) {
           log.info('Stage changed during server-side fallback hydration, skipping load:', {
             requestedStageId: stage.id,
             latestStageId: getCurrentStage()?.id,
           });
-          await rollbackPayload();
           return;
         }
         log.info('Loaded from server-side storage:', classroomId);
@@ -290,6 +247,7 @@ export async function runClassroomLoad<TMediaTasks = unknown>({
 export async function fetchClassroomFromApi(
   classroomId: string,
   shouldConvert: () => boolean = () => true,
+  deps: DocumentMigrationDeps = {},
 ): Promise<ClassroomPayload | null> {
   const res = await fetch(`/api/classroom?id=${encodeURIComponent(classroomId)}`);
   if (!res.ok) return null;
@@ -299,44 +257,75 @@ export async function fetchClassroomFromApi(
     classroom?: ClassroomPayload;
   };
   if (!json.success || !json.classroom) return null;
-  // Conversion allocates pool assets and writes compatibility rows, so it
-  // must not run for a load the caller has already superseded: the payload
-  // would be discarded while the side effects stayed. The unconverted
-  // payload carries no side effects at all, and the document load path
-  // retries conversion on the next open.
-  if (!shouldConvert()) return json.classroom;
+  // A stale request must not enter the allocation/commit critical section:
+  // the caller discards this payload, so no side effects may be produced.
+  // The unconverted payload carries none, and the document load path retries
+  // conversion on the next open.
+  const payload = json.classroom;
+  if (!shouldConvert()) return payload;
   // A server classroom payload is a pre-conversion transport: its speech
   // actions still carry the serving URL beside a derived audioId, and its
   // media bytes live behind that URL, not in any local store. Convert before
   // the payload is applied or persisted, so the classroom is born with
-  // allocated asset ids and the raw URLs are never stored. Conversion failure
-  // degrades to the unconverted payload rather than blocking the load -- the
-  // document load path retries conversion on the next open.
-  const { convertDocumentAssetRefs } = await import('@/lib/media/convert-legacy-asset-refs');
-  // The pass shares its allocation ledger with us, so every failure mode --
-  // a liveness abort or an ordinary worker error -- rolls back what it
-  // committed, not just the aborts.
-  const allocated: string[] = [];
+  // allocated asset ids and raw transport URLs never enter document storage.
+  // Conversion and the first document save share the per-stage lock, so
+  // simultaneous cold loads reuse the winner's committed document instead of
+  // allocating competing asset sets.
+  const [{ mutateDocument }, converter] = await Promise.all([
+    import('@/lib/document-store'),
+    import('@/lib/media/convert-legacy-asset-refs'),
+  ]);
   try {
-    // The guard travels into the conversion: a load superseded mid-fetch
-    // stops producing side effects as soon as it is known to be unwanted,
-    // and the abort degrades to the unconverted payload like any failure.
-    const converted = await convertDocumentAssetRefs(
-      { ...json.classroom },
-      undefined,
-      shouldConvert,
-      allocated,
+    return await mutateDocument(
+      payload.stage.id,
+      async (existing, store) => {
+        if (existing) {
+          // The document already owns its media (a concurrent cold load, or a
+          // prior open). Reuse it verbatim; if it still carries transport
+          // URLs, conversion could not complete and the load must fail rather
+          // than apply or persist raw addresses.
+          if (converter.containsClassroomMediaUrls(existing)) return null;
+          return { stage: existing.stage, scenes: existing.scenes };
+        }
+
+        const allocated: string[] = [];
+        try {
+          const converted = await converter.convertDocumentAssetRefs(
+            { ...payload, dslVersion: DSL_VERSION },
+            undefined,
+            shouldConvert,
+            allocated,
+          );
+          // The converter rechecks liveness at its commit boundaries; this is
+          // the final gate before the document write, so a load superseded in
+          // the last window never commits side effects it cannot hand over.
+          if (!shouldConvert()) {
+            throw new converter.LegacyConversionAbortedError(allocated);
+          }
+          if (converter.containsClassroomMediaUrls(converted.document)) {
+            throw new Error('server classroom media conversion was incomplete');
+          }
+          await store.saveDocument(converted.document);
+          return {
+            stage: converted.document.stage,
+            scenes: converted.document.scenes,
+          };
+        } catch (error) {
+          // Every failure mode -- a liveness abort or an ordinary converter
+          // error -- rolls back the pass's fresh allocations, and the
+          // document was never saved, so nothing durable references them.
+          await converter.rollbackConvertedAllocations(payload.stage.id, allocated);
+          throw error;
+        }
+      },
+      deps,
+      { requireLock: true },
     );
-    return {
-      stage: converted.document.stage,
-      scenes: converted.document.scenes,
-      allocatedAssetIds: converted.allocatedIds,
-    };
   } catch {
-    // The caller is discarding this payload: roll back whatever the pass
-    // committed so a stale or failed load leaves nothing behind.
-    await rollbackConvertedAllocations(json.classroom.stage.id, allocated);
-    return json.classroom;
+    // Persisting the raw transport is never an acceptable fallback: the next
+    // cold load retries conversion once storage or the media endpoint
+    // recovers.
+    return null;
   }
 }
 

@@ -770,11 +770,19 @@ export async function importDatabase(
       // Record the pre-import deletion state alongside the document pre-image:
       // a failed import rolls the document back, so it must roll this back too.
       const wasDeleted = isStageDeleted(document.stage.id);
-      await mutateDocument(document.stage.id, async (_existing, store) => {
-        const preImage = (await store.loadDocument(document.stage.id)) as AppDocument | null;
-        await store.saveDocument(document);
-        importedDocuments.push({ id: document.stage.id, preImage, wasDeleted });
-      });
+      // Wholesale replacement: the restored aggregate overwrites the whole
+      // document, so eager conversion of whatever currently sits there would
+      // allocate assets for content the restore immediately replaces.
+      await mutateDocument(
+        document.stage.id,
+        async (_existing, store) => {
+          const preImage = (await store.loadDocument(document.stage.id)) as AppDocument | null;
+          await store.saveDocument(document);
+          importedDocuments.push({ id: document.stage.id, preImage, wasDeleted });
+        },
+        {},
+        { mode: 'replace' },
+      );
       // Explicit document (re)creation: a backup may restore a stage deleted
       // earlier this session under the same id. Lift the deleted flag so later
       // edits of the restored document persist instead of being dropped. (The

@@ -32,6 +32,19 @@ export class AudioPlayer {
   private volume: number = 1;
   private playbackRate: number = 1;
   private requestToken: number = 0;
+  /** The object URL backing the current audio element, if any. */
+  private blobUrl: string | null = null;
+
+  /**
+   * Revoke an object URL this player created, forgetting it when it is still
+   * the current source. Idempotent: natural end, rejected play, stop, and
+   * replacement each call it once for their own URL.
+   */
+  private releaseBlobUrl(blobUrl: string | null | undefined): void {
+    if (!blobUrl) return;
+    URL.revokeObjectURL(blobUrl);
+    if (this.blobUrl === blobUrl) this.blobUrl = null;
+  }
 
   private stopAudioElement(): void {
     if (this.audio) {
@@ -39,6 +52,9 @@ export class AudioPlayer {
       this.audio.currentTime = 0;
       this.audio = null;
     }
+    // Stop or replacement before natural end must not leak the fetched
+    // narration: the element is dropped here, so its URL is released with it.
+    this.releaseBlobUrl(this.blobUrl);
   }
 
   /**
@@ -96,6 +112,7 @@ export class AudioPlayer {
 
       // Set audio source
       const blobUrl = blob ? URL.createObjectURL(blob) : undefined;
+      this.blobUrl = blobUrl ?? null;
       this.audio.src = blobUrl ?? (directUrl as string);
       if (this.muted) this.audio.volume = 0;
       else this.audio.volume = this.volume;
@@ -106,7 +123,7 @@ export class AudioPlayer {
 
       // Set ended callback
       this.audio.addEventListener('ended', () => {
-        if (blobUrl) URL.revokeObjectURL(blobUrl);
+        this.releaseBlobUrl(blobUrl);
         this.onEndedCallback?.();
       });
 
@@ -116,11 +133,11 @@ export class AudioPlayer {
       try {
         await this.audio.play();
       } catch (playError) {
-        if (blobUrl) URL.revokeObjectURL(blobUrl);
+        this.releaseBlobUrl(blobUrl);
         throw playError;
       }
       if (requestToken !== this.requestToken) {
-        if (blobUrl) URL.revokeObjectURL(blobUrl);
+        this.releaseBlobUrl(blobUrl);
         return false;
       }
       // Re-apply after play() — some browsers reset during load
