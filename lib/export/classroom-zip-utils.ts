@@ -43,9 +43,7 @@ export async function collectAudioFiles(scenes: Scene[]): Promise<CollectedAudio
     // missing and fetches the live co-present URL instead.
     if (blob && blob.size > 0) {
       const ext = record?.format || 'mp3';
-      const resolved = (
-        record ? { ...record, blob } : { id: audioId, blob }
-      ) as AudioFileRecord;
+      const resolved = (record ? { ...record, blob } : { id: audioId, blob }) as AudioFileRecord;
       collected.push({ zipPath: `audio/${audioId}.${ext}`, record: resolved });
     }
   }

@@ -650,10 +650,7 @@ export class HttpAssetStore implements StorageProvider {
       try {
         minted = URL.createObjectURL(new Blob([bytes], { type: identity.mediaType }));
       } catch {
-        throw malformed(
-          status,
-          '@openmaic/storage: asset object URL could not be created',
-        );
+        throw malformed(status, '@openmaic/storage: asset object URL could not be created');
       }
       return { identity, url: minted };
     });

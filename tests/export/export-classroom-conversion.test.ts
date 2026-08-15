@@ -397,7 +397,10 @@ describe('classroom ZIP export conversion snapshot', () => {
     expect(await db.mediaFiles.get(`stage-1:${mediaId}`)).toBeDefined();
     expect(await db.audioFiles.get(audioId)).toBeDefined();
     const durable = await store.loadDocument('stage-1');
-    expect(durable?.scenes[0].content.canvas.elements).toHaveLength(1);
+    const durableCanvas = (
+      durable?.scenes[0].content as unknown as { canvas: { elements: unknown[] } }
+    ).canvas;
+    expect(durableCanvas.elements).toHaveLength(1);
   });
 });
 

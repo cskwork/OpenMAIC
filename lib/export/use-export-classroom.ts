@@ -132,8 +132,7 @@ export async function buildClassroomExportZip(
   // its compatibility rows untouched.
   const rollbackSnapshotOnlyAllocations = async (): Promise<void> => {
     if (ledger.length === 0) return;
-    const { rollbackConvertedAllocations } =
-      await import('@/lib/media/convert-legacy-asset-refs');
+    const { rollbackConvertedAllocations } = await import('@/lib/media/convert-legacy-asset-refs');
     const { collectStageAssetRefs } = await import('@/lib/media/collect-stage-asset-refs');
     const referenced = freshDocument.document
       ? collectStageAssetRefs(freshDocument.document, {

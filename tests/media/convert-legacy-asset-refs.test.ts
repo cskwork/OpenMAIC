@@ -985,9 +985,7 @@ describe('speech reference conversion', () => {
     audioRows.set('tts_shared_id', audioRecord({ id: 'tts_shared_id' }));
 
     const doc = document({
-      scenes: [
-        slideScene([speech({ id: 'a1', audioId: 'tts_shared_id', audioUrl: liveUrl })]),
-      ],
+      scenes: [slideScene([speech({ id: 'a1', audioId: 'tts_shared_id', audioUrl: liveUrl })])],
     });
 
     const result = await convertDocumentAssetRefs(doc, deps);
@@ -1033,9 +1031,7 @@ describe('speech reference conversion', () => {
     // Evicted row: zero bytes, and its ossKey does not fetch usable bytes.
     audioRows.set('tts_shared_id', audioRecord({ id: 'tts_shared_id', blob: new Blob([]) }));
     const doc = document({
-      scenes: [
-        slideScene([speech({ id: 'a1', audioId: 'tts_shared_id', audioUrl: liveUrl })]),
-      ],
+      scenes: [slideScene([speech({ id: 'a1', audioId: 'tts_shared_id', audioUrl: liveUrl })])],
     });
 
     const result = await convertDocumentAssetRefs(doc, deps);

@@ -1175,10 +1175,10 @@ class GenerationFlipsOnFenceKv extends MemoryKv {
     const value = await super.get<T>(key, scope);
     if (key === 'document-storage-generation') {
       this.generationReads += 1;
-      // Reads 1-3 (entry, phase-1 probe, phase-3 fence baseline) agree; the
-      // fourth read -- the save-back's generation fence -- sees a clear that
-      // landed mid-pass.
-      if (this.generationReads >= 4) return 7 as T;
+      // Reads 1-2 (phase-1 probe, phase-3 fence baseline) agree; the third
+      // read -- the save-back's generation fence -- sees a clear that landed
+      // mid-pass.
+      if (this.generationReads >= 3) return 7 as T;
     }
     return value;
   }

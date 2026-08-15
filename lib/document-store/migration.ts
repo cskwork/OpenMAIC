@@ -424,7 +424,6 @@ async function finishMigrationMetadata(
 async function migrateLocked(
   stageId: string,
   deps: DocumentMigrationDeps,
-  expectedGeneration: number,
 ): Promise<DocumentAccessResult> {
   // Lock order: the per-stage document lock is acquired by the caller before
   // the global shared epoch. This matches the established per-stage -> global
@@ -672,11 +671,7 @@ export async function accessDocument(
   deps: DocumentMigrationDeps = {},
 ): Promise<DocumentAccessResult> {
   try {
-    return await withDocumentLock(
-      stageId,
-      async () => migrateLocked(stageId, deps, await readGeneration(deps.kv)),
-      deps,
-    );
+    return await withDocumentLock(stageId, async () => migrateLocked(stageId, deps), deps);
   } catch (error) {
     if (!(error instanceof DocumentLockUnavailableError)) throw error;
     // Reference conversion is deliberately skipped on the lock-free fallback:
@@ -712,9 +707,7 @@ export function mutateDocument<T>(
     // conversion would allocate assets for content the callback immediately
     // replaces, orphaning them. The callback writes the replacement itself.
     const document =
-      options.mode === 'replace'
-        ? null
-        : (await migrateLocked(stageId, deps, expectedGeneration)).document;
+      options.mode === 'replace' ? null : (await migrateLocked(stageId, deps)).document;
     return work(document, generationGuardedStore(stageId, expectedGeneration, deps));
   };
   return withDocumentLock(stageId, mutateLocked, deps).catch(async (error: unknown) => {
