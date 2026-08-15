@@ -144,8 +144,10 @@ async function convertLoadedDocument(
  * caller's allocation ledger is shared with the reconciliation pass: assets
  * the re-conversion allocates for a concurrent edit must be rolled back if
  * that save fails, exactly like the pass's own allocations. A failed save-back
- * rolls the whole ledger and returns the unconverted document: durable storage
- * still holds the legacy references, so the fresh allocations are orphans, and
+ * rolls the whole ledger and returns the unconverted document -- the
+ * authoritative reloaded document when a concurrent edit was observed, so the
+ * caller never sees a stale pre-concurrency snapshot: durable storage still
+ * holds the legacy references, so the fresh allocations are orphans, and
  * returning them would let repeated opens accumulate quota.
  */
 async function saveConvertedDocument(
@@ -161,6 +163,9 @@ async function saveConvertedDocument(
   if ((await readGeneration(deps.kv)) !== expectedGeneration) {
     throw new DocumentStorageGenerationChangedError(stageId);
   }
+  // The authoritative reload observed before a failed save-back: the caller
+  // must see the concurrent edit, not the stale pre-concurrency snapshot.
+  let reloaded: AppDocument | undefined;
   try {
     // Conversion may have spent seconds probing legacy URLs, and the document
     // lock does not coordinate independent browsers: another client can have
@@ -175,6 +180,7 @@ async function saveConvertedDocument(
       // effects back.
       return null;
     }
+    reloaded = latest;
     if (
       !isEqual(
         omitUndefinedObjectMembers(stripDocument(latest)),
@@ -195,7 +201,10 @@ async function saveConvertedDocument(
     // back here and return the unconverted document, so the next open
     // retries both cleanly. Returning the converted document would keep its
     // ledger allocations alive while storage still names the legacy refs,
-    // and repeated opens could accumulate additional orphaned assets. The
+    // and repeated opens could accumulate additional orphaned assets. When
+    // the failure followed a reconciliation reload, return the authoritative
+    // reloaded document rather than the stale pre-concurrency snapshot: the
+    // concurrent edit is durable and must not be hidden from the caller. The
     // generation fence above stays fatal: it is a cross-tab write race, not
     // a persistence hiccup.
     log.warn(
@@ -208,7 +217,7 @@ async function saveConvertedDocument(
         await import('@/lib/media/convert-legacy-asset-refs');
       await rollbackConvertedAllocations(stageId, ledger);
     }
-    return existing;
+    return reloaded ?? existing;
   }
 }
 

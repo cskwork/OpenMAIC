@@ -877,9 +877,9 @@ describe('legacy document migration', () => {
     // during save) must share the caller's allocation ledger. If its save
     // fails, its fresh allocations are untracked and can never be cleaned
     // up. The ledger must carry them so the pass's cleanup compensates them.
-    // The failed save also returns the UNCONVERTED document (finding: act as
-    // if conversion never happened), never the first pass's conversion whose
-    // allocations were rolled back.
+    // The failed save also returns the AUTHORITATIVE RELOADED document
+    // (unconverted), never the stale pre-concurrency snapshot: the concurrent
+    // edit is durable and must not be hidden from the caller.
     const realStore = store();
     await realStore.saveDocument({
       dslVersion: DSL_VERSION,
@@ -895,13 +895,26 @@ describe('legacy document migration', () => {
             const doc = await target.loadDocument(id);
             if (loads === 2 && doc) {
               // A concurrent editor renamed the stage while conversion ran.
-              return { ...doc, stage: { ...doc.stage, name: 'concurrent edit' } };
+              // The edit's own save already landed durably before the
+              // conversion's save-back was attempted.
+              const concurrent = { ...doc, stage: { ...doc.stage, name: 'concurrent edit' } };
+              await target.saveDocument(concurrent);
+              return concurrent;
             }
             return doc;
           };
         }
         if (property === 'saveDocument') {
-          return () => Promise.reject(new Error('quota exceeded'));
+          return async (doc: AppDocument) => {
+            // The concurrent editor's own save lands; the conversion
+            // save-back (which applies a 'converted' description) always
+            // fails, exactly like a quota rejection after the reload.
+            const stageMeta = doc.stage as { name?: string; description?: string };
+            if (stageMeta.name === 'concurrent edit' && !stageMeta.description) {
+              return target.saveDocument(doc);
+            }
+            throw new Error('quota exceeded');
+          };
         }
         return Reflect.get(target, property);
       },
@@ -922,11 +935,16 @@ describe('legacy document migration', () => {
       convertAssetRefs: convert,
     });
 
-    // The save failed, so the opened document is the unconverted original --
-    // never the first pass's conversion, whose allocations were rolled back.
-    expect(result.document?.stage.name).toBe('Migrated');
+    // The save failed, so the opened document is the authoritative reloaded
+    // document -- the concurrent edit, unconverted -- never the first pass's
+    // conversion, whose allocations were rolled back.
+    expect(result.document?.stage.name).toBe('concurrent edit');
     expect(result.document?.stage).not.toHaveProperty('description');
     expect(calls).toBe(2);
+    // The concurrent edit is durable; the failed conversion left no trace.
+    const persisted = await realStore.loadDocument('stage-1');
+    expect(persisted?.stage.name).toBe('concurrent edit');
+    expect(persisted?.stage).not.toHaveProperty('description');
     // Cleanup compensated BOTH passes' allocations: the first pass's and the
     // reconciliation's fresh ids.
     const rolledBackIds = rollbackSpy.mock.calls.flatMap((args) => args[1] as string[]);
