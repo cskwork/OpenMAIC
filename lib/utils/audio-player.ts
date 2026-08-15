@@ -11,6 +11,11 @@ import { createLogger } from '@/lib/logger';
 
 const log = createLogger('AudioPlayer');
 
+/** How long a legacy narration URL fetch may take before the media element
+ * fallback takes over. Bounded like the converter's URL probes: one stalled
+ * endpoint must not pin a playback line indefinitely. */
+const LEGACY_URL_FETCH_TIMEOUT_MS = 15_000;
+
 /** Bytes an audio id currently resolves to, pool first. Loaded lazily to keep
  * this module importable without the media graph. */
 async function resolveBytes(audioId: string): Promise<Blob | null> {
@@ -34,6 +39,21 @@ export class AudioPlayer {
   private requestToken: number = 0;
   /** The object URL backing the current audio element, if any. */
   private blobUrl: string | null = null;
+  /**
+   * The in-flight legacy narration fetch of the current play, if any. Aborted
+   * when the play is superseded (a replacement play, stop, or destroy), so a
+   * stale fetch is cancelled at the network layer instead of settling before
+   * its supersession is noticed.
+   */
+  private fetchAbort: AbortController | null = null;
+
+  /** Abort the in-flight legacy narration fetch, if one exists. */
+  private abortLegacyFetch(): void {
+    if (this.fetchAbort) {
+      this.fetchAbort.abort();
+      this.fetchAbort = null;
+    }
+  }
 
   /**
    * Revoke an object URL this player created, forgetting it when it is still
@@ -78,22 +98,36 @@ export class AudioPlayer {
    */
   public async play(audioId: string, legacyUrl?: string): Promise<boolean> {
     const requestToken = ++this.requestToken;
+    // A new play supersedes any in-flight legacy fetch of the previous one.
+    this.abortLegacyFetch();
     try {
       let blob = await resolveBytes(audioId);
       if (requestToken !== this.requestToken) return false;
 
       let directUrl: string | undefined;
       if (!blob && legacyUrl) {
+        const controller = new AbortController();
+        this.fetchAbort = controller;
+        const timeout = setTimeout(() => controller.abort(), LEGACY_URL_FETCH_TIMEOUT_MS);
         try {
-          const response = await fetch(legacyUrl);
-          blob = response.ok ? await response.blob() : null;
+          const response = await fetch(legacyUrl, { signal: controller.signal });
+          const fetched = response.ok ? await response.blob() : null;
+          // Zero-byte responses are not narration: fall back to the URL so a
+          // later attempt can retry, and never play silence.
+          if (fetched && fetched.size > 0) blob = fetched;
         } catch {
           blob = null;
+        } finally {
+          clearTimeout(timeout);
+          if (this.fetchAbort === controller) this.fetchAbort = null;
         }
         if (requestToken !== this.requestToken) return false;
         if (!blob) {
           // A cross-origin legacy URL without CORS headers cannot be fetched,
           // but a media element is not CORS-bound: hand it the URL directly.
+          // A superseded play never reaches here -- the token check above
+          // already returned false -- so only ordinary fetch/CORS/timeout
+          // failures fall back to the element.
           directUrl = legacyUrl;
         }
       }
@@ -164,6 +198,9 @@ export class AudioPlayer {
    */
   public stop(): void {
     this.requestToken += 1;
+    // Cancel a still-fetching legacy narration instead of waiting for it to
+    // settle: the play was superseded and its result is unwanted.
+    this.abortLegacyFetch();
     this.stopAudioElement();
     // Note: onEndedCallback intentionally NOT cleared here because play()
     // calls stop() internally — clearing would break the callback chain.
