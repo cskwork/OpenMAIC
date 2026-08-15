@@ -41,6 +41,22 @@ interface ObjectUrlIdentity {
   mediaType: string;
 }
 
+/**
+ * Outcome of a byte fetch that has not minted an object URL. `missing` is a
+ * confirmed miss (the byte layer declared the object absent); `retry` means
+ * the store's snapshot generation moved while the bytes were in flight, and
+ * the caller should re-read.
+ */
+type ByteFetchResult =
+  | {
+      readonly kind: 'bytes';
+      readonly status: number;
+      readonly identity: ObjectUrlIdentity;
+      readonly bytes: ArrayBuffer;
+    }
+  | { readonly kind: 'missing' }
+  | { readonly kind: 'retry' };
+
 // These fixed filenames preserve part bytes under standards-conforming parsers. Neither filename
 // is read by this package or derived from caller data.
 const ASSET_META_FILENAME = 'metadata.json';
@@ -444,11 +460,17 @@ export class HttpAssetStore implements StorageProvider {
     return id;
   }
 
-  private async get(
+  /**
+   * Read an asset's bytes within an optional bounded operation, without
+   * minting an object URL. `get` mints from the returned bytes for playback;
+   * the existence probe reads and discards them, so a probe never pins a
+   * fetched blob in the URL cache.
+   */
+  private async fetchBytes(
     id: AssetRef,
     encoded: string,
     bound?: BoundedOperation,
-  ): Promise<{ url: string | null; retry: boolean }> {
+  ): Promise<ByteFetchResult> {
     const generation = this.generation(id);
     const response = await this.fetchResponse(
       'GET',
@@ -477,7 +499,7 @@ export class HttpAssetStore implements StorageProvider {
       if (error.status === 404 && error.code === 'ASSET_NOT_FOUND') {
         this.identities.delete(id);
         await this.urls.invalidate(id);
-        return { url: null, retry: false };
+        return { kind: 'missing' };
       }
       throw error;
     }
@@ -561,7 +583,7 @@ export class HttpAssetStore implements StorageProvider {
         if (code === 'NoSuchKey') {
           this.identities.delete(id);
           await this.urls.invalidate(id);
-          return { url: null, retry: false };
+          return { kind: 'missing' };
         }
         throw malformed(
           byteResponse.status,
@@ -609,14 +631,27 @@ export class HttpAssetStore implements StorageProvider {
         );
       }
     }
-    if (this.generation(id) !== generation) return { url: null, retry: true };
+    if (this.generation(id) !== generation) return { kind: 'retry' };
+    return { kind: 'bytes', status: response.status, identity, bytes };
+  }
+
+  private async get(
+    id: AssetRef,
+    encoded: string,
+    bound?: BoundedOperation,
+  ): Promise<{ url: string | null; retry: boolean }> {
+    const generation = this.generation(id);
+    const fetched = await this.fetchBytes(id, encoded, bound);
+    if (fetched.kind === 'missing') return { url: null, retry: false };
+    if (fetched.kind === 'retry') return { url: null, retry: true };
+    const { identity, bytes, status } = fetched;
     const url = await this.urls.resolve(id, identity, async () => {
       let minted: string;
       try {
         minted = URL.createObjectURL(new Blob([bytes], { type: identity.mediaType }));
       } catch {
         throw malformed(
-          response.status,
+          status,
           '@openmaic/storage: asset object URL could not be created',
         );
       }
@@ -628,6 +663,27 @@ export class HttpAssetStore implements StorageProvider {
     }
     this.identities.set(id, identity);
     return { url, retry: false };
+  }
+
+  /**
+   * Byte-level existence check: the GET a probe issues when the HEAD cannot
+   * classify the answer. Reads the bytes only to confirm they exist, then
+   * discards them -- a migration probe that cached an object URL per endpoint
+   * would pin every fetched blob until store close. A snapshot-generation
+   * change mid-fetch re-reads, like the resolve loop.
+   */
+  private async probeBytes(
+    id: AssetRef,
+    encoded: string,
+    bound: BoundedOperation,
+  ): Promise<boolean> {
+    while (true) {
+      const fetched = await this.fetchBytes(id, encoded, bound);
+      if (fetched.kind === 'bytes') return true;
+      if (fetched.kind === 'missing') return false;
+      // The store's snapshot generation moved while the bytes were in flight;
+      // re-read under the same absolute deadline.
+    }
   }
 
   private async resolveFresh(
@@ -693,11 +749,13 @@ export class HttpAssetStore implements StorageProvider {
   }
 
   /**
-   * Metadata-only existence probe: a HEAD against the byte route, never a
-   * byte download or a minted URL. Bounded by ONE absolute deadline that also
-   * covers the fallback resolve, including the descriptor read, the signed
-   * fetch, and the body parsing, so a stalled persistence endpoint cannot
-   * hold a migration-time check on any of its steps.
+   * Metadata-only existence probe: a HEAD against the byte route first, then
+   * -- only when the HEAD cannot classify the answer -- a bounded byte read
+   * that is discarded, never a minted or retained object URL. Bounded by ONE
+   * absolute deadline that also covers the fallback read, including the
+   * descriptor read, the signed fetch, and the body parsing, so a stalled
+   * persistence endpoint cannot hold a migration-time check on any of its
+   * steps.
    */
   async exists(id: AssetRef): Promise<boolean> {
     const encoded = addressableSegment(id);
@@ -711,13 +769,26 @@ export class HttpAssetStore implements StorageProvider {
         undefined,
         bound.signal,
       );
-      if (response.ok) return response.status === 200;
-      const code = response.headers.get('x-error-code');
-      if (response.status === 404 && code === 'ASSET_NOT_FOUND') return false;
-      if (code !== null) throw await this.httpError(response);
-      // An unclassifiable HEAD is not a definitive miss; resolve decides. The
-      // fallback shares the probe's absolute deadline.
-      return (await this.resolveFresh(id, encoded, bound)) !== null;
+      if (response.ok) {
+        // A 200 is proof of existence only when it carries the response
+        // identity the byte route requires (revision plus content type): an
+        // auth wall or a redirect landing page can answer 200 without either,
+        // and trusting it would make a probe report an unresolvable id as
+        // present, dropping a co-present legacy handle for bytes that do not
+        // exist. An identity-less success is unclassifiable -- exactly like a
+        // status without a code -- and the bounded byte read decides, the way
+        // the warm path in `resolveFresh` refuses a HEAD that does not match a
+        // known identity.
+        if (response.status === 200 && responseIdentity(response) !== null) return true;
+      } else {
+        const code = response.headers.get('x-error-code');
+        if (response.status === 404 && code === 'ASSET_NOT_FOUND') return false;
+        if (code !== null) throw await this.httpError(response);
+      }
+      // An unclassifiable HEAD is not a definitive miss; the byte read
+      // decides. The fallback shares the probe's absolute deadline and never
+      // mints or retains an object URL.
+      return await this.probeBytes(id, encoded, bound);
     } finally {
       bound.settle();
     }

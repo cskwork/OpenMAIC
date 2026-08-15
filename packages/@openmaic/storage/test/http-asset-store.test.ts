@@ -18,7 +18,7 @@ import {
   type AssetConformanceServer,
   type AssetConformanceServerOptions,
 } from './asset-conformance-server.js';
-import { blobForObjectUrl } from './setup.js';
+import { blobForObjectUrl, objectUrlCount } from './setup.js';
 
 interface RawResponse {
   status: number;
@@ -1406,5 +1406,80 @@ describe('HttpAssetStore bounded exists fallback', () => {
     });
     expect(Date.now() - started).toBeLessThan(1000);
     expect(seen[0]?.aborted).toBe(true);
+  });
+
+  test('exists() does not trust a 200 HEAD without a valid response identity', async () => {
+    // An auth wall or proxy landing page can answer 200 with an HTML body and
+    // no asset identity (no x-asset-revision / content-type). Trusting that
+    // 200 would report an unresolvable id as present, and the converter would
+    // drop a co-present legacy handle for bytes that do not exist. The probe
+    // must treat the identity-less success as unclassifiable and let the
+    // bounded byte read decide -- which refuses the same identity-less body.
+    const identityless = new Response('<!doctype html><title>Sign in</title>', {
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+    });
+    const fetchImpl = ((_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      return Promise.resolve(
+        init?.method === 'HEAD'
+          ? identityless.clone()
+          : new Response('<!doctype html><title>Sign in</title>', {
+              status: 200,
+              headers: { 'content-type': 'text/html' },
+            }),
+      );
+    }) as typeof fetch;
+    const store = new HttpAssetStore({ baseUrl: 'https://assets.test', fetch: fetchImpl });
+
+    await expect(store.exists('ast_identityless')).rejects.toMatchObject({
+      code: 'MALFORMED_RESPONSE',
+    });
+  });
+
+  test('exists() resolves an identity-less 200 HEAD through the fallback when the bytes carry a real identity', async () => {
+    // The identity-less 200 is not proof, but it is not a miss either: the
+    // byte read confirms the asset genuinely resolves, and the probe answers
+    // present exactly as a matching warm HEAD would.
+    const fetchImpl = ((_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      if (init?.method === 'HEAD') {
+        return Promise.resolve(
+          new Response(null, {
+            status: 200,
+            headers: { 'content-type': 'text/html' },
+          }),
+        );
+      }
+      return Promise.resolve(
+        new Response(new Blob(['bytes']), {
+          status: 200,
+          headers: { 'content-type': 'text/plain', 'x-asset-revision': 'rev-1' },
+        }),
+      );
+    }) as typeof fetch;
+    const store = new HttpAssetStore({ baseUrl: 'https://assets.test', fetch: fetchImpl });
+
+    await expect(store.exists('ast_present')).resolves.toBe(true);
+  });
+
+  test('repeated exists() on an unclassifiable-HEAD endpoint leaves no object URLs minted', async () => {
+    // A probe that fell back through the byte read must not retain the fetched
+    // blob as an object URL: migration probes run per reference, and pinning
+    // every fetched blob would hold quota until store close.
+    const fetchImpl = ((_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      if (init?.method === 'HEAD') {
+        return Promise.resolve(new Response(null, { status: 500 }));
+      }
+      return Promise.resolve(
+        new Response(new Blob(['bytes']), {
+          status: 200,
+          headers: { 'content-type': 'text/plain', 'x-asset-revision': 'rev-1' },
+        }),
+      );
+    }) as typeof fetch;
+    const store = new HttpAssetStore({ baseUrl: 'https://assets.test', fetch: fetchImpl });
+
+    await expect(store.exists('ast_probe_1')).resolves.toBe(true);
+    await expect(store.exists('ast_probe_1')).resolves.toBe(true);
+    expect(objectUrlCount()).toBe(0);
   });
 });
