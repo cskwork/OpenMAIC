@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
+import type { KVScope } from '@openmaic/storage';
 import JSZip from 'jszip';
 
 import type { DocumentMigrationDeps } from '@/lib/document-store/migration';
@@ -66,10 +67,8 @@ describe('classroom ZIP export conversion snapshot', () => {
     const { getAssetPool } = await import('@/lib/media/asset-pool');
     const { BrowserDocumentStore } = await import('@openmaic/storage');
     const { buildClassroomExportZip } = await import('@/lib/export/use-export-classroom');
-    const {
-      materializeImportedAudio,
-      materializeImportedMedia,
-    } = await import('@/lib/import/use-import-classroom');
+    const { materializeImportedAudio, materializeImportedMedia } =
+      await import('@/lib/import/use-import-classroom');
     const { DSL_VERSION } = await import('@openmaic/dsl');
     const pool = getAssetPool();
 
@@ -267,19 +266,19 @@ describe('classroom ZIP export conversion snapshot', () => {
 class MemoryKv {
   readonly values = new Map<string, unknown>();
 
-  async get<T>(key: string, scope: string): Promise<T | null> {
+  async get<T>(key: string, scope: KVScope = 'account'): Promise<T | null> {
     return (this.values.get(`${scope}:${key}`) as T | undefined) ?? null;
   }
 
-  async set<T>(key: string, value: T, scope: string): Promise<void> {
+  async set<T>(key: string, value: T, scope: KVScope = 'account'): Promise<void> {
     this.values.set(`${scope}:${key}`, structuredClone(value));
   }
 
-  async remove(key: string, scope: string): Promise<void> {
+  async remove(key: string, scope: KVScope = 'account'): Promise<void> {
     this.values.delete(`${scope}:${key}`);
   }
 
-  async keys(prefix = '', scope: string): Promise<string[]> {
+  async keys(prefix = '', scope: KVScope = 'account'): Promise<string[]> {
     const fullPrefix = `${scope}:${prefix}`;
     return [...this.values.keys()]
       .filter((key) => key.startsWith(fullPrefix))

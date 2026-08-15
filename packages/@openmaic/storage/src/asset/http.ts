@@ -80,6 +80,52 @@ function malformed(status: number, message: string): HttpAssetStoreError {
   return new HttpAssetStoreError(status, 'MALFORMED_RESPONSE', message);
 }
 
+/** Whether a value is an absolute http(s) URL a client may fetch. */
+function isAbsoluteHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * One absolute-deadline budget for a bounded operation. Every request the
+ * operation issues -- descriptor GET, signed-object fetch, and the body reads
+ * attached to either -- carries the same signal, so a stalled persistence
+ * endpoint cannot hold the operation past the deadline no matter which step it
+ * stalls at. The timer is cleared with `settle()` once the operation ends.
+ */
+interface BoundedOperation {
+  readonly signal: AbortSignal;
+  settle(): void;
+}
+
+function startBoundedOperation(timeoutMs: number): BoundedOperation | null {
+  if (timeoutMs <= 0) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return {
+    signal: controller.signal,
+    settle: () => clearTimeout(timer),
+  };
+}
+
+/**
+ * The failure a bounded operation reports when its deadline fires mid-step.
+ * Stalled requests already surface as `HTTP_REQUEST_FAILED` through the fetch
+ * catch; a stalled body read must map the same way instead of masquerading as
+ * a malformed response.
+ */
+function deadlineFailure(): HttpAssetStoreError {
+  return new HttpAssetStoreError(
+    0,
+    'HTTP_REQUEST_FAILED',
+    '@openmaic/storage: asset HTTP request failed',
+  );
+}
+
 function localNotFound(): HttpAssetStoreError {
   return new HttpAssetStoreError(
     404,
@@ -229,7 +275,7 @@ export class HttpAssetStore implements StorageProvider {
     method: string,
     path: string,
     body?: Blob,
-    timeoutMs?: number,
+    signal?: AbortSignal,
   ): Promise<Response> {
     if (this.closed) {
       throw new HttpAssetStoreError(
@@ -262,7 +308,7 @@ export class HttpAssetStore implements StorageProvider {
         // caller as the 3xx it is, and `get` treats any redirect as an error.
         ...(method === 'GET' ? { redirect: 'manual' as RequestRedirect } : {}),
         ...(body === undefined ? {} : { body }),
-        ...(timeoutMs === undefined ? {} : { signal: AbortSignal.timeout(timeoutMs) }),
+        ...(signal === undefined ? {} : { signal }),
       });
     } catch {
       throw new HttpAssetStoreError(
@@ -401,14 +447,14 @@ export class HttpAssetStore implements StorageProvider {
   private async get(
     id: AssetRef,
     encoded: string,
-    timeoutMs?: number,
+    bound?: BoundedOperation,
   ): Promise<{ url: string | null; retry: boolean }> {
     const generation = this.generation(id);
     const response = await this.fetchResponse(
       'GET',
       `/assets/${encoded}/content`,
       undefined,
-      timeoutMs,
+      bound?.signal,
     );
     // A redirect answer to the descriptor byte GET means the server ignored the
     // descriptor negotiation (or is misconfigured). The GET is sent with
@@ -452,6 +498,7 @@ export class HttpAssetStore implements StorageProvider {
       try {
         descriptor = await response.json();
       } catch {
+        if (bound?.signal.aborted) throw deadlineFailure();
         throw malformed(
           response.status,
           '@openmaic/storage: asset egress descriptor could not be read',
@@ -477,11 +524,21 @@ export class HttpAssetStore implements StorageProvider {
           '@openmaic/storage: asset egress descriptor must carry a url and revision',
         );
       }
+      if (!isAbsoluteHttpUrl(signedUrl)) {
+        // Only an absolute http(s) URL may be fetched for the bytes; anything
+        // else is a malformed descriptor, and the follow-up request must never
+        // be issued against it.
+        throw malformed(
+          response.status,
+          '@openmaic/storage: asset egress descriptor must carry an absolute http(s) url',
+        );
+      }
       let byteResponse: Response;
       try {
         byteResponse = await this.fetchImpl(signedUrl, {
           cache: 'no-store',
           credentials: 'omit',
+          ...(bound === undefined ? {} : { signal: bound.signal }),
         });
       } catch {
         throw new HttpAssetStoreError(
@@ -528,6 +585,7 @@ export class HttpAssetStore implements StorageProvider {
       try {
         bytes = await byteResponse.arrayBuffer();
       } catch {
+        if (bound?.signal.aborted) throw deadlineFailure();
         throw malformed(
           byteResponse.status,
           '@openmaic/storage: asset byte response could not be read',
@@ -544,6 +602,7 @@ export class HttpAssetStore implements StorageProvider {
       try {
         bytes = await response.arrayBuffer();
       } catch {
+        if (bound?.signal.aborted) throw deadlineFailure();
         throw malformed(
           response.status,
           '@openmaic/storage: asset byte response could not be read',
@@ -574,7 +633,7 @@ export class HttpAssetStore implements StorageProvider {
   private async resolveFresh(
     id: AssetRef,
     encoded: string,
-    timeoutMs?: number,
+    bound?: BoundedOperation,
   ): Promise<string | null> {
     while (true) {
       const known = this.identities.get(id);
@@ -583,7 +642,7 @@ export class HttpAssetStore implements StorageProvider {
           'HEAD',
           `/assets/${encoded}/content`,
           undefined,
-          timeoutMs,
+          bound?.signal,
         );
         if (response.ok) {
           const identity = response.status === 200 ? responseIdentity(response) : null;
@@ -602,7 +661,7 @@ export class HttpAssetStore implements StorageProvider {
           // A HEAD error without a classifiable code falls back to GET.
         }
       }
-      const result = await this.get(id, encoded, timeoutMs);
+      const result = await this.get(id, encoded, bound);
       if (!result.retry) return result.url;
     }
   }
@@ -635,27 +694,33 @@ export class HttpAssetStore implements StorageProvider {
 
   /**
    * Metadata-only existence probe: a HEAD against the byte route, never a
-   * byte download or a minted URL. Bounded, so a stalled server cannot hang
-   * a migration-time check; an unclassifiable answer falls back to a full
-   * resolve, which is bounded the same way.
+   * byte download or a minted URL. Bounded by ONE absolute deadline that also
+   * covers the fallback resolve, including the descriptor read, the signed
+   * fetch, and the body parsing, so a stalled persistence endpoint cannot
+   * hold a migration-time check on any of its steps.
    */
   async exists(id: AssetRef): Promise<boolean> {
     const encoded = addressableSegment(id);
     if (encoded === null) return false;
-    const response = await this.fetchResponse(
-      'HEAD',
-      `/assets/${encoded}/content`,
-      undefined,
-      this.probeTimeoutMs,
-    );
-    if (response.ok) return response.status === 200;
-    const code = response.headers.get('x-error-code');
-    if (response.status === 404 && code === 'ASSET_NOT_FOUND') return false;
-    if (code !== null) throw await this.httpError(response);
-    // An unclassifiable HEAD is not a definitive miss; resolve decides. The
-    // fallback GET is bounded like the probe, so a stalled persistence
-    // endpoint cannot hold migration/conversion indefinitely.
-    return (await this.resolveFresh(id, encoded, this.probeTimeoutMs)) !== null;
+    const bound = startBoundedOperation(this.probeTimeoutMs);
+    if (!bound) throw deadlineFailure();
+    try {
+      const response = await this.fetchResponse(
+        'HEAD',
+        `/assets/${encoded}/content`,
+        undefined,
+        bound.signal,
+      );
+      if (response.ok) return response.status === 200;
+      const code = response.headers.get('x-error-code');
+      if (response.status === 404 && code === 'ASSET_NOT_FOUND') return false;
+      if (code !== null) throw await this.httpError(response);
+      // An unclassifiable HEAD is not a definitive miss; resolve decides. The
+      // fallback shares the probe's absolute deadline.
+      return (await this.resolveFresh(id, encoded, bound)) !== null;
+    } finally {
+      bound.settle();
+    }
   }
 
   async remove(id: AssetRef): Promise<void> {

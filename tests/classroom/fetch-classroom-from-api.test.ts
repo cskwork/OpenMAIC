@@ -338,10 +338,11 @@ describe('fetchClassroomFromApi at the server-media boundary', () => {
   });
 
   it('persists nothing raw when conversion cannot complete', async () => {
-    // The media endpoint refuses every request: transport URLs cannot be
-    // ingested, so the converted document would still carry raw addresses.
-    // The load must fail rather than apply or persist them.
-    stubNetwork({ mediaStatus: 404, proxyStatus: 404 });
+    // The media endpoint fails transiently for every request: transport URLs
+    // cannot be ingested AND cannot be declared dead, so the converted
+    // document would still carry raw addresses. The load must fail rather
+    // than apply or persist them.
+    stubNetwork({ mediaStatus: 500, proxyStatus: 500 });
     const result = await fetchApi();
 
     expect(result).toBeNull();
@@ -350,6 +351,25 @@ describe('fetchClassroomFromApi at the server-media boundary', () => {
     const { db } = await import('@/lib/utils/database');
     expect(await db.mediaFiles.where('stageId').equals('stage-1').toArray()).toHaveLength(0);
     expect(await db.audioFiles.where('stageId').equals('stage-1').toArray()).toHaveLength(0);
+  });
+
+  it('removes definitively dead transport URLs and completes the load', async () => {
+    // A 404 is a definitive refusal: the bytes are gone for good, so the
+    // reference converts to nothing rather than failing an otherwise usable
+    // classroom. The load succeeds with the dead references REMOVED, no raw
+    // transport URL survives, and nothing is allocated for dead entries.
+    stubNetwork({ mediaStatus: 404, proxyStatus: 404 });
+    const result = await fetchApi();
+
+    expect(result).not.toBeNull();
+    expect(JSON.stringify(result)).not.toContain('/api/classroom-media/');
+    expect(JSON.stringify(result)).not.toContain(AUDIO_URL);
+    const { getDocumentStore } = await import('@/lib/document-store');
+    const persisted = await getDocumentStore({ store: deps.store }).loadDocument('stage-1');
+    expect(persisted).not.toBeNull();
+    expect(JSON.stringify(persisted)).not.toContain('/api/classroom-media/');
+    expect(JSON.stringify(persisted)).not.toContain(AUDIO_URL);
+    expect(allocatedIds(result)).toHaveLength(0);
   });
 
   it('serializes two simultaneous cold loads: one conversion set, one committed document', async () => {

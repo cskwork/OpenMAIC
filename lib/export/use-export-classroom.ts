@@ -174,8 +174,7 @@ export async function buildClassroomExportZip(
       for (const u of report.inlined)
         if (!aggregateReport.inlined.includes(u)) aggregateReport.inlined.push(u);
       for (const f of report.failed)
-        if (!aggregateReport.failed.some((g) => g.url === f.url))
-          aggregateReport.failed.push(f);
+        if (!aggregateReport.failed.some((g) => g.url === f.url)) aggregateReport.failed.push(f);
       return {
         type: scene.type,
         title: scene.title,
@@ -263,7 +262,11 @@ export async function buildClassroomExportZip(
   // 11. Generate
   const zipBlob = await zip.generateAsync({ type: 'blob' });
   const safeName = latestName.replace(/[\\/:*?"<>|]/g, '_') || 'classroom';
-  return { zip: zipBlob, fileName: `${safeName}${CLASSROOM_ZIP_EXTENSION}`, inlineFailures: aggregateReport.failed };
+  return {
+    zip: zipBlob,
+    fileName: `${safeName}${CLASSROOM_ZIP_EXTENSION}`,
+    inlineFailures: aggregateReport.failed,
+  };
 }
 
 export function useExportClassroom() {

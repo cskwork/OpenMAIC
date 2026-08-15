@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
+import type { KVScope } from '@openmaic/storage';
 
 // Drives the converter through its production dependency graph: the real
 // Dexie tables, the real browser asset pool, and the real media-proxy
@@ -96,9 +97,8 @@ describe('legacy conversion with production wiring', () => {
     // compatibility rows alike -- while the legacy source rows survive.
     const { db } = await import('@/lib/utils/database');
     const { getAssetPool } = await import('@/lib/media/asset-pool');
-    const { convertDocumentAssetRefs, rollbackConvertedAllocations } = await import(
-      '@/lib/media/convert-legacy-asset-refs'
-    );
+    const { convertDocumentAssetRefs, rollbackConvertedAllocations } =
+      await import('@/lib/media/convert-legacy-asset-refs');
     const pool = getAssetPool();
     await db.mediaFiles.put({
       id: 'stage-1:gen_img_1',
@@ -258,13 +258,15 @@ describe('legacy conversion with production wiring', () => {
           title: 'S',
           order: 0,
           content: { type: 'slide', canvas: { id: 'c1', elements: [] } },
-          actions: [{ id: 'a1', type: 'speech', text: 'Hi', audioId: 'tts_s0_a1', audioUrl: legacyUrl }],
+          actions: [
+            { id: 'a1', type: 'speech', text: 'Hi', audioId: 'tts_s0_a1', audioUrl: legacyUrl },
+          ],
         },
       ],
     };
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (input: string, init?: RequestInit) => {
+      vi.fn(async (input: string, _init?: RequestInit) => {
         if (String(input) === '/api/classroom?id=classroom-1') {
           return new Response(JSON.stringify({ success: true, classroom: payload }), {
             status: 200,
@@ -311,19 +313,19 @@ describe('legacy conversion with production wiring', () => {
 class MemoryKv {
   readonly values = new Map<string, unknown>();
 
-  async get<T>(key: string, scope: string): Promise<T | null> {
+  async get<T>(key: string, scope: KVScope = 'account'): Promise<T | null> {
     return (this.values.get(`${scope}:${key}`) as T | undefined) ?? null;
   }
 
-  async set<T>(key: string, value: T, scope: string): Promise<void> {
+  async set<T>(key: string, value: T, scope: KVScope = 'account'): Promise<void> {
     this.values.set(`${scope}:${key}`, structuredClone(value));
   }
 
-  async remove(key: string, scope: string): Promise<void> {
+  async remove(key: string, scope: KVScope = 'account'): Promise<void> {
     this.values.delete(`${scope}:${key}`);
   }
 
-  async keys(prefix = '', scope: string): Promise<string[]> {
+  async keys(prefix = '', scope: KVScope = 'account'): Promise<string[]> {
     const fullPrefix = `${scope}:${prefix}`;
     return [...this.values.keys()]
       .filter((key) => key.startsWith(fullPrefix))

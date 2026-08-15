@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // fetch must be bounded by a timeout, and ordinary fetch/CORS failures keep
 // the direct media-element fallback.
 const mocks = vi.hoisted(() => ({
-  resolveAudioBlob: vi.fn(async () => null),
+  resolveAudioBlob: vi.fn(async (..._args: unknown[]) => null),
   createObjectURL: vi.fn(),
   revokeObjectURL: vi.fn(),
 }));
@@ -41,15 +41,13 @@ function stubAudio(play: () => Promise<void>) {
  * A fetch implementation that stalls until the caller's abort signal fires.
  * Records every signal it received so tests can assert cancellation.
  */
-function stalledFetch(record: { signals: AbortSignal[]; calls: number }) {
+function stalledFetch(record: { signals: Array<AbortSignal | undefined>; calls: number }) {
   return vi.fn<typeof globalThis.fetch>((_input, init) => {
     record.calls += 1;
     const signal = init?.signal;
     record.signals.push(signal as AbortSignal);
     return new Promise((_resolve, reject) => {
-      signal?.addEventListener('abort', () =>
-        reject(signal.reason ?? new Error('aborted')),
-      );
+      signal?.addEventListener('abort', () => reject(signal.reason ?? new Error('aborted')));
     });
   });
 }
@@ -67,7 +65,10 @@ describe('AudioPlayer legacy narration fetch', () => {
 
   it('aborts the in-flight legacy fetch when playback is stopped', async () => {
     stubObjectUrl();
-    const record = { signals: [], calls: 0 };
+    const record: { signals: Array<AbortSignal | undefined>; calls: number } = {
+      signals: [],
+      calls: 0,
+    };
     vi.stubGlobal('fetch', stalledFetch(record));
 
     const { AudioPlayer } = await import('@/lib/utils/audio-player');
@@ -88,7 +89,10 @@ describe('AudioPlayer legacy narration fetch', () => {
 
   it('aborts the previous play fetch when a replacement play starts', async () => {
     stubObjectUrl();
-    const record = { signals: [], calls: 0 };
+    const record: { signals: Array<AbortSignal | undefined>; calls: number } = {
+      signals: [],
+      calls: 0,
+    };
     const fetchImpl = vi.fn<typeof globalThis.fetch>((input, init) => {
       record.calls += 1;
       const signal = init?.signal;
@@ -99,9 +103,7 @@ describe('AudioPlayer legacy narration fetch', () => {
         );
       }
       return new Promise((_resolve, reject) => {
-        signal?.addEventListener('abort', () =>
-          reject(signal.reason ?? new Error('aborted')),
-        );
+        signal?.addEventListener('abort', () => reject(signal.reason ?? new Error('aborted')));
       });
     });
     vi.stubGlobal('fetch', fetchImpl);
@@ -120,7 +122,10 @@ describe('AudioPlayer legacy narration fetch', () => {
 
   it('aborts the in-flight legacy fetch on destroy()', async () => {
     stubObjectUrl();
-    const record = { signals: [], calls: 0 };
+    const record: { signals: Array<AbortSignal | undefined>; calls: number } = {
+      signals: [],
+      calls: 0,
+    };
     vi.stubGlobal('fetch', stalledFetch(record));
 
     const { AudioPlayer } = await import('@/lib/utils/audio-player');
@@ -139,7 +144,10 @@ describe('AudioPlayer legacy narration fetch', () => {
   it('bounds a stalled legacy fetch with a finite timeout and falls back to the media element', async () => {
     vi.useFakeTimers();
     stubObjectUrl();
-    const record = { signals: [], calls: 0 };
+    const record: { signals: Array<AbortSignal | undefined>; calls: number } = {
+      signals: [],
+      calls: 0,
+    };
     vi.stubGlobal('fetch', stalledFetch(record));
 
     const { AudioPlayer } = await import('@/lib/utils/audio-player');

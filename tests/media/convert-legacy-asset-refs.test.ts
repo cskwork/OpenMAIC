@@ -64,7 +64,7 @@ function makeHarness() {
     removeAsset: async (ref) => {
       pool.delete(ref);
     },
-    fetchLegacyUrl: async (url) => urlFetches.get(url) ?? { kind: 'unavailable' },
+    fetchLegacyUrl: async (url) => urlFetches.get(url) ?? { kind: 'unavailable' as const },
   };
 
   return { pool, mediaRows, audioRows, urlFetches, deps };
@@ -619,7 +619,9 @@ describe('classroom media URL conversion', () => {
   test('dead outcomes are shared across every slot naming the URL', async () => {
     const { pool, urlFetches, deps } = makeHarness();
     urlFetches.set(mediaUrl, { kind: 'dead' });
-    const fetchLegacyUrl = vi.fn(async (url: string) => urlFetches.get(url) ?? { kind: 'unavailable' });
+    const fetchLegacyUrl = vi.fn(
+      async (url: string) => urlFetches.get(url) ?? { kind: 'unavailable' as const },
+    );
     const doc = document({
       stage: stage({
         whiteboard: [
@@ -882,11 +884,12 @@ describe('speech reference conversion', () => {
       originAudioId: 'tts_shared_id',
       originAudioUrl: otherUrl,
     } as AudioFileRecord);
-    urlFetches.set(liveUrl, { kind: 'ok', blob: new Blob(['live-narration'], { type: 'audio/mpeg' }) });
+    urlFetches.set(liveUrl, {
+      kind: 'ok',
+      blob: new Blob(['live-narration'], { type: 'audio/mpeg' }),
+    });
     const doc = document({
-      scenes: [
-        slideScene([speech({ id: 'a1', audioId: 'tts_shared_id', audioUrl: liveUrl })]),
-      ],
+      scenes: [slideScene([speech({ id: 'a1', audioId: 'tts_shared_id', audioUrl: liveUrl })])],
     });
 
     const result = await convertDocumentAssetRefs(doc, deps);
@@ -920,7 +923,9 @@ describe('speech reference conversion', () => {
       originAudioId: 'tts_s0_a1',
       originAudioUrl: url,
     } as AudioFileRecord);
-    const fetchLegacyUrl = vi.fn(async (u: string) => urlFetches.get(u) ?? { kind: 'unavailable' });
+    const fetchLegacyUrl = vi.fn(
+      async (u: string) => urlFetches.get(u) ?? { kind: 'unavailable' as const },
+    );
     const doc = document({
       scenes: [slideScene([speech({ id: 'a1', audioId: 'tts_s0_a1', audioUrl: url })])],
     });
@@ -935,7 +940,7 @@ describe('speech reference conversion', () => {
   });
 
   test('an exact (id, url) pair with no durable row is fetched and mirrored with both keys', async () => {
-    const { audioRows, pool, urlFetches, deps } = makeHarness();
+    const { audioRows, urlFetches, deps } = makeHarness();
     const url = 'https://server.example.com/audio/both-keys.mp3';
     urlFetches.set(url, { kind: 'ok', blob: new Blob(['both-keys'], { type: 'audio/mpeg' }) });
     const doc = document({
