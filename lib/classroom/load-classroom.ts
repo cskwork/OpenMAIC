@@ -270,7 +270,11 @@ export async function fetchClassroomFromApi(
   // allocated asset ids and raw transport URLs never enter document storage.
   // Conversion and the first document save share the per-stage lock, so
   // simultaneous cold loads reuse the winner's committed document instead of
-  // allocating competing asset sets.
+  // allocating competing asset sets. When Web Locks are absent entirely (a
+  // non-secure context, an older browser, some webviews) the mutation
+  // degrades to the app's lock-free route instead of silently no-op'ing the
+  // cold load; the degraded pass still keeps its ledger+rollback discipline,
+  // so a failed unlocked attempt leaves nothing behind.
   const [{ mutateDocument }, converter] = await Promise.all([
     import('@/lib/document-store'),
     import('@/lib/media/convert-legacy-asset-refs'),
@@ -319,7 +323,6 @@ export async function fetchClassroomFromApi(
         }
       },
       deps,
-      { requireLock: true },
     );
   } catch {
     // Persisting the raw transport is never an acceptable fallback: the next

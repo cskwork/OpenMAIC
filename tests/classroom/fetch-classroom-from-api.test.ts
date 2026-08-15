@@ -438,4 +438,64 @@ describe('fetchClassroomFromApi at the server-media boundary', () => {
     );
     await expect(fetchApi()).resolves.toBeNull();
   });
+
+  it('cold-loads and commits through the lock-free route when Web Locks are absent', async () => {
+    // Finding: withDocumentLock throws DocumentLockUnavailableError when
+    // navigator.locks is absent (non-secure context, older browsers, some
+    // webviews), and the old requireLock gate rethrew it, so the outer catch
+    // returned null -- a silent no-op cold load where the same path used to
+    // load. An absent lock API must degrade to the app's lock-free route,
+    // keeping the ledger+rollback discipline: a failed unlocked attempt
+    // still leaves nothing behind.
+    stubNetwork();
+    const { fetchClassroomFromApi } = await import('@/lib/classroom/load-classroom');
+    const result = await fetchClassroomFromApi('stage-1', undefined, {
+      ...deps,
+      lockManager: null,
+    });
+
+    // The cold load completed: the payload converted and committed even
+    // without Web Locks.
+    expect(result).not.toBeNull();
+    expect(JSON.stringify(result)).not.toContain('/api/classroom-media/');
+    expect(JSON.stringify(result)).not.toContain(AUDIO_URL);
+    const ids = allocatedIds(result);
+    expect(ids).toHaveLength(3);
+    const { getDocumentStore } = await import('@/lib/document-store');
+    const committed = await getDocumentStore({ store: deps.store }).loadDocument('stage-1');
+    expect(committed).not.toBeNull();
+    expect(JSON.stringify(committed)).not.toContain('/api/classroom-media/');
+    const { getAssetPool } = await import('@/lib/media/asset-pool');
+    const pool = getAssetPool();
+    for (const id of ids) {
+      expect(await pool.exists?.(id as never)).toBe(true);
+    }
+    // The success path owns its allocations; nothing was rolled back.
+    expect(removeAssetSpy).not.toHaveBeenCalled();
+  });
+
+  it('still fails the cold load when a present lock manager cannot acquire', async () => {
+    // Finding: the lock-free degradation is reserved for an ABSENT lock API.
+    // A lock manager that exists but fails to acquire is the race requireLock
+    // exists to prevent: two realms could allocate competing asset sets, so
+    // that failure must keep failing (the load returns null, no side effects).
+    const rejectingLocks = {
+      request: vi.fn(() => Promise.reject(new Error('lock acquisition failed'))),
+      query: vi.fn(),
+    } as unknown as LockManager;
+    stubNetwork();
+    const { fetchClassroomFromApi } = await import('@/lib/classroom/load-classroom');
+    const result = await fetchClassroomFromApi('stage-1', undefined, {
+      ...deps,
+      lockManager: rejectingLocks,
+    });
+
+    expect(result).toBeNull();
+    const { getDocumentStore } = await import('@/lib/document-store');
+    expect(await getDocumentStore({ store: deps.store }).loadDocument('stage-1')).toBeNull();
+    const { db } = await import('@/lib/utils/database');
+    expect(await db.mediaFiles.where('stageId').equals('stage-1').toArray()).toHaveLength(0);
+    expect(await db.audioFiles.where('stageId').equals('stage-1').toArray()).toHaveLength(0);
+    expect(removeAssetSpy).not.toHaveBeenCalled();
+  });
 });

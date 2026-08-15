@@ -1001,4 +1001,185 @@ describe('legacy document migration', () => {
     expect(persisted?.stage.name).toBe('Restored');
     expect(persisted?.stage).not.toHaveProperty('description');
   });
+
+  test('cleanup keeps a manifest-only ref allocation while rolling back truly unreferenced ones', async () => {
+    // Finding: cleanup computed orphans from the renderable `referenced`
+    // set, which excludes videoManifest keys. A ref that appears ONLY as a
+    // videoManifest key was converted and saved, then cleanup rolled its
+    // pool entry + mirror back while the persisted manifest still names it.
+    const documentStore = store();
+    await documentStore.saveDocument({
+      dslVersion: DSL_VERSION,
+      stage: { id: 'stage-1', name: 'Migrated', createdAt: 100, updatedAt: 200 },
+      scenes: [],
+    });
+    allocationState.pool.clear();
+    allocationState.audioRows.clear();
+    allocationState.mediaRows.clear();
+    rollbackSpy.mockClear();
+    const convert = (doc: AppDocument, ledger?: string[]): Promise<AppDocument> => {
+      const manifestOnly = 'ast_manifest_only';
+      const unreferenced = 'ast_truly_unreferenced';
+      for (const id of [manifestOnly, unreferenced]) {
+        allocationState.pool.add(id);
+        allocationState.audioRows.add(id);
+        allocationState.mediaRows.add(`stage-1:${id}`);
+        ledger?.push(id);
+      }
+      return Promise.resolve({
+        ...doc,
+        stage: {
+          ...doc.stage,
+          name: 'converted',
+          // The manifest-only id appears ONLY as a videoManifest key: no
+          // slide or action names it, so the renderable `referenced` set
+          // excludes it.
+          videoManifest: { [manifestOnly]: { type: 'video', prompt: 'a video' } },
+        },
+      });
+    };
+
+    const result = await accessDocument('stage-1', {
+      store: documentStore,
+      kv: new MemoryKv(),
+      legacyStore: legacy(null),
+      lockManager: lockManager(),
+      convertAssetRefs: convert,
+    });
+
+    expect(result.document?.stage.name).toBe('converted');
+    // The manifest-only id survived cleanup: the persisted manifest still
+    // owns it, so its pool entry and both compatibility rows are intact.
+    expect(allocationState.pool.has('ast_manifest_only')).toBe(true);
+    expect(allocationState.audioRows.has('ast_manifest_only')).toBe(true);
+    expect(allocationState.mediaRows.has('stage-1:ast_manifest_only')).toBe(true);
+    // The truly unreferenced id was rolled back, and only it.
+    expect(allocationState.pool.has('ast_truly_unreferenced')).toBe(false);
+    expect(rollbackSpy).toHaveBeenCalledWith('stage-1', ['ast_truly_unreferenced']);
+    expect(rollbackSpy).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.arrayContaining(['ast_manifest_only']),
+    );
+  });
+
+  test('a generation fence firing mid-save rolls back the pass allocations and stays fatal', async () => {
+    // Finding: the save-back's generation fence sat BEFORE the rollback
+    // scope, so a cross-realm clearDatabase landing between the fence read
+    // and the save stranded the pass's allocations: the fence error
+    // propagated and cleanup never ran. The fence must stay fatal (it is a
+    // cross-tab write race, not a persistence hiccup) but must roll the
+    // ledger back first.
+    const documentStore = store();
+    await documentStore.saveDocument({
+      dslVersion: DSL_VERSION,
+      stage: { id: 'stage-1', name: 'Migrated', createdAt: 100, updatedAt: 200 },
+      scenes: [],
+    });
+    allocationState.pool.clear();
+    allocationState.audioRows.clear();
+    allocationState.mediaRows.clear();
+    rollbackSpy.mockClear();
+    let calls = 0;
+    const convert = (doc: AppDocument, ledger?: string[]): Promise<AppDocument> => {
+      calls += 1;
+      const id = `ast_fence_${calls}`;
+      allocationState.pool.add(id);
+      allocationState.audioRows.add(id);
+      allocationState.mediaRows.add(`stage-1:${id}`);
+      ledger?.push(id);
+      return Promise.resolve({ ...doc, stage: { ...doc.stage, description: 'converted' } });
+    };
+
+    await expect(
+      accessDocument('stage-1', {
+        store: documentStore,
+        kv: new GenerationFlipsOnFenceKv(),
+        legacyStore: legacy(null),
+        lockManager: lockManager(),
+        convertAssetRefs: convert,
+      }),
+    ).rejects.toThrow('storage was cleared during the mutation');
+
+    // The fatal fence error did not strand the pass's side effects: pool
+    // entry and both compatibility rows are gone.
+    expect(allocationState.pool.size).toBe(0);
+    expect(allocationState.audioRows.size).toBe(0);
+    expect(allocationState.mediaRows.size).toBe(0);
+    expect(rollbackSpy).toHaveBeenCalledWith('stage-1', ['ast_fence_1']);
+    // Nothing persisted from the fenced save.
+    expect((await documentStore.loadDocument('stage-1'))?.stage).not.toHaveProperty('description');
+  });
+
+  test('a birth-path save whose document vanishes rolls back the pass allocations', async () => {
+    // Finding: the birth path's lost-document throw (the save landed but the
+    // post-save reload observed a concurrent deletion) skipped cleanup, so
+    // the pass's fresh allocations stranded even though nothing durable
+    // references them.
+    const realStore = store();
+    const vanishingStore = new Proxy(realStore, {
+      get(target, property) {
+        if (property === 'saveDocument') {
+          return async (doc: AppDocument): Promise<void> => {
+            await target.saveDocument(doc);
+            // A concurrent deletion wipes the document between the save and
+            // the post-save reload, so the reload observes nothing.
+            await target.deleteDocument('stage-1');
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    allocationState.pool.clear();
+    allocationState.audioRows.clear();
+    allocationState.mediaRows.clear();
+    rollbackSpy.mockClear();
+    let calls = 0;
+    const convert = (doc: AppDocument, ledger?: string[]): Promise<AppDocument> => {
+      calls += 1;
+      const id = `ast_birth_${calls}`;
+      allocationState.pool.add(id);
+      allocationState.audioRows.add(id);
+      allocationState.mediaRows.add(`stage-1:${id}`);
+      ledger?.push(id);
+      return Promise.resolve({ ...doc, stage: { ...doc.stage, name: 'converted' } });
+    };
+
+    await expect(
+      accessDocument('stage-1', {
+        store: vanishingStore,
+        kv: new MemoryKv(),
+        legacyStore: legacy(snapshot()),
+        lockManager: lockManager(),
+        convertAssetRefs: convert,
+      }),
+    ).rejects.toThrow('Legacy migration lost document');
+
+    // The vanished document owned nothing, so every fresh allocation was
+    // rolled back instead of stranding.
+    expect(allocationState.pool.size).toBe(0);
+    expect(allocationState.audioRows.size).toBe(0);
+    expect(allocationState.mediaRows.size).toBe(0);
+    const rolledBackIds = rollbackSpy.mock.calls.flatMap((args) => args[1] as string[]);
+    expect(rolledBackIds).toContain('ast_birth_1');
+    // Nothing durable remains from the birth save.
+    expect(await realStore.loadDocument('stage-1')).toBeNull();
+  });
 });
+
+/** KV whose generation read changes at the save-back fence, mid-pass. */
+class GenerationFlipsOnFenceKv extends MemoryKv {
+  generationReads = 0;
+
+  override async get<T>(key: string, scope: KVScope = 'account'): Promise<T | null> {
+    const value = await super.get<T>(key, scope);
+    if (key === 'document-storage-generation') {
+      this.generationReads += 1;
+      // Reads 1-3 (entry, phase-1 probe, phase-3 fence baseline) agree; the
+      // fourth read -- the save-back's generation fence -- sees a clear that
+      // landed mid-pass.
+      if (this.generationReads >= 4) return 7 as T;
+    }
+    return value;
+  }
+}

@@ -67,8 +67,6 @@ export interface DocumentMutationOptions {
    * otherwise be orphaned by the very save that lands next.
    */
   mode?: 'update' | 'replace';
-  /** Fail instead of falling back to the lock-free/LWW path. */
-  requireLock?: boolean;
 }
 
 /**
@@ -160,13 +158,19 @@ async function saveConvertedDocument(
   ledger?: string[],
 ): Promise<AppDocument | null> {
   if (converted === existing) return existing;
-  if ((await readGeneration(deps.kv)) !== expectedGeneration) {
-    throw new DocumentStorageGenerationChangedError(stageId);
-  }
   // The authoritative reload observed before a failed save-back: the caller
   // must see the concurrent edit, not the stale pre-concurrency snapshot.
   let reloaded: AppDocument | undefined;
   try {
+    // The generation fence sits INSIDE the compensation scope: a cross-realm
+    // clearDatabase landing between the fence read and the save strands the
+    // pass's fresh allocations, and every exit -- including the fatal fence
+    // error -- must roll the ledger back. The fence error itself stays fatal
+    // (a cross-tab write race, not a persistence hiccup); it rolls back and
+    // rethrows rather than degrading to the unconverted document.
+    if ((await readGeneration(deps.kv)) !== expectedGeneration) {
+      throw new DocumentStorageGenerationChangedError(stageId);
+    }
     // Conversion may have spent seconds probing legacy URLs, and the document
     // lock does not coordinate independent browsers: another client can have
     // written while we converted. Reload and reconcile instead of blindly
@@ -194,6 +198,17 @@ async function saveConvertedDocument(
     await store.saveDocument(converted);
     return converted;
   } catch (error) {
+    if (error instanceof DocumentStorageGenerationChangedError) {
+      // A cross-tab clear raced the save: nothing was persisted, so every
+      // fresh allocation the pass made is an orphan. Roll them all back
+      // before the fatal error surfaces.
+      if (ledger && ledger.length > 0) {
+        const { rollbackConvertedAllocations } =
+          await import('@/lib/media/convert-legacy-asset-refs');
+        await rollbackConvertedAllocations(stageId, ledger);
+      }
+      throw error;
+    }
     // Best-effort: a readable document must not fail to open because the
     // save-back did (quota pressure, a transient write error). The write
     // never landed, so durable storage still holds the legacy references:
@@ -204,9 +219,7 @@ async function saveConvertedDocument(
     // and repeated opens could accumulate additional orphaned assets. When
     // the failure followed a reconciliation reload, return the authoritative
     // reloaded document rather than the stale pre-concurrency snapshot: the
-    // concurrent edit is durable and must not be hidden from the caller. The
-    // generation fence above stays fatal: it is a cross-tab write race, not
-    // a persistence hiccup.
+    // concurrent edit is durable and must not be hidden from the caller.
     log.warn(
       `Converted document ${JSON.stringify(stageId)} could not be saved back; ` +
         'rolling back its allocations and retrying on the next open',
@@ -493,7 +506,11 @@ async function migrateLocked(
     // Every exit rolls back the ledger entries the returned document does
     // not reference: a null answer (a concurrent deletion, an epoch change)
     // releases them all, and a reconciled or redone document keeps exactly
-    // what it uses.
+    // what it uses. The full document ref set is the reference space, NOT
+    // just the renderable `referenced` set: a ref that appears only as a
+    // videoManifest key is still owned by the persisted manifest, and
+    // rolling its allocation back would leave the manifest naming an id
+    // whose bytes are gone.
     const cleanup = async (finalDoc: AppDocument | null): Promise<void> => {
       if (passLedger.length === 0) return;
       const { rollbackConvertedAllocations } =
@@ -502,11 +519,11 @@ async function migrateLocked(
         await rollbackConvertedAllocations(stageId, passLedger);
         return;
       }
-      const referenced = collectStageAssetRefs(finalDoc, {
+      const documentRefs = collectStageAssetRefs(finalDoc, {
         mediaRows: [],
         audioRows: [],
-      }).referenced;
-      const orphans = passLedger.filter((id) => !referenced.has(id));
+      }).document;
+      const orphans = passLedger.filter((id) => !documentRefs.has(id));
       await rollbackConvertedAllocations(stageId, orphans);
     };
 
@@ -551,7 +568,14 @@ async function migrateLocked(
         throw error;
       }
       const actual = await store.loadDocument(stageId);
-      if (!actual) throw new Error(`Legacy migration lost document ${JSON.stringify(stageId)}`);
+      if (!actual) {
+        // The document was saved but vanished before the reload could see it
+        // (a concurrent deletion landing between the two): the pass's fresh
+        // allocations are now unowned, so roll them back before surfacing
+        // the loss.
+        await cleanup(null);
+        throw new Error(`Legacy migration lost document ${JSON.stringify(stageId)}`);
+      }
       assertMigrationVerified(freshExpected, actual, deps.migrateDsl);
       await finishMigrationMetadata(freshSnapshot, resolveKv(deps));
       await cleanup(actual);
@@ -588,7 +612,14 @@ async function migrateLocked(
       throw error;
     }
     const actual = await store.loadDocument(stageId);
-    if (!actual) throw new Error(`Legacy migration lost document ${JSON.stringify(stageId)}`);
+    if (!actual) {
+      // The document was saved but vanished before the reload could see it
+      // (a concurrent deletion landing between the two): the pass's fresh
+      // allocations are now unowned, so roll them back before surfacing the
+      // loss.
+      await cleanup(null);
+      throw new Error(`Legacy migration lost document ${JSON.stringify(stageId)}`);
+    }
     assertMigrationVerified(expected, actual, deps.migrateDsl);
     await finishMigrationMetadata(probe.snapshot, resolveKv(deps));
     await cleanup(actual);
@@ -688,10 +719,17 @@ export function mutateDocument<T>(
   };
   return withDocumentLock(stageId, mutateLocked, deps).catch(async (error: unknown) => {
     if (!(error instanceof DocumentLockUnavailableError)) throw error;
-    // Some callers must never degrade to lock-free allocation (a server
-    // fallback converting and committing a fresh document): without
-    // cross-realm exclusion, two realms could allocate competing asset sets.
-    if (options.requireLock) throw error;
+    // DocumentLockUnavailableError is raised only when the Web Locks API is
+    // ABSENT (a non-secure context, an older browser, some webviews): a lock
+    // manager that exists but fails to acquire rejects with its own error,
+    // which the guard above rethrows -- that is the race requireLock exists
+    // to prevent, and it keeps failing. An absent API degrades to the app's
+    // established lock-free route even for callers that normally require the
+    // lock: the alternative is a silent no-op cold load (the server fallback
+    // returning null where it used to load), and the rest of the app already
+    // accepts the lock-free risk profile for destination-backed and new
+    // documents. The degraded pass keeps the caller's ledger+rollback
+    // discipline, so a failed unlocked attempt still leaves nothing behind.
 
     // Migration is never attempted without cross-realm exclusion. A
     // destination-backed document (or a genuinely new id) can still accept
