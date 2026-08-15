@@ -261,6 +261,144 @@ describe('classroom ZIP export conversion snapshot', () => {
     expect(exportedSrc).toMatch(/^ast_/);
     expect(zipData.file(`media/${exportedSrc}.png`)).toBeDefined();
   });
+
+  it('a successful export leaves no new pool entries or mirror rows behind', async () => {
+    // Finding: the export snapshot conversion allocates pool entries + mirror
+    // rows into a ledger, but only the conversion-error branch rolled them
+    // back. A successful export discards the snapshot without persisting it,
+    // leaving the allocations unowned. The durable document was converted
+    // FIRST, so a fresh allocation can only belong to the ephemeral snapshot:
+    // once the ZIP has captured its bytes (or the export fails), the ledger
+    // entries the durable document does not reference must be rolled back.
+    const { db } = await import('@/lib/utils/database');
+    const { getAssetPool } = await import('@/lib/media/asset-pool');
+    const { BrowserDocumentStore } = await import('@openmaic/storage');
+    const { buildClassroomExportZip } = await import('@/lib/export/use-export-classroom');
+    const { DSL_VERSION } = await import('@openmaic/dsl');
+    const pool = getAssetPool();
+
+    // The durable document is FULLY converted: allocated media + audio ids,
+    // each backed by pool bytes and a compatibility row.
+    const mediaId = await pool.put(new Blob(['media-bytes'], { type: 'image/png' }), {
+      contentType: 'image/png',
+      mediaType: 'image',
+      origin: 'legacy-mediaFiles',
+    });
+    const audioId = await pool.put(new Blob(['audio-bytes'], { type: 'audio/mpeg' }), {
+      contentType: 'audio/mpeg',
+      mediaType: 'audio',
+      origin: 'legacy-audioFiles',
+    });
+    const durableScene = {
+      id: 'scene-1',
+      stageId: 'stage-1',
+      type: 'slide',
+      title: 'Scene',
+      order: 0,
+      content: {
+        type: 'slide',
+        canvas: {
+          id: 'c1',
+          elements: [{ id: 'el1', type: 'image', src: mediaId }],
+        },
+      },
+      actions: [{ id: 'a1', type: 'speech', text: 'Hi', audioId }],
+    };
+    const store = new BrowserDocumentStore({
+      indexedDB: globalThis.indexedDB as unknown as IDBFactory,
+      dbName: 'maic-documents',
+      validateScene: () => ({ valid: true }),
+    });
+    await store.saveDocument({
+      dslVersion: DSL_VERSION,
+      stage: { id: 'stage-1', name: 'Course', createdAt: 100, updatedAt: 200 },
+      scenes: [durableScene],
+    } as never);
+    await db.mediaFiles.put({
+      id: `stage-1:${mediaId}`,
+      stageId: 'stage-1',
+      type: 'image',
+      blob: new Blob(['media-bytes'], { type: 'image/png' }),
+      mimeType: 'image/png',
+      size: 11,
+      prompt: 'a prompt',
+      params: '{}',
+      createdAt: 1,
+      placeholderRef: 'gen_img_1',
+    });
+    await db.audioFiles.put({
+      id: audioId,
+      stageId: 'stage-1',
+      blob: new Blob(['audio-bytes'], { type: 'audio/mpeg' }),
+      format: 'mp3',
+      text: 'Hi',
+      createdAt: 1,
+      originAudioId: 'tts_s0_a1',
+    });
+
+    // The working state carries an unsaved edit the durable document never
+    // saw: a NEW legacy placeholder only the export snapshot conversion will
+    // allocate for.
+    const workingScenes = [
+      {
+        ...durableScene,
+        content: {
+          type: 'slide',
+          canvas: {
+            id: 'c1',
+            elements: [
+              { id: 'el1', type: 'image', src: mediaId },
+              { id: 'el2', type: 'image', src: 'gen_img_new' },
+            ],
+          },
+        },
+      },
+    ];
+    await db.mediaFiles.put({
+      id: 'stage-1:gen_img_new',
+      stageId: 'stage-1',
+      type: 'image',
+      blob: new Blob(['new-bytes'], { type: 'image/png' }),
+      mimeType: 'image/png',
+      size: 9,
+      prompt: 'new',
+      params: '{}',
+      createdAt: 2,
+    });
+
+    const deps: DocumentMigrationDeps = {
+      store,
+      kv: new MemoryKv(),
+      legacyStore: { read: async () => null, listStages: async () => [] },
+      lockManager: lockManager(),
+    };
+    const stage = { id: 'stage-1', name: 'Course', createdAt: 100, updatedAt: 200 };
+    const { zip } = await buildClassroomExportZip(stage as Stage, workingScenes as Scene[], deps);
+
+    // The export snapshot's fresh allocation reached the ZIP (the archive is
+    // self-contained)...
+    const zipData = await JSZip.loadAsync(zip);
+    const manifest = JSON.parse(await zipData.file('manifest.json')!.async('string')) as {
+      scenes: Array<{ content: { canvas: { elements: { src: string }[] } } }>;
+    };
+    const exportedNewSrc = manifest.scenes[0].content.canvas.elements[1].src;
+    expect(exportedNewSrc).toMatch(/^ast_/);
+    expect(zipData.file(`media/${exportedNewSrc}.png`)).toBeDefined();
+
+    // ...but its pool entry and compatibility mirror row were rolled back
+    // once the ZIP captured the bytes: the durable document never referenced
+    // them, so nothing may retain them.
+    expect(await pool.exists?.(exportedNewSrc as never)).toBe(false);
+    expect(await db.mediaFiles.get(`stage-1:${exportedNewSrc}`)).toBeUndefined();
+
+    // The durable document's own allocations are untouched.
+    expect(await pool.exists?.(mediaId as never)).toBe(true);
+    expect(await pool.exists?.(audioId as never)).toBe(true);
+    expect(await db.mediaFiles.get(`stage-1:${mediaId}`)).toBeDefined();
+    expect(await db.audioFiles.get(audioId)).toBeDefined();
+    const durable = await store.loadDocument('stage-1');
+    expect(durable?.scenes[0].content.canvas.elements).toHaveLength(1);
+  });
 });
 
 class MemoryKv {

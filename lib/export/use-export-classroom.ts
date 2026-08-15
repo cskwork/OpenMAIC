@@ -122,145 +122,181 @@ export async function buildClassroomExportZip(
     }
   }
 
-  // 3. Collect the roster from the in-memory stage (single source of truth;
-  // the in-memory stage already carries any lazily migrated voice fields).
-  const agentConfigs = exportStage.generatedAgentConfigs ?? stage.generatedAgentConfigs ?? [];
-
-  // 4. Collect audio files from the converted scenes: their speech actions
-  // name the allocated ids, whose compatibility rows the conversion wrote.
-  const audioFiles = await collectAudioFiles(exportScenes);
-
-  // 5. Collect media files (generated images/videos)
-  const mediaFiles = await collectMediaFiles(stage.id);
-
-  // 6. Build audioId → zipPath mapping for manifest
-  const audioIdToPath = new Map<string, string>();
-  for (const af of audioFiles) {
-    audioIdToPath.set(af.record.id, af.zipPath);
-  }
-
-  // 6b. Fetch legacy audio URLs that no local row backs. An unconverted
-  // document can carry narration only as an audioUrl; the field itself
-  // never enters the manifest, so its bytes must.
-  const { audioUrlToPath, blobs: legacyAudioBlobs } = await collectLegacyAudioForExport(
-    exportScenes,
-    audioIdToPath,
-  );
-
-  // 7. Build manifest
-  const manifestStage: ManifestStage = {
-    name: latestName,
-    description: exportStage.description,
-    language: exportStage.languageDirective,
-    style: exportStage.style,
-    videoManifest: exportStage.videoManifest,
-    createdAt: exportStage.createdAt,
-    updatedAt: exportStage.updatedAt,
-  };
-
-  const manifestAgents: ManifestAgent[] = agentConfigs.map(manifestAgentFromConfig);
-
-  // Build agent ID → index mapping for multiAgent references
-  const agentIdToIndex = new Map<string, number>();
-  agentConfigs.forEach((a, i) => agentIdToIndex.set(a.id, i));
-
-  const aggregateReport: InlineReport = { inlined: [], failed: [] };
-  const sharedFetcher = createAssetFetcher({ fetchImpl: createProxiedFetch() });
-  const manifestScenes: ManifestScene[] = await Promise.all(
-    exportScenes.map(async (scene) => {
-      const { content, report } = await inlineSceneContent(scene.content, {
-        fetcher: sharedFetcher,
-      });
-      for (const u of report.inlined)
-        if (!aggregateReport.inlined.includes(u)) aggregateReport.inlined.push(u);
-      for (const f of report.failed)
-        if (!aggregateReport.failed.some((g) => g.url === f.url)) aggregateReport.failed.push(f);
-      return {
-        type: scene.type,
-        title: scene.title,
-        order: scene.order,
-        content,
-        actions: scene.actions
-          ? actionsToManifest(scene.actions, audioIdToPath, agentIdToIndex, audioUrlToPath)
-          : undefined,
-        whiteboards: scene.whiteboards,
-        ...(scene.multiAgent?.enabled
-          ? {
-              multiAgent: {
-                enabled: true,
-                agentIndices: (scene.multiAgent.agentIds ?? [])
-                  .map((id) => agentIdToIndex.get(id))
-                  .filter((i): i is number => i !== undefined),
-                directorPrompt: scene.multiAgent.directorPrompt,
-              },
-            }
-          : {}),
-      };
-    }),
-  );
-
-  // 8. Build mediaIndex
-  const mediaIndex: Record<string, MediaIndexEntry> = {};
-
-  for (const af of audioFiles) {
-    mediaIndex[af.zipPath] = {
-      type: 'audio',
-      format: af.record.format,
-      duration: af.record.duration,
-      voice: af.record.voice,
-    };
-  }
-  for (const legacy of legacyAudioBlobs) {
-    mediaIndex[legacy.zipPath] = { type: 'audio', format: legacy.format };
-  }
-  for (const mf of mediaFiles) {
-    mediaIndex[mf.zipPath] = {
-      type: 'generated',
-      mimeType: mf.record.mimeType,
-      size: mf.record.size,
-      prompt: mf.record.prompt,
-    };
-  }
-
-  // Check for missing audio references. A legacy audioUrl recovered by
-  // the pass above travels under its own zip path, so it is not missing.
-  for (const { missingPath } of collectMissingAudioRefs(
-    exportScenes,
-    audioIdToPath,
-    audioUrlToPath,
-  )) {
-    mediaIndex[missingPath] = { type: 'audio', missing: true };
-  }
-
-  // 9. Assemble manifest
-  const manifest: ClassroomManifest = {
-    formatVersion: CLASSROOM_ZIP_FORMAT_VERSION,
-    exportedAt: new Date().toISOString(),
-    appVersion: process.env.npm_package_version || '0.0.0',
-    stage: manifestStage,
-    agents: manifestAgents,
-    scenes: manifestScenes,
-    mediaIndex,
-  };
-
-  zip.file('manifest.json', JSON.stringify(manifest, null, 2));
-
-  // 10. Add media blobs to ZIP
-  for (const af of audioFiles) {
-    zip.file(af.zipPath, af.record.blob);
-  }
-  for (const legacy of legacyAudioBlobs) {
-    zip.file(legacy.zipPath, legacy.blob);
-  }
-  for (const mf of mediaFiles) {
-    zip.file(mf.zipPath, mf.record.blob);
-    if (mf.record.poster) {
-      zip.file(mf.zipPath.replace(/\.\w+$/, '.poster.jpg'), mf.record.poster);
+  // The export snapshot is ephemeral: it is never persisted, so every
+  // allocation the in-memory snapshot conversion made is unowned once the
+  // ZIP has captured its bytes -- or once the export fails anywhere
+  // downstream. The durable document was accessed and converted FIRST, so
+  // any reference the working state shares with it reused the durable
+  // allocation and never entered the ledger; rolling back the ledger entries
+  // the durable document does not reference leaves the durable document and
+  // its compatibility rows untouched.
+  const rollbackSnapshotOnlyAllocations = async (): Promise<void> => {
+    if (ledger.length === 0) return;
+    const { rollbackConvertedAllocations } =
+      await import('@/lib/media/convert-legacy-asset-refs');
+    const { collectStageAssetRefs } = await import('@/lib/media/collect-stage-asset-refs');
+    const referenced = freshDocument.document
+      ? collectStageAssetRefs(freshDocument.document, {
+          mediaRows: [],
+          audioRows: [],
+        }).document
+      : new Set<string>();
+    const orphans = ledger.filter((id) => !referenced.has(id));
+    if (orphans.length > 0) {
+      await rollbackConvertedAllocations(stage.id, orphans).catch(() => undefined);
     }
-  }
+  };
 
-  // 11. Generate
-  const zipBlob = await zip.generateAsync({ type: 'blob' });
+  let zipBlob: Blob;
+  const aggregateReport: InlineReport = { inlined: [], failed: [] };
+  try {
+    // 3. Collect the roster from the in-memory stage (single source of truth;
+    // the in-memory stage already carries any lazily migrated voice fields).
+    const agentConfigs = exportStage.generatedAgentConfigs ?? stage.generatedAgentConfigs ?? [];
+
+    // 4. Collect audio files from the converted scenes: their speech actions
+    // name the allocated ids, whose compatibility rows the conversion wrote.
+    const audioFiles = await collectAudioFiles(exportScenes);
+
+    // 5. Collect media files (generated images/videos)
+    const mediaFiles = await collectMediaFiles(stage.id);
+
+    // 6. Build audioId → zipPath mapping for manifest
+    const audioIdToPath = new Map<string, string>();
+    for (const af of audioFiles) {
+      audioIdToPath.set(af.record.id, af.zipPath);
+    }
+
+    // 6b. Fetch legacy audio URLs that no local row backs. An unconverted
+    // document can carry narration only as an audioUrl; the field itself
+    // never enters the manifest, so its bytes must.
+    const { audioUrlToPath, blobs: legacyAudioBlobs } = await collectLegacyAudioForExport(
+      exportScenes,
+      audioIdToPath,
+    );
+
+    // 7. Build manifest
+    const manifestStage: ManifestStage = {
+      name: latestName,
+      description: exportStage.description,
+      language: exportStage.languageDirective,
+      style: exportStage.style,
+      videoManifest: exportStage.videoManifest,
+      createdAt: exportStage.createdAt,
+      updatedAt: exportStage.updatedAt,
+    };
+
+    const manifestAgents: ManifestAgent[] = agentConfigs.map(manifestAgentFromConfig);
+
+    // Build agent ID → index mapping for multiAgent references
+    const agentIdToIndex = new Map<string, number>();
+    agentConfigs.forEach((a, i) => agentIdToIndex.set(a.id, i));
+
+    const sharedFetcher = createAssetFetcher({ fetchImpl: createProxiedFetch() });
+    const manifestScenes: ManifestScene[] = await Promise.all(
+      exportScenes.map(async (scene) => {
+        const { content, report } = await inlineSceneContent(scene.content, {
+          fetcher: sharedFetcher,
+        });
+        for (const u of report.inlined)
+          if (!aggregateReport.inlined.includes(u)) aggregateReport.inlined.push(u);
+        for (const f of report.failed)
+          if (!aggregateReport.failed.some((g) => g.url === f.url)) aggregateReport.failed.push(f);
+        return {
+          type: scene.type,
+          title: scene.title,
+          order: scene.order,
+          content,
+          actions: scene.actions
+            ? actionsToManifest(scene.actions, audioIdToPath, agentIdToIndex, audioUrlToPath)
+            : undefined,
+          whiteboards: scene.whiteboards,
+          ...(scene.multiAgent?.enabled
+            ? {
+                multiAgent: {
+                  enabled: true,
+                  agentIndices: (scene.multiAgent.agentIds ?? [])
+                    .map((id) => agentIdToIndex.get(id))
+                    .filter((i): i is number => i !== undefined),
+                  directorPrompt: scene.multiAgent.directorPrompt,
+                },
+              }
+            : {}),
+        };
+      }),
+    );
+
+    // 8. Build mediaIndex
+    const mediaIndex: Record<string, MediaIndexEntry> = {};
+
+    for (const af of audioFiles) {
+      mediaIndex[af.zipPath] = {
+        type: 'audio',
+        format: af.record.format,
+        duration: af.record.duration,
+        voice: af.record.voice,
+      };
+    }
+    for (const legacy of legacyAudioBlobs) {
+      mediaIndex[legacy.zipPath] = { type: 'audio', format: legacy.format };
+    }
+    for (const mf of mediaFiles) {
+      mediaIndex[mf.zipPath] = {
+        type: 'generated',
+        mimeType: mf.record.mimeType,
+        size: mf.record.size,
+        prompt: mf.record.prompt,
+      };
+    }
+
+    // Check for missing audio references. A legacy audioUrl recovered by
+    // the pass above travels under its own zip path, so it is not missing.
+    for (const { missingPath } of collectMissingAudioRefs(
+      exportScenes,
+      audioIdToPath,
+      audioUrlToPath,
+    )) {
+      mediaIndex[missingPath] = { type: 'audio', missing: true };
+    }
+
+    // 9. Assemble manifest
+    const manifest: ClassroomManifest = {
+      formatVersion: CLASSROOM_ZIP_FORMAT_VERSION,
+      exportedAt: new Date().toISOString(),
+      appVersion: process.env.npm_package_version || '0.0.0',
+      stage: manifestStage,
+      agents: manifestAgents,
+      scenes: manifestScenes,
+      mediaIndex,
+    };
+
+    zip.file('manifest.json', JSON.stringify(manifest, null, 2));
+
+    // 10. Add media blobs to ZIP
+    for (const af of audioFiles) {
+      zip.file(af.zipPath, af.record.blob);
+    }
+    for (const legacy of legacyAudioBlobs) {
+      zip.file(legacy.zipPath, legacy.blob);
+    }
+    for (const mf of mediaFiles) {
+      zip.file(mf.zipPath, mf.record.blob);
+      if (mf.record.poster) {
+        zip.file(mf.zipPath.replace(/\.\w+$/, '.poster.jpg'), mf.record.poster);
+      }
+    }
+
+    // 11. Generate
+    zipBlob = await zip.generateAsync({ type: 'blob' });
+  } catch (error) {
+    // A failure after conversion means the snapshot was never captured: its
+    // fresh allocations are unowned and must not strand.
+    await rollbackSnapshotOnlyAllocations();
+    throw error;
+  }
+  // The ZIP has captured every blob; the snapshot's fresh allocations are
+  // now unowned and released.
+  await rollbackSnapshotOnlyAllocations();
   const safeName = latestName.replace(/[\\/:*?"<>|]/g, '_') || 'classroom';
   return {
     zip: zipBlob,

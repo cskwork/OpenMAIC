@@ -37,10 +37,14 @@ export async function collectAudioFiles(scenes: Scene[]): Promise<CollectedAudio
     // The pool answers first: after a stable-id regeneration whose mirror write
     // failed, the row holds the superseded narration.
     const blob = await resolveAudioBlob(audioId);
-    if (record || blob) {
+    // A row with no usable bytes -- an evicted row (empty blob, no pool
+    // resolve) -- must not ship an empty audio file. It produces no zip
+    // path, so the URL rescue in collectLegacyAudioForExport sees the id as
+    // missing and fetches the live co-present URL instead.
+    if (blob && blob.size > 0) {
       const ext = record?.format || 'mp3';
       const resolved = (
-        record ? { ...record, ...(blob ? { blob } : {}) } : { id: audioId, blob: blob! }
+        record ? { ...record, blob } : { id: audioId, blob }
       ) as AudioFileRecord;
       collected.push({ zipPath: `audio/${audioId}.${ext}`, record: resolved });
     }
