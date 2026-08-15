@@ -114,8 +114,11 @@ export async function buildClassroomExportZip(
     // The fallback snapshot must not reference allocations the rollback
     // removes, and the accessed document (converted, or untouched if the
     // durable conversion also failed) is always consistent with the rows.
+    // The whole ledger is spent: clearing it keeps the later snapshot-only
+    // rollback a no-op instead of idempotently re-removing the same ids.
     const { rollbackConvertedAllocations } = await import('@/lib/media/convert-legacy-asset-refs');
     await rollbackConvertedAllocations(stage.id, ledger).catch(() => undefined);
+    ledger.length = 0;
     if (freshDocument.document) {
       exportStage = freshDocument.document.stage;
       exportScenes = freshDocument.document.scenes;
