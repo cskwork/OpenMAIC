@@ -955,6 +955,165 @@ describe('speech reference conversion', () => {
     expect(mirror?.originAudioUrl).toBe(url);
   });
 
+  test('a local-bytes pair does not reuse the other URL mirror and drops the URL only with this pair ingestion', async () => {
+    // Finding: the local-bytes branch matched recovery mirrors id-only, so a
+    // mirror written for (id, URL-A) was reused for (id, URL-B), and URL-B
+    // was dropped unfetched -- its narration replaced by URL-A's bytes. The
+    // lookup must match BOTH origin keys, and the co-present URL may only be
+    // dropped when the reused/fresh allocation came from THIS pair (a
+    // pair-matched mirror or this row's bytes).
+    const { audioRows, pool, deps } = makeHarness();
+    const otherUrl = 'https://server.example.com/audio/other-for-id.mp3';
+    const liveUrl = 'https://server.example.com/audio/live-for-id.mp3';
+    pool.set('ast_mirrored_other', {
+      blob: new Blob(['other-narration'], { type: 'audio/mpeg' }),
+      meta: { contentType: 'audio/mpeg' },
+    });
+    audioRows.set('ast_mirrored_other', {
+      id: 'ast_mirrored_other',
+      stageId: 'stage-1',
+      blob: new Blob(['other-narration'], { type: 'audio/mpeg' }),
+      format: 'mp3',
+      text: 'other',
+      createdAt: 1,
+      originAudioId: 'tts_shared_id',
+      originAudioUrl: otherUrl,
+    } as AudioFileRecord);
+    // The legacy row for the id carries its OWN bytes: this is the
+    // local-bytes branch, so the co-present URL collapses into the id's
+    // asset rather than being fetched.
+    audioRows.set('tts_shared_id', audioRecord({ id: 'tts_shared_id' }));
+
+    const doc = document({
+      scenes: [
+        slideScene([speech({ id: 'a1', audioId: 'tts_shared_id', audioUrl: liveUrl })]),
+      ],
+    });
+
+    const result = await convertDocumentAssetRefs(doc, deps);
+
+    const action = result.document.scenes[0].actions![0] as unknown as Record<string, unknown>;
+    // The other URL's mirror was NOT reused: the pair received a fresh
+    // allocation from its own row, so the URL was dropped only because THIS
+    // pair's bytes were ingested.
+    expect(action.audioId).not.toBe('ast_mirrored_other');
+    expect(action.audioId).toMatch(/^ast_test_/);
+    expect(action).not.toHaveProperty('audioUrl');
+    expect(await pool.get(action.audioId as string)?.blob.text()).toBe('audio-bytes');
+    expect(pool.size).toBe(2);
+    // The fresh mirror records BOTH origin keys, so a later retry of THIS
+    // pair reuses it while a different url on the same id still misses it.
+    expect(audioRows.get(action.audioId as string)?.originAudioId).toBe('tts_shared_id');
+    expect(audioRows.get(action.audioId as string)?.originAudioUrl).toBe(liveUrl);
+    // The mirror for the other URL is untouched.
+    expect(audioRows.get('ast_mirrored_other')?.originAudioUrl).toBe(otherUrl);
+  });
+
+  test('a local-bytes pair whose row has no usable bytes keeps the URL (no drop without ingestion)', async () => {
+    // The id-only reuse is gone, and a fresh allocation is impossible (the
+    // row is an evicted zero-byte row and its ossKey fetch yields nothing):
+    // the co-present URL must survive untouched rather than being dropped.
+    const { audioRows, pool, deps } = makeHarness();
+    const otherUrl = 'https://server.example.com/audio/other-for-id.mp3';
+    const liveUrl = 'https://server.example.com/audio/live-for-id.mp3';
+    pool.set('ast_mirrored_other', {
+      blob: new Blob(['other-narration'], { type: 'audio/mpeg' }),
+      meta: { contentType: 'audio/mpeg' },
+    });
+    audioRows.set('ast_mirrored_other', {
+      id: 'ast_mirrored_other',
+      stageId: 'stage-1',
+      blob: new Blob(['other-narration'], { type: 'audio/mpeg' }),
+      format: 'mp3',
+      text: 'other',
+      createdAt: 1,
+      originAudioId: 'tts_shared_id',
+      originAudioUrl: otherUrl,
+    } as AudioFileRecord);
+    // Evicted row: zero bytes, and its ossKey does not fetch usable bytes.
+    audioRows.set('tts_shared_id', audioRecord({ id: 'tts_shared_id', blob: new Blob([]) }));
+    const doc = document({
+      scenes: [
+        slideScene([speech({ id: 'a1', audioId: 'tts_shared_id', audioUrl: liveUrl })]),
+      ],
+    });
+
+    const result = await convertDocumentAssetRefs(doc, deps);
+
+    const action = result.document.scenes[0].actions![0] as unknown as Record<string, unknown>;
+    // Nothing was ingested for this pair, so both legacy handles survive.
+    expect(action.audioId).toBe('tts_shared_id');
+    expect(action.audioUrl).toBe(liveUrl);
+    expect(result.report.kept).toBe(1);
+  });
+
+  test('an exact local-bytes pair with a pair-matched mirror still dedups', async () => {
+    // A previous pass converted this exact (id, url) pair from the id's row
+    // and mirrored it with both origin keys; the retry reuses that
+    // allocation instead of allocating a twin.
+    const { audioRows, pool, deps } = makeHarness();
+    const url = 'https://server.example.com/audio/exact-local.mp3';
+    pool.set('ast_prior_pair', {
+      blob: new Blob(['prior-pair'], { type: 'audio/mpeg' }),
+      meta: { contentType: 'audio/mpeg' },
+    });
+    audioRows.set('ast_prior_pair', {
+      id: 'ast_prior_pair',
+      stageId: 'stage-1',
+      blob: new Blob(['prior-pair'], { type: 'audio/mpeg' }),
+      format: 'mp3',
+      text: 'prior',
+      createdAt: 1,
+      originAudioId: 'tts_s0_a1',
+      originAudioUrl: url,
+    } as AudioFileRecord);
+    audioRows.set('tts_s0_a1', audioRecord({ id: 'tts_s0_a1' }));
+
+    const doc = document({
+      scenes: [slideScene([speech({ id: 'a1', audioId: 'tts_s0_a1', audioUrl: url })])],
+    });
+
+    const result = await convertDocumentAssetRefs(doc, deps);
+
+    const action = result.document.scenes[0].actions![0] as unknown as Record<string, unknown>;
+    expect(action.audioId).toBe('ast_prior_pair');
+    expect(action).not.toHaveProperty('audioUrl');
+    expect(pool.size).toBe(1);
+  });
+
+  test('local-bytes actions sharing an id but different urls in one pass allocate independently', async () => {
+    // The in-pass cache must key on the (id, url) pair here too: two actions
+    // sharing an id with different urls are different logical references,
+    // and an id-keyed cache would stamp the first pair's allocation onto the
+    // second before its own URL could be considered.
+    const { audioRows, pool, deps } = makeHarness();
+    audioRows.set('tts_shared_id', audioRecord({ id: 'tts_shared_id' }));
+    const urlA = 'https://server.example.com/audio/a.mp3';
+    const urlB = 'https://server.example.com/audio/b.mp3';
+    const doc = document({
+      scenes: [
+        slideScene([
+          speech({ id: 'a1', audioId: 'tts_shared_id', audioUrl: urlA }),
+          speech({ id: 'a2', audioId: 'tts_shared_id', audioUrl: urlB }),
+        ]),
+      ],
+    });
+
+    const result = await convertDocumentAssetRefs(doc, deps);
+
+    const actions = result.document.scenes[0].actions as unknown as Array<Record<string, unknown>>;
+    expect(actions[0]?.audioId).toMatch(/^ast_test_/);
+    expect(actions[1]?.audioId).toMatch(/^ast_test_/);
+    expect(actions[0]?.audioId).not.toBe(actions[1]?.audioId);
+    expect(actions[0]).not.toHaveProperty('audioUrl');
+    expect(actions[1]).not.toHaveProperty('audioUrl');
+    // Both allocations came from the shared row's bytes.
+    expect(pool.size).toBe(2);
+    for (const id of [actions[0]?.audioId, actions[1]?.audioId]) {
+      expect(await pool.get(id as string)?.blob.text()).toBe('audio-bytes');
+    }
+  });
+
   test('a zero-byte URL fetch is not ingested and the pair stays retryable', async () => {
     const { pool, urlFetches, deps } = makeHarness();
     const url = 'https://server.example.com/audio/empty.mp3';

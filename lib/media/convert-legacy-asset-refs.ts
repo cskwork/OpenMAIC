@@ -658,17 +658,27 @@ export async function convertDocumentAssetRefs(
     // An evicted row (empty blob, live ossKey) still has its bytes on the CDN;
     // export already treats ossKey as the live source, and conversion does too.
     if (audioId && record && (recordHasBytes || record.ossKey)) {
-      // Several speech actions can share one derived id; they shared one
-      // audioFiles row, so they collapse into one allocated asset. Speech
-      // actions convert concurrently, and the cache is the same
-      // promise-keyed one the slide path uses.
+      // The id's own row is the byte source for this reference. Two actions
+      // sharing an id but carrying different urls are different logical
+      // references -- the exact rule the dangling branch already enforces --
+      // so the recovery mirror lookup and the in-pass cache both key on the
+      // (id, url) pair when a URL is present: a mirror written for (id,
+      // URL-A) must never be reused for (id, URL-B), whose narration it does
+      // not hold.
+      const pairKey = audioUrl === undefined ? audioId : `${audioId}\u0000${audioUrl}`;
       const pendingAudio =
-        allocationByRef.get(audioId) ??
+        allocationByRef.get(pairKey) ??
         (async (): Promise<string | null> => {
           // A previous partially committed conversion may already have
-          // mirrored this row; reuse its allocation instead of orphaning a
-          // twin entry on every retry.
-          const mirrored = await resolvedDeps.getMirroredAudioRecord(stageId, { audioId });
+          // mirrored this exact pair; reuse its allocation instead of
+          // orphaning a twin entry on every retry. When both origin keys
+          // are present the lookup must match BOTH: an id-only match could
+          // be a mirror written for a different url, and reusing it would
+          // stamp that pair's bytes onto this one.
+          const mirrored = await resolvedDeps.getMirroredAudioRecord(
+            stageId,
+            audioUrl === undefined ? { audioId } : { audioId, audioUrl },
+          );
           if (mirrored && (await existsOnce(mirrored.id))) {
             report.converted += 1;
             return mirrored.id;
@@ -688,12 +698,17 @@ export async function convertDocumentAssetRefs(
             // Dexie stays a deliberate compatibility double-write until Part
             // 3 converges exporters and import/export onto the pool; mirror
             // the row under the allocated id, keyed like the generation
-            // write path, with the legacy id retained for retry recovery.
+            // write path, with the legacy id -- and the url, when the action
+            // carries one -- retained for retry recovery. Recording both
+            // keys is what lets a later retry of THIS pair reuse the
+            // allocation while a different url on the same id still misses
+            // it.
             await resolvedDeps.putAudioRecord({
               ...record,
               id: allocated,
               stageId,
               originAudioId: audioId,
+              ...(audioUrl ? { originAudioUrl: audioUrl } : {}),
             });
           } catch (error) {
             // Do not strand an allocation nothing references.
@@ -703,16 +718,17 @@ export async function convertDocumentAssetRefs(
           report.converted += 1;
           return allocated;
         })();
-      allocationByRef.set(audioId, pendingAudio);
+      allocationByRef.set(pairKey, pendingAudio);
       const assetId = await pendingAudio;
       if (!assetId) {
         report.kept += 1;
         return action;
       }
       const next: LegacySpeechAction = { ...speech, audioId: assetId };
-      // The id now resolves (freshly allocated); the co-present URL is
-      // dropped unconditionally -- it is never needed once the allocated id
-      // is confirmed resolvable.
+      // The id now resolves, and the allocation IS this pair's: either the
+      // recovery mirror matched both origin keys, or the bytes came from
+      // this row (its blob or its ossKey). Only then is the co-present URL
+      // dropped -- never when a mirror for a different url was reused.
       delete next.audioUrl;
       changed = true;
       return next;
