@@ -47,7 +47,7 @@ export interface RunNativeChildOptions {
   timeoutMs: number;
   maxToolCallAttempts: number;
   maxProviderTransports: number;
-  onVisibleText?: (text: string) => Promise<string> | string;
+  onVisibleTextDelta?: (delta: string) => Promise<string> | string;
   onDispatchedAction?: () => void;
 }
 
@@ -182,15 +182,6 @@ function assistantText(messages: AgentMessage[]): string {
     .trim();
 }
 
-function assistantMessageText(message: Extract<AgentMessage, { role: 'assistant' }>): string {
-  return message.content
-    .filter(
-      (content): content is Extract<typeof content, { type: 'text' }> => content.type === 'text',
-    )
-    .map((content) => content.text)
-    .join('');
-}
-
 function isDispatchedActionResult(result: AgentToolResult<unknown>): boolean {
   return Boolean(
     result.details &&
@@ -293,14 +284,14 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Nativ
       return;
     }
 
-    if (event.type === 'message_end' && event.message.role === 'assistant' && opts.onVisibleText) {
-      // Buffer the complete assistant turn before caller-owned classification and
-      // delivery. Streaming partial deltas here can expose a JSON/tool fallback
-      // before enough content exists to recognize and suppress it.
-      const text = assistantMessageText(event.message);
-      if (!text) return;
+    if (
+      event.type === 'message_update' &&
+      event.assistantMessageEvent.type === 'text_delta' &&
+      opts.onVisibleTextDelta
+    ) {
+      const delta = event.assistantMessageEvent.delta;
       const forwarded = await executeWithAbort(
-        () => Promise.resolve(opts.onVisibleText!(text)),
+        () => Promise.resolve(opts.onVisibleTextDelta!(delta)),
         signal,
       );
       visibleOutput += forwarded;
@@ -342,7 +333,7 @@ export async function runNativeChild(opts: RunNativeChildOptions): Promise<Nativ
   // When the caller owns visible delivery, its returned deltas are the source of
   // truth. Falling back to the raw assistant message in that mode could report
   // text that the caller deliberately filtered and never dispatched.
-  if (!visibleOutput && !opts.onVisibleText) visibleOutput = assistantText(messages);
+  if (!visibleOutput && !opts.onVisibleTextDelta) visibleOutput = assistantText(messages);
 
   const base = {
     visibleOutput,

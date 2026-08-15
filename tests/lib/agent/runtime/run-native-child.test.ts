@@ -163,7 +163,7 @@ describe('runNativeChild', () => {
       streamFn: scriptedStream([call('call-1'), text('Visible completion.')], contexts, true),
       tools: [demoTool(execute)],
       onDispatchedAction,
-      onVisibleText: (text) => text,
+      onVisibleTextDelta: (delta) => delta,
     });
 
     expect(result).toMatchObject({
@@ -234,7 +234,7 @@ describe('runNativeChild', () => {
     await expect(
       run({
         streamFn: deltaStream('###'),
-        onVisibleText: () => '',
+        onVisibleTextDelta: () => '',
       }),
     ).resolves.toMatchObject({
       status: 'failed',
@@ -502,10 +502,10 @@ describe('runNativeChild', () => {
     expect(result).toMatchObject({ status: 'exhausted', dispatchedActionCount: 0 });
   });
 
-  it('bounds a never-resolving visible-text callback with the same deadline', async () => {
+  it('bounds a never-resolving visible-text delta callback with the same deadline', async () => {
     const result = await run({
       streamFn: deltaStream('pending delivery'),
-      onVisibleText: () => new Promise(() => {}),
+      onVisibleTextDelta: () => new Promise(() => {}),
       timeoutMs: 10,
     });
 

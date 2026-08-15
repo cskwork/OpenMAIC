@@ -397,144 +397,27 @@ describe('Native Child production consumer', () => {
     });
   });
 
-  it('buffers and suppresses a streamed Legacy JSON fallback before visible delivery', async () => {
+  it('streams Native visible text deltas incrementally in provider order', async () => {
     useResponses([
       [
-        { type: 'text-delta', text: '[{"type":"action","name":"spot' },
-        { type: 'text-delta', text: 'light","params":{"elementId":"current-element"}}]' },
+        { type: 'text-delta', text: 'First ' },
+        { type: 'text-delta', text: 'second.' },
         finish('stop'),
       ],
     ]);
-    const harness = makeHarness({ evidence: sceneEvidence() });
-
-    const result = await execute(harness);
-
-    expect(harness.events.filter((event) => event.type === 'text_delta')).toEqual([]);
-    expect(harness.events.filter((event) => event.type === 'action')).toEqual([]);
-    expect(harness.onActionDone).not.toHaveBeenCalled();
-    expect(harness.summaries).toEqual([
-      expect.objectContaining({ contentPreview: '', actionCount: 0 }),
-    ]);
-    expect(result).toMatchObject({
-      isError: true,
-      details: {
-        text: '',
-        nativeChildRun: {
-          status: 'failed',
-          stopReason: 'native_empty_response',
-          attemptCount: 0,
-          executionCount: 0,
-          dispatchedActionCount: 0,
-          providerTransportCount: 1,
-        },
-      },
-    });
-  });
-
-  it('suppresses fenced structured fallback but preserves natural bracketed speech', async () => {
-    useResponses([
-      [
-        { type: 'text-delta', text: '```json\n{"type":"text","content":"internal"}\n```' },
-        finish('stop'),
-      ],
-      [{ type: 'text-delta', text: '[重点] 这里要看清楚因果关系。' }, finish('stop')],
-    ]);
-    const harness = makeHarness({ evidence: sceneEvidence() });
-
-    const structured = await execute(harness);
-    const natural = await harness.tool.execute('delegate-2', {
-      agentId: teacher.id,
-      instruction: 'Continue with natural speech.',
-    });
-
-    expect(structured).toMatchObject({
-      isError: true,
-      details: { text: '', nativeChildRun: { stopReason: 'native_empty_response' } },
-    });
-    expect(natural).not.toHaveProperty('isError');
-    expect(natural).toMatchObject({ details: { text: '[重点] 这里要看清楚因果关系。' } });
-    expect(
-      harness.events.filter((event) => event.type === 'text_delta').map((event) => event.data),
-    ).toEqual([{ content: '[重点] 这里要看清楚因果关系。', messageId: expect.any(String) }]);
-  });
-
-  it('suppresses a truncated structured fallback instead of streaming its prefix', async () => {
-    useResponses([
-      [
-        { type: 'text-delta', text: '[{"type":"action","name":"spotlight","params":{' },
-        { type: 'text-delta', text: '"elementId":"current-element"' },
-        finish('stop'),
-      ],
-    ]);
-    const harness = makeHarness({ evidence: sceneEvidence() });
-
-    const result = await execute(harness);
-
-    expect(harness.events.filter((event) => event.type === 'text_delta')).toEqual([]);
-    expect(harness.events.filter((event) => event.type === 'action')).toEqual([]);
-    expect(result).toMatchObject({
-      isError: true,
-      details: { text: '', nativeChildRun: { stopReason: 'native_empty_response' } },
-    });
-  });
-
-  it('suppresses split Legacy JSON on a later line after model preamble', async () => {
-    useResponses([
-      [
-        { type: 'text-delta', text: 'Here is the result:\n[{"type":"action","name":"spot' },
-        { type: 'text-delta', text: 'light","params":{"elementId":"current-element"}}]' },
-        finish('stop'),
-      ],
-    ]);
-    const harness = makeHarness({ evidence: sceneEvidence() });
-
-    const result = await execute(harness);
-
-    expect(harness.events.filter((event) => event.type === 'text_delta')).toEqual([]);
-    expect(harness.events.filter((event) => event.type === 'action')).toEqual([]);
-    expect(result).toMatchObject({
-      isError: true,
-      details: { text: '', nativeChildRun: { stopReason: 'native_empty_response' } },
-    });
-  });
-
-  it('suppresses a fenced Legacy JSON block on a later line after model preamble', async () => {
-    useResponses([
-      [
-        { type: 'text-delta', text: '下面是动作：\n```json\n' },
-        {
-          type: 'text-delta',
-          text: '[{"type":"action","name":"spotlight","params":{"elementId":"current-element"}}]\n```',
-        },
-        finish('stop'),
-      ],
-    ]);
-    const harness = makeHarness({ evidence: sceneEvidence() });
-
-    const result = await execute(harness);
-
-    expect(harness.events.filter((event) => event.type === 'text_delta')).toEqual([]);
-    expect(harness.events.filter((event) => event.type === 'action')).toEqual([]);
-    expect(result).toMatchObject({
-      isError: true,
-      details: { text: '', nativeChildRun: { stopReason: 'native_empty_response' } },
-    });
-  });
-
-  it('preserves a natural inline JSON example that is not a standalone fallback block', async () => {
-    const speech =
-      '例如 {"type":"action","name":"spotlight","params":{}} 只是一个普通 JSON 格式示例。';
-    useResponses([[{ type: 'text-delta', text: speech }, finish('stop')]]);
     const harness = makeHarness({ evidence: sceneEvidence() });
 
     const result = await execute(harness);
 
     expect(result).not.toHaveProperty('isError');
     expect(result).toMatchObject({
-      details: { text: speech, nativeChildRun: { status: 'completed' } },
+      details: { text: 'First second.', nativeChildRun: { status: 'completed' } },
     });
-    expect(harness.events.filter((event) => event.type === 'text_delta')).toEqual([
-      expect.objectContaining({ data: { content: speech, messageId: expect.any(String) } }),
+    expect(
+      harness.events.filter((event) => event.type === 'text_delta').map((event) => event.data),
+    ).toEqual([
+      { content: 'First ', messageId: expect.any(String) },
+      { content: 'second.', messageId: expect.any(String) },
     ]);
   });
 

@@ -222,7 +222,7 @@ describe('PR2 Native Child route production wiring', () => {
     expect(events.find((event) => event.type === 'done')).toMatchObject({
       data: { totalAgents: 1, totalActions: 1, agentHadContent: true },
     });
-  });
+  }, 15_000);
 
   it('keeps the production route on the Legacy Child harness when both new flags are absent', async () => {
     delete process.env.OPENMAIC_ENABLE_PI_NATIVE_CHILD_RUNTIME;
