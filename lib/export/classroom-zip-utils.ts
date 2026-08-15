@@ -58,7 +58,13 @@ export async function collectAudioFiles(scenes: Scene[]): Promise<CollectedAudio
 async function pooledBytesForRef(ref: string): Promise<Blob | null> {
   if (isConcreteMediaAddress(ref)) return null;
   try {
-    return await withAssetUrl(ref, async (url) => (url ? fetch(url).then((r) => r.blob()) : null));
+    return await withAssetUrl(ref, async (url) => {
+      if (!url) return null;
+      const blob = await fetch(url).then((response) => response.blob());
+      // Zero-byte pool answers are not usable bytes: the compatibility row
+      // stays the fallback rather than shipping an empty media file.
+      return blob.size > 0 ? blob : null;
+    });
   } catch {
     // The compatibility row remains the fallback when pool access fails.
     return null;
@@ -137,7 +143,11 @@ export async function collectLegacyAudioForExport(
     try {
       const response = await fetchMediaUrl(url, 15_000);
       if (!response.ok) return { url, blob: null };
-      return { url, blob: await response.blob() };
+      const blob = await response.blob();
+      // Zero-byte responses are not narration: skip the entry (the same
+      // outcome the converter gives an unusable URL) rather than archiving
+      // an empty file.
+      return { url, blob: blob.size > 0 ? blob : null };
     } catch {
       return { url, blob: null };
     }

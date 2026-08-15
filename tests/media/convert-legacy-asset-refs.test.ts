@@ -58,8 +58,8 @@ function makeHarness() {
       [...audioRows.values()].find(
         (row) =>
           row.stageId === stageId &&
-          ((keys.audioId !== undefined && row.originAudioId === keys.audioId) ||
-            (keys.audioUrl !== undefined && row.originAudioUrl === keys.audioUrl)),
+          (keys.audioId === undefined || row.originAudioId === keys.audioId) &&
+          (keys.audioUrl === undefined || row.originAudioUrl === keys.audioUrl),
       ),
     removeAsset: async (ref) => {
       pool.delete(ref);
@@ -450,6 +450,24 @@ describe('slide placeholder conversion', () => {
     expect(result.report.kept).toBe(1);
   });
 
+  test('a zero-byte media ossKey recovery fetch is not ingested', async () => {
+    const { mediaRows, pool, urlFetches, deps } = makeHarness();
+    mediaRows.set(
+      'stage-1:gen_img_1',
+      mediaRecord({ blob: new Blob([]), ossKey: 'https://cdn.example.com/gen_img_1.png' }),
+    );
+    urlFetches.set('https://cdn.example.com/gen_img_1.png', { kind: 'ok', blob: new Blob([]) });
+    const doc = document({
+      scenes: [slideScene([], [{ id: 'el1', type: 'image', src: 'gen_img_1' }])],
+    });
+
+    const result = await convertDocumentAssetRefs(doc, deps);
+
+    expect(result.changed).toBe(false);
+    expect(pool.size).toBe(0);
+    expect(result.report.kept).toBe(1);
+  });
+
   test('concrete URLs and already-allocated ids are never touched', async () => {
     const { pool, deps } = makeHarness();
     const doc = document({
@@ -466,6 +484,156 @@ describe('slide placeholder conversion', () => {
     const result = await convertDocumentAssetRefs(doc, deps);
     expect(result.changed).toBe(false);
     expect(result.document).toBe(doc);
+    expect(pool.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Classroom media transport URL conversion (three-state outcome)
+// ---------------------------------------------------------------------------
+
+describe('classroom media URL conversion', () => {
+  const mediaUrl = 'https://server.example.com/api/classroom-media/c1/slides/s1.png';
+
+  test('a live classroom media URL is ingested and the slot is rewritten', async () => {
+    const { pool, urlFetches, deps } = makeHarness();
+    urlFetches.set(mediaUrl, {
+      kind: 'ok',
+      blob: new Blob(['slide-bytes'], { type: 'image/png' }),
+    });
+    const doc = document({
+      scenes: [slideScene([], [{ id: 'el1', type: 'image', src: mediaUrl }])],
+    });
+
+    const result = await convertDocumentAssetRefs(doc, deps);
+
+    const canvas = (
+      result.document.scenes[0].content as { canvas: { elements: { src: string }[] } }
+    ).canvas;
+    expect(canvas.elements[0].src).toMatch(/^ast_test_/);
+    expect(pool.size).toBe(1);
+    const [assetId] = [...pool.keys()];
+    expect(await pool.get(assetId)?.blob.text()).toBe('slide-bytes');
+    expect(result.report.converted).toBe(1);
+    expect(containsClassroomMediaUrls(result.document)).toBe(false);
+  });
+
+  test('a dead classroom media URL is removed from the slide, never allocated', async () => {
+    const { pool, urlFetches, deps } = makeHarness();
+    urlFetches.set(mediaUrl, { kind: 'dead' });
+    const doc = document({
+      scenes: [slideScene([], [{ id: 'el1', type: 'image', src: mediaUrl }])],
+    });
+
+    const result = await convertDocumentAssetRefs(doc, deps);
+
+    const canvas = (
+      result.document.scenes[0].content as { canvas: { elements: { src: string }[] } }
+    ).canvas;
+    // The dead reference is emptied, and the emptied slot must not trip the
+    // classroom-transport completeness guard on the converted document.
+    expect(canvas.elements[0].src).toBe('');
+    expect(pool.size).toBe(0);
+    expect(result.report.emptied).toBe(1);
+    expect(containsClassroomMediaUrls(result.document)).toBe(false);
+  });
+
+  test('a dead classroom media URL is removed from a whiteboard slide', async () => {
+    const { pool, urlFetches, deps } = makeHarness();
+    urlFetches.set(mediaUrl, { kind: 'dead' });
+    const doc = document({
+      stage: stage({
+        whiteboard: [
+          { id: 'wb', elements: [{ id: 'el', type: 'image', src: mediaUrl }] },
+        ] as Stage['whiteboard'],
+      }),
+    });
+
+    const result = await convertDocumentAssetRefs(doc, deps);
+
+    expect(result.document.stage.whiteboard?.[0].elements[0]).toMatchObject({ src: '' });
+    expect(pool.size).toBe(0);
+    expect(result.report.emptied).toBe(1);
+  });
+
+  test('a dead video-manifest key is dropped, a transient one is kept', async () => {
+    const { pool, urlFetches, deps } = makeHarness();
+    const deadKey = 'https://server.example.com/api/classroom-media/c1/videos/v.mp4';
+    const flakyKey = 'https://server.example.com/api/classroom-media/c1/videos/flaky.mp4';
+    urlFetches.set(deadKey, { kind: 'dead' });
+    // No fixture for flakyKey: the harness answers `unavailable`.
+    const doc = document({
+      stage: stage({
+        videoManifest: {
+          [deadKey]: { prompt: 'gone' },
+          [flakyKey]: { prompt: 'later' },
+        } as unknown as Stage['videoManifest'],
+      }),
+    });
+
+    const result = await convertDocumentAssetRefs(doc, deps);
+
+    const manifest = result.document.stage.videoManifest as Record<string, { prompt: string }>;
+    expect(Object.keys(manifest)).toEqual([flakyKey]);
+    expect(pool.size).toBe(0);
+    expect(result.report.emptied).toBe(1);
+    expect(result.report.kept).toBe(1);
+    expect(containsClassroomMediaUrls(result.document)).toBe(true);
+  });
+
+  test('a transiently unavailable classroom media URL keeps the legacy slot untouched', async () => {
+    const { pool, deps } = makeHarness();
+    const doc = document({
+      scenes: [slideScene([], [{ id: 'el1', type: 'image', src: mediaUrl }])],
+    });
+
+    const result = await convertDocumentAssetRefs(doc, deps);
+
+    expect(result.changed).toBe(false);
+    const canvas = (
+      result.document.scenes[0].content as { canvas: { elements: { src: string }[] } }
+    ).canvas;
+    expect(canvas.elements[0].src).toBe(mediaUrl);
+    expect(pool.size).toBe(0);
+    expect(result.report.kept).toBe(1);
+  });
+
+  test('a zero-byte classroom media URL fetch is not ingested', async () => {
+    const { pool, urlFetches, deps } = makeHarness();
+    urlFetches.set(mediaUrl, { kind: 'ok', blob: new Blob([]) });
+    const doc = document({
+      scenes: [slideScene([], [{ id: 'el1', type: 'image', src: mediaUrl }])],
+    });
+
+    const result = await convertDocumentAssetRefs(doc, deps);
+
+    expect(result.changed).toBe(false);
+    const canvas = (
+      result.document.scenes[0].content as { canvas: { elements: { src: string }[] } }
+    ).canvas;
+    expect(canvas.elements[0].src).toBe(mediaUrl);
+    expect(pool.size).toBe(0);
+    expect(result.report.kept).toBe(1);
+  });
+
+  test('dead outcomes are shared across every slot naming the URL', async () => {
+    const { pool, urlFetches, deps } = makeHarness();
+    urlFetches.set(mediaUrl, { kind: 'dead' });
+    const fetchLegacyUrl = vi.fn(async (url: string) => urlFetches.get(url) ?? { kind: 'unavailable' });
+    const doc = document({
+      stage: stage({
+        whiteboard: [
+          { id: 'wb', elements: [{ id: 'el', type: 'image', src: mediaUrl }] },
+        ] as Stage['whiteboard'],
+      }),
+      scenes: [slideScene([], [{ id: 'el1', type: 'image', src: mediaUrl }])],
+    });
+
+    const result = await convertDocumentAssetRefs(doc, { ...deps, fetchLegacyUrl });
+
+    // One probe for the shared URL; every naming slot is emptied.
+    expect(fetchLegacyUrl).toHaveBeenCalledTimes(1);
+    expect(result.report.emptied).toBe(2);
     expect(pool.size).toBe(0);
   });
 });
@@ -691,6 +859,129 @@ describe('speech reference conversion', () => {
     const [assetId] = [...pool.keys()];
     expect(await pool.get(assetId)?.blob.text()).toBe('live-bytes');
     expect(result.report.emptied).toBe(1);
+  });
+
+  test('a mirrored row matching only the id of a supplied pair is not reused', async () => {
+    // Durable recovery must match BOTH origin keys when both are supplied:
+    // a row mirrored from a DIFFERENT url names the same id but not the same
+    // narration, and reusing it would stamp the wrong bytes onto this pair.
+    const { audioRows, pool, urlFetches, deps } = makeHarness();
+    const otherUrl = 'https://server.example.com/audio/other-for-id.mp3';
+    const liveUrl = 'https://server.example.com/audio/live-for-id.mp3';
+    pool.set('ast_mirrored_other', {
+      blob: new Blob(['other-narration'], { type: 'audio/mpeg' }),
+      meta: { contentType: 'audio/mpeg' },
+    });
+    audioRows.set('ast_mirrored_other', {
+      id: 'ast_mirrored_other',
+      stageId: 'stage-1',
+      blob: new Blob(['other-narration'], { type: 'audio/mpeg' }),
+      format: 'mp3',
+      text: 'other',
+      createdAt: 1,
+      originAudioId: 'tts_shared_id',
+      originAudioUrl: otherUrl,
+    } as AudioFileRecord);
+    urlFetches.set(liveUrl, { kind: 'ok', blob: new Blob(['live-narration'], { type: 'audio/mpeg' }) });
+    const doc = document({
+      scenes: [
+        slideScene([speech({ id: 'a1', audioId: 'tts_shared_id', audioUrl: liveUrl })]),
+      ],
+    });
+
+    const result = await convertDocumentAssetRefs(doc, deps);
+
+    const action = result.document.scenes[0].actions![0] as unknown as Record<string, unknown>;
+    // The half-matching mirror was NOT reused: the pair fetched its own URL
+    // and received a fresh allocation.
+    expect(action.audioId).not.toBe('ast_mirrored_other');
+    expect(action.audioId).toMatch(/^ast_test_/);
+    expect(await pool.get(action.audioId as string)?.blob.text()).toBe('live-narration');
+    expect(pool.size).toBe(2);
+  });
+
+  test('a mirrored row matching exactly the supplied pair is reused (crash recovery)', async () => {
+    // A previous partially committed conversion fetched this exact pair and
+    // mirrored it; the retry reuses that allocation instead of fetching and
+    // allocating again.
+    const { audioRows, pool, urlFetches, deps } = makeHarness();
+    const url = 'https://server.example.com/audio/exact-pair.mp3';
+    pool.set('ast_prior_pair', {
+      blob: new Blob(['prior-pair'], { type: 'audio/mpeg' }),
+      meta: { contentType: 'audio/mpeg' },
+    });
+    audioRows.set('ast_prior_pair', {
+      id: 'ast_prior_pair',
+      stageId: 'stage-1',
+      blob: new Blob(['prior-pair'], { type: 'audio/mpeg' }),
+      format: 'mp3',
+      text: 'prior',
+      createdAt: 1,
+      originAudioId: 'tts_s0_a1',
+      originAudioUrl: url,
+    } as AudioFileRecord);
+    const fetchLegacyUrl = vi.fn(async (u: string) => urlFetches.get(u) ?? { kind: 'unavailable' });
+    const doc = document({
+      scenes: [slideScene([speech({ id: 'a1', audioId: 'tts_s0_a1', audioUrl: url })])],
+    });
+
+    const result = await convertDocumentAssetRefs(doc, { ...deps, fetchLegacyUrl });
+
+    const action = result.document.scenes[0].actions![0] as unknown as Record<string, unknown>;
+    expect(action.audioId).toBe('ast_prior_pair');
+    expect(action).not.toHaveProperty('audioUrl');
+    expect(fetchLegacyUrl).not.toHaveBeenCalled();
+    expect(pool.size).toBe(1);
+  });
+
+  test('an exact (id, url) pair with no durable row is fetched and mirrored with both keys', async () => {
+    const { audioRows, pool, urlFetches, deps } = makeHarness();
+    const url = 'https://server.example.com/audio/both-keys.mp3';
+    urlFetches.set(url, { kind: 'ok', blob: new Blob(['both-keys'], { type: 'audio/mpeg' }) });
+    const doc = document({
+      scenes: [slideScene([speech({ id: 'a1', audioId: 'tts_s0_a1', audioUrl: url })])],
+    });
+
+    const result = await convertDocumentAssetRefs(doc, deps);
+
+    const action = result.document.scenes[0].actions![0] as unknown as Record<string, unknown>;
+    const mirror = audioRows.get(action.audioId as string);
+    expect(mirror?.originAudioId).toBe('tts_s0_a1');
+    expect(mirror?.originAudioUrl).toBe(url);
+  });
+
+  test('a zero-byte URL fetch is not ingested and the pair stays retryable', async () => {
+    const { pool, urlFetches, deps } = makeHarness();
+    const url = 'https://server.example.com/audio/empty.mp3';
+    urlFetches.set(url, { kind: 'ok', blob: new Blob([]) });
+    const doc = document({
+      scenes: [slideScene([speech({ audioId: 'tts_s0_a1', audioUrl: url })])],
+    });
+
+    const result = await convertDocumentAssetRefs(doc, deps);
+
+    expect(result.changed).toBe(false);
+    const action = result.document.scenes[0].actions![0] as unknown as Record<string, unknown>;
+    expect(action.audioId).toBe('tts_s0_a1');
+    expect(action.audioUrl).toBe(url);
+    expect(pool.size).toBe(0);
+    expect(result.report.kept).toBe(1);
+  });
+
+  test('a zero-byte audio ossKey recovery fetch is not ingested', async () => {
+    const { audioRows, pool, urlFetches, deps } = makeHarness();
+    audioRows.set(
+      'tts_s0_a1',
+      audioRecord({ id: 'tts_s0_a1', blob: new Blob([]), ossKey: 'https://cdn.example.com/a.mp3' }),
+    );
+    urlFetches.set('https://cdn.example.com/a.mp3', { kind: 'ok', blob: new Blob([]) });
+    const doc = document({ scenes: [slideScene([speech({ audioId: 'tts_s0_a1' })])] });
+
+    const result = await convertDocumentAssetRefs(doc, deps);
+
+    expect(result.changed).toBe(false);
+    expect(pool.size).toBe(0);
+    expect(result.report.kept).toBe(1);
   });
 
   test('idempotency: re-running on a converted document is a no-op', async () => {

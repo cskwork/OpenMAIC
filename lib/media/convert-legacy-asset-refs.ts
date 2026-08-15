@@ -99,8 +99,11 @@ export interface LegacyAssetConversionDeps {
    * The compatibility row a previous (possibly partial) conversion mirrored
    * for this legacy pair, if any. This is what makes a retry idempotent:
    * without it, a conversion that failed after allocating would allocate a
-   * fresh twin on every retry. Both origin keys are tried because a URL-only
-   * action has no legacy id to key on.
+   * fresh twin on every retry. When BOTH origin keys are supplied the row
+   * must match BOTH: actions sharing an id across different urls are distinct
+   * logical references, and reusing the first pair's allocation for the
+   * second would stamp one narration's bytes onto the other. Single-key
+   * lookups (id-only, URL-only) still match on the one supplied key.
    */
   getMirroredAudioRecord(
     stageId: string,
@@ -307,12 +310,12 @@ async function defaultDeps(): Promise<LegacyAssetConversionDeps> {
     putAudioRecord: (record) => db.audioFiles.put(record).then(() => undefined),
     getMirroredAudioRecord: (stageId, keys) =>
       db.audioFiles
-        .filter(
-          (row) =>
-            row.stageId === stageId &&
-            ((keys.audioId !== undefined && row.originAudioId === keys.audioId) ||
-              (keys.audioUrl !== undefined && row.originAudioUrl === keys.audioUrl)),
-        )
+        .filter((row) => {
+          if (row.stageId !== stageId) return false;
+          const idMatches = keys.audioId === undefined || row.originAudioId === keys.audioId;
+          const urlMatches = keys.audioUrl === undefined || row.originAudioUrl === keys.audioUrl;
+          return idMatches && urlMatches;
+        })
         .first(),
     removeAsset: (ref) => removeAsset(ref),
     fetchLegacyUrl: async (url) => {
@@ -431,12 +434,20 @@ export async function convertDocumentAssetRefs(
   // slides convert concurrently, and caching only completed allocations would
   // let two slides naming one ref each allocate their own asset.
   const allocationByRef = new Map<string, Promise<string | null>>();
-  /** Outcome of the URL-backed speech path, cached per dangling (id, url) pair. */
+  /**
+   * Outcome of reaching for the bytes behind a legacy URL-backed reference,
+   * shared by the speech pairs and the classroom media transport URLs.
+   * `dead` is a definitive refusal (the fetch answered 404/410); `unavailable`
+   * is anything transient, which keeps the reference for a later open.
+   */
   type UrlOutcome =
     | { readonly kind: 'allocated'; readonly assetId: string }
     | { readonly kind: 'dead' }
     | { readonly kind: 'unavailable' };
+  /** Outcome of the URL-backed speech path, cached per dangling (id, url) pair. */
   const urlOutcomeByRef = new Map<string, Promise<UrlOutcome>>();
+  /** Outcome of the classroom-media URL path, cached per URL. */
+  const mediaUrlOutcomeByRef = new Map<string, Promise<UrlOutcome>>();
   const report: LegacyAssetConversionReport = { converted: 0, emptied: 0, kept: 0 };
   let changed = false;
 
@@ -456,7 +467,9 @@ export async function convertDocumentAssetRefs(
           : new Blob([record.blob], { type: record.mimeType });
       } else if (record && record.ossKey && withinUrlProbeBudget()) {
         const fetched = await resolvedDeps.fetchLegacyUrl(record.ossKey);
-        if (fetched.kind === 'ok') {
+        // Zero-byte responses are not usable bytes: the row stays retryable
+        // instead of allocating an empty asset.
+        if (fetched.kind === 'ok' && fetched.blob.size > 0) {
           source = fetched.blob.type
             ? fetched.blob
             : new Blob([fetched.blob], { type: record.mimeType });
@@ -504,17 +517,24 @@ export async function convertDocumentAssetRefs(
     return pending;
   };
 
-  /** Allocate (once) for a server classroom media transport URL. */
-  const allocateUrlMediaRef = (url: string): Promise<string | null> => {
-    const inFlight = allocationByRef.get(url);
+  /**
+   * Allocate (once) for a server classroom media transport URL. The outcome
+   * is three-state: allocated bytes rewrite the slot, a definitive 404/410
+   * removes the dead reference (a dead URL is never carried into the new
+   * format), and a transient failure keeps it for a later open.
+   */
+  const allocateUrlMediaRef = (url: string): Promise<UrlOutcome> => {
+    const inFlight = mediaUrlOutcomeByRef.get(url);
     if (inFlight) return inFlight;
-    const pending = (async (): Promise<string | null> => {
-      if (!withinUrlProbeBudget()) return null;
+    const pending = (async (): Promise<UrlOutcome> => {
+      if (!withinUrlProbeBudget()) return { kind: 'unavailable' };
       const fetched = await resolvedDeps.fetchLegacyUrl(url);
       if (fetched.kind !== 'ok') {
-        report.kept += 1;
-        return null;
+        return fetched.kind === 'dead' ? { kind: 'dead' } : { kind: 'unavailable' };
       }
+      // Zero-byte responses are not usable bytes: keep the reference and
+      // retry on a later open rather than allocating an empty asset.
+      if (fetched.blob.size === 0) return { kind: 'unavailable' };
       const isVideo = /\.(mp4|webm|mov)(\?|#|$)/i.test(url);
       const assetId = await resolvedDeps.putAsset(fetched.blob, {
         contentType: fetched.blob.type || undefined,
@@ -543,9 +563,9 @@ export async function convertDocumentAssetRefs(
         throw error;
       }
       report.converted += 1;
-      return assetId;
+      return { kind: 'allocated', assetId };
     })();
-    allocationByRef.set(url, pending);
+    mediaUrlOutcomeByRef.set(url, pending);
     return pending;
   };
 
@@ -553,6 +573,7 @@ export async function convertDocumentAssetRefs(
     assertContinuing();
     const slots = [...slideMediaReferenceSlots(slide)];
     const rewrites: Array<{ index: number; assetId: string }> = [];
+    const removals: number[] = [];
     for (let index = 0; index < slots.length; index += 1) {
       const ref = slots[index].read();
       if (isGeneratedMediaPlaceholder(ref)) {
@@ -560,17 +581,28 @@ export async function convertDocumentAssetRefs(
         if (assetId) rewrites.push({ index, assetId });
       } else if (isClassroomMediaUrl(ref)) {
         // Server classrooms ship media as transport URLs; ingest their bytes
-        // rather than persisting a deployment-specific address.
-        const assetId = await allocateUrlMediaRef(ref);
-        if (assetId) rewrites.push({ index, assetId });
+        // rather than persisting a deployment-specific address. A confirmed
+        // dead URL is emptied (removed), never preserved or allocated.
+        const outcome = await allocateUrlMediaRef(ref);
+        if (outcome.kind === 'allocated') {
+          rewrites.push({ index, assetId: outcome.assetId });
+        } else if (outcome.kind === 'dead') {
+          removals.push(index);
+          report.emptied += 1;
+        } else {
+          report.kept += 1;
+        }
       }
     }
-    if (rewrites.length === 0) return slide;
+    if (rewrites.length === 0 && removals.length === 0) return slide;
     // Rewrite on a clone so the caller's document is never mutated. Slot
     // iteration order is deterministic, so the clone's slots align by index.
     const clone = structuredClone(slide);
     const cloneSlots = [...slideMediaReferenceSlots(clone)];
     for (const { index, assetId } of rewrites) cloneSlots[index].write(assetId);
+    // Emptied slots remove the dead reference entirely: an empty src cannot
+    // trip the classroom-transport completeness guard.
+    for (const index of removals) cloneSlots[index].write(undefined);
     changed = true;
     return clone;
   };
@@ -644,7 +676,8 @@ export async function convertDocumentAssetRefs(
           let source: Blob | undefined = recordHasBytes ? record.blob : undefined;
           if (!source && record.ossKey && withinUrlProbeBudget()) {
             const fetched = await resolvedDeps.fetchLegacyUrl(record.ossKey);
-            if (fetched.kind === 'ok') source = fetched.blob;
+            // Zero-byte responses are not usable bytes: keep the row retryable.
+            if (fetched.kind === 'ok' && fetched.blob.size > 0) source = fetched.blob;
           }
           if (!source) return null;
           const allocated = await resolvedDeps.putAsset(source, audioMeta(source, record, speech));
@@ -715,7 +748,10 @@ export async function convertDocumentAssetRefs(
             return { kind: 'unavailable' };
           }
           const fetched = await resolvedDeps.fetchLegacyUrl(audioUrl);
-          if (fetched.kind === 'ok') {
+          // Zero-byte responses are not usable bytes: the pair stays
+          // retryable and the URL remains the live fallback, never an
+          // allocated empty asset.
+          if (fetched.kind === 'ok' && fetched.blob.size > 0) {
             const assetId = await resolvedDeps.putAsset(
               fetched.blob,
               audioMeta(fetched.blob, undefined, speech),
@@ -828,21 +864,34 @@ export async function convertDocumentAssetRefs(
   }
 
   // The video manifest is keyed by the same media refs; re-key placeholder
-  // entries whose bytes were (or can still be) ingested.
+  // entries whose bytes were (or can still be) ingested, drop entries whose
+  // transport URL is confirmed dead, and keep transiently unavailable ones
+  // under the legacy key for a later open.
   let videoManifest = stage.videoManifest;
   if (videoManifest) {
     let manifestChanged = false;
     const nextManifest: typeof videoManifest = {};
     for (const [key, entry] of Object.entries(videoManifest)) {
-      if (isGeneratedMediaPlaceholder(key) || isClassroomMediaUrl(key)) {
-        const assetId = isGeneratedMediaPlaceholder(key)
-          ? await allocateMediaRef(key)
-          : await allocateUrlMediaRef(key);
+      if (isGeneratedMediaPlaceholder(key)) {
+        const assetId = await allocateMediaRef(key);
         if (assetId) {
           nextManifest[assetId] = entry;
           manifestChanged = true;
           continue;
         }
+      } else if (isClassroomMediaUrl(key)) {
+        const outcome = await allocateUrlMediaRef(key);
+        if (outcome.kind === 'allocated') {
+          nextManifest[outcome.assetId] = entry;
+          manifestChanged = true;
+          continue;
+        }
+        if (outcome.kind === 'dead') {
+          report.emptied += 1;
+          manifestChanged = true;
+          continue;
+        }
+        report.kept += 1;
       }
       nextManifest[key] = entry;
     }

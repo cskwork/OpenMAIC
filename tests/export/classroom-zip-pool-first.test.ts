@@ -83,6 +83,29 @@ describe('classroom ZIP media collection', () => {
     expect(await collected[0].record.blob.text()).toBe('row-bytes');
   });
 
+  it('treats a zero-byte pooled answer as a miss and ships the compatibility row', async () => {
+    const ref = 'ast_pool_empty';
+    mocks.rows.push({
+      id: `stage-1:${ref}`,
+      stageId: 'stage-1',
+      blob: new Blob(['row-bytes'], { type: 'image/png' }),
+      mimeType: 'image/png',
+    });
+    const poolUrl = 'blob:pool-empty';
+    mocks.poolResolve.mockResolvedValue(poolUrl);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string) => {
+        if (input === poolUrl) return new Response(new Blob([]));
+        throw new Error(`Unexpected fetch: ${input}`);
+      }),
+    );
+
+    const collected = await collectMediaFiles('stage-1');
+
+    expect(await collected[0].record.blob.text()).toBe('row-bytes');
+  });
+
   it('leaves legacy placeholder rows on their stored bytes', async () => {
     mocks.rows.push({
       id: 'stage-1:gen_img_1',
