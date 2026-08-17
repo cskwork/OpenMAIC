@@ -61,6 +61,20 @@ describe('SlideElement', () => {
     expect(html).toContain('white-space:pre-line');
   });
 
+  it('does not preserve source-formatting line endings in rich shape labels', () => {
+    const html = renderToStaticMarkup(
+      createElement(SlideElement, {
+        elementInfo: {
+          ...shapeElement,
+          text: { ...shapeElement.text!, content: '<p>First line</p>\n<p>Second line</p>' },
+        },
+        elementIndex: 3,
+      }),
+    );
+
+    expect(html).not.toContain('white-space:pre-line');
+  });
+
   it('does not apply literal-line-ending styling to injected shape-label editor content', () => {
     const html = renderToStaticMarkup(
       createElement(SlideElement, {
