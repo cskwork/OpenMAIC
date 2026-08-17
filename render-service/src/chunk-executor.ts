@@ -5,8 +5,10 @@
  */
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
+import { fork, type ChildProcess } from 'node:child_process';
 import { access, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   assemble as producerAssemble,
   plan as producerPlan,
@@ -201,6 +203,68 @@ async function settleProducer<T>(operation: Promise<T>, signal?: AbortSignal): P
   return result;
 }
 
+function terminateChild(child: ChildProcess): void {
+  if (!child.pid) return;
+  try {
+    process.kill(-child.pid, 'SIGKILL');
+  } catch {
+    child.kill('SIGKILL');
+  }
+}
+
+function renderChunkInTerminatedProcess(
+  planDir: string,
+  chunkIndex: number,
+  outputPath: string,
+  signal?: AbortSignal,
+): Promise<ChunkResult> {
+  const workerPath = fileURLToPath(new URL('./chunk-worker.ts', import.meta.url));
+  const child = fork(workerPath, [], {
+    detached: true,
+    execArgv: ['--import', 'tsx/esm'],
+    stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+  });
+  return new Promise((resolveResult, rejectResult) => {
+    let settled = false;
+    let aborting = false;
+    const finish = (callback: () => void): void => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      child.disconnect();
+      callback();
+    };
+    const onAbort = (): void => {
+      aborting = true;
+      terminateChild(child);
+    };
+    child.once('error', (error) =>
+      finish(() =>
+        rejectResult(
+          aborting ? new ChunkExecutorError('chunk_execution_failed', 'Render cancelled') : error,
+        ),
+      ),
+    );
+    child.once('exit', (code) => {
+      if (aborting) {
+        finish(() =>
+          rejectResult(new ChunkExecutorError('chunk_execution_failed', 'Render cancelled')),
+        );
+        return;
+      }
+      if (!settled && code !== 0)
+        finish(() => rejectResult(new Error(`Chunk worker exited with code ${code}`)));
+    });
+    child.on('message', (message: { ok: boolean; result?: ChunkResult; error?: string }) => {
+      if (message.ok && message.result) finish(() => resolveResult(message.result!));
+      else finish(() => rejectResult(new Error(message.error ?? 'Chunk worker failed')));
+    });
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) return onAbort();
+    child.send({ planDir, chunkIndex, outputPath });
+  });
+}
+
 function digest(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
@@ -383,10 +447,14 @@ async function verifyChunkOutput(
       `Chunk ${chunk.index} has no matching plan/hash sidecar for plan ${planHash}`,
     );
   }
-  if (sidecar.captureMode !== undefined && sidecar.captureMode !== 'beginframe') {
+  if (
+    sidecar.captureMode !== undefined &&
+    sidecar.captureMode !== config.resourceProfile.requestedCaptureMode
+  ) {
     throw new ChunkExecutorError(
       'mismatched_chunk',
-      `Chunk ${chunk.index} used unsupported capture mode ${sidecar.captureMode}`,
+      `Chunk ${chunk.index} used capture mode ${sidecar.captureMode}; ` +
+        `expected ${config.resourceProfile.requestedCaptureMode}`,
     );
   }
 }
@@ -680,11 +748,9 @@ async function renderOne(
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
       const result = await settleProducer(
-        (dependencies.renderChunk ?? defaultDeps.renderChunk)(
-          plan.planDir,
-          chunk.index,
-          chunk.outputPath,
-        ),
+        dependencies.renderChunk
+          ? dependencies.renderChunk(plan.planDir, chunk.index, chunk.outputPath)
+          : renderChunkInTerminatedProcess(plan.planDir, chunk.index, chunk.outputPath, signal),
         signal,
       );
       if (signal?.aborted)
