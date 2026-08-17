@@ -131,6 +131,7 @@ export function buildRenderExecutionMetrics(
   const failure = observedFailureCapture(job);
   return {
     resourceProfile: config.resourceProfile.name,
+    capturePolicy: config.resourceProfile.capturePolicy,
     requestedCaptureMode: config.resourceProfile.requestedCaptureMode,
     actualCaptureMode:
       job.perfSummary?.drawElement?.mode ??
@@ -232,6 +233,7 @@ export class InProcessExecutor implements RenderExecutor {
           observedModes.length === 1 ? observedModes[0]! : result.plan.captureMode;
         const chunkMetrics: RenderExecutionMetrics = {
           resourceProfile: config.resourceProfile.name,
+          capturePolicy: config.resourceProfile.capturePolicy,
           requestedCaptureMode: config.resourceProfile.requestedCaptureMode,
           actualCaptureMode,
           requestedWorkers: config.producerWorkers,

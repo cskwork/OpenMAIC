@@ -447,14 +447,15 @@ async function verifyChunkOutput(
       `Chunk ${chunk.index} has no matching plan/hash sidecar for plan ${planHash}`,
     );
   }
-  if (
-    sidecar.captureMode !== undefined &&
-    sidecar.captureMode !== config.resourceProfile.requestedCaptureMode
-  ) {
+  const allowedCaptureModes =
+    config.resourceProfile.capturePolicy === 'screenshot-only'
+      ? new Set(['screenshot'])
+      : new Set(['beginframe', 'screenshot']);
+  if (sidecar.captureMode !== undefined && !allowedCaptureModes.has(sidecar.captureMode)) {
     throw new ChunkExecutorError(
       'mismatched_chunk',
       `Chunk ${chunk.index} used capture mode ${sidecar.captureMode}; ` +
-        `expected ${config.resourceProfile.requestedCaptureMode}`,
+        `profile policy is ${config.resourceProfile.capturePolicy}`,
     );
   }
 }

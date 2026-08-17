@@ -73,7 +73,7 @@ export const config = {
   chunkSizeFrames: intEnv('RENDER_CHUNK_SIZE_FRAMES', 0),
   /** Optional target frame count used by the producer planner. */
   targetChunkFrames: intEnv('RENDER_TARGET_CHUNK_FRAMES', 0),
-  /** Fail a job if the selected profile requires BeginFrame and producer reports otherwise. */
+  /** Explicit false guard so inherited env cannot turn screenshot fallback rejection back on. */
   requireBeginFrame: resourceProfile.requireBeginFrame,
   /** Active (queued+running) jobs allowed per client identity. 0 disables the guard. */
   maxJobsPerUser: intEnvAllowZero('RENDER_MAX_JOBS_PER_USER', 1),
