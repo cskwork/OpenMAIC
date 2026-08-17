@@ -212,13 +212,13 @@ function terminateChild(child: ChildProcess): void {
   }
 }
 
-function renderChunkInTerminatedProcess(
+export function renderChunkInTerminatedProcess(
   planDir: string,
   chunkIndex: number,
   outputPath: string,
   signal?: AbortSignal,
+  workerPath = fileURLToPath(new URL('./chunk-worker.ts', import.meta.url)),
 ): Promise<ChunkResult> {
-  const workerPath = fileURLToPath(new URL('./chunk-worker.ts', import.meta.url));
   const child = fork(workerPath, [], {
     detached: true,
     execArgv: ['--import', 'tsx/esm'],
@@ -231,7 +231,13 @@ function renderChunkInTerminatedProcess(
       if (settled) return;
       settled = true;
       signal?.removeEventListener('abort', onAbort);
-      child.disconnect();
+      if (child.connected) {
+        try {
+          child.disconnect();
+        } catch {
+          // SIGKILL may close IPC between the connected check and disconnect.
+        }
+      }
       callback();
     };
     const onAbort = (): void => {

@@ -1,6 +1,7 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -8,6 +9,7 @@ import {
   createRenderPlan,
   executeRenderChunks,
   freezeRenderPlan,
+  renderChunkInTerminatedProcess,
   validateChunkResults,
   type ChunkExecutorDependencies,
 } from '../src/chunk-executor.js';
@@ -126,6 +128,28 @@ function deps(overrides: Partial<ChunkExecutorDependencies> = {}): ChunkExecutor
 }
 
 describe('local bounded chunk executor', () => {
+  it('terminates a real child worker on deadline without crashing the parent', async () => {
+    const controller = new AbortController();
+    const fixture = join(
+      dirname(fileURLToPath(import.meta.url)),
+      'fixtures',
+      'hanging-chunk-worker.mjs',
+    );
+    const operation = renderChunkInTerminatedProcess(
+      '/tmp/plan',
+      0,
+      '/tmp/chunk.mp4',
+      controller.signal,
+      fixture,
+    );
+    setTimeout(() => controller.abort(), 10);
+    await expect(operation).rejects.toMatchObject<ChunkExecutorError>({
+      code: 'chunk_execution_failed',
+      message: 'Render cancelled',
+    });
+    expect(process.connected).not.toBe(false);
+  });
+
   it('freezes immutable plan metadata and preserves producer frame boundaries', async () => {
     const paths = setup();
     await materializeProject(paths.projectDir);
