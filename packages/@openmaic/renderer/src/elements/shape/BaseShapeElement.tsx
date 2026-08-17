@@ -130,6 +130,7 @@ export function BaseShapeElement({ elementInfo, renderLabel }: BaseShapeElementP
         style={{
           // @ts-expect-error CSS custom properties
           '--paragraphSpace': `${text.paragraphSpace === undefined ? 5 : text.paragraphSpace}px`,
+          whiteSpace: 'pre-line',
         }}
         dangerouslySetInnerHTML={{ __html: text.content }}
       />

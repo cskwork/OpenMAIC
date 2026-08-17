@@ -23,6 +23,7 @@ export function BaseTextElement({ elementInfo, target, renderContent }: BaseText
       style={{
         position: 'relative',
         pointerEvents: target === 'thumbnail' ? 'none' : undefined,
+        whiteSpace: 'pre-line',
       }}
       dangerouslySetInnerHTML={{ __html: elementInfo.content }}
     />
