@@ -12,7 +12,12 @@ export function createTextDocument(html: string): ProseMirrorNode {
   if (HTML_MARKUP_PATTERN.test(html)) {
     template.innerHTML = html;
   } else {
-    const lines = html.split(/\r\n?|\n/);
+    // Match the renderer's `dangerouslySetInnerHTML` semantics for entities
+    // while keeping the tag-free path as text, then make its literal line
+    // endings explicit ProseMirror hard breaks.
+    const decoded = document.createElement('template');
+    decoded.innerHTML = html;
+    const lines = (decoded.content.textContent ?? '').split(/\r\n?|\n/);
     lines.forEach((line, index) => {
       if (index > 0) template.content.append(document.createElement('br'));
       template.content.append(document.createTextNode(line));

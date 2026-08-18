@@ -101,7 +101,7 @@ describe('renderer ProseMirror schema', () => {
   it('preserves inline-block layout styles used by imported PPTX text', () => {
     const output = serializeTextDocument(
       createTextDocument(
-        '<p><span style="display: inline-block; width: 30px; height: 24px; vertical-align: middle; margin: 1px 2px; padding: 3px 4px">■</span>Text</p>',
+        '<p><span style="display: inline-block; width: 30px; height: 24px; vertical-align: middle; margin: 1px 2px; padding: 3px 4px">■</span><span style="display: inline-block; width: 12px; margin-left: 5px; padding-right: 6px">•</span>Text</p>',
       ),
     );
 
@@ -109,7 +109,9 @@ describe('renderer ProseMirror schema', () => {
     expect(output).toContain('height: 24px');
     expect(output).toContain('vertical-align: middle');
     expect(output).toContain('margin: 1px 2px');
+    expect(output).toContain('margin-left: 5px');
     expect(output).toContain('padding: 3px 4px');
+    expect(output).toContain('padding-right: 6px');
   });
 
   it('preserves explicit PPTX line breaks instead of reflowing them', () => {
@@ -126,5 +128,11 @@ describe('renderer ProseMirror schema', () => {
     const output = serializeTextDocument(createTextDocument('First line\nSecond line'));
 
     expect(output).toContain('First line<br>Second line');
+  });
+
+  it('decodes plain-text HTML entities while preserving literal line breaks', () => {
+    const output = serializeTextDocument(createTextDocument('A&nbsp;\nB &amp; C'));
+
+    expect(output).toContain('A&nbsp;<br>B &amp; C');
   });
 });
