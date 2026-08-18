@@ -136,6 +136,10 @@ const letterSpacing: MarkSpec = {
 const inlineBlock: MarkSpec = {
   attrs: {
     width: {},
+    height: { default: '' },
+    verticalAlign: { default: '' },
+    margin: { default: '' },
+    padding: { default: '' },
     textIndent: { default: '' },
     boxSizing: { default: '' },
   },
@@ -144,7 +148,8 @@ const inlineBlock: MarkSpec = {
       tag: 'span',
       getAttrs: (dom) => {
         const element = dom as HTMLElement;
-        const { display, width, textIndent, boxSizing } = element.style;
+        const { display, width, height, verticalAlign, margin, padding, textIndent, boxSizing } =
+          element.style;
         if (
           !element.textContent?.trim() ||
           display !== 'inline-block' ||
@@ -153,6 +158,10 @@ const inlineBlock: MarkSpec = {
           return false;
         return {
           width,
+          height,
+          verticalAlign,
+          margin,
+          padding,
           textIndent: textIndent === '0px' || textIndent === '0' ? '0' : '',
           boxSizing: boxSizing === 'border-box' ? boxSizing : '',
         };
@@ -161,6 +170,10 @@ const inlineBlock: MarkSpec = {
   ],
   toDOM: (mark) => {
     let style = `display: inline-block; width: ${mark.attrs.width};`;
+    if (mark.attrs.height) style += `height: ${mark.attrs.height};`;
+    if (mark.attrs.verticalAlign) style += `vertical-align: ${mark.attrs.verticalAlign};`;
+    if (mark.attrs.margin) style += `margin: ${mark.attrs.margin};`;
+    if (mark.attrs.padding) style += `padding: ${mark.attrs.padding};`;
     if (mark.attrs.textIndent) style += 'text-indent: 0;';
     if (mark.attrs.boxSizing) style += `box-sizing: ${mark.attrs.boxSizing};`;
     return ['span', { style }, 0];

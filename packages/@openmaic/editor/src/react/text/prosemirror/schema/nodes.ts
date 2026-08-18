@@ -224,7 +224,7 @@ const paragraph: NodeSpec = {
         let textIndentLevel = 0;
         let textIndentCss = '';
         if (textIndent) {
-          if (/em/.test(textIndent)) {
+          if (/^-?(?:\d+|\d*\.\d+)em$/i.test(textIndent)) {
             textIndentLevel = parseFloat(textIndent);
           } else if (/px/.test(textIndent)) {
             textIndentLevel = Math.floor(parseFloat(textIndent) / 16);

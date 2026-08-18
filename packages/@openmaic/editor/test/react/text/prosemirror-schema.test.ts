@@ -40,6 +40,15 @@ describe('renderer ProseMirror schema', () => {
     expect(output).toContain('letter-spacing: 1.5pt');
   });
 
+  it('preserves rem first-line indentation without converting its unit', () => {
+    const output = serializeTextDocument(
+      createTextDocument('<p style="text-indent: 1rem">Indented text</p>'),
+    );
+
+    expect(output).toContain('text-indent: 1rem');
+    expect(output).not.toContain('text-indent: 1em');
+  });
+
   it('preserves an empty inline-block spacer used for PPTX first-line indentation', () => {
     const output = serializeTextDocument(
       createTextDocument(
@@ -89,6 +98,20 @@ describe('renderer ProseMirror schema', () => {
     expect(output).toContain('■');
   });
 
+  it('preserves inline-block layout styles used by imported PPTX text', () => {
+    const output = serializeTextDocument(
+      createTextDocument(
+        '<p><span style="display: inline-block; width: 30px; height: 24px; vertical-align: middle; margin: 1px 2px; padding: 3px 4px">■</span>Text</p>',
+      ),
+    );
+
+    expect(output).toContain('display: inline-block');
+    expect(output).toContain('height: 24px');
+    expect(output).toContain('vertical-align: middle');
+    expect(output).toContain('margin: 1px 2px');
+    expect(output).toContain('padding: 3px 4px');
+  });
+
   it('preserves explicit PPTX line breaks instead of reflowing them', () => {
     const output = serializeTextDocument(
       createTextDocument(
@@ -97,5 +120,11 @@ describe('renderer ProseMirror schema', () => {
     );
 
     expect(output).toMatch(/1954年清华大学首创“先进集体”<\/span><br><span[^>]*>评选制度/);
+  });
+
+  it('turns literal plain-text newlines into explicit line breaks', () => {
+    const output = serializeTextDocument(createTextDocument('First line\nSecond line'));
+
+    expect(output).toContain('First line<br>Second line');
   });
 });

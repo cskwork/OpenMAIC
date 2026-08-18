@@ -5,9 +5,19 @@ import {
 } from 'prosemirror-model';
 import { textSchema } from './schema';
 
+const HTML_MARKUP_PATTERN = /<\/?[a-z][^>]*>|<![^>]*>/i;
+
 export function createTextDocument(html: string): ProseMirrorNode {
   const template = document.createElement('template');
-  template.innerHTML = html;
+  if (HTML_MARKUP_PATTERN.test(html)) {
+    template.innerHTML = html;
+  } else {
+    const lines = html.split(/\r\n?|\n/);
+    lines.forEach((line, index) => {
+      if (index > 0) template.content.append(document.createElement('br'));
+      template.content.append(document.createTextNode(line));
+    });
+  }
   return ProseMirrorDOMParser.fromSchema(textSchema).parse(template.content);
 }
 
