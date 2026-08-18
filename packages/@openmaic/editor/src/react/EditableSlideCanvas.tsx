@@ -616,8 +616,7 @@ export function EditableSlideCanvas(props: EditableSlideCanvasProps) {
               style={{
                 position: 'absolute',
                 inset: 0,
-                pointerEvents:
-                  hasActiveEditor || creationActive ? 'none' : 'auto',
+                pointerEvents: hasActiveEditor || creationActive ? 'none' : 'auto',
                 touchAction: editingTouchAction,
               }}
             />

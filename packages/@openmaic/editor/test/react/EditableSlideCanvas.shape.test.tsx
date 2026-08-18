@@ -99,9 +99,9 @@ describe('EditableSlideCanvas — Shape label editing', () => {
     fireEvent.pointerDown(target, { button: 0, pointerId: 1, clientX: 130, clientY: 130 });
     fireEvent.pointerUp(target, { button: 0, pointerId: 1, clientX: 130, clientY: 130 });
 
-    expect((container.querySelector('[data-marquee-surface]') as HTMLElement).style.pointerEvents).toBe(
-      'none',
-    );
+    expect(
+      (container.querySelector('[data-marquee-surface]') as HTMLElement).style.pointerEvents,
+    ).toBe('none');
   });
 
   it('exits Shape label editing when the blank canvas is pressed', () => {
