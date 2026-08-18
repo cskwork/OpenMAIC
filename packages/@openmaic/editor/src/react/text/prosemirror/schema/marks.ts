@@ -1,6 +1,9 @@
 import { marks } from 'prosemirror-schema-basic';
 import type { MarkSpec } from 'prosemirror-model';
 
+const CSS_LENGTH_PATTERN =
+  /^-?(?:\d+|\d*\.\d+)(?:px|pt|pc|mm|cm|in|rem|em|ex|ch|vw|vh|vmin|vmax|%)$/i;
+
 const subscript: MarkSpec = {
   excludes: 'subscript',
   parseDOM: [
@@ -115,6 +118,55 @@ const fontsize: MarkSpec = {
   },
 };
 
+const letterSpacing: MarkSpec = {
+  attrs: {
+    letterSpacing: {},
+  },
+  inline: true,
+  group: 'inline',
+  parseDOM: [
+    {
+      style: 'letter-spacing',
+      getAttrs: (letterSpacing) => (letterSpacing ? { letterSpacing } : {}),
+    },
+  ],
+  toDOM: (mark) => ['span', { style: `letter-spacing: ${mark.attrs.letterSpacing};` }, 0],
+};
+
+const inlineBlock: MarkSpec = {
+  attrs: {
+    width: {},
+    textIndent: { default: '' },
+    boxSizing: { default: '' },
+  },
+  parseDOM: [
+    {
+      tag: 'span',
+      getAttrs: (dom) => {
+        const element = dom as HTMLElement;
+        const { display, width, textIndent, boxSizing } = element.style;
+        if (
+          !element.textContent?.trim() ||
+          display !== 'inline-block' ||
+          !CSS_LENGTH_PATTERN.test(width)
+        )
+          return false;
+        return {
+          width,
+          textIndent: textIndent === '0px' || textIndent === '0' ? '0' : '',
+          boxSizing: boxSizing === 'border-box' ? boxSizing : '',
+        };
+      },
+    },
+  ],
+  toDOM: (mark) => {
+    let style = `display: inline-block; width: ${mark.attrs.width};`;
+    if (mark.attrs.textIndent) style += 'text-indent: 0;';
+    if (mark.attrs.boxSizing) style += `box-sizing: ${mark.attrs.boxSizing};`;
+    return ['span', { style }, 0];
+  },
+};
+
 const fontname: MarkSpec = {
   attrs: {
     fontname: {},
@@ -189,6 +241,8 @@ const schemaMarks = {
   em,
   strong,
   fontsize,
+  letterSpacing,
+  inlineBlock,
   fontname,
   code,
   forecolor,
