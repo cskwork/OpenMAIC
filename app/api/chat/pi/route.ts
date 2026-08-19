@@ -25,6 +25,7 @@ import { apiError } from '@/lib/server/api-response';
 import type { ThinkingConfig } from '@/lib/types/provider';
 import type { StatelessChatRequest } from '@/lib/types/chat';
 import { resolveClassroomWebSearchConfig } from '@/lib/server/web-search-config';
+import { createPiChatUsageCollector } from '@/lib/chat/pi/usage';
 
 const log = createLogger('Pi Chat API');
 
@@ -74,6 +75,7 @@ export async function POST(req: NextRequest) {
       model: languageModel,
       apiKey: resolvedApiKey,
       providerId,
+      modelId: resolvedModelId,
       modelInfo,
       thinkingConfig: resolvedThinkingConfig,
     } = await resolveModel({
@@ -111,7 +113,9 @@ export async function POST(req: NextRequest) {
 
     const signal = req.signal;
     const abortController = new AbortController();
-    signal.addEventListener('abort', () => abortController.abort(), { once: true });
+    const abortFromRequest = () => abortController.abort(signal.reason);
+    if (signal.aborted) abortFromRequest();
+    else signal.addEventListener('abort', abortFromRequest, { once: true });
 
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
@@ -119,6 +123,11 @@ export async function POST(req: NextRequest) {
     const send: SendEvent = async (event) => {
       await writer.write(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
     };
+    const usageCollector = createPiChatUsageCollector({
+      send,
+      provider: providerId,
+      resolvedModel: resolvedModelId,
+    });
 
     const thinkingConfig: ThinkingConfig = resolvedThinkingConfig ?? {
       mode: 'disabled',
@@ -184,10 +193,12 @@ export async function POST(req: NextRequest) {
           childRuntimeMode,
           enableNativeChildSpotlight,
           nativeWebSearchConfig,
+          usageCollector,
         });
 
         if (signal.aborted) {
           stopHeartbeat();
+          await usageCollector.flush();
           await writer.close();
           return;
         }
@@ -208,9 +219,13 @@ export async function POST(req: NextRequest) {
 
         log.error('Pi chat stream error:', error);
         try {
+          await usageCollector.flush();
           await send({
             type: 'error',
-            data: { message: error instanceof Error ? error.message : String(error) },
+            data: {
+              message: error instanceof Error ? error.message : String(error),
+              usage: usageCollector.getSummary(),
+            },
           });
           await writer.close();
         } catch {

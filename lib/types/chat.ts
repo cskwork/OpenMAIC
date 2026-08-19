@@ -449,6 +449,9 @@ export type StatelessEvent =
       data: { stage: 'director' | 'agent_loading'; agentId?: string };
     }
   | { type: 'cue_user'; data: { fromAgentId?: string; prompt?: string } }
+  | { type: 'llm_call_start'; data: import('@/lib/chat/pi/usage').PiLlmCallStartData }
+  | { type: 'llm_usage'; data: import('@/lib/chat/pi/usage').PiLlmUsageData }
+  | { type: 'llm_call_end'; data: import('@/lib/chat/pi/usage').PiLlmCallEndData }
   | {
       type: 'done';
       data: {
@@ -461,6 +464,10 @@ export type StatelessEvent =
         directorCompaction?: DirectorCompactionTrace;
         directorToolTrace?: DirectorToolTraceEntry[];
         directorState?: DirectorState;
+        usage?: import('@/lib/chat/pi/usage').PiChatUsageSummary;
       };
     }
-  | { type: 'error'; data: { message: string } };
+  | {
+      type: 'error';
+      data: { message: string; usage?: import('@/lib/chat/pi/usage').PiChatUsageSummary };
+    };

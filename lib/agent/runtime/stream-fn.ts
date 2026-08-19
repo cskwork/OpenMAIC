@@ -37,6 +37,7 @@ import {
 import { streamLLM } from '@/lib/ai/llm';
 import { normalizeUsage } from '@/lib/usage/normalize';
 import type { ThinkingConfig } from '@/lib/types/provider';
+import type { PiLlmUsageCall, PiLlmUsageObserver } from '@/lib/chat/pi/usage';
 import {
   captureToolCallMetadata,
   emitToolCallProviderOptions,
@@ -144,6 +145,8 @@ export interface CallLlmStreamFnOptions {
   source?: string;
   /** Optional abort signal forwarded to the underlying streamLLM call. */
   abortSignal?: AbortSignal;
+  /** Optional request-scoped observer for benchmark-visible Pi LLM usage. */
+  usageObserver?: PiLlmUsageObserver;
 }
 
 /**
@@ -270,6 +273,7 @@ async function pump(
   const mapper = createPartMapper(partial, (event) => stream.push(event));
   let settled = false;
   let cleanupAbortListeners = () => {};
+  let usageCall: PiLlmUsageCall | undefined;
 
   const setUsage = (rawUsage: LanguageModelUsage | undefined): void => {
     const usage = normalizeUsage(rawUsage);
@@ -294,7 +298,11 @@ async function pump(
     partial.content = partial.content.filter((content) => content.type !== 'toolCall');
   };
 
-  const settleError = (reason: 'error' | 'aborted', error: unknown): boolean => {
+  const settleError = (
+    reason: 'error' | 'aborted',
+    error: unknown,
+    finishReason?: FinishReason,
+  ): boolean => {
     if (settled) return false;
     settled = true;
     mapper.finalize();
@@ -305,6 +313,7 @@ async function pump(
       reason === 'aborted' ? 'Operation aborted' : 'LLM stream error',
     );
     cleanupAbortListeners();
+    usageCall?.settle(reason === 'aborted' ? 'cancelled' : 'error', undefined, finishReason);
     stream.push({ type: 'error', reason, error: partial });
     return true;
   };
@@ -318,10 +327,12 @@ async function pump(
     const hasToolCall = partial.content.some((content) => content.type === 'toolCall');
     mapper.finalize();
     setUsage(totalUsage);
+    if (totalUsage !== undefined) usageCall?.observeFinishStep(totalUsage);
 
     switch (finishReason) {
       case 'length':
         settled = true;
+        usageCall?.settle('completed', totalUsage, finishReason);
         if (hasToolCall) lengthToolCallMessages.add(partial);
         removeExecutableToolCalls();
         partial.stopReason = 'length';
@@ -331,21 +342,24 @@ async function pump(
       case 'content-filter':
       case 'error':
       case 'other':
-        return settleError('error', `LLM stream finished with ${finishReason}`);
+        return settleError('error', `LLM stream finished with ${finishReason}`, finishReason);
       case 'tool-calls':
         if (!hasToolCall) {
           return settleError(
             'error',
             'LLM stream reported tool-calls without a complete parsed tool call',
+            finishReason,
           );
         }
         settled = true;
+        usageCall?.settle('completed', totalUsage, finishReason);
         partial.stopReason = 'toolUse';
         cleanupAbortListeners();
         stream.push({ type: 'done', reason: 'toolUse', message: partial });
         return true;
       case 'stop':
         settled = true;
+        usageCall?.settle('completed', totalUsage, finishReason);
         partial.stopReason = hasToolCall ? 'toolUse' : 'stop';
         cleanupAbortListeners();
         stream.push({
@@ -384,34 +398,51 @@ async function pump(
       return;
     }
 
+    // Admission identity is allocated only after both pre-abort checks and
+    // immediately before the actual OpenMAIC streamLLM invocation.
+    usageCall = opts.usageObserver?.beginCall();
+
     const requestedMaxTokens = streamOptions?.maxTokens;
     const maxOutputTokens =
       opts.maxOutputTokens && requestedMaxTokens
         ? Math.min(opts.maxOutputTokens, requestedMaxTokens)
         : (requestedMaxTokens ?? opts.maxOutputTokens);
-    const result = await streamLLM(
-      {
-        model: opts.languageModel,
-        system: context.systemPrompt,
-        messages: toModelMessages(context.messages, {
-          includeReasoning:
-            typeof opts.languageModel !== 'string' &&
-            opts.languageModel.provider === 'kimi.chat' &&
-            opts.languageModel.modelId === 'kimi-k3',
-        }),
-        tools: toAiTools(context.tools ?? []),
-        toolChoice: 'auto',
-        // pi's loop owns multi-step; one LLM turn per streamFn call.
-        stopWhen: stepCountIs(1),
-        maxOutputTokens,
-        abortSignal: combinedAbort.signal,
-      },
-      opts.source ?? 'maic-agent',
-      opts.thinkingConfig,
-    );
+    let result: ReturnType<typeof streamLLM>;
+    try {
+      result = streamLLM(
+        {
+          model: opts.languageModel,
+          system: context.systemPrompt,
+          messages: toModelMessages(context.messages, {
+            includeReasoning:
+              typeof opts.languageModel !== 'string' &&
+              opts.languageModel.provider === 'kimi.chat' &&
+              opts.languageModel.modelId === 'kimi-k3',
+          }),
+          tools: toAiTools(context.tools ?? []),
+          toolChoice: 'auto',
+          // pi's loop owns multi-step; one LLM turn per streamFn call.
+          stopWhen: stepCountIs(1),
+          maxOutputTokens,
+          abortSignal: combinedAbort.signal,
+        },
+        opts.source ?? 'maic-agent',
+        opts.thinkingConfig,
+      );
+    } catch (error) {
+      settleError('error', error);
+      return;
+    }
 
     for await (const part of result.fullStream as AsyncIterable<Record<string, unknown>>) {
       if (settled) break;
+      if (part.type === 'finish-step') {
+        const response = part.response as { modelId?: unknown } | undefined;
+        usageCall?.observeFinishStep(
+          part.usage as LanguageModelUsage | undefined,
+          typeof response?.modelId === 'string' ? response.modelId : undefined,
+        );
+      }
       if (part.type === 'finish') {
         settleFinish(
           part.finishReason as FinishReason | undefined,

@@ -54,10 +54,11 @@ function resultFrom(parts: Array<Record<string, unknown>>) {
   };
 }
 
-function makeRequest(overrides: Record<string, unknown> = {}): NextRequest {
+function makeRequest(overrides: Record<string, unknown> = {}, signal?: AbortSignal): NextRequest {
   return new Request('http://localhost/api/chat/pi', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal,
     body: JSON.stringify({
       messages: [
         {
@@ -146,6 +147,7 @@ describe('PR2 Native Child route production wiring', () => {
       model: resolvedModel,
       apiKey: 'resolved-key',
       providerId: 'test-provider',
+      modelId: 'openmaic-resolved-model',
       modelInfo: { outputWindow: 512, contextWindow: 16_000 },
       thinkingConfig: { mode: 'disabled', enabled: false },
     });
@@ -232,8 +234,62 @@ describe('PR2 Native Child route production wiring', () => {
       }),
     ]);
     expect(events.find((event) => event.type === 'done')).toMatchObject({
-      data: { totalAgents: 1, totalActions: 1, agentHadContent: true },
+      data: {
+        totalAgents: 1,
+        totalActions: 1,
+        agentHadContent: true,
+        usage: {
+          callCount: 5,
+          endedCallCount: 5,
+          usageEventCount: 5,
+          complete: true,
+          observedRetryCount: 0,
+          retryVisibility: 'openmaic_only',
+        },
+      },
     });
+    const starts = events.filter((event) => event.type === 'llm_call_start');
+    const usage = events.filter((event) => event.type === 'llm_usage');
+    const ends = events.filter((event) => event.type === 'llm_call_end');
+    expect(starts.map((event) => [event.data.phase, event.data.transportIndex])).toEqual([
+      ['director_initial', 1],
+      ['director_continuation', 2],
+      ['child_initial', 1],
+      ['child_continuation', 2],
+      ['director_continuation', 3],
+    ]);
+    expect(starts.every((event) => event.data.provider === 'test-provider')).toBe(true);
+    expect(starts.every((event) => event.data.resolvedModel === 'openmaic-resolved-model')).toBe(
+      true,
+    );
+    expect(starts.filter((event) => event.data.agentId === 'teacher-1')).toHaveLength(2);
+    expect(
+      starts
+        .filter((event) => event.data.agentId === 'teacher-1')
+        .every((event) => event.data.runtimeMode === 'native'),
+    ).toBe(true);
+    expect(
+      starts
+        .filter((event) => event.data.agentId === undefined)
+        .every((event) => event.data.runtimeMode === undefined),
+    ).toBe(true);
+    expect(starts.every((event) => typeof event.data.startedAt === 'number')).toBe(true);
+    expect(new Set(starts.map((event) => event.data.callId)).size).toBe(5);
+    expect(usage).toHaveLength(5);
+    expect(
+      usage.every(
+        (event) => event.data.status === 'completed' && typeof event.data.observedAt === 'number',
+      ),
+    ).toBe(true);
+    expect(ends).toHaveLength(5);
+    expect(
+      ends.every(
+        (event) =>
+          typeof event.data.finishReason === 'string' && typeof event.data.completedAt === 'number',
+      ),
+    ).toBe(true);
+    const doneIndex = events.findIndex((event) => event.type === 'done');
+    expect(events.findLastIndex((event) => event.type === 'llm_call_end')).toBeLessThan(doneIndex);
   }, 15_000);
 
   it('keeps the production route on Legacy when the Native runtime flag is absent', async () => {
@@ -288,9 +344,36 @@ describe('PR2 Native Child route production wiring', () => {
       }),
     ]);
     expect(events.find((event) => event.type === 'done')).toMatchObject({
-      data: { totalAgents: 1, totalActions: 0, agentHadContent: true },
+      data: {
+        totalAgents: 1,
+        totalActions: 0,
+        agentHadContent: true,
+        usage: { callCount: 4, endedCallCount: 4, complete: true },
+      },
     });
+    const legacyStarts = events.filter((event) => event.type === 'llm_call_start');
+    expect(legacyStarts.filter((event) => event.data.phase === 'child_initial')).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({ runtimeMode: 'legacy', agentId: 'teacher-1' }),
+      }),
+    ]);
+    expect(legacyStarts.filter((event) => event.data.phase === 'child_continuation')).toHaveLength(
+      0,
+    );
   }, 15_000);
+
+  it('does not allocate usage identity or start a provider transport for an already-aborted route request', async () => {
+    const controller = new AbortController();
+    controller.abort(new Error('request already cancelled'));
+
+    const { POST } = await import('@/app/api/chat/pi/route');
+    const response = await POST(makeRequest({}, controller.signal));
+    const events = await readSseEvents(response);
+
+    expect(response.status).toBe(200);
+    expect(mocks.streamLLM).not.toHaveBeenCalled();
+    expect(events.filter((event) => event.type.startsWith('llm_'))).toEqual([]);
+  });
 
   it('keeps web_search exclusively in the Native Child inventory', async () => {
     const directorResponses = [

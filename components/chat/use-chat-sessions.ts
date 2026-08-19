@@ -412,6 +412,15 @@ export async function runPiSingleRequest(
       if (!dataLine) continue;
       const event = JSON.parse(dataLine.slice(6)) as StatelessEvent;
       if (event.type === 'done') sawDoneEvent = true;
+      // Benchmark usage lifecycle events are additive observability only. Do
+      // not let them instantiate or otherwise perturb the classroom UI buffer.
+      if (
+        event.type === 'llm_call_start' ||
+        event.type === 'llm_usage' ||
+        event.type === 'llm_call_end'
+      ) {
+        continue;
+      }
       consumer.onEvent(event);
     }
   }

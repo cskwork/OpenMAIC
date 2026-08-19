@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({ streamLLM: vi.fn() }));
 vi.mock('@/lib/ai/llm', () => ({ streamLLM: mocks.streamLLM }));
 
 import { buildCallAgentTool } from '@/lib/chat/pi/tools/call-agent';
+import { createPiChatUsageCollector } from '@/lib/chat/pi/usage';
 
 const ZERO_USAGE = {
   inputTokens: 0,
@@ -93,6 +94,14 @@ function makeHarness() {
   const summaries: AgentTurnSummary[] = [];
   const onActionDone = vi.fn();
   const abortController = new AbortController();
+  const usageCollector = createPiChatUsageCollector({
+    send: async (event) => {
+      events.push(event);
+    },
+    provider: 'test-provider',
+    resolvedModel: 'child-model',
+    requestUsageId: 'request-1',
+  });
   const tool = buildCallAgentTool({
     body: makeBody(),
     agentConfigs: [teacher],
@@ -111,15 +120,18 @@ function makeHarness() {
     getWhiteboardLedger: () => [],
     maxActionsPerAgent: 2,
     enableWhiteboardTools: true,
+    usageCollector,
   });
-  return { events, summaries, onActionDone, tool };
+  return { events, summaries, onActionDone, tool, usageCollector };
 }
 
 async function execute(harness: ReturnType<typeof makeHarness>) {
-  return harness.tool.execute('delegate-1', {
+  const result = await harness.tool.execute('delegate-1', {
     agentId: teacher.id,
     instruction: 'Teach briefly.',
   });
+  await harness.usageCollector.flush();
+  return result;
 }
 
 function actionOutput(text = 'I opened the board.') {
@@ -163,6 +175,23 @@ describe('Legacy Pi Child shared transport consumer', () => {
       expect.objectContaining({ data: expect.objectContaining({ actionName: 'wb_open' }) }),
     ]);
     expect(harness.onActionDone).toHaveBeenCalledTimes(1);
+    expect(harness.usageCollector.getSummary()).toMatchObject({
+      callCount: 1,
+      endedCallCount: 1,
+      usageEventCount: 1,
+      complete: true,
+      observedRetryCount: 0,
+    });
+    expect(harness.events.filter((event) => event.type === 'llm_call_start')).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({
+          phase: 'child_initial',
+          transportIndex: 1,
+          agentId: teacher.id,
+        }),
+      }),
+    ]);
+    expect(harness.events.filter((event) => event.type === 'llm_call_end')).toHaveLength(1);
     expect(harness.summaries).toEqual([
       expect.objectContaining({
         agentId: teacher.id,

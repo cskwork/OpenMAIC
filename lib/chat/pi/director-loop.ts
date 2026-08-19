@@ -19,6 +19,7 @@ import {
   type DirectorSceneEvidencePacket,
 } from './tools/read-scene';
 import type { NativeWebSearchConfig } from './tools/web-search';
+import type { PiChatUsageCollector } from './usage';
 
 function formatSceneEvidenceForDelegation(evidence: DirectorSceneEvidencePacket[]): string {
   return evidence.map((packet) => packet.content).join('\n\n');
@@ -40,6 +41,7 @@ export async function runPiDirectorLoop(opts: {
   childRuntimeMode?: ChildRuntimeMode;
   enableNativeChildSpotlight?: boolean;
   nativeWebSearchConfig?: NativeWebSearchConfig;
+  usageCollector?: PiChatUsageCollector;
 }): Promise<void> {
   let totalAgents = 0;
   let totalActions = 0;
@@ -108,9 +110,20 @@ export async function runPiDirectorLoop(opts: {
     thinkingConfig: opts.thinkingConfig,
     source: 'pi-chat-director',
     abortSignal: opts.abortSignal,
+    usageObserver: opts.usageCollector?.createObserver({ scope: 'director' }),
+  });
+  const compactionStreamFn = createCallLlmStreamFn({
+    languageModel: opts.languageModel,
+    maxOutputTokens: opts.maxOutputTokens,
+    thinkingConfig: opts.thinkingConfig,
+    // Keep the deployment-wide usage JSONL source stable. The benchmark-only
+    // observer carries the distinct compaction phase.
+    source: 'pi-chat-director',
+    abortSignal: opts.abortSignal,
+    usageObserver: opts.usageCollector?.createObserver({ scope: 'compaction' }),
   });
   const compactionRuntime = createDirectorCompactionRuntime({
-    streamFn,
+    streamFn: compactionStreamFn,
     contextWindow: opts.contextWindow,
     maxOutputTokens: opts.maxOutputTokens,
   });
@@ -154,6 +167,7 @@ export async function runPiDirectorLoop(opts: {
       enableNativeChildSpotlight: opts.enableNativeChildSpotlight === true,
       nativeWebSearchConfig: opts.nativeWebSearchConfig,
       requestStartCurrentScene,
+      usageCollector: opts.usageCollector,
       isUserCued: () => userCued,
       isSessionClosed: () => sessionClosed,
       takeSceneEvidence: () => {
@@ -239,6 +253,7 @@ export async function runPiDirectorLoop(opts: {
     await cueUser({ fromAgentId: piAgentResponses.at(-1)?.agentId });
   }
 
+  await opts.usageCollector?.flush();
   await opts.send({
     type: 'done',
     data: {
@@ -260,6 +275,7 @@ export async function runPiDirectorLoop(opts: {
         // state and follow-up payloads without being read back.
         whiteboardLedger: piWhiteboardLedger,
       },
+      ...(opts.usageCollector ? { usage: opts.usageCollector.getSummary() } : {}),
     },
   });
 }

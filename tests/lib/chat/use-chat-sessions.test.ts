@@ -439,6 +439,105 @@ describe('shouldAwaitPresentationAction', () => {
 });
 
 describe('runPiSingleRequest', () => {
+  it('does not forward benchmark-only usage lifecycle events into the classroom buffer', async () => {
+    const encoder = new TextEncoder();
+    const events = [
+      {
+        type: 'llm_call_start',
+        data: {
+          requestUsageId: 'request-1',
+          callId: 'call-1',
+          sequence: 1,
+          phase: 'director_initial',
+          transportIndex: 1,
+          provider: 'openai',
+          resolvedModel: 'model',
+          startedAt: '2026-08-18T00:00:00.000Z',
+        },
+      },
+      {
+        type: 'llm_usage',
+        data: {
+          requestUsageId: 'request-1',
+          callId: 'call-1',
+          sequence: 1,
+          phase: 'director_initial',
+          transportIndex: 1,
+          provider: 'openai',
+          resolvedModel: 'model',
+          usageStatus: 'complete',
+          rawUsage: { inputTokens: 1, outputTokens: 1 },
+          normalizedUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        },
+      },
+      {
+        type: 'llm_call_end',
+        data: {
+          requestUsageId: 'request-1',
+          callId: 'call-1',
+          sequence: 1,
+          phase: 'director_initial',
+          transportIndex: 1,
+          provider: 'openai',
+          resolvedModel: 'model',
+          status: 'completed',
+          usageStatus: 'complete',
+          endedAt: '2026-08-18T00:00:01.000Z',
+        },
+      },
+      {
+        type: 'done',
+        data: { totalAgents: 0, totalActions: 0, endReason: 'completed' },
+      },
+    ];
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')),
+        );
+        controller.close();
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(body, { status: 200 })),
+    );
+    const onEvent = vi.fn();
+    const onIterationEnd = vi.fn(async () => ({
+      directorState: undefined,
+      totalAgents: 0,
+      agentHadContent: false,
+      cueUserReceived: false,
+    }));
+
+    try {
+      await runPiSingleRequest(
+        'session-1',
+        {
+          messages: [],
+          storeState: {},
+          config: { agentIds: ['teacher-1'] },
+          apiKey: '',
+        } as unknown as Parameters<typeof runPiSingleRequest>[1],
+        new AbortController(),
+        'qa',
+        () => ({ onEvent, onIterationEnd }),
+        vi.fn(),
+        vi.fn(),
+        vi.fn(),
+        vi.fn(),
+        { current: vi.fn() },
+        (key) => key,
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(onEvent).toHaveBeenCalledOnce();
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'done' }));
+    expect(onIterationEnd).toHaveBeenCalledOnce();
+  });
+
   it('does not accept the first-request context when fetch fails before a response', async () => {
     vi.stubGlobal(
       'fetch',

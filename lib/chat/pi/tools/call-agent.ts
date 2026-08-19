@@ -30,6 +30,7 @@ import {
   toHistoryMessages,
 } from '../prompts';
 import type { SendEvent } from '../types';
+import type { PiChatUsageCollector } from '../usage';
 import {
   buildChildActionTools,
   createPiWhiteboardRuntimeState,
@@ -548,6 +549,7 @@ export function buildCallAgentTool(opts: {
   isUserCued?: () => boolean;
   isSessionClosed?: () => boolean;
   takeSceneEvidence?: () => RuntimeEvidenceAttachment<DirectorSceneEvidenceMetadata[]> | undefined;
+  usageCollector?: PiChatUsageCollector;
 }): AgentTool<typeof CallAgentParams> {
   // Loop-guard (model-agnostic): an empty/errored child turn used to bypass onAgentDone,
   // so the completed-turn count never advanced and the maxAgentTurns guard was defeated — a model
@@ -672,6 +674,12 @@ export function buildCallAgentTool(opts: {
       }
 
       const messageId = nanoid();
+      const childRuntimeMode = opts.childRuntimeMode ?? 'legacy';
+      const usageObserver = opts.usageCollector?.createObserver({
+        scope: 'child',
+        agentId: agent.id,
+        runtimeMode: childRuntimeMode,
+      });
       let text = '';
       let actionCount = 0;
       let sawStructuredOutput = false;
@@ -702,7 +710,6 @@ export function buildCallAgentTool(opts: {
         },
       });
 
-      const childRuntimeMode = opts.childRuntimeMode ?? 'legacy';
       if (childRuntimeMode === 'native') {
         const capturedScene = opts.requestStartCurrentScene;
         const hasMatchingCurrentSceneEvidence = Boolean(
@@ -746,6 +753,7 @@ export function buildCallAgentTool(opts: {
               thinkingConfig: opts.thinkingConfig,
               maxOutputTokens: opts.maxOutputTokens,
               abortSignal: childAbort.signal,
+              usageObserver,
             }),
             systemPrompt: buildNativeChildPrompt(
               opts.body,
@@ -839,6 +847,7 @@ export function buildCallAgentTool(opts: {
           thinkingConfig: opts.thinkingConfig,
           maxOutputTokens: opts.maxOutputTokens,
           abortSignal: childAbort.signal,
+          usageObserver,
         }),
         systemPrompt: buildChildPrompt(
           opts.body,
