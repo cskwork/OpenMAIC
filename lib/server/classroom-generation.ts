@@ -5,14 +5,15 @@ import type { StageStore } from '@/lib/api/stage-api-types';
 import {
   applyOutlineFallbacks,
   generateSceneOutlinesFromRequirements,
-} from '@/lib/generation/outline-generator';
-import {
-  createSceneWithActions,
   generateSceneActions,
   generateSceneContent,
-} from '@/lib/generation/scene-generator';
-import type { AICallFn } from '@/lib/generation/pipeline-types';
-import type { AgentInfo } from '@/lib/generation/pipeline-types';
+  PBLGenerationError,
+  withGenerationRetry,
+  type AICallFn,
+  type AgentInfo,
+} from '@openmaic/generation';
+import { createSceneWithActions } from '@/lib/server/scene-generation';
+import { generatePBLV2Project } from '@/lib/pbl/v2/agents/planner';
 import { getDefaultAgents } from '@/lib/orchestration/registry/store';
 import { createLogger } from '@/lib/logger';
 import { isProviderKeyRequired } from '@/lib/ai/providers';
@@ -31,7 +32,6 @@ import {
   replaceMediaPlaceholders,
   generateTTSForClassroom,
 } from '@/lib/server/classroom-media-generation';
-import { withGenerationRetry } from '@/lib/generation/generation-retry';
 import { buildVideoManifestFromOutlines } from '@/lib/media/video-manifest';
 import type { UserRequirements } from '@/lib/types/generation';
 import type { Scene, Stage } from '@/lib/types/stage';
@@ -39,12 +39,19 @@ import { AGENT_COLOR_PALETTE, AGENT_DEFAULT_AVATARS } from '@/lib/constants/agen
 
 const log = createLogger('Classroom');
 
+export function containPBLGenerationError(error: unknown, sceneTitle: string): null {
+  if (!(error instanceof PBLGenerationError)) throw error;
+  log.warn(`PBL generation failed for scene "${sceneTitle}": ${error.message}`);
+  return null;
+}
+
 export interface GenerateClassroomInput {
   requirement: string;
   pdfContent?: { text: string; images: string[] };
   enableWebSearch?: boolean;
   webSearchProviderId?: WebSearchProviderId;
   webSearchApiKey?: string;
+  webSearchModelId?: string;
   baiduSubSources?: BaiduSubSources;
   enableImageGeneration?: boolean;
   enableVideoGeneration?: boolean;
@@ -443,6 +450,7 @@ export async function generateClassroom(
           apiKey: webSearchConfig.apiKey,
           baseUrl: webSearchConfig.baseUrl,
           baiduSubSources: webSearchConfig.baiduSubSources,
+          claudeModelId: webSearchConfig.claudeModelId,
         });
         researchContext = formatSearchResultsAsContext(searchResult);
         if (researchContext) {
@@ -577,34 +585,41 @@ export async function generateClassroom(
       });
     };
 
-    // Resolve this scene's content model lazily, per outline type. The browser
-    // UI does the same at /api/generate/scene-content (composite key
-    // scene-content:<type> → scene-content). PBL scenes additionally need the
-    // resolved model object, since generatePBLSceneContent drives its own LLM
-    // calls through it instead of the aiCall closure — without it PBL scenes
-    // silently fail (return null) on this one-shot path.
+    // Resolve this scene's content model lazily, per outline type. The package
+    // gets the provider-bound AICallFn and the app injects its agentic PBL loop
+    // as the classified fallback, preserving single-call → loop routing.
     const contentCall = await resolveSceneContentCall(safeOutline.type);
-    const content = await withGenerationRetry(
-      () =>
-        generateSceneContent(safeOutline, contentCall.aiCall, {
-          agents,
-          languageDirective,
-          allowProceduralSkill: vocationalActive,
-          // PBL scene content is driven by the model object, not the aiCall
-          // closure, so both the routed model AND its thinking config must be
-          // passed explicitly — otherwise a `scene-content:pbl` route with a
-          // `thinking` config would be silently ignored here (slide/quiz/
-          // interactive go through the aiCall closure and already honor it).
-          ...(safeOutline.type === 'pbl'
-            ? { languageModel: contentCall.model, thinkingConfig: contentCall.thinking }
-            : {}),
-        }),
-      {
-        label: `scene ${index + 1}/${outlines.length} content`,
-        shouldRetryResult: (result) => result === null,
-        onRetry: (event) => reportSceneRetry('content', event),
-      },
-    );
+    const content = await (async () => {
+      try {
+        return await withGenerationRetry(
+          () =>
+            generateSceneContent(safeOutline, contentCall.aiCall, {
+              agents,
+              languageDirective,
+              allowProceduralSkill: vocationalActive,
+              ...(safeOutline.type === 'pbl'
+                ? {
+                    pblLoopFallback: (input) =>
+                      generatePBLV2Project(
+                        input,
+                        contentCall.model,
+                        callLLM,
+                        { logger: log },
+                        contentCall.thinking,
+                      ),
+                  }
+                : {}),
+            }),
+          {
+            label: `scene ${index + 1}/${outlines.length} content`,
+            shouldRetryResult: (result) => result === null,
+            onRetry: (event) => reportSceneRetry('content', event),
+          },
+        );
+      } catch (error) {
+        return containPBLGenerationError(error, safeOutline.title);
+      }
+    })();
     if (!content) {
       log.warn(`Skipping scene "${safeOutline.title}" — content generation failed`);
       continue;

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const searchWithBochaMock = vi.hoisted(() => vi.fn());
 const searchWithBraveMock = vi.hoisted(() => vi.fn());
+const searchWithClaudeMock = vi.hoisted(() => vi.fn());
 const searchWithBaiduMock = vi.hoisted(() => vi.fn());
 const searchWithTavilyMock = vi.hoisted(() => vi.fn());
 const searchWithMiniMaxMock = vi.hoisted(() => vi.fn());
@@ -14,6 +15,10 @@ vi.mock('@/lib/web-search/bocha', () => ({
 
 vi.mock('@/lib/web-search/brave', () => ({
   searchWithBrave: searchWithBraveMock,
+}));
+
+vi.mock('@/lib/web-search/claude', () => ({
+  searchWithClaude: searchWithClaudeMock,
 }));
 
 vi.mock('@/lib/web-search/baidu', () => ({
@@ -42,6 +47,7 @@ describe('searchWeb', () => {
   beforeEach(() => {
     searchWithBochaMock.mockReset();
     searchWithBraveMock.mockReset();
+    searchWithClaudeMock.mockReset();
     searchWithBaiduMock.mockReset();
     searchWithTavilyMock.mockReset();
     searchWithMiniMaxMock.mockReset();
@@ -101,6 +107,57 @@ describe('searchWeb', () => {
       baseUrl: 'https://api.bocha.cn',
     });
     expect(searchWithTavilyMock).not.toHaveBeenCalled();
+  });
+
+  it('dispatches Claude provider requests with the selected model', async () => {
+    searchWithClaudeMock.mockResolvedValueOnce({
+      answer: 'claude answer',
+      sources: [],
+      query: 'q',
+      responseTime: 0.4,
+    });
+
+    await expect(
+      searchWeb({
+        providerId: 'claude',
+        query: 'q',
+        apiKey: 'sk-key',
+        maxResults: 5,
+        baseUrl: 'https://api.anthropic.com/v1',
+        claudeModelId: 'claude-opus-5',
+      }),
+    ).resolves.toEqual({
+      answer: 'claude answer',
+      sources: [],
+      query: 'q',
+      responseTime: 0.4,
+    });
+    expect(searchWithClaudeMock).toHaveBeenCalledWith({
+      query: 'q',
+      apiKey: 'sk-key',
+      modelId: 'claude-opus-5',
+      maxResults: 5,
+      baseUrl: 'https://api.anthropic.com/v1',
+    });
+    expect(searchWithTavilyMock).not.toHaveBeenCalled();
+  });
+
+  it('dispatches Claude provider requests without a model (adapter default applies)', async () => {
+    searchWithClaudeMock.mockResolvedValueOnce({
+      answer: '',
+      sources: [],
+      query: 'q',
+      responseTime: 0.1,
+    });
+
+    await searchWeb({ providerId: 'claude', query: 'q', apiKey: 'sk-key' });
+    expect(searchWithClaudeMock).toHaveBeenCalledWith({
+      query: 'q',
+      apiKey: 'sk-key',
+      modelId: undefined,
+      maxResults: undefined,
+      baseUrl: undefined,
+    });
   });
 
   it('dispatches Brave provider requests without an API key', async () => {
@@ -241,5 +298,40 @@ describe('searchWeb', () => {
       maxResults: 8,
       baseUrl: 'http://192.168.161.100:6060',
     });
+  });
+
+  it('threads the caller AbortSignal through every registered provider adapter', async () => {
+    const signal = new AbortController().signal;
+    const result = { answer: '', sources: [], query: 'q', responseTime: 0.1 };
+    const cases: Array<{
+      providerId: Parameters<typeof searchWeb>[0]['providerId'];
+      adapter: ReturnType<typeof vi.fn>;
+      baseUrl?: string;
+    }> = [
+      { providerId: 'tavily', adapter: searchWithTavilyMock },
+      { providerId: 'bocha', adapter: searchWithBochaMock },
+      { providerId: 'brave', adapter: searchWithBraveMock },
+      { providerId: 'baidu', adapter: searchWithBaiduMock },
+      { providerId: 'claude', adapter: searchWithClaudeMock },
+      { providerId: 'minimax', adapter: searchWithMiniMaxMock },
+      { providerId: 'doubao', adapter: searchWithDoubaoMock },
+      {
+        providerId: 'searxng',
+        adapter: searchWithSearxngMock,
+        baseUrl: 'http://192.168.161.100:6060',
+      },
+    ];
+
+    for (const testCase of cases) {
+      testCase.adapter.mockResolvedValueOnce(result);
+      await searchWeb({
+        providerId: testCase.providerId,
+        query: 'q',
+        apiKey: 'key',
+        baseUrl: testCase.baseUrl,
+        signal,
+      });
+      expect(testCase.adapter).toHaveBeenLastCalledWith(expect.objectContaining({ signal }));
+    }
   });
 });

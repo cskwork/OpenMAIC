@@ -7,7 +7,11 @@
 
 import { NextRequest } from 'next/server';
 import { isProviderKeyRequired } from '@/lib/ai/providers';
-import { isPiChatEnabled, isPiWebSearchEnabled } from '@/lib/config/feature-flags';
+import {
+  isPiChatEnabled,
+  isPiNativeChildRuntimeEnabled,
+  isPiNativeChildSpotlightEnabled,
+} from '@/lib/config/feature-flags';
 import { createLogger } from '@/lib/logger';
 import {
   getPiMaxActionsPerAgent,
@@ -20,6 +24,7 @@ import { resolveModel } from '@/lib/server/resolve-model';
 import { apiError } from '@/lib/server/api-response';
 import type { ThinkingConfig } from '@/lib/types/provider';
 import type { StatelessChatRequest } from '@/lib/types/chat';
+import { resolveClassroomWebSearchConfig } from '@/lib/server/web-search-config';
 
 const log = createLogger('Pi Chat API');
 
@@ -123,6 +128,24 @@ export async function POST(req: NextRequest) {
     const maxAgentTurns = getPiMaxAgentTurns(body);
     const maxActionsPerAgent = getPiMaxActionsPerAgent(body);
     const enableWhiteboardTools = body.config.piEnableWhiteboardTools === true;
+    const childRuntimeMode = isPiNativeChildRuntimeEnabled() ? 'native' : 'legacy';
+    const enableNativeChildSpotlight = isPiNativeChildSpotlightEnabled();
+    let nativeWebSearchConfig: ReturnType<typeof resolveClassroomWebSearchConfig>;
+    try {
+      nativeWebSearchConfig =
+        childRuntimeMode === 'native'
+          ? resolveClassroomWebSearchConfig({
+              webSearchProviderId: body.webSearchProviderId,
+              webSearchApiKey: body.webSearchApiKey,
+              webSearchBaseUrl: body.webSearchBaseUrl,
+              webSearchModelId: body.webSearchModelId,
+              baiduSubSources: body.baiduSubSources,
+            })
+          : undefined;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Invalid Web Search configuration';
+      return apiError('INVALID_REQUEST', 400, message);
+    }
 
     log.info(
       `Pi request agents=${body.config.agentIds.join(', ')} messages=${body.messages.length} maxAgentTurns=${maxAgentTurns}`,
@@ -158,7 +181,9 @@ export async function POST(req: NextRequest) {
           maxAgentTurns,
           maxActionsPerAgent,
           enableWhiteboardTools,
-          enableWebSearch: isPiWebSearchEnabled(),
+          childRuntimeMode,
+          enableNativeChildSpotlight,
+          nativeWebSearchConfig,
         });
 
         if (signal.aborted) {

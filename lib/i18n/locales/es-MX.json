@@ -227,6 +227,7 @@
       }
     },
     "text": {
+      "toolbar": "Barra de texto",
       "label": "Texto",
       "font": "Fuente",
       "fontDefault": "Predeterminada",
@@ -240,17 +241,99 @@
       "alignLeft": "Alinear a la izquierda",
       "alignCenter": "Centrar",
       "alignRight": "Alinear a la derecha",
-      "bullet": "Lista con viñetas"
+      "bullet": "Lista con viñetas",
+      "colorHex": "Código de color"
+    },
+    "line": {
+      "toolbar": "Barra de línea",
+      "kind": "Tipo de línea",
+      "color": "Color de línea",
+      "width": "Grosor de línea",
+      "style": "Estilo de línea",
+      "start": "Estilo inicial",
+      "end": "Estilo final",
+      "straight": "Recta",
+      "broken": "Quebrada",
+      "broken2": "Quebrada doble",
+      "curve": "Curva",
+      "cubic": "Curva cúbica",
+      "solid": "Sólida",
+      "dashed": "Discontinua",
+      "dotted": "Punteada",
+      "none": "Ninguno",
+      "arrow": "Flecha",
+      "dot": "Punto"
     },
     "insert": {
+      "toolbar": "Barra de inserción",
       "textBox": "Cuadro de texto",
+      "line": "Línea",
+      "linePresets": {
+        "straight": "Línea recta",
+        "dashed": "Línea discontinua",
+        "arrow": "Línea con flecha",
+        "dashedArrow": "Línea discontinua con flecha",
+        "dottedEnd": "Línea con extremo de punto",
+        "broken": "Línea quebrada",
+        "doubleBroken": "Línea con doble quiebre",
+        "curve": "Curva",
+        "cubic": "Curva cúbica"
+      },
+      "table": "Tabla",
+      "formula": "Fórmula",
+      "chart": "Gráfica",
+      "chartBar": "Gráfica de barras",
+      "chartLine": "Gráfica de líneas",
+      "chartPie": "Gráfica circular",
+      "tableDimensions": "Tabla {{rows}} x {{columns}}",
       "dragToolbar": "Mover herramientas de inserción",
       "dragToolbarKeyboard": "Mover herramientas de inserción: presiona Enter o Espacio y luego usa las flechas",
       "image": "Imagen",
       "imageDrop": "Suelta una imagen o haz clic para elegir un archivo",
       "imageOr": "o pega la URL de una imagen",
       "imageUrlPlaceholder": "https://…",
-      "imageInsert": "Insertar"
+      "imageInsert": "Insertar",
+      "video": "Video",
+      "videoDrop": "Suelta un video o haz clic para elegir un archivo",
+      "videoOr": "o pega la URL de un video",
+      "videoUrlPlaceholder": "https://…",
+      "videoInsert": "Insertar",
+      "audio": "Audio",
+      "audioDrop": "Suelta un audio o haz clic para elegir un archivo",
+      "audioOr": "o pega la URL de un audio",
+      "audioUrlPlaceholder": "https://…",
+      "audioInsert": "Insertar"
+    },
+    "asset": {
+      "drop": "Arrastra un archivo o haz clic para elegir",
+      "orUrl": "o pega la URL del archivo",
+      "urlPlaceholder": "https://…",
+      "insert": "Insertar",
+      "invalidType": "Tipo de archivo no compatible",
+      "readFailed": "No se pudo leer el archivo"
+    },
+    "latex": {
+      "toolbar": "Barra de fórmulas",
+      "editFormula": "Editar fórmula",
+      "dialog": "Editor de fórmulas",
+      "source": "Código fuente LaTeX",
+      "preview": "Vista previa",
+      "symbols": "Símbolos",
+      "presets": "Fórmulas predefinidas",
+      "invalidSource": "El código fuente LaTeX no es válido."
+    },
+    "video": {
+      "toolbar": "Barra de video",
+      "poster": "Establecer portada"
+    },
+    "audio": {
+      "toolbar": "Barra de audio",
+      "preview": "Escuchar audio",
+      "pause": "Pausar vista previa",
+      "loop": "Repetir"
+    },
+    "table": {
+      "doubleClickToEdit": "Haz doble clic para editar"
     },
     "nav": {
       "addSlide": "Agregar diapositiva",
@@ -273,14 +356,38 @@
       "toBack": "Enviar al fondo"
     },
     "image": {
+      "toolbar": "Barra de imagen",
       "replace": "Reemplazar imagen",
       "flipH": "Voltear horizontal",
-      "flipV": "Voltear vertical"
+      "flipV": "Voltear vertical",
+      "crop": "Recortar imagen"
+    },
+    "contextMenu": {
+      "horizontalAlignment": "Alineación horizontal",
+      "verticalAlignment": "Alineación vertical",
+      "selectAll": "Seleccionar todo",
+      "copy": "Copiar",
+      "cut": "Cortar",
+      "paste": "Pegar",
+      "unlock": "Desbloquear",
+      "lock": "Bloquear",
+      "group": "Agrupar",
+      "ungroup": "Desagrupar",
+      "bringForward": "Traer adelante",
+      "sendBackward": "Enviar atrás",
+      "alignTop": "Alinear arriba",
+      "alignMiddle": "Alinear al medio",
+      "alignBottom": "Alinear abajo"
     },
     "background": {
       "label": "Fondo",
       "solid": "Sólido",
-      "image": "Imagen"
+      "image": "Imagen",
+      "color": "Color"
+    },
+    "common": {
+      "cancel": "Cancelar",
+      "confirm": "Confirmar"
     },
     "quiz": {
       "addQuestion": "Agregar pregunta",
@@ -330,6 +437,7 @@
       "discussion": "Discusión"
     },
     "element": {
+      "toolbar": "Barra de elementos",
       "text": "Texto",
       "image": "Imagen",
       "shape": "Forma",
@@ -583,67 +691,7 @@
     "startRecording": "Iniciar grabación"
   },
   "pbl": {
-    "legacyFormat": "Esta escena de ABP usa un formato heredado. Vuelve a generar el curso.",
     "emptyProject": "El proyecto de ABP aún no se ha generado. Créalo desde la generación de cursos.",
-    "roleSelection": {
-      "title": "Elige tu rol",
-      "description": "Selecciona un rol para empezar a colaborar en el proyecto"
-    },
-    "workspace": {
-      "restart": "Reiniciar",
-      "confirmRestart": "¿Restablecer todo el progreso?",
-      "confirm": "Confirmar",
-      "cancel": "Cancelar"
-    },
-    "issueboard": {
-      "title": "Tablero de retos",
-      "noIssues": "Aún no hay retos",
-      "statusDone": "Hecho",
-      "statusActive": "En curso",
-      "statusPending": "Pendiente"
-    },
-    "chat": {
-      "title": "Discusión del proyecto",
-      "currentIssue": "Reto actual",
-      "mentionHint": "Usa @question para preguntar y @judge para enviar a revisión",
-      "placeholder": "Escribe un mensaje...",
-      "send": "Enviar",
-      "issueCompleteMessage": "¡Completaste el reto \"{{completed}}\"! Vamos con el siguiente: \"{{next}}\"",
-      "allCompleteMessage": "🎉 ¡Completaste todos los retos! ¡Gran trabajo en el proyecto!"
-    },
-    "guide": {
-      "howItWorks": "Cómo funciona",
-      "help": "Ayuda",
-      "title": "Ayuda",
-      "step1": {
-        "title": "Paso 1: elige un rol",
-        "desc": "Cuando el proyecto se haya generado, selecciona un rol de la lista (los roles que no son del sistema están marcados con 🟢)"
-      },
-      "step2": {
-        "title": "Paso 2: completa los retos",
-        "desc": "Cada reto representa una tarea de aprendizaje:",
-        "s1": {
-          "title": "Ver el reto actual",
-          "desc": "Revisa el título, la descripción y el responsable del reto"
-        },
-        "s2": {
-          "title": "Recibe orientación",
-          "example": "@question ¿Por dónde empiezo?\n@question ¿Cómo implemento esta función?",
-          "desc": "El agente de preguntas te da preguntas guía y pistas (sin respuestas directas)"
-        },
-        "s3": {
-          "title": "Entrega tu trabajo",
-          "example": "@judge Ya terminé, revisa mis notas por favor",
-          "desc": "El agente juez evalúa tu trabajo y te da retroalimentación:",
-          "complete": "Pasa automáticamente al siguiente reto",
-          "revision": "Mejora tu trabajo según la retroalimentación"
-        }
-      },
-      "step3": {
-        "title": "Paso 3: completa el proyecto",
-        "desc": "Cuando todos los retos estén terminados, el sistema mostrará \"🎉 ¡Proyecto completado!\""
-      }
-    },
     "v2": {
       "hero": {
         "title": "Aprendizaje basado en proyectos",
@@ -885,7 +933,37 @@
     "searchPlaceholder": "Buscar cursos...",
     "searchAriaLabel": "Buscar cursos",
     "clearSearch": "Borrar",
-    "searchEmpty": "Ningún curso coincide con tu búsqueda"
+    "searchEmpty": "Ningún curso coincide con tu búsqueda",
+    "newFolderTitle": "Nueva carpeta",
+    "newFolderDesc": "Agrupa cursos por tema o para acceder más fácil.",
+    "newFolderInline": "Nueva carpeta…",
+    "folderNameLabel": "Nombre de la carpeta",
+    "folderNamePlaceholder": "p. ej. Matemáticas, Inglés, Cursos principales",
+    "folderNameHint": "CJK y latín ambos válidos; los espacios cuentan.",
+    "folderNameExists": "Ya existe una carpeta con ese nombre",
+    "folderCountLimit": "Límite de carpetas alcanzado",
+    "folderWidth": "Ancho {{width}}/{{max}}",
+    "folderCreate": "Crear",
+    "folderBadge": "Carpeta",
+    "folderCourseCountUnit": "cursos",
+    "deleteFolderTitle": "Eliminar carpeta \"{{name}}\"",
+    "deleteFolderEmptyDesc": "Esta carpeta está vacía. La eliminación no se puede deshacer.",
+    "deleteFolderUngroupDesc": "Los cursos se quedan en \"Mis cursos\", solo sin carpeta.",
+    "moveToFolder": "Mover a carpeta",
+    "moveToFolderLabel": "Mover a…",
+    "ungrouped": "Sin clasificar",
+    "searchResults": "Resultados de búsqueda",
+    "folderCreateFailed": "Error al crear la carpeta",
+    "folderRenameFailed": "Error al renombrar la carpeta",
+    "folderDeleteFailed": "Error al eliminar la carpeta",
+    "moveFailed": "Error al mover el curso",
+    "emptyFolderHint": "Esta carpeta está vacía",
+    "emptyLibraryHint": "Aún no hay cursos — crea uno arriba o importa un curso.",
+    "folderNameEmpty": "El nombre de la carpeta no puede estar vacío",
+    "deleteFolderOnly": "Solo eliminar carpeta",
+    "deleteFolderAndCourses": "Eliminar carpeta y {{count}} curso",
+    "deleteFolderAndCourses_other": "Eliminar carpeta y {{count}} cursos",
+    "deleteFolderConfirmRemove": "Esto elimina la carpeta y sus cursos, incluido el historial de chat."
   },
   "upload": {
     "pdfSizeLimit": "Admite archivos PDF de hasta 50 MB",
@@ -1109,6 +1187,7 @@
       "bocha": "Bocha",
       "brave": "Brave Search",
       "baidu": "Baidu",
+      "claude": "Claude",
       "searxng": "SearXNG"
     },
     "providerTypes": {
@@ -1644,6 +1723,8 @@
     "webSearchApiKeyPlaceholder": "Ingresa tu clave API de búsqueda",
     "webSearchApiKeyPlaceholderServer": "Clave del servidor configurada; puedes sobrescribirla opcionalmente",
     "webSearchApiKeyHint": "Obtén una clave API del proveedor de búsqueda seleccionado",
+    "claudeSearchModel": "Modelo de búsqueda",
+    "claudeSearchModelHint": "El modelo de Claude que realiza las búsquedas web y resume los resultados.",
     "webSearchApiKeyOptional": "La clave API es opcional. Sin ella, se usará el scraping de páginas públicas como alternativa.",
     "searxngServerOnlyNotice": "SearXNG debe configurarse en el servidor. Define la variable de entorno SEARXNG_BASE_URL (o la sección web-search en server-providers.yml). No se aceptan URLs de instancia proporcionadas por el cliente.",
     "baiduSubSources": "Fuentes de búsqueda de Baidu",

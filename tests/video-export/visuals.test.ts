@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Action } from '@openmaic/dsl';
-import type { PBLProjectConfig } from '@/lib/pbl/types';
-import { upgradeLegacyPBLConfigToProjectV2 } from '@/lib/pbl/v2/compat';
+import { upgradeLegacyPBLConfigToProjectV2, type PBLProjectConfig } from '@/lib/pbl/legacy/read';
+import type { PBLProjectV2 } from '@/lib/pbl/v2/types';
 import {
   compileVideoTimeline,
   emitManifest,
@@ -43,6 +43,55 @@ function compile(scene: CompilerScene) {
   );
 }
 
+const nonRunnableV2Mutations: Array<[string, (project: PBLProjectV2) => void]> = [
+  [
+    'all milestones have empty microtasks',
+    (project) => {
+      project.milestones.forEach((milestone) => {
+        milestone.microtasks = [];
+      });
+    },
+  ],
+  [
+    'one milestone has no microtasks',
+    (project) => {
+      project.milestones.at(-1)!.microtasks = [];
+    },
+  ],
+  [
+    'there is no Instructor role',
+    (project) => {
+      project.roles.forEach((role) => {
+        role.type = 'mentor';
+      });
+    },
+  ],
+  [
+    'the Instructor has no id',
+    (project) => {
+      Reflect.deleteProperty(project.roles.find((role) => role.type === 'instructor')!, 'id');
+    },
+  ],
+  [
+    'the Instructor has no name',
+    (project) => {
+      Reflect.deleteProperty(project.roles.find((role) => role.type === 'instructor')!, 'name');
+    },
+  ],
+  [
+    'a microtask has no id',
+    (project) => {
+      Reflect.deleteProperty(project.milestones.at(-1)!.microtasks.at(-1)!, 'id');
+    },
+  ],
+  [
+    'a microtask has no title',
+    (project) => {
+      Reflect.deleteProperty(project.milestones.at(-1)!.microtasks.at(-1)!, 'title');
+    },
+  ],
+];
+
 describe('video-export cover visual pass', () => {
   it('builds a whole-scene Quiz cover from authored questions and default points', () => {
     const ir = compile(
@@ -62,7 +111,7 @@ describe('video-export cover visual pass', () => {
       }),
     );
 
-    expect(ir.version).toBe(2);
+    expect(ir.version).toBe(4);
     expect(ir.scenes[0]).toMatchObject({
       supported: true,
       base: { kind: 'visual-segments' },
@@ -130,6 +179,8 @@ describe('video-export cover visual pass', () => {
           },
           threads: [{ messages: [{ content: 'SECRET_CHAT' }] }],
           submissions: [{ content: 'SECRET_SUBMISSION' }],
+          evaluations: [],
+          engagementEvents: [],
         },
         projectConfig: {
           projectInfo: { title: 'Legacy title', description: 'Legacy description' },
@@ -366,6 +417,109 @@ describe('video-export cover visual pass', () => {
     ]);
   });
 
+  it('uses legacy cover fields when a hybrid scene has malformed projectV2', () => {
+    const visual = compile(
+      pblScene({
+        projectConfig: legacyProjectConfig({ activeIssue: 'root', chat: '' }),
+        projectV2: { title: 'broken' },
+      }),
+    ).scenes[0].visuals[0];
+
+    expect(visual).toEqual({
+      kind: 'pbl-cover',
+      startMs: 0,
+      durationMs: 3600,
+      title: 'Legacy Project',
+      description: 'Legacy description',
+      gains: [],
+      stageCount: 1,
+      taskCount: 2,
+    });
+  });
+
+  it('uses legacy cover fields when a hybrid v2 project has no milestones', () => {
+    const projectConfig = legacyProjectConfig({ activeIssue: 'root', chat: '' });
+    const projectV2 = upgradeLegacyPBLConfigToProjectV2(projectConfig);
+    projectV2.title = 'Empty v2 title';
+    projectV2.milestones = [];
+
+    const visual = compile(pblScene({ projectConfig, projectV2 })).scenes[0].visuals[0];
+
+    expect(visual).toMatchObject({
+      kind: 'pbl-cover',
+      title: 'Legacy Project',
+      stageCount: 1,
+      taskCount: 2,
+    });
+  });
+
+  it.each(nonRunnableV2Mutations)(
+    'uses legacy cover fields when a hybrid v2 project is non-runnable because %s',
+    (_label, makeNonRunnable) => {
+      const projectConfig = legacyProjectConfig({ activeIssue: 'root', chat: '' });
+      const projectV2 = upgradeLegacyPBLConfigToProjectV2(projectConfig);
+      projectV2.title = 'Non-runnable v2 title';
+      makeNonRunnable(projectV2);
+
+      const visual = compile(pblScene({ projectConfig, projectV2 })).scenes[0].visuals[0];
+
+      expect(visual).toMatchObject({
+        kind: 'pbl-cover',
+        title: 'Legacy Project',
+        stageCount: 1,
+        taskCount: 2,
+      });
+    },
+  );
+
+  it('keeps a partial projectV2 cover when the legacy config is an empty stub', () => {
+    const visual = compile(
+      pblScene({
+        projectConfig: {},
+        projectV2: { title: 'Recoverable v2 title' },
+      }),
+    ).scenes[0].visuals[0];
+
+    expect(visual).toMatchObject({
+      kind: 'pbl-cover',
+      title: 'Recoverable v2 title',
+    });
+  });
+
+  it.each(nonRunnableV2Mutations)(
+    'keeps the permissive v2-only cover when %s',
+    (_label, makeNonRunnable) => {
+      const projectV2 = upgradeLegacyPBLConfigToProjectV2(
+        legacyProjectConfig({ activeIssue: 'root', chat: '' }),
+      );
+      projectV2.title = 'Recoverable non-runnable v2';
+      makeNonRunnable(projectV2);
+
+      const visual = compile(pblScene({ projectV2 })).scenes[0].visuals[0];
+
+      expect(visual).toMatchObject({
+        kind: 'pbl-cover',
+        title: 'Recoverable non-runnable v2',
+      });
+    },
+  );
+
+  it('keeps the permissive v2 cover when a damaged hybrid legacy shell has no issues', () => {
+    const projectConfig = legacyProjectConfig({ activeIssue: 'root', chat: '' });
+    projectConfig.issueboard.issues = [];
+
+    const visual = compile(
+      pblScene({ projectConfig, projectV2: { title: 'Recoverable damaged v2' } }),
+    ).scenes[0].visuals[0];
+
+    expect(visual).toMatchObject({
+      kind: 'pbl-cover',
+      title: 'Recoverable damaged v2',
+      stageCount: 0,
+      taskCount: 0,
+    });
+  });
+
   /**
    * A v1 roster holds student roles and issueboard bots, never a tutor, so no
    * agent on it may be promoted onto the cover as one.
@@ -415,7 +569,7 @@ describe('video-export cover visual pass', () => {
     expect(JSON.stringify(first)).not.toMatch(/Question Agent|Instructor/);
   });
 
-  it('keeps interactive scenes unsupported while Quiz and PBL get informational diagnostics', () => {
+  it('keeps unprepared interactive scenes unsupported while Quiz and PBL get informational diagnostics', () => {
     const interactive = {
       id: 'interactive',
       stageId: 'stage',

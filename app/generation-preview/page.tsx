@@ -21,7 +21,7 @@ import {
   fetchSceneContent,
   generateTTSForScene,
 } from '@/lib/hooks/use-scene-generator';
-import { isAbortError } from '@/lib/generation/generation-retry';
+import { isAbortError } from '@openmaic/generation';
 import { FOREGROUND_SCENE_RETRY_OPTIONS } from './foreground-retry';
 import {
   loadImageMapping,
@@ -520,6 +520,7 @@ function GenerationPreviewContent() {
               apiKey: wsConfig?.apiKey || undefined,
               baseUrl: wsProviderId === 'searxng' ? undefined : wsConfig?.baseUrl || undefined,
               baiduSubSources: wsProviderId === 'baidu' ? wsSettings.baiduSubSources : undefined,
+              claudeModelId: wsProviderId === 'claude' ? wsConfig?.modelId || undefined : undefined,
             }),
           ),
           signal,

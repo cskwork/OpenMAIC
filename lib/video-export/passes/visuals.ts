@@ -1,18 +1,33 @@
 /**
  * `visuals` pass — derive deterministic Quiz/PBL cover cards from authored data.
  *
- * This pass deliberately uses local structural narrowing rather than importing
- * app PBL/runtime types. Only learner-visible design fields enter the IR; quiz
- * answers, PBL threads, submissions, progress and internal personas are ignored.
+ * This pass uses structural narrowing for current content and delegates legacy
+ * PBL reads to the permanent read-only adapter. Only learner-visible design
+ * fields enter the IR; quiz answers, threads, submissions, progress and internal
+ * personas are ignored.
  *
  * Pure: no IO, clock, randomness, DOM, React, or app-layer imports.
  */
-import type { CompilerScene } from '../deps';
-import type { Diagnostic, PblCoverVisual, VideoTimelineScene, VisualSegment } from '../ir';
+import type { CompilerScene, QuizLayoutMeasurement, QuizLayoutProbe } from '../deps';
+import type {
+  Diagnostic,
+  PblCoverVisual,
+  QuizQuestionListQuestion,
+  QuizQuestionListVisual,
+  VideoTimelineScene,
+  VisualSegment,
+} from '../ir';
+import {
+  isRunnablePblV2CoverProject,
+  isUsableLegacyCoverConfig,
+  pblLegacyCover,
+} from '../legacy/read';
 
 export interface VisualsResult {
   scenes: VideoTimelineScene[];
   diagnostics: Diagnostic[];
+  /** Per-scene duration inserted after the original authored scene timeline. */
+  extensionsMs: number[];
 }
 
 type UnknownRecord = Record<string, unknown>;
@@ -31,41 +46,96 @@ function text(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
-function legacyIssueRoot(
-  issue: UnknownRecord,
-  issueById: ReadonlyMap<unknown, UnknownRecord>,
-): UnknownRecord | undefined {
-  let current = issue;
-  const visited = new Set<UnknownRecord>();
-
-  while (current.parent_issue !== null) {
-    if (visited.has(current)) return undefined;
-    visited.add(current);
-    const parent = issueById.get(current.parent_issue);
-    if (!parent) return undefined;
-    current = parent;
+function quizOption(value: unknown, index: number): { value: string; label: string } | null {
+  if (typeof value === 'string') {
+    const label = text(value);
+    return label ? { value: String.fromCharCode(65 + index), label } : null;
   }
-
-  return current;
+  if (!isRecord(value)) return null;
+  const optionValue = text(value.value);
+  const label = text(value.label);
+  return optionValue && label ? { value: optionValue, label } : null;
 }
 
 /**
- * Counts authored stages on a legacy issueboard: every root contributes one
- * stage, and an orphan or cycle issue stands alone so a malformed board still
- * yields a stable count instead of vanishing from the cover.
+ * Project a Quiz scene onto the complete learner-visible field whitelist used
+ * by export. This is the only path from authored Quiz data into question-list
+ * IR, so answer keys and runtime state cannot leak into the emitter.
  */
-function legacyStageCount(issues: readonly UnknownRecord[]): number {
-  const issueById = new Map<unknown, UnknownRecord>();
-  for (const issue of issues) issueById.set(issue.id, issue);
-
-  const roots = new Set<UnknownRecord>();
-  let standaloneCount = 0;
-  for (const issue of issues) {
-    const root = legacyIssueRoot(issue, issueById);
-    if (root) roots.add(root);
-    else standaloneCount += 1;
+export function prepareQuizQuestionList(scene: CompilerScene): QuizQuestionListQuestion[] {
+  const raw = Array.isArray(scene.content?.questions) ? scene.content.questions : [];
+  const questions: QuizQuestionListQuestion[] = [];
+  for (const value of raw) {
+    if (!isRecord(value)) continue;
+    const id = text(value.id);
+    const question = text(value.question);
+    const type = value.type;
+    if (!id || !question || (type !== 'single' && type !== 'multiple' && type !== 'short_answer')) {
+      continue;
+    }
+    if (type === 'short_answer') {
+      questions.push({ id, type, question });
+      continue;
+    }
+    const options = Array.isArray(value.options)
+      ? value.options
+          .map((option, index) => quizOption(option, index))
+          .filter((option): option is { value: string; label: string } => option !== null)
+      : [];
+    questions.push({ id, type, question, options });
   }
-  return roots.size + standaloneCount;
+  return questions;
+}
+
+const QUIZ_TRANSITION_MS = 600;
+const QUIZ_TOP_HOLD_MS = 1200;
+const QUIZ_BOTTOM_HOLD_MS = 1200;
+const QUIZ_SCROLL_PX_PER_SECOND_720P = 96;
+const QUIZ_MIN_SCROLL_MS = 4000;
+const QUIZ_MAX_SCROLL_MS = 24_000;
+
+function validMeasurement(value: QuizLayoutMeasurement | null): value is QuizLayoutMeasurement {
+  return (
+    value !== null &&
+    Number.isFinite(value.contentHeightPx) &&
+    value.contentHeightPx > 0 &&
+    Number.isFinite(value.viewportHeightPx) &&
+    value.viewportHeightPx > 0 &&
+    Number.isFinite(value.frameHeightPx) &&
+    value.frameHeightPx > 0
+  );
+}
+
+function quizQuestionListVisual(
+  source: CompilerScene,
+  timeline: VideoTimelineScene,
+  questions: QuizQuestionListQuestion[],
+  measurement: QuizLayoutMeasurement,
+): QuizQuestionListVisual {
+  const scrollDistancePx = Math.max(0, measurement.contentHeightPx - measurement.viewportHeightPx);
+  const targetPixelsPerSecond = QUIZ_SCROLL_PX_PER_SECOND_720P * (measurement.frameHeightPx / 720);
+  const unclampedScrollMs = Math.round((scrollDistancePx / targetPixelsPerSecond) * 1000);
+  const scrollDurationMs =
+    scrollDistancePx === 0
+      ? 0
+      : Math.min(QUIZ_MAX_SCROLL_MS, Math.max(QUIZ_MIN_SCROLL_MS, unclampedScrollMs));
+  const pixelsPerSecond = scrollDurationMs === 0 ? 0 : scrollDistancePx / (scrollDurationMs / 1000);
+  const durationMs = QUIZ_TRANSITION_MS + QUIZ_TOP_HOLD_MS + scrollDurationMs + QUIZ_BOTTOM_HOLD_MS;
+  return {
+    kind: 'quiz-question-list',
+    startMs: timeline.startMs + timeline.durationMs,
+    durationMs,
+    title: source.title,
+    questions,
+    contentHeightPx: measurement.contentHeightPx,
+    viewportHeightPx: measurement.viewportHeightPx,
+    scrollDistancePx,
+    pixelsPerSecond,
+    transitionDurationMs: QUIZ_TRANSITION_MS,
+    topHoldDurationMs: QUIZ_TOP_HOLD_MS,
+    scrollDurationMs,
+    bottomHoldDurationMs: QUIZ_BOTTOM_HOLD_MS,
+  };
 }
 
 function quizCover(scene: CompilerScene, timeline: VideoTimelineScene): VisualSegment {
@@ -122,71 +192,83 @@ function pblV2Cover(
   };
 }
 
-/**
- * A legacy (v1) project has no instructor to put on the cover, so it never
- * names one.
- *
- * Its roster is the 2–4 *development roles the learner chooses between* — the
- * design prompt asks for "Data Analyst", "Frontend Developer" and the like —
- * plus the `Question Agent - <issue>` / `Judge Agent - <issue>` helpers the
- * issueboard spawns per issue. Promoting any of them would print a student
- * role, or a machine name, under a "Tutor" label. Picking by the issueboard's
- * active issue would additionally tie the cover to learner progress. Both are
- * worse than the card simply not claiming an instructor.
- */
-function pblLegacyCover(
-  project: UnknownRecord,
-  scene: CompilerScene,
-  timeline: VideoTimelineScene,
-): PblCoverVisual {
-  const projectInfo = isRecord(project.projectInfo) ? project.projectInfo : {};
-  const issueboard = isRecord(project.issueboard) ? project.issueboard : {};
-  const issues = records(issueboard.issues);
-  return {
-    kind: 'pbl-cover',
-    startMs: timeline.startMs,
-    durationMs: timeline.durationMs,
-    title: text(projectInfo.title) ?? scene.title,
-    description: text(projectInfo.description) ?? '',
-    gains: [],
-    stageCount: legacyStageCount(issues),
-    taskCount: issues.length,
-  };
-}
-
 function pblCover(scene: CompilerScene, timeline: VideoTimelineScene): PblCoverVisual {
-  const projectV2 =
-    scene.content && isRecord(scene.content.projectV2) ? scene.content.projectV2 : undefined;
-  if (projectV2) return pblV2Cover(projectV2, scene, timeline);
-
+  const projectV2 = scene.content?.projectV2;
   const projectConfig =
-    scene.content && isRecord(scene.content.projectConfig) ? scene.content.projectConfig : {};
-  return pblLegacyCover(projectConfig, scene, timeline);
+    scene.content && isRecord(scene.content.projectConfig)
+      ? scene.content.projectConfig
+      : undefined;
+  // On a hybrid scene a damaged or non-runnable v2 payload must not shadow usable legacy data:
+  // the renderer falls back to the legacy config there, and the exported cover
+  // has to agree with what the classroom shows. When the legacy config is
+  // absent, empty, or garbage (the renderer would not show it either), the
+  // cover keeps reading a partial v2 payload defensively — a sparse cover
+  // beats an empty one, and there is nothing usable to diverge from.
+  const legacyUsable = isUsableLegacyCoverConfig(projectConfig);
+  const v2Runnable = isRunnablePblV2CoverProject(projectV2);
+  if (isRecord(projectV2) && (v2Runnable || !legacyUsable)) {
+    return pblV2Cover(projectV2, scene, timeline);
+  }
+  return pblLegacyCover(projectConfig ?? {}, scene, timeline);
 }
 
 export function applyVisuals(
   timelineScenes: readonly VideoTimelineScene[],
   sourceScenes: readonly CompilerScene[],
+  quizLayout?: QuizLayoutProbe,
 ): VisualsResult {
   const diagnostics: Diagnostic[] = [];
+  const extensionsMs = timelineScenes.map(() => 0);
   const scenes = timelineScenes.map((timeline, index): VideoTimelineScene => {
     const source = sourceScenes[index];
     if (!source || (source.type !== 'quiz' && source.type !== 'pbl')) return timeline;
 
     const visual =
       source.type === 'quiz' ? quizCover(source, timeline) : pblCover(source, timeline);
+    let visuals: VisualSegment[] = [visual];
+    if (source.type === 'quiz') {
+      const questions = prepareQuizQuestionList(source);
+      if (questions.length > 0) {
+        let measurement: QuizLayoutMeasurement | null = null;
+        if (quizLayout) {
+          try {
+            measurement = quizLayout.measureQuestionList(source);
+          } catch {
+            measurement = null;
+          }
+        }
+        if (validMeasurement(measurement)) {
+          const list = quizQuestionListVisual(source, timeline, questions, measurement);
+          extensionsMs[index] = list.durationMs;
+          visuals = [
+            { ...visual, durationMs: timeline.durationMs + list.transitionDurationMs },
+            list,
+          ];
+        } else {
+          diagnostics.push({
+            severity: 'warn',
+            code: 'quiz-layout-unavailable',
+            sceneId: timeline.id,
+            message: `Quiz question-list layout was unavailable for scene "${timeline.title}"; using the deterministic cover-only fallback.`,
+          });
+        }
+      }
+    }
     diagnostics.push({
       severity: 'info',
       code: 'cover-card',
       sceneId: timeline.id,
-      message: `Scene "${timeline.title}" (${timeline.type}) is rendered as a deterministic static cover card.`,
+      message:
+        timeline.type === 'quiz' && visuals.some((item) => item.kind === 'quiz-question-list')
+          ? `Scene "${timeline.title}" (quiz) is rendered as a deterministic cover-to-question-list sequence.`
+          : `Scene "${timeline.title}" (${timeline.type}) is rendered as a deterministic static cover card.`,
     });
     return {
       ...timeline,
       supported: true,
       base: { kind: 'visual-segments' },
-      visuals: [visual],
+      visuals,
     };
   });
-  return { scenes, diagnostics };
+  return { scenes, diagnostics, extensionsMs };
 }

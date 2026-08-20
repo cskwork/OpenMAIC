@@ -30,6 +30,15 @@ export function isPlaybackRendererEnabled(): boolean {
 }
 
 /**
+ * Experimental Pro-mode slide editor renderer. Default OFF so professional
+ * editing keeps using the legacy in-app editor canvas unless explicitly enabled
+ * in `.env.local`.
+ */
+export function isEditorRendererEnabled(): boolean {
+  return readBoolean(process.env.NEXT_PUBLIC_MAIC_EDITOR_RENDERER_ENABLED);
+}
+
+/**
  * Experimental Pi-based classroom chat runtime. Default OFF. The same public
  * flag selects the client runtime and gates the corresponding server route.
  */
@@ -38,11 +47,19 @@ export function isPiChatEnabled(): boolean {
 }
 
 /**
- * Server-only gate for the Pi Director web-search tool. Default OFF. Enabling
- * Pi chat alone must not implicitly grant the Director external network access.
+ * Server-only selector for the Pi Child execution harness. Default OFF keeps
+ * the existing Legacy JSON-action Child runtime.
  */
-export function isPiWebSearchEnabled(): boolean {
-  return readBoolean(process.env.OPENMAIC_ENABLE_PI_WEB_SEARCH);
+export function isPiNativeChildRuntimeEnabled(): boolean {
+  return readBoolean(process.env.OPENMAIC_ENABLE_PI_NATIVE_CHILD_RUNTIME);
+}
+
+/**
+ * Server-only capability gate for Native Child Spotlight. This flag never
+ * selects the Child runtime and has no effect while the Legacy harness is used.
+ */
+export function isPiNativeChildSpotlightEnabled(): boolean {
+  return readBoolean(process.env.OPENMAIC_ENABLE_PI_NATIVE_CHILD_SPOTLIGHT);
 }
 
 /**
