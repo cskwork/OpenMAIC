@@ -12,12 +12,14 @@ describe('ReplayContract static parsing', () => {
     const html = `
       <div id="board" data-testid="surface"></div>
       <button id="start-button">Start</button>
+      <button id="1start">Special</button>
       <script>document.body.innerHTML = '<div id="fake-script-target"></div>'</script>
     `;
     expect(parseReplayTargets(html)).toEqual([
       '#board',
       '#start-button',
       '[data-testid="surface"]',
+      '[id="1start"]',
     ]);
   });
 
@@ -45,6 +47,18 @@ describe('ReplayContract static parsing', () => {
         'capability-fileOperations',
       ]),
     );
+  });
+
+  it('scans executable handlers without treating prose as navigation', () => {
+    const risky = analyzeReplayHtml(`
+      <button onclick=history.back()>Back</button>
+      <button onclick="(()=>globalThis['location'].href='/next')()">Next</button>
+      <button onclick="navigation.navigate('/next')">Navigate</button>
+    `);
+    expect(risky.capabilities.navigation).toBe('risk');
+    expect(
+      analyzeReplayHtml('<p>Choose a location.</p><button>Start</button>').capabilities.navigation,
+    ).toBe('not-detected');
   });
 
   it('rejects malformed, unsupported, and stale contracts', () => {

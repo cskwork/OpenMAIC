@@ -274,6 +274,11 @@ jobs:
         env:
           INTERACTIVE_STATIC_BROWSER: '1'
 
+      - name: Replay contract Chromium inspection
+        run: pnpm exec vitest run tests/interactive/replay-contract.browser.test.ts
+        env:
+          REPLAY_CONTRACT_BROWSER: '1'
+
       # runner.* is only valid in step contexts (not job-level env).
       - name: Materialize Hyperframes lint samples
         run: pnpm exec vitest run tests/video-export/e2e-materialize.test.ts

@@ -26,6 +26,9 @@ export interface ReplayTarget {
   reasons: string[];
   rect: ReplayRect;
   disabled: boolean;
+  checked?: boolean | 'mixed';
+  value?: string;
+  selectedIndex?: number;
 }
 
 export interface ReplayControl {
@@ -161,6 +164,58 @@ function statusFor(found: boolean, risky = false): ReplayCapabilityStatus {
   return risky ? 'risk' : 'unsupported';
 }
 
+function htmlStartTags(html: string): string[] {
+  const tags: string[] = [];
+  for (let start = 0; start < html.length; start++) {
+    if (html[start] !== '<' || !/[a-z]/i.test(html[start + 1] ?? '')) continue;
+    let quote = '';
+    for (let end = start + 1; end < html.length; end++) {
+      const char = html[end];
+      if (quote) {
+        if (char === quote) quote = '';
+      } else if (char === '"' || char === "'") {
+        quote = char;
+      } else if (char === '>') {
+        tags.push(html.slice(start, end + 1));
+        start = end;
+        break;
+      }
+    }
+  }
+  return tags;
+}
+
+function hasUncontainableReplaySideEffect(html: string): boolean {
+  const executableFragments: string[] = [];
+  if (typeof DOMParser !== 'undefined') {
+    const parsed = new DOMParser().parseFromString(html, 'text/html');
+    for (const script of parsed.querySelectorAll('script')) {
+      if (script.hasAttribute('src')) return true;
+      executableFragments.push(script.textContent ?? '');
+    }
+    for (const element of parsed.querySelectorAll('*')) {
+      for (const attribute of element.attributes) {
+        if (/^on/i.test(attribute.name)) executableFragments.push(attribute.value);
+      }
+    }
+  } else {
+    if (/<script\b[^>]*\bsrc\s*=/i.test(html)) return true;
+    for (const match of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi)) {
+      executableFragments.push(match[1] ?? '');
+    }
+    for (const tag of htmlStartTags(html)) {
+      for (const handler of tag.matchAll(
+        /\bon[a-z]+\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi,
+      )) {
+        executableFragments.push(handler[1] ?? handler[2] ?? handler[3] ?? '');
+      }
+    }
+  }
+  return /(?:\[\s*["']location["']\s*\]|\blocation)\s*(?:\.|\[|=)|(?:\[\s*["']history["']\s*\]|\bhistory)\s*(?:\.\s*(?:go|back|forward)|\[\s*["'](?:go|back|forward)["']\s*\])\s*\(|(?:\[\s*["']navigation["']\s*\]|\bnavigation)\s*(?:\.\s*(?:navigate|reload|back|forward|traverseTo)|\[\s*["'](?:navigate|reload|back|forward|traverseTo)["']\s*\])\s*\(|(?:\[\s*["'](?:FileReader|showOpenFilePicker|showSaveFilePicker|showDirectoryPicker)["']\s*\]|\b(?:FileReader|showOpenFilePicker|showSaveFilePicker|showDirectoryPicker)\b)/i.test(
+    executableFragments.join('\n'),
+  );
+}
+
 /** Static, DOM-free capability scan used before opening a browser frame. */
 export function analyzeReplayHtml(html: string): {
   capabilities: ReplayCapabilities;
@@ -184,10 +239,7 @@ export function analyzeReplayHtml(html: string): {
       has(/\b(?:Date\.now|new\s+Date|Math\.random|crypto\.getRandomValues)\b/),
       true,
     ),
-    navigation: statusFor(
-      has(/<(?:a|form)\b|\b(?:location|history\.|window\.location|document\.location)/i),
-      true,
-    ),
+    navigation: statusFor(has(/<(?:a|form)\b/i) || hasUncontainableReplaySideEffect(html), true),
     popups: statusFor(has(/\b(?:window\.)?open\s*\(/i), true),
     fileOperations: statusFor(
       has(/<input\b[^>]*type\s*=\s*["']file|\b(?:FileReader|showOpenFilePicker|download)\b/i),
@@ -218,39 +270,58 @@ export function parseReplayTargets(html: string): string[] {
   for (const match of markup.matchAll(tag)) {
     const attrs = match[2] ?? '';
     const id = /\bid\s*=\s*["']([^"']+)["']/i.exec(attrs)?.[1];
-    if (id) selectors.add(`#${cssEscape(id)}`);
+    if (id) selectors.add(stableAttributeSelector('id', id, escapeCssString));
     for (const name of ['data-testid', 'data-step-id', 'data-action']) {
       const value = new RegExp(`\\b${name}\\s*=\\s*["']([^"']+)["']`, 'i').exec(attrs)?.[1];
-      if (value) selectors.add(`[${name}="${cssEscape(value)}"]`);
+      if (value) selectors.add(stableAttributeSelector(name, value, escapeCssString));
     }
   }
   return [...selectors].sort();
 }
 
-function cssEscape(value: string): string {
-  return value.replace(/[^a-zA-Z0-9_-]/g, (char) => `\\${char}`);
+function escapeCssString(value: string): string {
+  return String(value)
+    .replace(/\0/g, '\uFFFD')
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\a ')
+    .replace(/\r/g, '\\d ');
+}
+
+function stableAttributeSelector(
+  name: string,
+  value: string,
+  escapeValue: (input: string) => string,
+): string {
+  const normalized = String(value);
+  if (name === 'id' && /^-?[_a-zA-Z][-_a-zA-Z0-9]*$/.test(normalized)) {
+    return `#${normalized}`;
+  }
+  return `[${name}="${escapeValue(normalized)}"]`;
 }
 
 function injectInspector(html: string, options: ReplayInjectionOptions): string {
   const timeout = Math.max(100, Math.floor(options.operationTimeoutMs));
   const settle = Math.max(0, Math.floor(options.settleMs));
+  const escapeCssStringSource = escapeCssString.toString();
+  const stableAttributeSelectorSource = stableAttributeSelector.toString();
   const script = `<script data-openmaic-replay-inspector>(function(){
 var TIMEOUT=${timeout},SETTLE=${settle},PREFIX='__openmaicReplay',CHANNEL=new MessageChannel();
-function esc(s){return String(s).replace(/[^a-zA-Z0-9_-]/g,function(c){return '\\\\'+c})}
-function selector(el){if(el.id)return '#'+esc(el.id);for(var i=0,n=['data-testid','data-step-id','data-action'];i<n.length;i++){var v=el.getAttribute(n[i]);if(v)return '['+n[i]+'="'+esc(v)+'"]'}var parts=[],node=el;while(node&&node.nodeType===1&&node.tagName.toLowerCase()!=='html'){var index=1,sibling=node.previousElementSibling;while(sibling){if(sibling.tagName===node.tagName)index++;sibling=sibling.previousElementSibling}parts.unshift(node.tagName.toLowerCase()+':nth-of-type('+index+')');node=node.parentElement}return parts.join(' > ')}
-function text(el){return String(el.textContent||'').replace(/\\s+/g,' ').trim().slice(0,160)}
-function vis(el){var r=el.getBoundingClientRect(),reasons=[],v='visible',n=el;while(n){var s=getComputedStyle(n);if(n.hidden||n.inert||n.getAttribute('aria-hidden')==='true'||s.display==='none'||s.visibility==='hidden'||s.visibility==='collapse'||Number(s.opacity)===0){v='hidden';reasons.push('css-hidden');break}n=n.parentElement}if(v==='visible'&&(r.width<=0||r.height<=0)){v='hidden';reasons.push('zero-size')}else if(v==='visible'&&(r.right<=0||r.bottom<=0||r.left>=innerWidth||r.top>=innerHeight)){v='off-viewport';reasons.push('outside-viewport')}else if(v==='visible'){var x=Math.max(0,Math.min(innerWidth-1,r.left+r.width/2)),y=Math.max(0,Math.min(innerHeight-1,r.top+r.height/2)),top=document.elementFromPoint(x,y);if(!top){v='unknown';reasons.push('hit-test-unavailable')}else if(top!==el&&!el.contains(top)){v='occluded';reasons.push('covered-by-'+String(top.id||top.tagName||'element'))}}return {selector:selector(el),tagName:el.tagName.toLowerCase(),text:text(el),visibility:v,reasons:reasons,rect:{x:Math.round(r.x*100)/100,y:Math.round(r.y*100)/100,width:Math.round(r.width*100)/100,height:Math.round(r.height*100)/100},disabled:!!el.disabled||el.getAttribute('aria-disabled')==='true'}}
-function snapshot(){var els=[].slice.call(document.querySelectorAll('[id],[data-testid],[data-step-id],[data-action],button,input,select,textarea,[role]')),seen={},targets=[];els.forEach(function(el){var s=selector(el);if(!s||seen[s])return;seen[s]=1;targets.push(vis(el))});targets.sort(function(a,b){return a.selector.localeCompare(b.selector)});var groups={visible:[],hidden:[],offViewport:[],occluded:[]};targets.forEach(function(t){if(groups[t.visibility])groups[t.visibility].push(t.selector)});var serial=targets.map(function(t){return [t.selector,t.visibility,t.text,t.disabled,t.rect.x,t.rect.y,t.rect.width,t.rect.height].join('|')}).join('\\n');return {signature:fnv(serial),targets:targets,visible:groups.visible,hidden:groups.hidden,offViewport:groups.offViewport,occluded:groups.occluded}}
-function fnv(s){var h=2166136261;for(var i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return (h>>>0).toString(16).padStart(8,'0')}
-function controls(){var out=[],seen={};[].slice.call(document.querySelectorAll('button,input,select,textarea,[role="button"],[role="switch"],[role="checkbox"]')).forEach(function(el){var s=selector(el);if(!s||seen[s])return;seen[s]=1;var tag=el.tagName.toLowerCase(),type=(el.getAttribute('type')||'').toLowerCase(),toggle=type==='checkbox'||type==='radio'||el.getAttribute('role')==='switch'||el.getAttribute('role')==='checkbox',button=tag==='button'||(tag==='input'&&type==='button'),kind=toggle?'toggle':(button?'button':(tag==='input'||tag==='select'||tag==='textarea'?'input':'button')),bounded=true,reason='',value;if(tag==='a'){bounded=false;reason='navigation-control'}if(tag==='input'&&(type==='file'||type==='url'||type==='email'||type==='submit'||type==='image')){bounded=false;reason='unsafe-input-type'}if(kind==='input'&&tag==='textarea'&&!(el.maxLength>0&&el.maxLength<=${SAFE_INPUT_MAX})){bounded=false;reason='unbounded-input'}if(kind==='input'&&tag==='input'&&(type===''||type==='text'||type==='search')&&!(el.maxLength>0&&el.maxLength<=${SAFE_INPUT_MAX})){bounded=false;reason='unbounded-input'}if(kind==='input'&&tag==='input'&&(type==='number'||type==='range')){var min=Number(el.min),max=Number(el.max);if(!Number.isFinite(min)||!Number.isFinite(max)||max<min){bounded=false;reason='unbounded-input'}else value=(min+max)/2}if(kind==='input'&&tag==='select'){value=el.options&&el.options.length?el.options[Math.min(1,el.options.length-1)].value:''}if(kind==='input'&&value===undefined)value='';if(tag==='button'&&el.form&&(type===''||type==='submit'||type==='reset')){bounded=false;reason='form-navigation'}out.push({selector:s,kind:kind,tagName:tag,label:text(el)||el.getAttribute('aria-label')||'',inputType:type||undefined,bounded:bounded,safe:bounded&&!el.disabled,operationValue:value,reason:reason||undefined})});return out.sort(function(a,b){return a.selector.localeCompare(b.selector)})}
-function emit(kind,payload){try{var x={kind:PREFIX+'-'+kind};Object.keys(payload||{}).forEach(function(k){x[k]=payload[k]});CHANNEL.port1.postMessage(x)}catch(_){} }
-function settle(){return new Promise(function(resolve){var done=false,t=setTimeout(function(){if(!done){done=true;resolve(false)}},Math.max(50,TIMEOUT-50));requestAnimationFrame(function(){requestAnimationFrame(function(){setTimeout(function(){if(done)return;done=true;clearTimeout(t);resolve(true)},SETTLE)})})})}
-function safeOp(op){var el=document.querySelector(op.selector);if(!el)return {ok:false,error:'target-not-found'};if(el.disabled||el.getAttribute('aria-disabled')==='true')return {ok:false,error:'target-disabled'};try{if(op.kind==='input'){var value=String(op.value==null?'':op.value);if(value.length>${SAFE_INPUT_MAX})return {ok:false,error:'input-too-long'};el.value=value;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}))}else{el.click()}return {ok:true}}catch(e){return {ok:false,error:String(e&&e.message||e)}}}
-CHANNEL.port1.addEventListener('message',function(e){var d=e.data||{};if(!d||d.kind!==PREFIX+'-operation')return;var before=snapshot(),result=safeOp(d.operation||{});settle().then(function(settled){emit('operation-result',{id:d.id,before:before,after:snapshot(),result:result,settled:settled,controls:controls()})})});CHANNEL.port1.start();parent.postMessage({kind:PREFIX+'-hello'},'*',[CHANNEL.port2]);
+var escapeCssString=${escapeCssStringSource},stableAttributeSelector=${stableAttributeSelectorSource};
+function selector(element){if(element.id)return stableAttributeSelector('id',element.id,escapeCssString);var attributeNames=['data-testid','data-step-id','data-action'];for(var attributeIndex=0;attributeIndex<attributeNames.length;attributeIndex++){var attributeValue=element.getAttribute(attributeNames[attributeIndex]);if(attributeValue)return stableAttributeSelector(attributeNames[attributeIndex],attributeValue,escapeCssString)}var parts=[],node=element;while(node&&node.nodeType===1&&node.tagName.toLowerCase()!=='html'){var index=1,sibling=node.previousElementSibling;while(sibling){if(sibling.tagName===node.tagName)index++;sibling=sibling.previousElementSibling}parts.unshift(node.tagName.toLowerCase()+':nth-of-type('+index+')');node=node.parentElement}return parts.join(' > ')}
+function normalizedText(element){return String(element.textContent||'').replace(/\\s+/g,' ').trim().slice(0,160)}
+function inspectTarget(element){var rect=element.getBoundingClientRect(),reasons=[],visibility='visible',ancestor=element;while(ancestor){var style=getComputedStyle(ancestor);if(ancestor.hidden||ancestor.inert||ancestor.getAttribute('aria-hidden')==='true'||style.display==='none'||style.visibility==='hidden'||style.visibility==='collapse'||Number(style.opacity)===0){visibility='hidden';reasons.push('css-hidden');break}ancestor=ancestor.parentElement}if(visibility==='visible'&&(rect.width<=0||rect.height<=0)){visibility='hidden';reasons.push('zero-size')}else if(visibility==='visible'&&(rect.right<=0||rect.bottom<=0||rect.left>=innerWidth||rect.top>=innerHeight)){visibility='off-viewport';reasons.push('outside-viewport')}else if(visibility==='visible'){var pointX=Math.max(0,Math.min(innerWidth-1,rect.left+rect.width/2)),pointY=Math.max(0,Math.min(innerHeight-1,rect.top+rect.height/2)),topElement=document.elementFromPoint(pointX,pointY);if(!topElement){visibility='unknown';reasons.push('hit-test-unavailable')}else if(topElement!==element&&!element.contains(topElement)){visibility='occluded';reasons.push('covered-by-'+String(topElement.id||topElement.tagName||'element'))}}var tagName=element.tagName.toLowerCase(),state={},ariaChecked=element.getAttribute('aria-checked');if(tagName==='input'&&(element.type==='checkbox'||element.type==='radio'))state.checked=element.indeterminate?'mixed':!!element.checked;else if((element.getAttribute('role')==='switch'||element.getAttribute('role')==='checkbox')&&ariaChecked!==null)state.checked=ariaChecked==='mixed'?'mixed':ariaChecked==='true';if(tagName==='select'){state.value=String(element.value||'').slice(0,${SAFE_INPUT_MAX});state.selectedIndex=element.selectedIndex}else if(tagName==='textarea'&&element.maxLength>0&&element.maxLength<=${SAFE_INPUT_MAX})state.value=String(element.value||'').slice(0,${SAFE_INPUT_MAX});else if(tagName==='input'&&(element.type===''||element.type==='text'||element.type==='search'||element.type==='number'||element.type==='range')&&((element.type==='number'||element.type==='range')||(element.maxLength>0&&element.maxLength<=${SAFE_INPUT_MAX})))state.value=String(element.value||'').slice(0,${SAFE_INPUT_MAX});return Object.assign({selector:selector(element),tagName:tagName,text:normalizedText(element),visibility:visibility,reasons:reasons,rect:{x:Math.round(rect.x*100)/100,y:Math.round(rect.y*100)/100,width:Math.round(rect.width*100)/100,height:Math.round(rect.height*100)/100},disabled:!!element.disabled||element.getAttribute('aria-disabled')==='true'},state)}
+function snapshot(){var elements=[].slice.call(document.querySelectorAll('[id],[data-testid],[data-step-id],[data-action],button,input,select,textarea,[role]')),seen={},targets=[];elements.forEach(function(element){var targetSelector=selector(element);if(!targetSelector||seen[targetSelector])return;seen[targetSelector]=1;targets.push(inspectTarget(element))});targets.sort(function(first,second){return first.selector.localeCompare(second.selector)});var groups={visible:[],hidden:[],offViewport:[],occluded:[]};targets.forEach(function(target){if(groups[target.visibility])groups[target.visibility].push(target.selector)});var serialized=targets.map(function(target){return [target.selector,target.visibility,target.text,target.disabled,target.checked,target.value,target.selectedIndex,target.rect.x,target.rect.y,target.rect.width,target.rect.height].join('|')}).join('\\n');return {signature:hashSnapshot(serialized),targets:targets,visible:groups.visible,hidden:groups.hidden,offViewport:groups.offViewport,occluded:groups.occluded}}
+function hashSnapshot(serialized){var hash=2166136261;for(var index=0;index<serialized.length;index++){hash^=serialized.charCodeAt(index);hash=Math.imul(hash,16777619)}return (hash>>>0).toString(16).padStart(8,'0')}
+function collectControls(){var controls=[],seen={};[].slice.call(document.querySelectorAll('button,input,select,textarea,[role="button"],[role="switch"],[role="checkbox"]')).forEach(function(element){var targetSelector=selector(element);if(!targetSelector||seen[targetSelector])return;seen[targetSelector]=1;var tagName=element.tagName.toLowerCase(),inputType=(element.getAttribute('type')||'').toLowerCase(),toggle=inputType==='checkbox'||inputType==='radio'||element.getAttribute('role')==='switch'||element.getAttribute('role')==='checkbox',button=tagName==='button'||(tagName==='input'&&inputType==='button'),kind=toggle?'toggle':(button?'button':(tagName==='input'||tagName==='select'||tagName==='textarea'?'input':'button')),bounded=true,reason='',operationValue,visibility=inspectTarget(element).visibility,disabled=!!element.disabled||element.getAttribute('aria-disabled')==='true';if(tagName==='a'){bounded=false;reason='navigation-control'}if(tagName==='input'&&!(inputType===''||inputType==='text'||inputType==='search'||inputType==='number'||inputType==='range'||inputType==='checkbox'||inputType==='radio'||inputType==='button')){bounded=false;reason='unsafe-input-type'}if(kind==='input'&&tagName==='textarea'&&!(element.maxLength>0&&element.maxLength<=${SAFE_INPUT_MAX})){bounded=false;reason='unbounded-input'}if(kind==='input'&&tagName==='input'&&(inputType===''||inputType==='text'||inputType==='search')&&!(element.maxLength>0&&element.maxLength<=${SAFE_INPUT_MAX})){bounded=false;reason='unbounded-input'}if(kind==='input'&&tagName==='input'&&(inputType==='number'||inputType==='range')){var minimum=Number(element.min),maximum=Number(element.max);if(!Number.isFinite(minimum)||!Number.isFinite(maximum)||maximum<minimum){bounded=false;reason='unbounded-input'}else operationValue=(minimum+maximum)/2}if(kind==='input'&&tagName==='select'){operationValue=element.options&&element.options.length?element.options[Math.min(1,element.options.length-1)].value:'';if(String(operationValue).length>${SAFE_INPUT_MAX}){bounded=false;reason='unbounded-input'}}if(kind==='input'&&operationValue===undefined)operationValue='';if(tagName==='button'&&element.form&&(inputType===''||inputType==='submit'||inputType==='reset')){bounded=false;reason='form-navigation'}if(!reason&&disabled)reason='target-disabled';if(!reason&&visibility!=='visible')reason='target-'+visibility;controls.push({selector:targetSelector,kind:kind,tagName:tagName,label:normalizedText(element)||element.getAttribute('aria-label')||'',inputType:inputType||undefined,bounded:bounded,safe:bounded&&!disabled&&visibility==='visible',operationValue:operationValue,reason:reason||undefined})});return controls.sort(function(first,second){return first.selector.localeCompare(second.selector)})}
+function emit(kind,payload){try{var message={kind:PREFIX+'-'+kind};Object.keys(payload||{}).forEach(function(key){message[key]=payload[key]});CHANNEL.port1.postMessage(message)}catch(ignoredError){} }
+function settle(){return new Promise(function(resolve){var done=false,timeoutHandle=setTimeout(function(){if(!done){done=true;resolve(false)}},Math.max(50,TIMEOUT-50));requestAnimationFrame(function(){requestAnimationFrame(function(){setTimeout(function(){if(done)return;done=true;clearTimeout(timeoutHandle);resolve(true)},SETTLE)})})})}
+function applySafeOperation(operation){var control=collectControls().find(function(candidate){return candidate.selector===operation.selector});if(!control)return {ok:false,error:'target-not-found'};if(!control.safe)return {ok:false,error:control.reason||'target-unsafe'};if(operation.kind==='input'&&control.kind!=='input')return {ok:false,error:'operation-kind-mismatch'};try{var element=document.querySelector(operation.selector);if(operation.kind==='input'){var value=String(operation.value==null?'':operation.value);if(value.length>${SAFE_INPUT_MAX})return {ok:false,error:'input-too-long'};element.value=value;element.dispatchEvent(new Event('input',{bubbles:true}));element.dispatchEvent(new Event('change',{bubbles:true}))}else{element.click()}return {ok:true}}catch(error){return {ok:false,error:String(error&&error.message||error)}}}
+CHANNEL.port1.addEventListener('message',function(event){var data=event.data||{};if(!data||data.kind!==PREFIX+'-operation')return;var before=snapshot(),result=applySafeOperation(data.operation||{});settle().then(function(settled){emit('operation-result',{id:data.id,before:before,after:snapshot(),result:result,settled:settled,controls:collectControls()})})});CHANNEL.port1.start();parent.postMessage({kind:PREFIX+'-hello'},'*',[CHANNEL.port2]);
 window.addEventListener('click',function(e){var a=e.target&&e.target.closest&&e.target.closest('a');if(a){e.preventDefault();e.stopPropagation();emit('diagnostic',{code:'navigation-blocked',message:'link activation is not explored'})}},true);
 window.addEventListener('submit',function(e){e.preventDefault();emit('diagnostic',{code:'navigation-blocked',message:'form submission is not explored'})},true);
-try{window.open=function(){emit('diagnostic',{code:'popup-blocked',message:'popup activation is not explored'});return null};window.alert=function(){emit('diagnostic',{code:'popup-blocked',message:'modal activation is not explored'})};window.confirm=function(){emit('diagnostic',{code:'popup-blocked',message:'modal activation is not explored'});return false};if(window.navigator&&window.navigator.share)window.navigator.share=function(){emit('diagnostic',{code:'popup-blocked',message:'share activation is not explored'});return Promise.reject(new Error('replay-popup-blocked'))};if(window.HTMLAnchorElement){HTMLAnchorElement.prototype.click=function(){emit('diagnostic',{code:'navigation-blocked',message:'programmatic link activation is not explored'})}}if(window.history){history.pushState=function(){emit('diagnostic',{code:'navigation-blocked',message:'history mutation is not explored'})};history.replaceState=function(){emit('diagnostic',{code:'navigation-blocked',message:'history mutation is not explored'})}}if(window.Location){['assign','replace'].forEach(function(name){try{Location.prototype[name]=function(){emit('diagnostic',{code:'navigation-blocked',message:'location mutation is not explored'})}}catch(_) {}})}}catch(_){}
-function ready(){emit('ready',{snapshot:snapshot(),controls:controls(),viewport:{width:innerWidth,height:innerHeight}})}
+try{window.open=function(){emit('diagnostic',{code:'popup-blocked',message:'popup activation is not explored'});return null};window.alert=function(){emit('diagnostic',{code:'popup-blocked',message:'modal activation is not explored'})};window.confirm=function(){emit('diagnostic',{code:'popup-blocked',message:'modal activation is not explored'});return false};if(window.navigator&&window.navigator.share)window.navigator.share=function(){emit('diagnostic',{code:'popup-blocked',message:'share activation is not explored'});return Promise.reject(new Error('replay-popup-blocked'))};if(window.HTMLAnchorElement){HTMLAnchorElement.prototype.click=function(){emit('diagnostic',{code:'navigation-blocked',message:'programmatic link activation is not explored'})}}if(window.HTMLFormElement){HTMLFormElement.prototype.submit=function(){emit('diagnostic',{code:'navigation-blocked',message:'programmatic form submission is not explored'})}}if(window.history){history.pushState=function(){emit('diagnostic',{code:'navigation-blocked',message:'history mutation is not explored'})};history.replaceState=function(){emit('diagnostic',{code:'navigation-blocked',message:'history mutation is not explored'})}}if(window.Location){['assign','replace'].forEach(function(name){try{Location.prototype[name]=function(){emit('diagnostic',{code:'navigation-blocked',message:'location mutation is not explored'})}}catch(_) {}})}}catch(_){}
+function ready(){emit('ready',{snapshot:snapshot(),controls:collectControls(),viewport:{width:innerWidth,height:innerHeight}})}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',ready,{once:true});else ready();
 })();</script>`;
   // Keep an authored doctype at byte zero so the inspected page stays in
@@ -347,6 +418,27 @@ function normalizeSnapshot(value: unknown): ReplaySnapshot {
   };
 }
 
+function replayOperationsFromControls(value: unknown, limit: number): ReplayOperation[] {
+  if (!Array.isArray(value)) return [];
+  return (value as ReplayControl[])
+    .filter(
+      (control) =>
+        control.safe &&
+        control.bounded &&
+        typeof control.selector === 'string' &&
+        control.selector.length > 0,
+    )
+    .map(
+      (control): ReplayOperation => ({
+        kind: control.kind === 'toggle' ? 'toggle' : control.kind === 'input' ? 'input' : 'click',
+        selector: control.selector,
+        ...(control.kind === 'input' ? { value: control.operationValue ?? '' } : {}),
+      }),
+    )
+    .sort((a, b) => `${a.selector}:${a.kind}`.localeCompare(`${b.selector}:${b.kind}`))
+    .slice(0, limit);
+}
+
 export class ReplayContractParseError extends Error {
   constructor(
     public readonly code: 'invalid-contract' | 'unsupported-version' | 'stale-source',
@@ -420,7 +512,7 @@ export async function inspectReplayContract(
   const viewport = options.viewport ?? { width: 1280, height: 720 };
   const staticReport = analyzeReplayHtml(html);
   const iframe = document.createElement('iframe');
-  iframe.title = 'ReplayContract inspector';
+  iframe.setAttribute('aria-hidden', 'true');
   iframe.setAttribute('sandbox', 'allow-scripts');
   iframe.style.cssText = `position:fixed;left:-10000px;top:0;width:${viewport.width}px;height:${viewport.height}px;border:0;pointer-events:none`;
   document.body.appendChild(iframe);
@@ -455,34 +547,29 @@ export async function inspectReplayContract(
           selector: target.selector,
         });
       }
+      if (target.checked === 'mixed') {
+        diagnostics.push({
+          code: 'ambiguous-control-state',
+          severity: 'warning',
+          message: 'Control has an indeterminate or mixed checked state',
+          selector: target.selector,
+        });
+      }
     }
     const controls = (Array.isArray(ready.controls) ? ready.controls : []) as ReplayControl[];
-    const unsafeExploration = (
-      ['navigation', 'popups', 'fileOperations', 'externalResources'] as const
-    ).some((key) => {
-      const status = staticReport.capabilities[key];
-      return status === 'risk' || status === 'unsupported';
-    });
-    if (unsafeExploration) {
+    const unsafeSourceExploration = hasUncontainableReplaySideEffect(html);
+    if (unsafeSourceExploration) {
       diagnostics.push({
-        code: 'exploration-skipped-unsafe-capability',
+        code: 'exploration-skipped-uncontainable-side-effect',
         severity: 'warning',
         message:
-          'Candidate exploration skipped because the source exposes navigation, popup, or file capabilities',
+          'Candidate exploration skipped because programmatic navigation or file access cannot be safely contained',
       });
     }
-    const safeControls =
-      limits.maxDepth === 0 || unsafeExploration
+    const operations =
+      limits.maxDepth === 0 || unsafeSourceExploration
         ? []
-        : controls
-            .filter((control) => control.safe && control.bounded)
-            .slice(0, limits.maxOperations);
-    const operations: ReplayOperation[] = safeControls.map((control) => ({
-      kind: control.kind === 'toggle' ? 'toggle' : control.kind === 'input' ? 'input' : 'click',
-      selector: control.selector,
-      ...(control.kind === 'input' ? { value: control.operationValue ?? '' } : {}),
-    }));
-    const operationBySelector = new Map(safeControls.map((control) => [control.selector, control]));
+        : replayOperationsFromControls(controls, limits.maxOperations);
     const queue: ReplayOperation[][] = operations.map((operation) => [operation]);
     const seenSignatures = new Set([initial.signature]);
     let requestId = 0;
@@ -498,6 +585,7 @@ export async function inspectReplayContract(
         const fresh = await loadFresh();
         const port = fresh.port;
         const snapshots = [normalizeSnapshot(fresh.ready.snapshot)];
+        let availableControls: unknown = fresh.ready.controls;
         let settled = true;
         let failed = false;
         for (const operation of path) {
@@ -533,6 +621,7 @@ export async function inspectReplayContract(
             break;
           }
           snapshots.push(normalizeSnapshot(result.after));
+          availableControls = result.controls;
           settled = settled && result.settled === true;
         }
         if (failed) continue;
@@ -547,6 +636,9 @@ export async function inspectReplayContract(
           });
         }
         const isNewState = !seenSignatures.has(after.signature);
+        const operatedTarget = before.targets.find(
+          (target) => target.selector === path[path.length - 1].selector,
+        );
         if (isNewState) {
           seenSignatures.add(after.signature);
           states++;
@@ -556,10 +648,8 @@ export async function inspectReplayContract(
           operation: path[path.length - 1],
           preconditions: {
             target: path[path.length - 1].selector,
-            visibility:
-              before.targets.find((target) => target.selector === path[path.length - 1].selector)
-                ?.visibility ?? 'unknown',
-            enabled: !operationBySelector.get(path[path.length - 1].selector)?.reason,
+            visibility: operatedTarget?.visibility ?? 'unknown',
+            enabled: operatedTarget ? !operatedTarget.disabled : false,
           },
           postconditions: {
             changed: before.signature !== after.signature,
@@ -573,7 +663,11 @@ export async function inspectReplayContract(
           after,
         });
         if (isNewState && path.length < limits.maxDepth) {
-          for (const operation of operations) {
+          const nextOperations = replayOperationsFromControls(
+            availableControls,
+            limits.maxOperations,
+          );
+          for (const operation of nextOperations) {
             if (queue.length + transitions.length >= limits.maxOperations) break;
             queue.push([...path, operation]);
           }
