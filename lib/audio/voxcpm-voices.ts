@@ -16,17 +16,20 @@ import {
 } from '@/lib/audio/voxcpm';
 import {
   ensureRegisteredVoice,
+  registerVoiceFromReference,
   type VoiceRegistrationRequestConfig,
 } from '@/lib/audio/voice-registration-client';
+import { QWEN_TTS_VOICE_CLONE_MODEL } from '@/lib/audio/constants';
+import { validateReferenceAudio } from '@/lib/audio/wav-validate';
 
 export type VoxCPMVoiceProfile = VoiceProfileRecord;
 
-const VOXCPM_VOICE_PROFILES_CHANGED = 'voxcpm-voice-profiles-changed';
+const VOICE_PROFILES_CHANGED = 'voice-profiles-changed';
 export const VOXCPM_REFERENCE_AUDIO_MAX_BYTES = 10 * 1024 * 1024;
 export const VOXCPM_REFERENCE_AUDIO_MAX_SECONDS = 60;
 
 function notifyVoiceProfilesChanged(): void {
-  window.dispatchEvent(new Event(VOXCPM_VOICE_PROFILES_CHANGED));
+  window.dispatchEvent(new Event(VOICE_PROFILES_CHANGED));
 }
 
 function createId(): string {
@@ -70,9 +73,11 @@ function writeAscii(view: DataView, offset: number, value: string): void {
   }
 }
 
-function audioBufferToMonoWav(audioBuffer: AudioBuffer): ArrayBuffer {
-  const sampleRate = audioBuffer.sampleRate;
-  const sampleCount = audioBuffer.length;
+function audioBufferToMonoWav(
+  audioBuffer: AudioBuffer,
+  sampleRate = audioBuffer.sampleRate,
+): ArrayBuffer {
+  const sampleCount = Math.round(audioBuffer.duration * sampleRate);
   const dataSize = sampleCount * 2;
   const buffer = new ArrayBuffer(44 + dataSize);
   const view = new DataView(buffer);
@@ -96,8 +101,14 @@ function audioBufferToMonoWav(audioBuffer: AudioBuffer): ArrayBuffer {
   );
   let offset = 44;
   for (let i = 0; i < sampleCount; i++) {
+    const sourcePosition = (i * audioBuffer.sampleRate) / sampleRate;
+    const sourceIndex = Math.min(Math.floor(sourcePosition), audioBuffer.length - 1);
+    const nextIndex = Math.min(sourceIndex + 1, audioBuffer.length - 1);
+    const fraction = sourcePosition - sourceIndex;
     let mixed = 0;
-    for (const channel of channels) mixed += channel[i];
+    for (const channel of channels) {
+      mixed += channel[sourceIndex] * (1 - fraction) + channel[nextIndex] * fraction;
+    }
     const sample = Math.max(-1, Math.min(1, mixed / channels.length));
     view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
     offset += 2;
@@ -129,6 +140,20 @@ async function decodeAudioBlob(blob: Blob): Promise<AudioBuffer> {
 async function audioBlobToWav(blob: Blob): Promise<Blob> {
   const audioBuffer = await decodeAudioBlob(blob);
   return new Blob([audioBufferToMonoWav(audioBuffer)], { type: 'audio/wav' });
+}
+
+export async function normalizeQwenReferenceAudio(
+  blob: Blob,
+  fileName?: string,
+): Promise<{ blob: Blob; name: string; mimeType: string }> {
+  const audioBuffer = await decodeAudioBlob(blob);
+  const wav = new Blob([audioBufferToMonoWav(audioBuffer, 24_000)], { type: 'audio/wav' });
+  validateReferenceAudio(new Uint8Array(await wav.arrayBuffer()));
+  return {
+    blob: wav,
+    name: replaceFileExtension(fileName, 'wav'),
+    mimeType: 'audio/wav',
+  };
 }
 
 export async function validateVoxCPMReferenceAudio(blob: Blob): Promise<void> {
@@ -207,8 +232,8 @@ export function useVoxCPMVoiceProfiles() {
 
   useEffect(() => {
     void refresh();
-    window.addEventListener(VOXCPM_VOICE_PROFILES_CHANGED, refresh);
-    return () => window.removeEventListener(VOXCPM_VOICE_PROFILES_CHANGED, refresh);
+    window.addEventListener(VOICE_PROFILES_CHANGED, refresh);
+    return () => window.removeEventListener(VOICE_PROFILES_CHANGED, refresh);
   }, [refresh]);
 
   const addPromptVoice = useCallback(
@@ -276,6 +301,104 @@ export function useVoxCPMVoiceProfiles() {
   );
 
   return { profiles, loading, refresh, addPromptVoice, addCloneVoice, deleteVoice };
+}
+
+export function useAllVoiceProfiles() {
+  const [profiles, setProfiles] = useState<VoiceProfileRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const rows = await db.voiceProfiles.toArray();
+      rows.sort((a, b) => b.updatedAt - a.updatedAt);
+      setProfiles(rows);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    window.addEventListener(VOICE_PROFILES_CHANGED, refresh);
+    return () => window.removeEventListener(VOICE_PROFILES_CHANGED, refresh);
+  }, [refresh]);
+
+  return { profiles, loading, refresh };
+}
+
+export function useQwenVoiceProfiles() {
+  const [profiles, setProfiles] = useState<VoiceProfileRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const rows = await db.voiceProfiles.where('providerId').equals('qwen-tts').toArray();
+      rows.sort((a, b) => b.updatedAt - a.updatedAt);
+      setProfiles(rows);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    window.addEventListener(VOICE_PROFILES_CHANGED, refresh);
+    return () => window.removeEventListener(VOICE_PROFILES_CHANGED, refresh);
+  }, [refresh]);
+
+  const addCloneVoice = useCallback(
+    async (
+      input: { name: string; referenceAudio: File; refText: string },
+      request: VoiceRegistrationRequestConfig,
+    ) => {
+      const normalized = await normalizeQwenReferenceAudio(
+        input.referenceAudio,
+        input.referenceAudio.name,
+      );
+      const referenceAudio = new File([normalized.blob], normalized.name, {
+        type: normalized.mimeType,
+      });
+      const voiceId = await registerVoiceFromReference(
+        'qwen-tts',
+        {
+          name: input.name,
+          referenceAudio,
+          refText: input.refText,
+        },
+        { ...request, ttsModelId: QWEN_TTS_VOICE_CLONE_MODEL },
+      );
+      const now = Date.now();
+      await db.voiceProfiles.put({
+        id: voiceId,
+        providerId: 'qwen-tts',
+        kind: 'clone',
+        name: input.name.trim(),
+        promptText: input.refText,
+        referenceAudio,
+        referenceAudioName: referenceAudio.name,
+        referenceAudioMimeType: referenceAudio.type,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await refresh();
+      notifyVoiceProfilesChanged();
+      return voiceId;
+    },
+    [refresh],
+  );
+
+  const deleteVoice = useCallback(
+    async (id: string) => {
+      await db.voiceProfiles.delete(id);
+      await refresh();
+      notifyVoiceProfilesChanged();
+    },
+    [refresh],
+  );
+
+  return { profiles, loading, refresh, addCloneVoice, deleteVoice };
 }
 
 export async function getVoxCPMProviderOptions(

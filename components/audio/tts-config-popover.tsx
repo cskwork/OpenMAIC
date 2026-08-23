@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback } from 'react';
 import { Volume2, Play, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -16,12 +16,17 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { useSettingsStore } from '@/lib/store/settings';
-import { getTTSVoices } from '@/lib/audio/constants';
+import {
+  getTTSVoices,
+  isQwenVoiceCloneModel,
+  QWEN_TTS_VOICE_CLONE_MODEL,
+  TTS_PROVIDERS,
+} from '@/lib/audio/constants';
 import { useTTSPreview } from '@/lib/audio/use-tts-preview';
 import {
   getVoxCPMProviderOptions,
   getVoxCPMVoiceOptions,
-  useVoxCPMVoiceProfiles,
+  useAllVoiceProfiles,
 } from '@/lib/audio/voxcpm-voices';
 import {
   VOXCPM_AUTO_VOICE_ID,
@@ -58,7 +63,10 @@ export function TtsConfigPopover() {
   const ttsSpeed = useSettingsStore((s) => s.ttsSpeed);
   const ttsProvidersConfig = useSettingsStore((s) => s.ttsProvidersConfig);
   const setTTSVoice = useSettingsStore((s) => s.setTTSVoice);
-  const { profiles: voxcpmProfiles } = useVoxCPMVoiceProfiles();
+  const setTTSProviderConfig = useSettingsStore((s) => s.setTTSProviderConfig);
+  const { profiles: voiceProfiles } = useAllVoiceProfiles();
+  const voxcpmProfiles = voiceProfiles.filter((profile) => profile.providerId === 'voxcpm-tts');
+  const qwenProfiles = voiceProfiles.filter((profile) => profile.providerId === 'qwen-tts');
   const voxcpmBackend = normalizeVoxCPMBackend(
     ttsProvidersConfig['voxcpm-tts']?.providerOptions?.backend,
   );
@@ -68,19 +76,37 @@ export function TtsConfigPopover() {
       ? getVoxCPMVoiceOptions(voxcpmProfiles, {
           supportsClone: voxCPMBackendSupportsReferenceAudio(voxcpmBackend),
         })
-      : getTTSVoices(ttsProviderId);
-  const localizedVoices = useMemo(
-    () =>
-      voices.map((v) => ({
-        ...v,
-        displayName: getVoiceDisplayName(v.id, v.name, locale, t),
-      })),
-    [voices, locale, t],
-  );
+      : ttsProviderId === 'qwen-tts'
+        ? [
+            ...getTTSVoices(ttsProviderId),
+            ...qwenProfiles.map((profile) => ({
+              id: profile.id,
+              name: profile.name,
+              language: 'auto',
+              gender: 'neutral' as const,
+            })),
+          ]
+        : getTTSVoices(ttsProviderId);
+  const localizedVoices = voices.map((voice) => ({
+    ...voice,
+    displayName: getVoiceDisplayName(voice.id, voice.name, locale, t),
+  }));
 
   const pillCls =
     'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-all cursor-pointer select-none whitespace-nowrap border';
   const canPreview = ttsProviderId !== 'voxcpm-tts' || ttsVoice !== VOXCPM_AUTO_VOICE_ID;
+
+  const handleVoiceChange = (voiceId: string) => {
+    setTTSVoice(voiceId);
+    if (ttsProviderId !== 'qwen-tts') return;
+    if (qwenProfiles.some((profile) => profile.id === voiceId)) {
+      setTTSProviderConfig(ttsProviderId, { modelId: QWEN_TTS_VOICE_CLONE_MODEL });
+    } else if (isQwenVoiceCloneModel(ttsProvidersConfig[ttsProviderId]?.modelId)) {
+      setTTSProviderConfig(ttsProviderId, {
+        modelId: TTS_PROVIDERS[ttsProviderId].defaultModelId,
+      });
+    }
+  };
 
   const handlePreview = useCallback(async () => {
     if (previewing) {
@@ -190,7 +216,7 @@ export function TtsConfigPopover() {
           <div className="px-3.5 py-3 space-y-3">
             {/* Voice + Preview row */}
             <div className="flex items-center gap-2">
-              <Select value={ttsVoice} onValueChange={setTTSVoice}>
+              <Select value={ttsVoice} onValueChange={handleVoiceChange}>
                 <SelectTrigger className="h-7 text-xs flex-1 min-w-0">
                   <SelectValue />
                 </SelectTrigger>

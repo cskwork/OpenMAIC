@@ -26,7 +26,11 @@ import {
 } from '@/components/ui/alert-dialog';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { useSettingsStore } from '@/lib/store/settings';
-import { TTS_PROVIDERS, DEFAULT_TTS_VOICES } from '@/lib/audio/constants';
+import {
+  TTS_PROVIDERS,
+  DEFAULT_TTS_VOICES,
+  QWEN_TTS_VOICE_CLONE_MODEL,
+} from '@/lib/audio/constants';
 import type { TTSProviderId } from '@/lib/audio/types';
 import {
   Volume2,
@@ -53,10 +57,12 @@ import { isTTSProviderConfigured, isTTSProviderEnabled } from '@/lib/audio/provi
 import { isCustomTTSProvider } from '@/lib/audio/types';
 import {
   getVoxCPMProviderOptions,
+  normalizeQwenReferenceAudio,
   normalizeVoxCPMReferenceAudio,
   validateVoxCPMReferenceAudio,
   VOXCPM_REFERENCE_AUDIO_MAX_SECONDS,
   useVoxCPMVoiceProfiles,
+  useQwenVoiceProfiles,
 } from '@/lib/audio/voxcpm-voices';
 import {
   VOXCPM_BACKENDS,
@@ -554,6 +560,7 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
       )}
 
       {selectedProviderId === 'voxcpm-tts' && <VoxCPMVoiceManager />}
+      {selectedProviderId === 'qwen-tts' && <QwenVoiceCloneManager />}
 
       {/* Custom Voice List Management */}
       {isCustom && (
@@ -716,7 +723,11 @@ function VoxCPMVoiceManager() {
 
   const startReferenceRecording = async () => {
     if (isRecordingReference) return;
-    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+    if (
+      typeof navigator === 'undefined' ||
+      typeof MediaRecorder === 'undefined' ||
+      !navigator.mediaDevices?.getUserMedia
+    ) {
       toast.error(t('settings.voxcpmRecordingUnsupported'));
       return;
     }
@@ -1131,6 +1142,319 @@ function VoxCPMVoiceManager() {
                 </div>
               </TabsContent>
             </Tabs>
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function QwenVoiceCloneManager() {
+  const { t } = useI18n();
+  const { profiles, addCloneVoice, deleteVoice } = useQwenVoiceProfiles();
+  const ttsProviderId = useSettingsStore((state) => state.ttsProviderId);
+  const ttsVoice = useSettingsStore((state) => state.ttsVoice);
+  const ttsSpeed = useSettingsStore((state) => state.ttsSpeed);
+  const ttsProvidersConfig = useSettingsStore((state) => state.ttsProvidersConfig);
+  const setTTSVoice = useSettingsStore((state) => state.setTTSVoice);
+  const setTTSProviderConfig = useSettingsStore((state) => state.setTTSProviderConfig);
+  const { previewing, startPreview, stopPreview } = useTTSPreview();
+  const providerConfig = ttsProvidersConfig['qwen-tts'];
+
+  const [name, setName] = useState('');
+  const [refText, setRefText] = useState('');
+  const [referenceFile, setReferenceFile] = useState<File | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [previewingVoiceId, setPreviewingVoiceId] = useState<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopRecordingTimer = () => {
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+  };
+
+  const stopRecordingStream = () => {
+    recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+    recordingStreamRef.current = null;
+  };
+
+  const normalizeFile = async (file: File): Promise<File> => {
+    const normalized = await normalizeQwenReferenceAudio(file, file.name);
+    return new File([normalized.blob], normalized.name, { type: normalized.mimeType });
+  };
+
+  const handleFileChange = async (file: File | null) => {
+    if (!file) {
+      setReferenceFile(null);
+      return;
+    }
+    try {
+      setReferenceFile(await normalizeFile(file));
+    } catch (error) {
+      setReferenceFile(null);
+      toast.error(error instanceof Error ? error.message : t('settings.qwenCloneSaveFailed'));
+    }
+  };
+
+  const startRecording = async () => {
+    if (isRecording) return;
+    if (
+      typeof navigator === 'undefined' ||
+      typeof MediaRecorder === 'undefined' ||
+      !navigator.mediaDevices?.getUserMedia
+    ) {
+      toast.error(t('settings.qwenCloneUnsupported'));
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : undefined;
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      recordingChunksRef.current = [];
+      recordingStreamRef.current = stream;
+      mediaRecorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) recordingChunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        void (async () => {
+          try {
+            const blob = new Blob(recordingChunksRef.current, {
+              type: recorder.mimeType || 'audio/webm',
+            });
+            if (blob.size > 0) {
+              const file = new File([blob], `qwen-reference-${Date.now()}.webm`, {
+                type: blob.type,
+              });
+              setReferenceFile(await normalizeFile(file));
+              if (!name.trim()) setName(t('settings.voxcpmRecordedVoiceName'));
+            }
+          } catch (error) {
+            toast.error(error instanceof Error ? error.message : t('settings.qwenCloneSaveFailed'));
+          } finally {
+            recordingChunksRef.current = [];
+            setIsRecording(false);
+            setRecordingSeconds(0);
+            stopRecordingTimer();
+            stopRecordingStream();
+          }
+        })();
+      };
+      recorder.start();
+      setIsRecording(true);
+      setRecordingSeconds(0);
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSeconds((seconds) => {
+          const nextSeconds = seconds + 1;
+          if (nextSeconds >= 60 && mediaRecorderRef.current?.state === 'recording') {
+            mediaRecorderRef.current.stop();
+          }
+          return nextSeconds;
+        });
+      }, 1000);
+    } catch (error) {
+      setIsRecording(false);
+      stopRecordingTimer();
+      stopRecordingStream();
+      toast.error(error instanceof Error ? error.message : t('settings.qwenCloneUnsupported'));
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
+  };
+
+  useEffect(() => {
+    return () => {
+      stopRecordingTimer();
+      if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
+      stopRecordingStream();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!previewing) setPreviewingVoiceId(null);
+  }, [previewing]);
+
+  const handleSave = async () => {
+    if (!name.trim() || !refText.trim() || !referenceFile) return;
+    setSaving(true);
+    try {
+      const voiceId = await addCloneVoice(
+        { name, referenceAudio: referenceFile, refText },
+        {
+          ttsApiKey: providerConfig?.apiKey || undefined,
+          ttsBaseUrl: providerConfig?.baseUrl || providerConfig?.customDefaultBaseUrl || undefined,
+          ttsModelId: QWEN_TTS_VOICE_CLONE_MODEL,
+        },
+      );
+      setTTSProviderConfig('qwen-tts', { modelId: QWEN_TTS_VOICE_CLONE_MODEL });
+      if (ttsProviderId === 'qwen-tts') setTTSVoice(voiceId);
+      setName('');
+      setRefText('');
+      setReferenceFile(null);
+      toast.success(t('settings.qwenCloneSaved'));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('settings.qwenCloneSaveFailed'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handlePreview = async (voiceId: string) => {
+    if (previewingVoiceId === voiceId) {
+      stopPreview();
+      setPreviewingVoiceId(null);
+      return;
+    }
+    setPreviewingVoiceId(voiceId);
+    try {
+      await startPreview({
+        text: t('settings.ttsTestTextDefault'),
+        providerId: 'qwen-tts',
+        modelId: QWEN_TTS_VOICE_CLONE_MODEL,
+        voice: voiceId,
+        speed: ttsSpeed,
+        apiKey: providerConfig?.apiKey,
+        baseUrl: providerConfig?.baseUrl || providerConfig?.customDefaultBaseUrl,
+      });
+    } catch (error) {
+      setPreviewingVoiceId(null);
+      toast.error(error instanceof Error ? error.message : t('settings.qwenCloneSaveFailed'));
+    }
+  };
+
+  const handleDelete = async (voiceId: string) => {
+    await deleteVoice(voiceId);
+    if (ttsProviderId === 'qwen-tts' && ttsVoice === voiceId) {
+      setTTSVoice(DEFAULT_TTS_VOICES['qwen-tts']);
+      setTTSProviderConfig('qwen-tts', {
+        modelId: TTS_PROVIDERS['qwen-tts'].defaultModelId,
+      });
+    }
+  };
+
+  const recordingSupported =
+    typeof navigator !== 'undefined' &&
+    typeof MediaRecorder !== 'undefined' &&
+    !!navigator.mediaDevices?.getUserMedia;
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <Label className="text-base font-semibold">{t('settings.qwenCloneVoicesTitle')}</Label>
+        <p className="mt-1 text-xs text-muted-foreground">{t('settings.qwenCloneRefAudioHint')}</p>
+        {!recordingSupported && (
+          <p className="mt-1 text-xs text-amber-600 dark:text-amber-300">
+            {t('settings.qwenCloneUnsupported')}
+          </p>
+        )}
+      </div>
+
+      <div className="overflow-hidden rounded-lg border border-border/70 bg-background">
+        <div className="grid lg:grid-cols-[minmax(280px,0.95fr)_minmax(0,1.15fr)]">
+          <section className="border-b border-border/60 lg:border-b-0 lg:border-r">
+            <div className="flex h-12 items-center justify-between border-b border-border/60 px-4">
+              <span className="text-sm font-medium">{t('settings.voxcpmVoicePool')}</span>
+              <span className="text-xs text-muted-foreground">
+                {t('settings.voxcpmVoiceCount', { count: profiles.length })}
+              </span>
+            </div>
+            <div className="max-h-[360px] overflow-y-auto">
+              {profiles.length ? (
+                profiles.map((profile) => (
+                  <VoiceProfileRow
+                    key={profile.id}
+                    icon={<FileAudio className="h-4 w-4" />}
+                    title={profile.name}
+                    badge={t('settings.voxcpmClone')}
+                    detail={profile.referenceAudioName || profile.id}
+                    kind="clone"
+                    previewing={previewingVoiceId === profile.id}
+                    onPreview={() => handlePreview(profile.id)}
+                    onDelete={() => handleDelete(profile.id)}
+                  />
+                ))
+              ) : (
+                <div className="px-4 py-8 text-center text-sm text-muted-foreground/60">
+                  {t('settings.voxcpmNoCustomVoices')}
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="space-y-3 p-4">
+            <Input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder={t('settings.voxcpmCloneVoiceNamePlaceholder')}
+              className="h-10 rounded-md text-sm"
+            />
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+              <label className="inline-flex h-10 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm hover:bg-accent hover:text-accent-foreground">
+                <Upload className="h-3.5 w-3.5 shrink-0" />
+                <span className="max-w-[240px] truncate">
+                  {referenceFile ? referenceFile.name : t('settings.voxcpmUploadReferenceAudio')}
+                </span>
+                <input
+                  type="file"
+                  accept="audio/*"
+                  className="hidden"
+                  onChange={(event) => {
+                    void handleFileChange(event.target.files?.[0] || null);
+                    event.target.value = '';
+                  }}
+                />
+              </label>
+              <Button
+                type="button"
+                variant={isRecording ? 'destructive' : 'outline'}
+                size="sm"
+                disabled={!recordingSupported}
+                onClick={isRecording ? stopRecording : startRecording}
+                className="h-10 gap-2 rounded-md"
+              >
+                {isRecording ? (
+                  <>
+                    <Square className="h-3.5 w-3.5" />
+                    {formatRecordingTime(recordingSeconds)}
+                  </>
+                ) : (
+                  <>
+                    <Mic className="h-3.5 w-3.5" />
+                    {t('settings.voxcpmRecord')}
+                  </>
+                )}
+              </Button>
+            </div>
+            <Textarea
+              value={refText}
+              onChange={(event) => setRefText(event.target.value)}
+              placeholder={t('settings.qwenCloneRefText')}
+              className="min-h-24 resize-none rounded-md text-sm"
+            />
+            <div className="flex justify-end">
+              <Button
+                size="sm"
+                onClick={handleSave}
+                disabled={saving || !name.trim() || !refText.trim() || !referenceFile}
+                className="h-9 gap-1.5 rounded-md"
+              >
+                {saving ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Plus className="h-3.5 w-3.5" />
+                )}
+                {t('settings.voxcpmAddClone')}
+              </Button>
+            </div>
           </section>
         </div>
       </div>

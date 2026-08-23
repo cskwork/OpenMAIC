@@ -9,7 +9,7 @@ import {
   type ResolvedVoice,
 } from '@/lib/audio/voice-resolver';
 import { isTTSProviderEnabled } from '@/lib/audio/provider-enablement';
-import { useVoxCPMVoiceProfiles } from '@/lib/audio/voxcpm-voices';
+import { useAllVoiceProfiles } from '@/lib/audio/voxcpm-voices';
 import { resolveAgentVoiceOptions } from '@/lib/audio/agent-voice';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import type { TTSProviderId } from '@/lib/audio/types';
@@ -43,7 +43,7 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
   const globalTtsProviderId = useSettingsStore((s) => s.ttsProviderId);
   const globalTtsVoice = useSettingsStore((s) => s.ttsVoice);
   const agentVoiceOverrides = useSettingsStore((s) => s.agentVoiceOverrides);
-  const { profiles: voxcpmProfiles } = useVoxCPMVoiceProfiles();
+  const { profiles: voiceProfiles } = useAllVoiceProfiles();
 
   const queueRef = useRef<QueueItem[]>([]);
   const isPlayingRef = useRef(false);
@@ -110,7 +110,7 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       // lecture voice (below).
       const providers = getSelectableProvidersWithVoices(
         ttsProvidersConfig,
-        voxcpmProfiles,
+        voiceProfiles,
         browserVoices,
       );
       const firstVoice = (): ResolvedVoice | null =>
@@ -147,7 +147,7 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
     [
       agents,
       ttsProvidersConfig,
-      voxcpmProfiles,
+      voiceProfiles,
       browserVoices,
       globalTtsProviderId,
       globalTtsVoice,
