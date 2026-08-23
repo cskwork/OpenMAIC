@@ -45,6 +45,9 @@ function findAdvertisedVoice(
   token: string,
   availableVoices: AdvertisedVoice[] | undefined,
 ): AdvertisedVoice | undefined {
+  const exactMatch = availableVoices?.find((voice) => advertisedVoiceToken(voice) === token);
+  if (exactMatch) return exactMatch;
+
   const parts = token.split('::');
   if (parts.length !== 2 && parts.length !== 3) return undefined;
   const providerId = parts[0];
@@ -201,7 +204,7 @@ Return a JSON object with this exact structure:
         avatar: string;
         color: string;
         priority: number;
-        voice?: string;
+        voice?: unknown;
         voiceDesign?: unknown;
       }>;
     };
@@ -237,8 +240,11 @@ Return a JSON object with this exact structure:
     const agents = parsed.agents.map((agent, index) => {
       // Resolve only an advertised voice token so provider/model/voice remain bound together.
       let voiceConfig: { providerId: string; modelId?: string; voiceId: string } | undefined;
-      if (agent.voice) {
-        const advertised = findAdvertisedVoice(agent.voice, availableVoices);
+      if (agent.voice !== undefined && agent.voice !== null) {
+        const advertised =
+          typeof agent.voice === 'string'
+            ? findAdvertisedVoice(agent.voice, availableVoices)
+            : undefined;
         if (advertised) {
           voiceConfig = {
             providerId: advertised.providerId,

@@ -109,6 +109,57 @@ describe('agent-profiles route — voiceDesign', () => {
     });
   });
 
+  it('drops a non-string voice value without failing the request', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    callLLM.mockResolvedValue({ text: llmAgents({ voice: 123 }) });
+
+    const res = await POST(
+      makeRequest({
+        availableVoices: [{ providerId: 'qwen-tts', voiceId: 'Cherry', voiceName: 'Cherry' }],
+      }),
+    );
+    const body = await res.json();
+
+    expect(body.success).toBe(true);
+    expect(body.agents[0]).not.toHaveProperty('voiceConfig');
+    expect(warn).toHaveBeenCalledWith(
+      '[AgentProfiles] Dropped voice token not present in the advertised list:',
+      123,
+    );
+    warn.mockRestore();
+  });
+
+  it('prefers an exact advertised token when provider and voice IDs are duplicated', async () => {
+    callLLM.mockResolvedValue({
+      text: llmAgents({ voice: 'qwen-tts::qwen3-tts-vc-second::clone-1' }),
+    });
+    const res = await POST(
+      makeRequest({
+        availableVoices: [
+          {
+            providerId: 'qwen-tts',
+            modelId: 'qwen3-tts-vc-first',
+            voiceId: 'clone-1',
+            voiceName: 'First clone',
+          },
+          {
+            providerId: 'qwen-tts',
+            modelId: 'qwen3-tts-vc-second',
+            voiceId: 'clone-1',
+            voiceName: 'Second clone',
+          },
+        ],
+      }),
+    );
+    const body = await res.json();
+
+    expect(body.agents[0].voiceConfig).toEqual({
+      providerId: 'qwen-tts',
+      modelId: 'qwen3-tts-vc-second',
+      voiceId: 'clone-1',
+    });
+  });
+
   it('accepts a two-part clone token and derives its advertised model', async () => {
     callLLM.mockResolvedValue({ text: llmAgents({ voice: 'qwen-tts::clone-1' }) });
     const res = await POST(
