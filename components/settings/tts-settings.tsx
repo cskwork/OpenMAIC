@@ -32,6 +32,7 @@ import {
   isQwenCloneVoice,
   QWEN_TTS_VOICE_CLONE_MODEL,
   resolveTTSModelForVoice,
+  getManuallySelectableTTSModels,
 } from '@/lib/audio/constants';
 import type { TTSProviderId } from '@/lib/audio/types';
 import {
@@ -98,6 +99,9 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
 
   const ttsProvider = TTS_PROVIDERS[selectedProviderId as keyof typeof TTS_PROVIDERS];
   const isCustom = isCustomTTSProvider(selectedProviderId);
+  // Voice-clone models are resolved from the picked voice, never chosen by
+  // hand, so they are hidden from the manual model list.
+  const manuallySelectableModels = getManuallySelectableTTSModels(selectedProviderId);
   const providerConfig = ttsProvidersConfig[selectedProviderId];
   const isServerConfigured = !!providerConfig?.isServerConfigured;
   // Per-provider enablement (#665): the toggle is meaningful only for an
@@ -570,11 +574,11 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
       )}
 
       {/* Available Models */}
-      {ttsProvider?.models?.length > 0 && !isVoxCPM && (
+      {manuallySelectableModels.length > 0 && !isVoxCPM && (
         <div className="space-y-2">
           <Label className="text-sm text-muted-foreground">{t('settings.availableModels')}</Label>
           <div className="flex flex-wrap gap-2">
-            {ttsProvider.models.map((model) => (
+            {manuallySelectableModels.map((model) => (
               <div
                 key={model.id}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-muted/50 border border-border/40 text-xs font-mono text-muted-foreground"

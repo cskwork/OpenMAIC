@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { QWEN_TTS_VOICE_CLONE_MODEL } from '@/lib/audio/constants';
+import {
+  getManuallySelectableTTSModels,
+  QWEN_TTS_VOICE_CLONE_MODEL,
+  TTS_PROVIDERS,
+} from '@/lib/audio/constants';
 import {
   deleteQwenVoice,
   downloadAudio,
@@ -633,5 +637,21 @@ describe('Qwen voice cloning', () => {
     expect(
       qwen.modelGroups.find((group) => group.modelId === 'qwen3-tts-flash')?.voices,
     ).not.toContainEqual(expect.objectContaining({ id: 'vendor_voice_1' }));
+  });
+
+  it('excludes the voice-clone model from manual model options but keeps it in the registry', () => {
+    const qwenModels = TTS_PROVIDERS['qwen-tts'].models;
+    // The registry entry stays so voice-driven dispatch can still resolve it.
+    expect(qwenModels.some((model) => model.id === QWEN_TTS_VOICE_CLONE_MODEL)).toBe(true);
+
+    const manualModels = getManuallySelectableTTSModels('qwen-tts');
+    expect(manualModels.some((model) => model.id === QWEN_TTS_VOICE_CLONE_MODEL)).toBe(false);
+    expect(manualModels.length).toBe(qwenModels.length - 1);
+    // Non-clone models remain selectable.
+    expect(manualModels.map((model) => model.id)).toContain('qwen3-tts-flash');
+    // Other providers are unaffected by the filter.
+    expect(getManuallySelectableTTSModels('openai-tts')).toEqual(
+      TTS_PROVIDERS['openai-tts'].models,
+    );
   });
 });

@@ -1391,6 +1391,20 @@ export function getTTSProvider(
 }
 
 /**
+ * Models a user may pick manually in the UI. The Qwen voice-clone model is
+ * excluded: it is never chosen by hand, only resolved implicitly from a picked
+ * clone voice (model-follows-voice), so it must not appear in manual model
+ * pickers while staying in the provider registry for voice-driven dispatch.
+ */
+export function getManuallySelectableTTSModels(
+  providerId: TTSProviderId,
+  customProviders?: Record<string, TTSProviderConfig>,
+): TTSProviderConfig['models'] {
+  const provider = getTTSProvider(providerId, customProviders);
+  return (provider?.models || []).filter((model) => !isQwenVoiceCloneModel(model.id));
+}
+
+/**
  * Get voices for a specific TTS provider
  */
 export function getTTSVoices(
