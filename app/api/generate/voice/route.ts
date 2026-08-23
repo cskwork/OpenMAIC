@@ -46,6 +46,7 @@ export async function POST(req: NextRequest) {
       language?: string;
       referenceAudioBase64?: string;
       mimeType?: string;
+      refText?: string;
       ttsApiKey?: string;
       ttsBaseUrl?: string;
       ttsModelId?: string;
@@ -113,20 +114,28 @@ export async function POST(req: NextRequest) {
     // Not present, but the client has the cached reference clip → re-register it
     // (register-on-invalid; preserves the original timbre instead of re-synthesizing).
     if (body.referenceAudioBase64) {
-      await adapter.registerVoice(cfg, {
+      const registeredVoiceId = await adapter.registerVoice(cfg, {
         voiceId,
         referenceAudioBase64: body.referenceAudioBase64,
         mimeType: body.mimeType,
+        refText: body.refText,
       });
-      return apiSuccess({ voiceId, registered: true });
+      return apiSuccess({ voiceId: registeredVoiceId, registered: true });
     }
 
     // First use → bootstrap-synthesize the descriptor, register, return the clip.
+    if (adapter.supportsBootstrapReferenceClip === false) {
+      return apiError(
+        'INVALID_REQUEST',
+        400,
+        'This provider requires reference audio and a verbatim transcript',
+      );
+    }
     const clip = await adapter.bootstrapReferenceClip(cfg, {
       design: design!,
       language: body.language,
     });
-    await adapter.registerVoice(cfg, {
+    const registeredVoiceId = await adapter.registerVoice(cfg, {
       voiceId,
       referenceAudioBase64: clip.referenceAudioBase64,
       mimeType: clip.mimeType,
@@ -134,7 +143,7 @@ export async function POST(req: NextRequest) {
 
     log.info(`Registered auto voice ${voiceId} for provider ${providerId}`);
     return apiSuccess({
-      voiceId,
+      voiceId: registeredVoiceId,
       registered: true,
       referenceAudioBase64: clip.referenceAudioBase64,
       mimeType: clip.mimeType,

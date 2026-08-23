@@ -10,6 +10,7 @@
  */
 
 import type { VoiceDesign } from '@/lib/audio/voice-design';
+import { qwenVoiceCloneRegistrationAdapter } from '@/lib/audio/qwen-voice-clone-registration';
 import { voxcpmVoiceRegistrationAdapter } from '@/lib/audio/voxcpm-registration';
 
 /** Resolved backend connection for a registration call (server-injected for managed providers). */
@@ -22,12 +23,19 @@ export interface VoiceRegistrationConfig {
 export interface VoiceRegistrationAdapter {
   /** Whether registration is available for this provider given its options (e.g. backend kind). */
   supportsRegistration(options?: Record<string, unknown>): boolean;
+  /** Whether the adapter can synthesize its own reference clip from a voice design. */
+  supportsBootstrapReferenceClip?: boolean;
   /** Whether `voiceId` is already registered on the backend. */
   voiceExists(cfg: VoiceRegistrationConfig, voiceId: string): Promise<boolean>;
   /** Register (or idempotently re-register) a reference clip under `voiceId`; returns the id. */
   registerVoice(
     cfg: VoiceRegistrationConfig,
-    params: { voiceId: string; referenceAudioBase64: string; mimeType?: string },
+    params: {
+      voiceId: string;
+      referenceAudioBase64: string;
+      mimeType?: string;
+      refText?: string;
+    },
   ): Promise<string>;
   /** Synthesize the voice design once into a reference clip. */
   bootstrapReferenceClip(
@@ -38,6 +46,7 @@ export interface VoiceRegistrationAdapter {
 
 /** providerId → adapter. The only seam to touch when adding a provider. */
 const VOICE_REGISTRATION_ADAPTERS: Record<string, VoiceRegistrationAdapter> = {
+  'qwen-tts': qwenVoiceCloneRegistrationAdapter,
   'voxcpm-tts': voxcpmVoiceRegistrationAdapter,
 };
 

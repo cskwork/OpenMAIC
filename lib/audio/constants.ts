@@ -79,6 +79,14 @@ export const MINIMAX_TTS_MODELS = [
   { id: 'speech-02-turbo', name: 'Speech 02 Turbo' },
 ] as const;
 
+export const DEFAULT_QWEN_TTS_VOICE_CLONE_MODEL = 'qwen3-tts-vc-2026-01-22';
+export const QWEN_TTS_VOICE_CLONE_MODEL =
+  process.env.TTS_QWEN_VOICE_CLONE_MODEL || DEFAULT_QWEN_TTS_VOICE_CLONE_MODEL;
+
+export function isQwenVoiceCloneModel(modelId?: string): boolean {
+  return modelId === QWEN_TTS_VOICE_CLONE_MODEL || modelId === DEFAULT_QWEN_TTS_VOICE_CLONE_MODEL;
+}
+
 export const TTS_PROVIDERS: Record<BuiltInTTSProviderId, TTSProviderConfig> = {
   'openai-tts': {
     id: 'openai-tts',
@@ -311,6 +319,7 @@ export const TTS_PROVIDERS: Record<BuiltInTTSProviderId, TTSProviderConfig> = {
       { id: 'qwen3-tts-flash', name: 'Qwen3 TTS Flash' },
       { id: 'qwen3-tts-instruct-flash', name: 'Qwen3 TTS Instruct Flash' },
       { id: 'qwen-tts', name: 'Qwen TTS' },
+      { id: QWEN_TTS_VOICE_CLONE_MODEL, name: 'Qwen3 TTS Voice Clone' },
     ],
     defaultModelId: 'qwen3-tts-flash',
     voices: [

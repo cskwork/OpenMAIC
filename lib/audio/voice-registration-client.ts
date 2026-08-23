@@ -19,6 +19,12 @@ export interface VoiceRegistrationRequestConfig {
   ttsModelId?: string;
 }
 
+export interface UserVoiceRegistrationParams {
+  name: string;
+  referenceAudio: Blob;
+  refText: string;
+}
+
 function base64ToBlob(base64: string, mimeType?: string): Blob {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -37,6 +43,34 @@ async function blobToBase64(blob: Blob): Promise<string> {
     };
     reader.readAsDataURL(blob);
   });
+}
+
+/** Register a user-provided sample and return the provider's authoritative voice id. */
+export async function registerVoiceFromReference(
+  providerId: string,
+  params: UserVoiceRegistrationParams,
+  request: VoiceRegistrationRequestConfig,
+): Promise<string> {
+  const referenceAudioBase64 = await blobToBase64(params.referenceAudio);
+  const res = await fetch('/api/generate/voice', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      providerId,
+      voiceId: params.name.trim(),
+      referenceAudioBase64,
+      mimeType: params.referenceAudio.type || 'audio/wav',
+      refText: params.refText,
+      ...request,
+    }),
+  });
+  const data = (await res.json().catch(() => ({}))) as { voiceId?: unknown; error?: unknown };
+  if (!res.ok) {
+    throw new Error(typeof data.error === 'string' ? data.error : 'Voice registration failed');
+  }
+  const voiceId = typeof data.voiceId === 'string' ? data.voiceId.trim() : '';
+  if (!voiceId) throw new Error('Voice registration returned no voice id');
+  return voiceId;
 }
 
 // Confirmed-registered + in-flight memos, keyed by (voiceId, backend, credential).
@@ -116,6 +150,7 @@ async function registerOnce(
   if (!res.ok) return undefined; // graceful fallback to the inline prompt path
 
   const data = (await res.json().catch(() => ({}))) as {
+    voiceId?: string;
     referenceAudioBase64?: string;
     mimeType?: string;
   };
@@ -127,6 +162,10 @@ async function registerOnce(
       updatedAt: Date.now(),
     });
   }
+  const registeredVoiceId = data.voiceId?.trim() || voiceId;
   registeredThisSession.add(memoKey);
-  return voiceId;
+  if (registeredVoiceId !== voiceId) {
+    registeredThisSession.add(memoKeyFor(registeredVoiceId, request));
+  }
+  return registeredVoiceId;
 }

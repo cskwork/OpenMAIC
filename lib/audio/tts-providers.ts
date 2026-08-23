@@ -94,7 +94,8 @@
 
 import type { TTSModelConfig } from './types';
 import { isCustomTTSProvider } from './types';
-import { TTS_PROVIDERS } from './constants';
+import { isQwenVoiceCloneModel, QWEN_TTS_VOICE_CLONE_MODEL, TTS_PROVIDERS } from './constants';
+import { downloadAudio, synthesizeQwenVoiceClone } from './qwen-voice-clone';
 import { splitConcatenatedJsonObjects } from './json-stream';
 import {
   VOXCPM_VLLM_MODEL_ID,
@@ -645,6 +646,15 @@ async function generateGLMTTS(config: TTSModelConfig, text: string): Promise<TTS
 async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TTSGenerationResult> {
   const baseUrl = config.baseUrl || TTS_PROVIDERS['qwen-tts'].defaultBaseUrl;
 
+  if (isQwenVoiceCloneModel(config.modelId)) {
+    return synthesizeQwenVoiceClone(
+      { apiKey: config.apiKey, baseUrl, targetModel: QWEN_TTS_VOICE_CLONE_MODEL },
+      text,
+      config.voice,
+      config.speed,
+    );
+  }
+
   // Calculate speed: Qwen3 uses rate parameter from -500 to 500
   // speed 1.0 = rate 0, speed 2.0 = rate 500, speed 0.5 = rate -250
   const rate = Math.round(((config.speed || 1.0) - 1.0) * 500);
@@ -682,17 +692,10 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
   }
 
   // Download audio from URL
-  const audioUrl = data.output.audio.url;
-  const audioResponse = await fetch(audioUrl);
-
-  if (!audioResponse.ok) {
-    throw new Error(`Failed to download audio from URL: ${audioResponse.statusText}`);
-  }
-
-  const arrayBuffer = await audioResponse.arrayBuffer();
+  const downloaded = await downloadAudio(data.output.audio.url);
 
   return {
-    audio: new Uint8Array(arrayBuffer),
+    audio: downloaded.bytes,
     format: 'wav', // Qwen3 TTS returns WAV format
   };
 }

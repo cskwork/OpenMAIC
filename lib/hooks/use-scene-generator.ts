@@ -265,24 +265,25 @@ export async function generateAndStoreTTS(
   stageId?: string,
 ): Promise<string | null> {
   const settings = useSettingsStore.getState();
-  if (settings.ttsProviderId === 'browser-native-tts') return null;
-  // Don't server-generate against a disabled/unconfigured provider (#665).
-  if (
-    !isTTSProviderEnabled(
-      settings.ttsProviderId,
-      settings.ttsProvidersConfig?.[settings.ttsProviderId],
-    )
-  )
-    return null;
+  // A generated roster's explicit voice binding is the course voice source of truth.
+  // Global settings remain the fallback for classrooms without a binding.
+  const teacher = pickNarratorAgent(useAgentRegistry.getState().listAgents());
+  const boundVoice = teacher?.voiceConfig;
+  const ttsProviderId = boundVoice?.providerId ?? settings.ttsProviderId;
+  const ttsVoice = boundVoice?.voiceId ?? settings.ttsVoice;
+  const ttsProviderConfig = settings.ttsProvidersConfig?.[ttsProviderId];
+  const ttsModelId = boundVoice?.modelId ?? ttsProviderConfig?.modelId;
 
-  const ttsProviderConfig = settings.ttsProvidersConfig?.[settings.ttsProviderId];
+  if (ttsProviderId === 'browser-native-tts') return null;
+  // Don't server-generate against a disabled/unconfigured provider (#665).
+  if (!isTTSProviderEnabled(ttsProviderId, ttsProviderConfig)) return null;
+
   // Narration is the teacher's voice — resolve it from the teacher agent profile
   // through the single resolver (registers + references by id for stable timbre).
-  const teacher = pickNarratorAgent(useAgentRegistry.getState().listAgents());
   const providerOptions = await resolveAgentVoiceOptions(teacher, {
-    providerId: settings.ttsProviderId,
-    providerConfig: ttsProviderConfig,
-    voiceId: settings.ttsVoice,
+    providerId: ttsProviderId,
+    providerConfig: { ...ttsProviderConfig, modelId: ttsModelId },
+    voiceId: ttsVoice,
     language,
   });
   const data = await withGenerationRetry(
@@ -293,9 +294,9 @@ export async function generateAndStoreTTS(
         body: JSON.stringify({
           text,
           audioId: requestId,
-          ttsProviderId: settings.ttsProviderId,
-          ttsModelId: ttsProviderConfig?.modelId,
-          ttsVoice: settings.ttsVoice,
+          ttsProviderId,
+          ttsModelId,
+          ttsVoice,
           ttsSpeed: settings.ttsSpeed,
           ttsApiKey: ttsProviderConfig?.apiKey || undefined,
           // Managed providers resolve their base URL server-side; only send the

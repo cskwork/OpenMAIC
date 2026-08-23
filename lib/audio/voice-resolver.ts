@@ -1,7 +1,7 @@
 import type { TTSProviderId } from '@/lib/audio/types';
 import { isCustomTTSProvider } from '@/lib/audio/types';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
-import { TTS_PROVIDERS } from '@/lib/audio/constants';
+import { isQwenVoiceCloneModel, TTS_PROVIDERS } from '@/lib/audio/constants';
 import {
   BROWSER_NATIVE_TTS_PROVIDER_ID,
   isTTSProviderEnabled,
@@ -125,6 +125,13 @@ export interface ProviderWithVoices {
   modelGroups: ModelVoiceGroup[]; // voices grouped by model
 }
 
+export interface UserVoiceProfile {
+  id: string;
+  providerId?: string;
+  name: string;
+  kind?: string;
+}
+
 /**
  * Get all ENABLED providers and their voices for the voice picker UI and for
  * deterministic auto-assignment.
@@ -145,7 +152,7 @@ export function getEnabledProvidersWithVoices(
       customName?: string;
     }
   >,
-  voxcpmProfiles: Array<{ id: string; name: string; kind?: string }> = [],
+  voiceProfiles: UserVoiceProfile[] = [],
 ): ProviderWithVoices[] {
   const result: ProviderWithVoices[] = [];
 
@@ -158,13 +165,30 @@ export function getEnabledProvidersWithVoices(
     const providerConfig = ttsProvidersConfig[providerId];
     if (!isTTSProviderEnabled(providerId, providerConfig)) continue;
 
+    const providerProfiles = voiceProfiles.filter(
+      (profile) =>
+        (profile.providerId || VOXCPM_TTS_PROVIDER_ID) === providerId && profile.kind === 'clone',
+    );
     const visibleVoxCPMProfiles =
       providerId === VOXCPM_TTS_PROVIDER_ID
-        ? voxcpmProfiles.filter((profile) => {
+        ? voiceProfiles.filter((profile) => {
+            if ((profile.providerId || VOXCPM_TTS_PROVIDER_ID) !== providerId) return false;
             const backend = normalizeVoxCPMBackend(providerConfig?.providerOptions?.backend);
             return profile.kind !== 'clone' || voxCPMBackendSupportsReferenceAudio(backend);
           })
         : [];
+    const userVoices =
+      providerId === VOXCPM_TTS_PROVIDER_ID
+        ? visibleVoxCPMProfiles.map((profile) => ({
+            id: getVoxCPMProfileVoiceId(profile.id),
+            name: profile.name,
+            language: 'auto',
+          }))
+        : providerProfiles.map((profile) => ({
+            id: profile.id,
+            name: profile.name,
+            language: 'auto',
+          }));
 
     {
       const allVoices = [
@@ -173,30 +197,23 @@ export function getEnabledProvidersWithVoices(
           name: v.name,
           language: v.language,
         })),
-        ...(providerId === VOXCPM_TTS_PROVIDER_ID
-          ? visibleVoxCPMProfiles.map((profile) => ({
-              id: getVoxCPMProfileVoiceId(profile.id),
-              name: profile.name,
-              language: 'auto',
-            }))
-          : []),
+        ...userVoices,
       ];
 
       // Build model groups
       const modelGroups: ModelVoiceGroup[] = [];
       if (config.models.length > 0) {
         for (const model of config.models) {
-          const compatibleVoices = config.voices
-            .filter((v) => !v.compatibleModels || v.compatibleModels.includes(model.id))
-            .map((v) => ({ id: v.id, name: v.name, language: v.language }));
+          const compatibleVoices =
+            providerId === 'qwen-tts' && isQwenVoiceCloneModel(model.id)
+              ? []
+              : config.voices
+                  .filter((v) => !v.compatibleModels || v.compatibleModels.includes(model.id))
+                  .map((v) => ({ id: v.id, name: v.name, language: v.language }));
           if (providerId === VOXCPM_TTS_PROVIDER_ID) {
-            compatibleVoices.push(
-              ...visibleVoxCPMProfiles.map((profile) => ({
-                id: getVoxCPMProfileVoiceId(profile.id),
-                name: profile.name,
-                language: 'auto',
-              })),
-            );
+            compatibleVoices.push(...userVoices);
+          } else if (providerId !== 'qwen-tts' || isQwenVoiceCloneModel(model.id)) {
+            compatibleVoices.push(...userVoices);
           }
           modelGroups.push({
             modelId: model.id,
@@ -268,10 +285,10 @@ export function getSelectableProvidersWithVoices(
       customName?: string;
     }
   >,
-  voxcpmProfiles: Array<{ id: string; name: string; kind?: string }> = [],
+  voiceProfiles: UserVoiceProfile[] = [],
   browserVoices: BrowserVoiceLike[] = [],
 ): ProviderWithVoices[] {
-  const providers = getEnabledProvidersWithVoices(ttsProvidersConfig, voxcpmProfiles);
+  const providers = getEnabledProvidersWithVoices(ttsProvidersConfig, voiceProfiles);
   if (
     isTTSProviderEnabled(
       BROWSER_NATIVE_TTS_PROVIDER_ID,
