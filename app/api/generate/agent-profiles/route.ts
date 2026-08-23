@@ -33,6 +33,31 @@ interface RequestBody {
   }>;
 }
 
+type AdvertisedVoice = NonNullable<RequestBody['availableVoices']>[number];
+
+function advertisedVoiceToken(voice: AdvertisedVoice): string {
+  return voice.modelId
+    ? `${voice.providerId}::${voice.modelId}::${voice.voiceId}`
+    : `${voice.providerId}::${voice.voiceId}`;
+}
+
+function findAdvertisedVoice(
+  token: string,
+  availableVoices: AdvertisedVoice[] | undefined,
+): AdvertisedVoice | undefined {
+  const parts = token.split('::');
+  if (parts.length !== 2 && parts.length !== 3) return undefined;
+  const providerId = parts[0];
+  const voiceId = parts.at(-1);
+  if (!providerId || !voiceId || (parts.length === 3 && !parts[1])) return undefined;
+
+  // The voice is authoritative for its model. The optional model segment is
+  // accepted for compatibility but never allowed to override the advertised binding.
+  return availableVoices?.find(
+    (voice) => voice.providerId === providerId && voice.voiceId === voiceId,
+  );
+}
+
 function stripCodeFences(text: string): string {
   let cleaned = text.trim();
   // Remove markdown code fences (```json ... ``` or ``` ... ```)
@@ -94,9 +119,7 @@ export async function POST(req: NextRequest) {
       availableVoices && availableVoices.length > 0
         ? JSON.stringify(
             availableVoices.map((v) => ({
-              id: v.modelId
-                ? `${v.providerId}::${v.modelId}::${v.voiceId}`
-                : `${v.providerId}::${v.voiceId}`,
+              id: advertisedVoiceToken(v),
               name: v.voiceName,
               language: v.voiceLanguage || 'unknown',
             })),
@@ -111,7 +134,7 @@ export async function POST(req: NextRequest) {
       : '';
 
     const voiceJsonField = voiceListStr
-      ? ',\n      "voice": "string (voice id from available list, e.g. \'qwen-tts::Cherry\')"'
+      ? `,\n      "voice": "string (voice id from available list, e.g. '${advertisedVoiceToken(availableVoices![0])}')"`
       : '';
 
     const userPrompt = `Generate agent profiles for the following course:
@@ -215,12 +238,7 @@ Return a JSON object with this exact structure:
       // Resolve only an advertised voice token so provider/model/voice remain bound together.
       let voiceConfig: { providerId: string; modelId?: string; voiceId: string } | undefined;
       if (agent.voice) {
-        const advertised = availableVoices?.find(
-          (voice) =>
-            (voice.modelId
-              ? `${voice.providerId}::${voice.modelId}::${voice.voiceId}`
-              : `${voice.providerId}::${voice.voiceId}`) === agent.voice,
-        );
+        const advertised = findAdvertisedVoice(agent.voice, availableVoices);
         if (advertised) {
           voiceConfig = {
             providerId: advertised.providerId,

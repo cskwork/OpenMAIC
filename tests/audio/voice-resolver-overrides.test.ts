@@ -192,6 +192,31 @@ describe('resolveAgentVoice with overrides', () => {
     ).toEqual({ providerId: 'openai-tts', voiceId: 'alloy' });
   });
 
+  it('rejects a stale legacy model when voice metadata excludes the default group', () => {
+    const openai: ProviderWithVoices = {
+      providerId: 'openai-tts',
+      providerName: 'OpenAI',
+      voices: [
+        { id: 'marin', name: 'Marin' },
+        { id: 'alloy', name: 'Alloy' },
+      ],
+      modelGroups: [
+        {
+          modelId: 'gpt-4o-mini-tts',
+          modelName: 'Default',
+          voices: [{ id: 'alloy', name: 'Alloy' }],
+        },
+      ],
+    };
+    expect(
+      resolveAgentVoice(
+        agent('legacy', { providerId: 'openai-tts', modelId: 'tts-retired', voiceId: 'marin' }),
+        1,
+        [openai],
+      ),
+    ).toEqual({ providerId: 'openai-tts', voiceId: 'alloy' });
+  });
+
   it('falls back globally for an empty narrator voice id on every provider', () => {
     const global = { providerId: 'qwen-tts' as const, voiceId: 'Cherry' };
     expect(

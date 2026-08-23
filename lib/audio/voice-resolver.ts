@@ -121,8 +121,19 @@ export function resolveAgentVoice(
     const matchingModelGroup = choice.modelId
       ? fromEnabled.modelGroups.find((group) => group.modelId === choice.modelId)
       : undefined;
+    const provider = TTS_PROVIDERS[choice.providerId as keyof typeof TTS_PROVIDERS];
+    const declaredVoice = provider?.voices.find((voice) => voice.id === choice.voiceId);
+    const defaultModelGroup = provider
+      ? fromEnabled.modelGroups.find((group) => group.modelId === provider.defaultModelId)
+      : undefined;
+    const staleModelCanUseDefault = declaredVoice?.compatibleModels
+      ? defaultModelGroup?.voices.some((voice) => voice.id === choice.voiceId) === true
+      : true;
+    // Without compatibility metadata, legacy providers are assumed to accept
+    // their known voices on the configured default model, preserving prior behavior.
     const modelCompatible =
-      !matchingModelGroup || matchingModelGroup.voices.some((voice) => voice.id === choice.voiceId);
+      matchingModelGroup?.voices.some((voice) => voice.id === choice.voiceId) ??
+      staleModelCanUseDefault;
     if (allVoiceIds.has(choice.voiceId) && modelCompatible) {
       return {
         providerId: choice.providerId,

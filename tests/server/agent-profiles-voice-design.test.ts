@@ -109,8 +109,46 @@ describe('agent-profiles route — voiceDesign', () => {
     });
   });
 
+  it('accepts a two-part clone token and derives its advertised model', async () => {
+    callLLM.mockResolvedValue({ text: llmAgents({ voice: 'qwen-tts::clone-1' }) });
+    const res = await POST(
+      makeRequest({
+        availableVoices: [
+          {
+            providerId: 'qwen-tts',
+            modelId: 'qwen3-tts-vc-test',
+            voiceId: 'clone-1',
+            voiceName: 'Clone',
+          },
+        ],
+      }),
+    );
+    const body = await res.json();
+    expect(body.agents[0].voiceConfig).toEqual({
+      providerId: 'qwen-tts',
+      modelId: 'qwen3-tts-vc-test',
+      voiceId: 'clone-1',
+    });
+  });
+
   it('accepts a two-part catalog voice token without persisting a model', async () => {
     callLLM.mockResolvedValue({ text: llmAgents({ voice: 'qwen-tts::Cherry' }) });
+    const res = await POST(
+      makeRequest({
+        availableVoices: [{ providerId: 'qwen-tts', voiceId: 'Cherry', voiceName: 'Cherry' }],
+      }),
+    );
+    const body = await res.json();
+    expect(body.agents[0].voiceConfig).toEqual({
+      providerId: 'qwen-tts',
+      voiceId: 'Cherry',
+    });
+  });
+
+  it('accepts a three-part catalog token without trusting its model segment', async () => {
+    callLLM.mockResolvedValue({
+      text: llmAgents({ voice: 'qwen-tts::qwen3-tts-vc-stale::Cherry' }),
+    });
     const res = await POST(
       makeRequest({
         availableVoices: [{ providerId: 'qwen-tts', voiceId: 'Cherry', voiceName: 'Cherry' }],

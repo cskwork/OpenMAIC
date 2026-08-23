@@ -31,18 +31,10 @@ export function clearVoiceBindingUnavailable(binding: {
 }
 
 export function trackAssignedVoiceBinding(
-  previousKey: string | undefined,
+  _previousKey: string | undefined,
   binding: { providerId: string; voiceId: string },
 ): string {
-  const nextKey = voiceBindingKey(binding);
-  if (previousKey && previousKey !== nextKey) {
-    const separator = previousKey.indexOf('\0');
-    clearVoiceBindingUnavailable({
-      providerId: previousKey.slice(0, separator),
-      voiceId: previousKey.slice(separator + 1),
-    });
-  }
-  return nextKey;
+  return voiceBindingKey(binding);
 }
 
 export function markVoiceBindingNoticeShown(key: string): boolean {

@@ -17,15 +17,25 @@ const REGISTRATION_MEMO_TTL_MS = 60 * 60 * 1000;
 const REGISTRATION_MEMO_MAX_ENTRIES = 256;
 
 const inFlightRegistrations = new Map<string, Promise<string>>();
-const registrations = new Map<string, { voiceId: string; expiresAt: number }>();
+const registrations = new Map<string, { voiceId: string; expiresAt: number; configKey: string }>();
 const registrationKeysByVoice = new Map<string, Set<string>>();
 
 function decodeBase64(value: string): Uint8Array {
   return new Uint8Array(Buffer.from(value, 'base64'));
 }
 
+function registrationConfigKey(cfg: VoiceRegistrationConfig): string {
+  return createHash('sha256')
+    .update(cfg.baseUrl)
+    .update('\0')
+    .update(cfg.apiKey || '')
+    .update('\0')
+    .update(cfg.model || '')
+    .digest('hex');
+}
+
 function registrationKey(
-  cfg: VoiceRegistrationConfig,
+  configKey: string,
   params: {
     voiceId: string;
     referenceAudioBase64: string;
@@ -33,11 +43,7 @@ function registrationKey(
   },
 ): string {
   return createHash('sha256')
-    .update(cfg.baseUrl)
-    .update('\0')
-    .update(cfg.apiKey || '')
-    .update('\0')
-    .update(cfg.model || '')
+    .update(configKey)
     .update('\0')
     .update(params.voiceId)
     .update('\0')
@@ -60,7 +66,8 @@ async function registerVoice(
   const refText = params.refText || '';
   if (!refText.trim()) throw new QwenVoiceCloneError('QWEN_VC_CONFIG_MISSING', 400);
 
-  const key = registrationKey(cfg, params);
+  const configKey = registrationConfigKey(cfg);
+  const key = registrationKey(configKey, params);
   const memoized = registrations.get(key);
   if (memoized) {
     if (memoized.expiresAt > Date.now()) {
@@ -86,7 +93,7 @@ async function registerVoice(
       { name: params.voiceId, audio, text: refText },
       undefined,
     );
-    rememberRegistration(key, result.voiceId);
+    rememberRegistration(key, configKey, result.voiceId);
     return result.voiceId;
   })().finally(() => inFlightRegistrations.delete(key));
   inFlightRegistrations.set(key, pending);
@@ -112,9 +119,13 @@ function waitForRegistration(pending: Promise<string>, signal?: AbortSignal): Pr
   });
 }
 
-function rememberRegistration(key: string, voiceId: string): void {
+function rememberRegistration(key: string, configKey: string, voiceId: string): void {
   registrations.delete(key);
-  registrations.set(key, { voiceId, expiresAt: Date.now() + REGISTRATION_MEMO_TTL_MS });
+  registrations.set(key, {
+    voiceId,
+    expiresAt: Date.now() + REGISTRATION_MEMO_TTL_MS,
+    configKey,
+  });
   const keys = registrationKeysByVoice.get(voiceId) ?? new Set<string>();
   keys.add(key);
   registrationKeysByVoice.set(voiceId, keys);
@@ -149,7 +160,20 @@ async function voiceExists(
     voiceId,
     signal,
   );
-  return result === 'unknown' && registrationKeysByVoice.has(voiceId) ? true : result;
+  if (result !== 'unknown') return result;
+
+  const configKey = registrationConfigKey(cfg);
+  const keys = registrationKeysByVoice.get(voiceId);
+  if (!keys) return result;
+  for (const key of [...keys]) {
+    const registration = registrations.get(key);
+    if (!registration || registration.expiresAt <= Date.now()) {
+      removeRegistrationKey(key, voiceId);
+      continue;
+    }
+    if (registration.configKey === configKey) return true;
+  }
+  return result;
 }
 
 async function deleteVoice(
