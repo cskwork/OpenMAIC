@@ -857,6 +857,28 @@ function GenerationPreviewContent() {
             );
           };
 
+          // The user's global TTS voice is the narrator voice. Pass it along so
+          // the server pins the teacher agent to it instead of letting the LLM
+          // pick a different voice. Reuse the same resolution helpers as the
+          // advertised list: the model follows the voice, and only clones carry
+          // a model on the wire.
+          const getNarratorVoiceForGeneration = ():
+            | { providerId: string; voiceId: string; modelId?: string }
+            | undefined => {
+            const providerId = settings.ttsProviderId;
+            const voiceId = settings.ttsVoice?.trim();
+            if (!providerId || !voiceId) return undefined;
+            const modelId =
+              providerId === 'qwen-tts' && isQwenCloneVoice(voiceId)
+                ? resolveTTSModelForVoice(
+                    providerId,
+                    voiceId,
+                    settings.ttsProvidersConfig[providerId]?.modelId,
+                  )
+                : undefined;
+            return { providerId, voiceId, ...(modelId ? { modelId } : {}) };
+          };
+
           const agentResp = await fetch('/api/generate/agent-profiles', {
             method: 'POST',
             headers: getApiHeaders(),
@@ -871,6 +893,7 @@ function GenerationPreviewContent() {
                 availableAvatars: allAvatars.map((a) => a.path),
                 avatarDescriptions: allAvatars.map((a) => ({ path: a.path, desc: a.desc })),
                 availableVoices: getAvailableVoicesForGeneration(),
+                narratorVoice: getNarratorVoiceForGeneration(),
               }),
             ),
             signal,

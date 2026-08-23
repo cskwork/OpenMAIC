@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
+import { QWEN_TTS_VOICE_CLONE_MODEL } from '@/lib/audio/constants';
 
 const callLLM = vi.fn();
 
@@ -210,5 +211,153 @@ describe('agent-profiles route — voiceDesign', () => {
       providerId: 'qwen-tts',
       voiceId: 'Cherry',
     });
+  });
+
+  it('pins the teacher voice to the passed narrator voice verbatim', async () => {
+    // The LLM would have picked Cherry for the teacher, but the user's narrator
+    // voice (the advertised clone) must win.
+    callLLM.mockResolvedValue({
+      text: llmAgents({ voice: 'qwen-tts::Cherry' }),
+    });
+    const res = await POST(
+      makeRequest({
+        availableVoices: [
+          {
+            providerId: 'qwen-tts',
+            modelId: 'qwen3-tts-vc-test',
+            voiceId: 'clone-1',
+            voiceName: 'Clone',
+          },
+        ],
+        narratorVoice: {
+          providerId: 'qwen-tts',
+          modelId: 'qwen3-tts-vc-test',
+          voiceId: 'clone-1',
+        },
+      }),
+    );
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    expect(body.agents[0].voiceConfig).toEqual({
+      providerId: 'qwen-tts',
+      modelId: 'qwen3-tts-vc-test',
+      voiceId: 'clone-1',
+    });
+  });
+
+  it('honors a narrator clone voice that is not in the advertised list', async () => {
+    callLLM.mockResolvedValue({
+      text: llmAgents({ voice: 'qwen-tts::Cherry' }),
+    });
+    const res = await POST(
+      makeRequest({
+        availableVoices: [{ providerId: 'qwen-tts', voiceId: 'Cherry', voiceName: 'Cherry' }],
+        narratorVoice: {
+          providerId: 'qwen-tts',
+          modelId: 'qwen3-tts-vc-test',
+          voiceId: 'clone-ghost',
+        },
+      }),
+    );
+    const body = await res.json();
+    // The clone is account-scoped and self-contained; the model follows the voice.
+    expect(body.agents[0].voiceConfig).toEqual({
+      providerId: 'qwen-tts',
+      modelId: QWEN_TTS_VOICE_CLONE_MODEL,
+      voiceId: 'clone-ghost',
+    });
+  });
+
+  it('still assigns LLM-picked voices to non-teacher agents when the narrator voice is pinned', async () => {
+    callLLM.mockResolvedValue({
+      text: JSON.stringify({
+        agents: [
+          {
+            name: 'Prof. Lin',
+            role: 'teacher',
+            persona: 'A patient mentor.',
+            avatar: '/a.png',
+            color: '#111111',
+            priority: 10,
+          },
+          {
+            name: 'Sam',
+            role: 'student',
+            persona: 'Curious learner.',
+            avatar: '/b.png',
+            color: '#222222',
+            priority: 5,
+            voice: 'qwen-tts::Cherry',
+          },
+        ],
+      }),
+    });
+    const res = await POST(
+      makeRequest({
+        availableVoices: [
+          { providerId: 'qwen-tts', voiceId: 'Cherry', voiceName: 'Cherry' },
+          {
+            providerId: 'qwen-tts',
+            modelId: 'qwen3-tts-vc-test',
+            voiceId: 'clone-1',
+            voiceName: 'Clone',
+          },
+        ],
+        narratorVoice: {
+          providerId: 'qwen-tts',
+          modelId: 'qwen3-tts-vc-test',
+          voiceId: 'clone-1',
+        },
+      }),
+    );
+    const body = await res.json();
+    expect(body.agents[0].voiceConfig).toEqual({
+      providerId: 'qwen-tts',
+      modelId: 'qwen3-tts-vc-test',
+      voiceId: 'clone-1',
+    });
+    expect(body.agents[1].voiceConfig).toEqual({ providerId: 'qwen-tts', voiceId: 'Cherry' });
+  });
+
+  it('falls back to the LLM-assigned teacher voice when narratorVoice is absent', async () => {
+    callLLM.mockResolvedValue({
+      text: llmAgents({ voice: 'qwen-tts::qwen3-tts-vc-test::clone-1' }),
+    });
+    const res = await POST(
+      makeRequest({
+        availableVoices: [
+          {
+            providerId: 'qwen-tts',
+            modelId: 'qwen3-tts-vc-test',
+            voiceId: 'clone-1',
+            voiceName: 'Clone',
+          },
+        ],
+      }),
+    );
+    const body = await res.json();
+    expect(body.agents[0].voiceConfig).toEqual({
+      providerId: 'qwen-tts',
+      modelId: 'qwen3-tts-vc-test',
+      voiceId: 'clone-1',
+    });
+  });
+
+  it('ignores a narrator voice that is neither advertised nor a valid clone', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    callLLM.mockResolvedValue({
+      text: llmAgents({ voice: 'qwen-tts::Cherry' }),
+    });
+    const res = await POST(
+      makeRequest({
+        availableVoices: [{ providerId: 'qwen-tts', voiceId: 'Cherry', voiceName: 'Cherry' }],
+        narratorVoice: { providerId: 'openai-tts', voiceId: 'not-advertised' },
+      }),
+    );
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    // The unusable narrator voice is dropped; the LLM's choice stands.
+    expect(body.agents[0].voiceConfig).toEqual({ providerId: 'qwen-tts', voiceId: 'Cherry' });
+    warn.mockRestore();
   });
 });
