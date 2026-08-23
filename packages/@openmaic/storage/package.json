@@ -35,6 +35,10 @@
       "types": "./dist/runtime/pg.d.ts",
       "import": "./dist/runtime/pg.js"
     },
+    "./agent-session/pg": {
+      "types": "./dist/agent-session/pg.d.ts",
+      "import": "./dist/agent-session/pg.js"
+    },
     "./asset/pg": {
       "types": "./dist/asset/pg.d.ts",
       "import": "./dist/asset/pg.js"
