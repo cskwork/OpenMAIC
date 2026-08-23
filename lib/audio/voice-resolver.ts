@@ -3,6 +3,7 @@ import { isCustomTTSProvider } from '@/lib/audio/types';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import {
   isQwenCatalogVoice,
+  isQwenCloneVoice,
   isQwenVoiceCloneModel,
   resolveTTSModelForVoice,
   TTS_PROVIDERS,
@@ -144,22 +145,56 @@ export function resolveAgentVoice(
   }
 
   // Fallback: deterministic pick among enabled providers (canonical order).
-  if (enabledProviders.length > 0) {
-    const first = enabledProviders[0];
-    const fallbackVoices =
-      first.providerId === 'qwen-tts'
-        ? first.voices.filter((voice) => isQwenCatalogVoice(voice.id))
-        : first.voices;
-    if (fallbackVoices.length > 0) {
-      return {
-        providerId: first.providerId,
-        voiceId: fallbackVoices[agentIndex % fallbackVoices.length].id,
-      };
-    }
-  }
+  return resolveDeterministicFallbackVoice(enabledProviders, agentIndex);
+}
 
-  // Nothing enabled — no TTS for this agent.
-  return null;
+/**
+ * The deterministic last-resort voice pick shared by `resolveAgentVoice` and
+ * the narrator fallback: the first ENABLED provider in canonical order and one
+ * of its catalog voices (Qwen clones are excluded — only catalog voices are
+ * guaranteed usable without account state). Returns null when no enabled
+ * provider can serve a voice.
+ */
+export function resolveDeterministicFallbackVoice(
+  enabledProviders: ProviderWithVoices[],
+  index: number,
+): ResolvedVoice | null {
+  if (enabledProviders.length === 0) return null;
+  const first = enabledProviders[0];
+  const fallbackVoices =
+    first.providerId === 'qwen-tts'
+      ? first.voices.filter((voice) => isQwenCatalogVoice(voice.id))
+      : first.voices;
+  if (fallbackVoices.length === 0) return null;
+  return {
+    providerId: first.providerId,
+    voiceId: fallbackVoices[index % fallbackVoices.length].id,
+  };
+}
+
+/**
+ * The narrator (teacher) voice to pin at agent-profile generation time.
+ *
+ * Returns undefined when the global voice is unusable — no voice selected, or
+ * its provider disabled/unconfigured — so the teacher is never pinned to a
+ * voice the fallback machinery cannot serve. The advertised list contains only
+ * enabled providers, so an unpinned narrator lets the LLM pick a working voice;
+ * and because the pin makes bound == global, pinning an unusable voice would
+ * defeat `resolveNarratorVoiceBinding`'s enabled-provider fallback at narration.
+ */
+export function resolveNarratorVoiceForGeneration(
+  providerId: TTSProviderId,
+  voiceId: string | undefined,
+  providerConfig: (TTSEnablementConfig & { modelId?: string }) | undefined,
+): ResolvedVoice | undefined {
+  const trimmed = voiceId?.trim();
+  if (!providerId || !trimmed) return undefined;
+  if (!isTTSProviderEnabled(providerId, providerConfig)) return undefined;
+  const modelId =
+    providerId === 'qwen-tts' && isQwenCloneVoice(trimmed)
+      ? resolveTTSModelForVoice(providerId, trimmed, providerConfig?.modelId)
+      : undefined;
+  return { providerId, voiceId: trimmed, ...(modelId ? { modelId } : {}) };
 }
 
 /**

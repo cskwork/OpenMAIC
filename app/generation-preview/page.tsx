@@ -12,7 +12,10 @@ import { cn } from '@/lib/utils';
 import { useStageStore } from '@/lib/store/stage';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
-import { getEnabledProvidersWithVoices } from '@/lib/audio/voice-resolver';
+import {
+  getEnabledProvidersWithVoices,
+  resolveNarratorVoiceForGeneration,
+} from '@/lib/audio/voice-resolver';
 import { isQwenCloneVoice, resolveTTSModelForVoice } from '@/lib/audio/constants';
 import { isTTSProviderEnabled } from '@/lib/audio/provider-enablement';
 import { useAllVoiceProfiles } from '@/lib/audio/voxcpm-voices';
@@ -861,23 +864,15 @@ function GenerationPreviewContent() {
           // the server pins the teacher agent to it instead of letting the LLM
           // pick a different voice. Reuse the same resolution helpers as the
           // advertised list: the model follows the voice, and only clones carry
-          // a model on the wire.
-          const getNarratorVoiceForGeneration = ():
-            | { providerId: string; voiceId: string; modelId?: string }
-            | undefined => {
-            const providerId = settings.ttsProviderId;
-            const voiceId = settings.ttsVoice?.trim();
-            if (!providerId || !voiceId) return undefined;
-            const modelId =
-              providerId === 'qwen-tts' && isQwenCloneVoice(voiceId)
-                ? resolveTTSModelForVoice(
-                    providerId,
-                    voiceId,
-                    settings.ttsProvidersConfig[providerId]?.modelId,
-                  )
-                : undefined;
-            return { providerId, voiceId, ...(modelId ? { modelId } : {}) };
-          };
+          // a model on the wire. An unusable global voice (disabled/unconfigured
+          // provider) is NOT pinned — the LLM then picks a working advertised
+          // voice and the narration fallback machinery stays alive.
+          const getNarratorVoiceForGeneration = () =>
+            resolveNarratorVoiceForGeneration(
+              settings.ttsProviderId,
+              settings.ttsVoice,
+              settings.ttsProvidersConfig[settings.ttsProviderId],
+            );
 
           const agentResp = await fetch('/api/generate/agent-profiles', {
             method: 'POST',

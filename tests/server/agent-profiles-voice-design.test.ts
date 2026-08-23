@@ -360,4 +360,64 @@ describe('agent-profiles route — voiceDesign', () => {
     expect(body.agents[0].voiceConfig).toEqual({ providerId: 'qwen-tts', voiceId: 'Cherry' });
     warn.mockRestore();
   });
+
+  it('keeps the schema example token from the advertised list when the narrator is a ghost clone', async () => {
+    // The pinned narrator clone is NOT advertised (deleted/ghost): the schema
+    // example must still come from the advertised list so an LLM echoing it
+    // into a student's voice field produces a resolvable token.
+    callLLM.mockResolvedValue({ text: llmAgents({}) });
+    const res = await POST(
+      makeRequest({
+        availableVoices: [{ providerId: 'qwen-tts', voiceId: 'Cherry', voiceName: 'Cherry' }],
+        narratorVoice: {
+          providerId: 'qwen-tts',
+          modelId: 'qwen3-tts-vc-test',
+          voiceId: 'clone-ghost',
+        },
+      }),
+    );
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    // The teacher is still pinned to the (self-contained) ghost clone…
+    expect(body.agents[0].voiceConfig).toEqual({
+      providerId: 'qwen-tts',
+      modelId: QWEN_TTS_VOICE_CLONE_MODEL,
+      voiceId: 'clone-ghost',
+    });
+    // …but the schema example token is always an advertised voice.
+    const prompt = callLLM.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain("e.g. 'qwen-tts::Cherry'");
+    expect(prompt).not.toContain(`e.g. 'qwen-tts::${QWEN_TTS_VOICE_CLONE_MODEL}::clone-ghost'`);
+  });
+
+  it('prompts for a voice on every non-teacher agent and never reuses the teacher voice', async () => {
+    callLLM.mockResolvedValue({ text: llmAgents({}) });
+    const res = await POST(
+      makeRequest({
+        availableVoices: [
+          { providerId: 'qwen-tts', voiceId: 'Cherry', voiceName: 'Cherry' },
+          {
+            providerId: 'qwen-tts',
+            modelId: 'qwen3-tts-vc-test',
+            voiceId: 'clone-1',
+            voiceName: 'Clone',
+          },
+        ],
+        narratorVoice: {
+          providerId: 'qwen-tts',
+          modelId: 'qwen3-tts-vc-test',
+          voiceId: 'clone-1',
+        },
+      }),
+    );
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    const prompt = callLLM.mock.calls[0][0].prompt as string;
+    // The softened phrasing still requires a voice field on every non-teacher
+    // agent (the old "ONLY to the other agents" over-generalized into omissions).
+    expect(prompt).toContain('Every OTHER agent must still be assigned a voice from this list');
+    expect(prompt).not.toContain('Assign voices ONLY to the other');
+    // The fixed teacher voice is out of bounds for non-teacher assignment.
+    expect(prompt).toContain('Never assign the fixed teacher narrator voice to any other agent');
+  });
 });
