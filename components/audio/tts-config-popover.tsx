@@ -95,6 +95,9 @@ export function TtsConfigPopover() {
   const pillCls =
     'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-all cursor-pointer select-none whitespace-nowrap border';
   const canPreview = ttsProviderId !== 'voxcpm-tts' || ttsVoice !== VOXCPM_AUTO_VOICE_ID;
+  const usesQwenClone =
+    ttsProviderId === 'qwen-tts' &&
+    isQwenVoiceCloneModel(ttsProvidersConfig[ttsProviderId]?.modelId);
 
   const handleVoiceChange = (voiceId: string) => {
     setTTSVoice(voiceId);
@@ -247,6 +250,11 @@ export function TtsConfigPopover() {
                 {previewing ? t('toolbar.ttsPreviewing') : t('toolbar.ttsPreview')}
               </button>
             </div>
+            {usesQwenClone && (
+              <p className="text-[11px] text-muted-foreground">
+                {t('settings.qwenCloneSpeedHint')}
+              </p>
+            )}
           </div>
         )}
       </PopoverContent>

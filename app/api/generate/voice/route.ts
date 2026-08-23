@@ -20,6 +20,7 @@ import {
   isServerTTSProviderDisabled,
   resolveTTSApiKey,
   resolveTTSBaseUrl,
+  resolveQwenVoiceCloneModel,
   resolveTTSModel,
 } from '@/lib/server/provider-config';
 import { createLogger } from '@/lib/logger';
@@ -30,6 +31,7 @@ import {
   getVoiceRegistrationAdapter,
   type VoiceRegistrationConfig,
 } from '@/lib/audio/voice-registration';
+import { QwenVoiceCloneError, qwenVoiceCloneErrorMessage } from '@/lib/audio/qwen-voice-clone';
 
 const log = createLogger('Voice Registration API');
 
@@ -50,6 +52,7 @@ export async function POST(req: NextRequest) {
       ttsApiKey?: string;
       ttsBaseUrl?: string;
       ttsModelId?: string;
+      action?: 'register' | 'delete';
     };
     providerId = typeof body.providerId === 'string' ? body.providerId : undefined;
     voiceId = typeof body.voiceId === 'string' ? body.voiceId.trim() : undefined;
@@ -61,7 +64,8 @@ export async function POST(req: NextRequest) {
     if (!voiceId) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'voiceId is required');
     }
-    if (!design && !body.referenceAudioBase64) {
+    const deleting = body.action === 'delete';
+    if (!deleting && !design && !body.referenceAudioBase64) {
       return apiError(
         'MISSING_REQUIRED_FIELD',
         400,
@@ -102,8 +106,19 @@ export async function POST(req: NextRequest) {
     const cfg: VoiceRegistrationConfig = {
       baseUrl,
       apiKey,
-      model: resolveTTSModel(providerId, body.ttsModelId),
+      model:
+        providerId === 'qwen-tts'
+          ? resolveQwenVoiceCloneModel(body.ttsModelId)
+          : resolveTTSModel(providerId, body.ttsModelId),
     };
+
+    if (deleting) {
+      if (!adapter.deleteVoice) {
+        return apiError('INVALID_REQUEST', 400, 'This provider does not support voice deletion');
+      }
+      await adapter.deleteVoice(cfg, voiceId);
+      return apiSuccess({ voiceId, deleted: true });
+    }
 
     // Already registered → no-op (also avoids a redundant re-register when the
     // client offered a cached clip but the voice is still live on the backend).
@@ -153,6 +168,9 @@ export async function POST(req: NextRequest) {
       `Voice registration failed [provider=${providerId ?? 'unknown'}, voiceId=${voiceId ?? 'unknown'}]:`,
       error,
     );
+    if (error instanceof QwenVoiceCloneError) {
+      return apiError(error.code, error.httpStatus || 502, qwenVoiceCloneErrorMessage(error));
+    }
     return apiError(
       'GENERATION_FAILED',
       500,

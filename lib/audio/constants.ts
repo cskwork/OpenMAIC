@@ -80,11 +80,14 @@ export const MINIMAX_TTS_MODELS = [
 ] as const;
 
 export const DEFAULT_QWEN_TTS_VOICE_CLONE_MODEL = 'qwen3-tts-vc-2026-01-22';
-export const QWEN_TTS_VOICE_CLONE_MODEL =
-  process.env.TTS_QWEN_VOICE_CLONE_MODEL || DEFAULT_QWEN_TTS_VOICE_CLONE_MODEL;
+/** Client-visible VC model. Server-only overrides are resolved in provider-config. */
+export const QWEN_TTS_VOICE_CLONE_MODEL = DEFAULT_QWEN_TTS_VOICE_CLONE_MODEL;
 
-export function isQwenVoiceCloneModel(modelId?: string): boolean {
-  return modelId === QWEN_TTS_VOICE_CLONE_MODEL || modelId === DEFAULT_QWEN_TTS_VOICE_CLONE_MODEL;
+export function isQwenVoiceCloneModel(modelId?: string, configuredModelId?: string): boolean {
+  return (
+    !!modelId &&
+    (/-tts-vc(?:-|$)/iu.test(modelId) || (!!configuredModelId && modelId === configuredModelId))
+  );
 }
 
 export const TTS_PROVIDERS: Record<BuiltInTTSProviderId, TTSProviderConfig> = {

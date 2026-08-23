@@ -19,6 +19,7 @@ import { splitLongSpeechActions } from '@/lib/audio/tts-utils';
 import { measureAudioDuration } from '@/lib/audio/audio-duration';
 import { isTTSProviderEnabled } from '@/lib/audio/provider-enablement';
 import { resolveAgentVoiceOptions, pickNarratorAgent } from '@/lib/audio/agent-voice';
+import { resolveNarratorVoiceBinding } from '@/lib/audio/voice-resolver';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
 import {
   generateMediaForOutlines,
@@ -268,11 +269,20 @@ export async function generateAndStoreTTS(
   // A generated roster's explicit voice binding is the course voice source of truth.
   // Global settings remain the fallback for classrooms without a binding.
   const teacher = pickNarratorAgent(useAgentRegistry.getState().listAgents());
-  const boundVoice = teacher?.voiceConfig;
-  const ttsProviderId = boundVoice?.providerId ?? settings.ttsProviderId;
-  const ttsVoice = boundVoice?.voiceId ?? settings.ttsVoice;
+  const globalProviderConfig = settings.ttsProvidersConfig?.[settings.ttsProviderId];
+  const resolvedVoice = resolveNarratorVoiceBinding(
+    teacher?.voiceConfig,
+    {
+      providerId: settings.ttsProviderId,
+      modelId: globalProviderConfig?.modelId,
+      voiceId: settings.ttsVoice,
+    },
+    settings.ttsProvidersConfig,
+  );
+  const ttsProviderId = resolvedVoice.providerId;
+  const ttsVoice = resolvedVoice.voiceId;
   const ttsProviderConfig = settings.ttsProvidersConfig?.[ttsProviderId];
-  const ttsModelId = boundVoice?.modelId ?? ttsProviderConfig?.modelId;
+  const ttsModelId = resolvedVoice.modelId ?? ttsProviderConfig?.modelId;
 
   if (ttsProviderId === 'browser-native-tts') return null;
   // Don't server-generate against a disabled/unconfigured provider (#665).
@@ -346,12 +356,12 @@ export async function generateAndStoreTTS(
     contentType: blob.type,
     mediaType: 'audio',
     text,
-    voice: settings.ttsVoice,
+    voice: ttsVoice,
     duration,
     language,
     provider: {
-      id: settings.ttsProviderId,
-      model: ttsProviderConfig?.modelId,
+      id: ttsProviderId,
+      model: ttsModelId,
     },
   } as const;
   const assetId = replaceAssetId ?? (await putAsset(blob, assetMeta));
@@ -366,7 +376,7 @@ export async function generateAndStoreTTS(
       duration,
       format: data.format,
       text,
-      voice: settings.ttsVoice,
+      voice: ttsVoice,
       createdAt: Date.now(),
     });
   } catch (error) {

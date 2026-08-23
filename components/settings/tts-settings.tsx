@@ -29,6 +29,7 @@ import { useSettingsStore } from '@/lib/store/settings';
 import {
   TTS_PROVIDERS,
   DEFAULT_TTS_VOICES,
+  isQwenVoiceCloneModel,
   QWEN_TTS_VOICE_CLONE_MODEL,
 } from '@/lib/audio/constants';
 import type { TTSProviderId } from '@/lib/audio/types';
@@ -58,6 +59,7 @@ import { isCustomTTSProvider } from '@/lib/audio/types';
 import {
   getVoxCPMProviderOptions,
   normalizeQwenReferenceAudio,
+  preserveRecordedVoiceName,
   normalizeVoxCPMReferenceAudio,
   validateVoxCPMReferenceAudio,
   VOXCPM_REFERENCE_AUDIO_MAX_SECONDS,
@@ -557,6 +559,10 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
             {t('settings.modelSelectedViaVoice')}
           </p>
         </div>
+      )}
+
+      {selectedProviderId === 'qwen-tts' && isQwenVoiceCloneModel(providerConfig?.modelId) && (
+        <p className="text-xs text-muted-foreground">{t('settings.qwenCloneSpeedHint')}</p>
       )}
 
       {selectedProviderId === 'voxcpm-tts' && <VoxCPMVoiceManager />}
@@ -1234,7 +1240,9 @@ function QwenVoiceCloneManager() {
                 type: blob.type,
               });
               setReferenceFile(await normalizeFile(file));
-              if (!name.trim()) setName(t('settings.voxcpmRecordedVoiceName'));
+              setName((currentName) =>
+                preserveRecordedVoiceName(currentName, t('settings.voxcpmRecordedVoiceName')),
+              );
             }
           } catch (error) {
             toast.error(error instanceof Error ? error.message : t('settings.qwenCloneSaveFailed'));
@@ -1253,7 +1261,7 @@ function QwenVoiceCloneManager() {
       recordingTimerRef.current = setInterval(() => {
         setRecordingSeconds((seconds) => {
           const nextSeconds = seconds + 1;
-          if (nextSeconds >= 60 && mediaRecorderRef.current?.state === 'recording') {
+          if (nextSeconds >= 58 && mediaRecorderRef.current?.state === 'recording') {
             mediaRecorderRef.current.stop();
           }
           return nextSeconds;
@@ -1332,7 +1340,12 @@ function QwenVoiceCloneManager() {
   };
 
   const handleDelete = async (voiceId: string) => {
-    await deleteVoice(voiceId);
+    const vendorDeleted = await deleteVoice(voiceId, {
+      ttsApiKey: providerConfig?.apiKey || undefined,
+      ttsBaseUrl: providerConfig?.baseUrl || providerConfig?.customDefaultBaseUrl || undefined,
+      ttsModelId: QWEN_TTS_VOICE_CLONE_MODEL,
+    });
+    if (!vendorDeleted) toast.warning(t('settings.qwenCloneDeleteWarning'));
     if (ttsProviderId === 'qwen-tts' && ttsVoice === voiceId) {
       setTTSVoice(DEFAULT_TTS_VOICES['qwen-tts']);
       setTTSProviderConfig('qwen-tts', {

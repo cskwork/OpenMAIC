@@ -1407,6 +1407,8 @@
     "qwenCloneSaved": "Qwen 克隆音色已注册并保存",
     "qwenCloneSaveFailed": "Qwen 克隆音色注册失败",
     "qwenCloneUnsupported": "当前浏览器不支持录音，请改为上传音频文件。",
+    "qwenCloneSpeedHint": "Cloned voices always synthesize at 1× speed.",
+    "qwenCloneDeleteWarning": "The voice was removed locally, but provider deletion failed.",
     "providerOpenAIWhisper": "OpenAI ASR (gpt-4o-mini-transcribe)",
     "providerBrowserNative": "浏览器原生 ASR",
     "providerQwenASR": "Qwen ASR（阿里云百炼）",

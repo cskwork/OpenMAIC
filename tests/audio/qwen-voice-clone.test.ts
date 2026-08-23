@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { QWEN_TTS_VOICE_CLONE_MODEL } from '@/lib/audio/constants';
 import {
-  QwenVoiceCloneError,
+  deleteQwenVoice,
   downloadAudio,
   preferredVoiceName,
+  qwenVoiceExists,
   registerQwenVoice,
   synthesizeQwenVoiceClone,
 } from '@/lib/audio/qwen-voice-clone';
@@ -12,6 +13,7 @@ import { clearQwenVoiceRegistrationMemoForTests } from '@/lib/audio/qwen-voice-c
 import { getVoiceRegistrationAdapter } from '@/lib/audio/voice-registration';
 import { getEnabledProvidersWithVoices } from '@/lib/audio/voice-resolver';
 import { validateReferenceAudio } from '@/lib/audio/wav-validate';
+import { generateTTS } from '@/lib/audio/tts-providers';
 
 const CONFIG = {
   apiKey: 'sk-qwen',
@@ -199,12 +201,91 @@ describe('Qwen voice cloning', () => {
     });
   });
 
-  it('rejects non-default VC speed before fetch', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch');
-    await expect(synthesizeQwenVoiceClone(CONFIG, 'Hello', 'qwen_vc_1', 1.2)).rejects.toEqual(
-      new QwenVoiceCloneError('QWEN_VC_SPEED_UNSUPPORTED', 400),
+  it('normalizes non-default VC speed and still synthesizes', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            output: {
+              audio: { url: 'https://dashscope-result-sg.oss-ap-southeast-1.aliyuncs.com/a.wav' },
+            },
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(new Response(new Uint8Array([1])));
+    await expect(synthesizeQwenVoiceClone(CONFIG, 'Hello', 'qwen_vc_1', 1.25)).resolves.toEqual({
+      audio: new Uint8Array([1]),
+      format: 'wav',
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('allows a custom Qwen base URL to serve its own audio without weakening redirects', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(new Uint8Array([1]), { status: 200 }));
+    await downloadAudio(
+      'https://proxy.example.com/storage/result.wav',
+      undefined,
+      'https://proxy.example.com/api/v1',
     );
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchSpy.mock.calls[0][1]).toMatchObject({ redirect: 'error' });
+  });
+
+  it('lists and deletes provider-side Qwen voices with documented request shapes', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ output: { total_count: 1, voice_list: [{ voice: 'v1' }] } })),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ output: { voice: 'v1' } })));
+
+    await expect(qwenVoiceExists(CONFIG, 'v1')).resolves.toBe(true);
+    await expect(deleteQwenVoice(CONFIG, 'v1')).resolves.toBeUndefined();
+    expect(JSON.parse(String(fetchSpy.mock.calls[0][1]?.body))).toMatchObject({
+      model: 'qwen-voice-enrollment',
+      input: { action: 'list', page_index: 0, page_size: 100 },
+    });
+    expect(JSON.parse(String(fetchSpy.mock.calls[1][1]?.body))).toEqual({
+      model: 'qwen-voice-enrollment',
+      input: { action: 'delete', voice: 'v1' },
+    });
+  });
+
+  it('evicts the registration memo when synthesis reports that the voice is gone', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ output: { voice: 'vendor_voice_1' } })))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ code: 'VoiceNotFound', message: 'voice does not exist' }), {
+          status: 400,
+        }),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ output: { voice: 'vendor_voice_2' } })));
+    const adapter = getVoiceRegistrationAdapter('qwen-tts')!;
+    const params = {
+      voiceId: 'Teacher',
+      referenceAudioBase64: Buffer.from(pcmWav()).toString('base64'),
+      refText: 'Reference transcript.',
+    };
+    const cfg = { baseUrl: CONFIG.baseUrl, apiKey: CONFIG.apiKey, model: CONFIG.targetModel };
+    await expect(adapter.registerVoice(cfg, params)).resolves.toBe('vendor_voice_1');
+    await expect(
+      generateTTS(
+        {
+          providerId: 'qwen-tts',
+          modelId: CONFIG.targetModel,
+          voice: 'vendor_voice_1',
+          speed: 1.25,
+          apiKey: CONFIG.apiKey,
+          baseUrl: CONFIG.baseUrl,
+        },
+        'Hello',
+      ),
+    ).rejects.toMatchObject({ code: 'QWEN_VC_VOICE_NOT_FOUND' });
+    await expect(adapter.registerVoice(cfg, params)).resolves.toBe('vendor_voice_2');
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
   });
 
   it('shares a synthesis deadline across the vendor request and download', async () => {
@@ -264,7 +345,6 @@ describe('Qwen voice cloning', () => {
       Promise.all([adapter.registerVoice(cfg, params), adapter.registerVoice(cfg, params)]),
     ).resolves.toEqual(['vendor_voice_1', 'vendor_voice_1']);
     expect(fetchSpy).toHaveBeenCalledOnce();
-    await expect(adapter.voiceExists(cfg, 'vendor_voice_1')).resolves.toBe(false);
   });
 
   it('injects Qwen clone profiles only into the VC model group', () => {

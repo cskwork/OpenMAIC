@@ -73,6 +73,24 @@ export async function registerVoiceFromReference(
   return voiceId;
 }
 
+/** Request provider-side deletion. Returns false so callers can still remove local state. */
+export async function deleteRegisteredVoice(
+  providerId: string,
+  voiceId: string,
+  request: VoiceRegistrationRequestConfig,
+): Promise<boolean> {
+  try {
+    const res = await fetch('/api/generate/voice', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ providerId, voiceId, action: 'delete', ...request }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // Confirmed-registered + in-flight memos, keyed by (voiceId, backend, credential).
 // The same voiceId may be unregistered — or inaccessible — on a different backend
 // or under different credentials, so both the base URL and the API key are part

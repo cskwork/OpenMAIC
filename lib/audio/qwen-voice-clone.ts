@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 
 import type { TTSGenerationResult } from '@/lib/audio/tts-providers';
+import { createLogger } from '@/lib/logger';
 
 export const QWEN_VOICE_ENROLLMENT_MODEL = 'qwen-voice-enrollment';
-const DEFAULT_QWEN_BASE_URL = 'https://dashscope.aliyuncs.com/api/v1';
+export const DEFAULT_QWEN_BASE_URL = 'https://dashscope.aliyuncs.com/api/v1';
 const ENROLLMENT_PATH = '/api/v1/services/audio/tts/customization';
 const SYNTHESIS_PATH = '/api/v1/services/aigc/multimodal-generation/generation';
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -24,13 +25,14 @@ export type QwenVoiceCloneErrorCode =
   | 'QWEN_VC_AUDIO_DOWNLOAD_FAILED'
   | 'QWEN_VC_AUDIO_TOO_LARGE'
   | 'QWEN_VC_AUDIO_EMPTY'
-  | 'QWEN_VC_SPEED_UNSUPPORTED'
+  | 'QWEN_VC_VOICE_NOT_FOUND'
   | 'QWEN_VC_BOOTSTRAP_UNSUPPORTED';
 
 export class QwenVoiceCloneError extends Error {
   constructor(
     readonly code: QwenVoiceCloneErrorCode,
     readonly httpStatus?: number,
+    readonly vendorCode?: string,
   ) {
     super(code);
     this.name = 'QwenVoiceCloneError';
@@ -47,7 +49,46 @@ interface QwenResponse {
   output?: {
     voice?: unknown;
     audio?: { url?: unknown; format?: unknown };
+    voice_list?: Array<{ voice?: unknown; target_model?: unknown }>;
+    page_index?: unknown;
+    page_size?: unknown;
+    total_count?: unknown;
   };
+  code?: unknown;
+  message?: unknown;
+}
+
+const log = createLogger('QwenVoiceClone');
+let loggedSpeedNormalization = false;
+
+const ERROR_MESSAGES: Record<QwenVoiceCloneErrorCode, string> = {
+  QWEN_VC_CONFIG_MISSING: 'Qwen voice cloning is missing required configuration.',
+  QWEN_VC_ENDPOINT_INVALID: 'The configured Qwen endpoint is invalid.',
+  QWEN_VC_HTTP_ERROR: 'Qwen rejected the voice cloning request.',
+  QWEN_VC_TIMEOUT: 'The Qwen voice cloning request timed out.',
+  QWEN_VC_TRANSPORT_ERROR: 'Could not reach the Qwen voice cloning service.',
+  QWEN_VC_RESPONSE_JSON_INVALID: 'Qwen returned an invalid response.',
+  QWEN_VC_RESPONSE_VOICE_MISSING: 'Qwen did not return a cloned voice ID.',
+  QWEN_VC_RESPONSE_AUDIO_URL_MISSING: 'Qwen did not return an audio download URL.',
+  QWEN_VC_AUDIO_URL_INVALID: 'Qwen returned an untrusted audio download URL.',
+  QWEN_VC_AUDIO_DOWNLOAD_FAILED: 'The generated Qwen audio could not be downloaded.',
+  QWEN_VC_AUDIO_TOO_LARGE: 'The generated Qwen audio exceeds the 50 MB limit.',
+  QWEN_VC_AUDIO_EMPTY: 'Qwen returned an empty audio file.',
+  QWEN_VC_VOICE_NOT_FOUND: 'The cloned Qwen voice no longer exists.',
+  QWEN_VC_BOOTSTRAP_UNSUPPORTED: 'Qwen voice cloning requires reference audio and a transcript.',
+};
+
+export function qwenVoiceCloneErrorMessage(error: QwenVoiceCloneError): string {
+  return ERROR_MESSAGES[error.code];
+}
+
+function isUnknownVoiceResponse(body: QwenResponse): boolean {
+  const code = typeof body.code === 'string' ? body.code : '';
+  const message = typeof body.message === 'string' ? body.message : '';
+  return (
+    /^(?:voice[_-]?(?:not[_-]?found|not[_-]?exist|invalid)|invalid[_-]?voice)$/iu.test(code) ||
+    /voice.{0,40}(?:not found|not exist|does not exist|invalid)/iu.test(message)
+  );
 }
 
 function resolveConfig(config: QwenVoiceCloneConfig): {
@@ -149,7 +190,14 @@ async function postJson(
       if (!response.ok) throw new QwenVoiceCloneError('QWEN_VC_HTTP_ERROR', response.status);
       throw new QwenVoiceCloneError('QWEN_VC_RESPONSE_JSON_INVALID', 502);
     }
-    if (!response.ok) throw new QwenVoiceCloneError('QWEN_VC_HTTP_ERROR', response.status);
+    if (!response.ok) {
+      const vendorCode = typeof parsed.code === 'string' ? parsed.code : undefined;
+      throw new QwenVoiceCloneError(
+        isUnknownVoiceResponse(parsed) ? 'QWEN_VC_VOICE_NOT_FOUND' : 'QWEN_VC_HTTP_ERROR',
+        response.status,
+        vendorCode,
+      );
+    }
     return parsed;
   } finally {
     timeout.cleanup();
@@ -182,6 +230,52 @@ export async function registerQwenVoice(
   return { voiceId, targetModel: resolved.targetModel };
 }
 
+/** Delete a Qwen-TTS cloned voice from the provider account. */
+export async function deleteQwenVoice(
+  config: QwenVoiceCloneConfig,
+  voiceId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const resolved = resolveConfig(config);
+  const voice = voiceId.trim();
+  if (!voice) throw new QwenVoiceCloneError('QWEN_VC_CONFIG_MISSING', 400);
+  await postJson(
+    endpoint(resolved.baseUrl, ENROLLMENT_PATH),
+    resolved.apiKey,
+    { model: QWEN_VOICE_ENROLLMENT_MODEL, input: { action: 'delete', voice } },
+    signal,
+  );
+}
+
+/** Query the paginated Qwen-TTS voice list for a specific enrolled voice. */
+export async function qwenVoiceExists(
+  config: QwenVoiceCloneConfig,
+  voiceId: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const resolved = resolveConfig(config);
+  const wanted = voiceId.trim();
+  if (!wanted) return false;
+  const pageSize = 100;
+  for (let pageIndex = 0; pageIndex < 100; pageIndex++) {
+    const body = await postJson(
+      endpoint(resolved.baseUrl, ENROLLMENT_PATH),
+      resolved.apiKey,
+      {
+        model: QWEN_VOICE_ENROLLMENT_MODEL,
+        input: { action: 'list', page_size: pageSize, page_index: pageIndex },
+      },
+      signal,
+    );
+    const voices = Array.isArray(body.output?.voice_list) ? body.output.voice_list : [];
+    if (voices.some((item) => item.voice === wanted)) return true;
+    const total =
+      typeof body.output?.total_count === 'number' ? body.output.total_count : voices.length;
+    if (voices.length < pageSize || (pageIndex + 1) * pageSize >= total) return false;
+  }
+  return false;
+}
+
 export function audioFormat(contentType: string | null, vendorFormat: unknown, url: URL): string {
   if (typeof vendorFormat === 'string' && /^[a-z0-9]+$/iu.test(vendorFormat)) {
     return vendorFormat.toLowerCase();
@@ -196,6 +290,7 @@ export function audioFormat(contentType: string | null, vendorFormat: unknown, u
 export async function downloadAudio(
   rawUrl: string,
   signal?: AbortSignal,
+  effectiveBaseUrl?: string | URL,
 ): Promise<{ bytes: Uint8Array; contentType: string | null; url: URL }> {
   let url: URL;
   try {
@@ -206,14 +301,27 @@ export async function downloadAudio(
   const trustedHost = /^dashscope-result-[a-z0-9-]+\.oss-[a-z]{2}-[a-z0-9-]+\.aliyuncs\.com$/u.test(
     url.hostname,
   );
+  let trustedCustomEndpoint = false;
+  if (effectiveBaseUrl) {
+    try {
+      const configured = new URL(effectiveBaseUrl);
+      const defaultEndpoint = new URL(DEFAULT_QWEN_BASE_URL);
+      trustedCustomEndpoint =
+        configured.origin !== defaultEndpoint.origin &&
+        url.host === configured.host &&
+        url.protocol === configured.protocol;
+    } catch {
+      throw new QwenVoiceCloneError('QWEN_VC_ENDPOINT_INVALID', 400);
+    }
+  }
   if (
-    !trustedHost ||
+    (!trustedHost && !trustedCustomEndpoint) ||
     (url.protocol !== 'https:' && url.protocol !== 'http:') ||
-    (url.port && url.port !== '80' && url.port !== '443')
+    (trustedHost && url.port && url.port !== '80' && url.port !== '443')
   ) {
     throw new QwenVoiceCloneError('QWEN_VC_AUDIO_URL_INVALID', 502);
   }
-  if (url.protocol === 'http:') url.protocol = 'https:';
+  if (trustedHost && url.protocol === 'http:') url.protocol = 'https:';
 
   const timeout = timeoutSignal(signal, AUDIO_DOWNLOAD_TIMEOUT_MS);
   try {
@@ -273,8 +381,9 @@ export async function synthesizeQwenVoiceClone(
   const resolved = resolveConfig(config);
   const voice = voiceId.trim();
   if (!voice) throw new QwenVoiceCloneError('QWEN_VC_CONFIG_MISSING', 400);
-  if (!Number.isFinite(speed) || speed !== 1) {
-    throw new QwenVoiceCloneError('QWEN_VC_SPEED_UNSUPPORTED', 400);
+  if ((!Number.isFinite(speed) || speed !== 1) && !loggedSpeedNormalization) {
+    loggedSpeedNormalization = true;
+    log.debug('Qwen VC does not support rate control; normalizing synthesis speed to 1x');
   }
   const deadline = timeoutSignal(signal, SYNTHESIS_DEADLINE_MS);
   try {
@@ -289,7 +398,7 @@ export async function synthesizeQwenVoiceClone(
     if (!rawAudioUrl) {
       throw new QwenVoiceCloneError('QWEN_VC_RESPONSE_AUDIO_URL_MISSING', 502);
     }
-    const downloaded = await downloadAudio(rawAudioUrl, deadline.signal);
+    const downloaded = await downloadAudio(rawAudioUrl, deadline.signal, resolved.baseUrl);
     return {
       audio: downloaded.bytes,
       format: audioFormat(downloaded.contentType, body.output?.audio?.format, downloaded.url),

@@ -15,6 +15,7 @@ import {
   type VoxCPMVoicePromptContext,
 } from '@/lib/audio/voxcpm';
 import {
+  deleteRegisteredVoice,
   ensureRegisteredVoice,
   registerVoiceFromReference,
   type VoiceRegistrationRequestConfig,
@@ -27,6 +28,10 @@ export type VoxCPMVoiceProfile = VoiceProfileRecord;
 const VOICE_PROFILES_CHANGED = 'voice-profiles-changed';
 export const VOXCPM_REFERENCE_AUDIO_MAX_BYTES = 10 * 1024 * 1024;
 export const VOXCPM_REFERENCE_AUDIO_MAX_SECONDS = 60;
+
+export function preserveRecordedVoiceName(currentName: string, defaultName: string): string {
+  return currentName.trim() ? currentName : defaultName;
+}
 
 function notifyVoiceProfilesChanged(): void {
   window.dispatchEvent(new Event(VOICE_PROFILES_CHANGED));
@@ -73,11 +78,14 @@ function writeAscii(view: DataView, offset: number, value: string): void {
   }
 }
 
-function audioBufferToMonoWav(
+export function audioBufferToMonoWav(
   audioBuffer: AudioBuffer,
   sampleRate = audioBuffer.sampleRate,
 ): ArrayBuffer {
-  const sampleCount = Math.round(audioBuffer.duration * sampleRate);
+  // Browser recorder timestamps and decoder padding can cross the advertised
+  // limit by a few frames. Truncate deterministically so normalized output is
+  // always accepted by the enrollment validator.
+  const sampleCount = Math.min(Math.round(audioBuffer.duration * sampleRate), 60 * sampleRate);
   const dataSize = sampleCount * 2;
   const buffer = new ArrayBuffer(44 + dataSize);
   const view = new DataView(buffer);
@@ -390,10 +398,18 @@ export function useQwenVoiceProfiles() {
   );
 
   const deleteVoice = useCallback(
-    async (id: string) => {
+    async (id: string, request: VoiceRegistrationRequestConfig) => {
+      const vendorDeleted = await deleteRegisteredVoice('qwen-tts', id, {
+        ...request,
+        ttsModelId: QWEN_TTS_VOICE_CLONE_MODEL,
+      });
+      if (!vendorDeleted) {
+        console.warn('[QwenVoiceProfiles] Provider deletion failed; removing local profile');
+      }
       await db.voiceProfiles.delete(id);
       await refresh();
       notifyVoiceProfilesChanged();
+      return vendorDeleted;
     },
     [refresh],
   );

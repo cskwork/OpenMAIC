@@ -17,7 +17,7 @@ vi.mock('@/lib/server/resolve-model', () => ({
 
 import { POST } from '@/app/api/generate/agent-profiles/route';
 
-function makeRequest(): NextRequest {
+function makeRequest(extra: Record<string, unknown> = {}): NextRequest {
   return new NextRequest('http://localhost/api/generate/agent-profiles', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -25,6 +25,7 @@ function makeRequest(): NextRequest {
       stageInfo: { name: 'Intro to Algebra' },
       languageDirective: 'Respond in English.',
       availableAvatars: ['/a.png', '/b.png'],
+      ...extra,
     }),
   });
 }
@@ -82,5 +83,29 @@ describe('agent-profiles route — voiceDesign', () => {
 
     expect(body.success).toBe(true);
     expect(body.agents[0]).not.toHaveProperty('voiceDesign');
+  });
+
+  it('preserves the advertised model in the generated voice binding', async () => {
+    callLLM.mockResolvedValue({
+      text: llmAgents({ voice: 'qwen-tts::qwen3-tts-vc-test::clone-1' }),
+    });
+    const res = await POST(
+      makeRequest({
+        availableVoices: [
+          {
+            providerId: 'qwen-tts',
+            modelId: 'qwen3-tts-vc-test',
+            voiceId: 'clone-1',
+            voiceName: 'Clone',
+          },
+        ],
+      }),
+    );
+    const body = await res.json();
+    expect(body.agents[0].voiceConfig).toEqual({
+      providerId: 'qwen-tts',
+      modelId: 'qwen3-tts-vc-test',
+      voiceId: 'clone-1',
+    });
   });
 });

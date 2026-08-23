@@ -30,6 +30,20 @@ export interface AgentVoiceOverride {
 /** Persisted per-agent voice picks, keyed by agent id (settings store). */
 export type AgentVoiceOverrides = Record<string, AgentVoiceOverride>;
 
+type ProviderConfigMap = Record<string, TTSEnablementConfig | undefined>;
+
+/** Prefer a persisted narrator binding, retaining the global fallback when it is unusable. */
+export function resolveNarratorVoiceBinding(
+  bound: AgentConfig['voiceConfig'] | undefined,
+  globalVoice: ResolvedVoice,
+  providerConfigs: ProviderConfigMap,
+): ResolvedVoice {
+  if (bound && isTTSProviderEnabled(bound.providerId, providerConfigs[bound.providerId])) {
+    return { providerId: bound.providerId, modelId: bound.modelId, voiceId: bound.voiceId };
+  }
+  return globalVoice;
+}
+
 /**
  * Resolve the TTS provider + voice for an agent, choosing only among ENABLED
  * providers (`enabledProviders` is the output of getEnabledProvidersWithVoices,
@@ -71,7 +85,20 @@ export function resolveAgentVoice(
     if (!fromEnabled) continue;
     const list = getServerVoiceList(choice.providerId);
     const allVoiceIds = new Set([...list, ...fromEnabled.voices.map((v) => v.id)]);
-    if (allVoiceIds.has(choice.voiceId)) {
+    const cloneOnlyVoice =
+      choice.providerId === 'qwen-tts' &&
+      fromEnabled.modelGroups.some(
+        (group) =>
+          isQwenVoiceCloneModel(group.modelId) &&
+          group.voices.some((voice) => voice.id === choice.voiceId),
+      );
+    const matchingModelGroup = choice.modelId
+      ? fromEnabled.modelGroups.find((group) => group.modelId === choice.modelId)
+      : undefined;
+    const modelCompatible = matchingModelGroup
+      ? matchingModelGroup.voices.some((voice) => voice.id === choice.voiceId)
+      : !choice.modelId && !cloneOnlyVoice;
+    if (allVoiceIds.has(choice.voiceId) && modelCompatible) {
       return { providerId: choice.providerId, modelId: choice.modelId, voiceId: choice.voiceId };
     }
   }
@@ -79,10 +106,15 @@ export function resolveAgentVoice(
   // Fallback: deterministic pick among enabled providers (canonical order).
   if (enabledProviders.length > 0) {
     const first = enabledProviders[0];
-    if (first.voices.length > 0) {
+    const fallbackGroup = first.modelGroups.find(
+      (group) => !isQwenVoiceCloneModel(group.modelId) && group.voices.length > 0,
+    );
+    const fallbackVoices = fallbackGroup?.voices ?? first.voices;
+    if (fallbackVoices.length > 0) {
       return {
         providerId: first.providerId,
-        voiceId: first.voices[agentIndex % first.voices.length].id,
+        ...(fallbackGroup?.modelId ? { modelId: fallbackGroup.modelId } : {}),
+        voiceId: fallbackVoices[agentIndex % fallbackVoices.length].id,
       };
     }
   }

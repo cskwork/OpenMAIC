@@ -12,6 +12,7 @@ import { generateTTS, TTSRateLimitError } from '@/lib/audio/tts-providers';
 import { recordGenerationUsage } from '@/lib/server/usage-storage';
 import {
   isServerConfiguredProvider,
+  isResolvedQwenVoiceCloneModel,
   isServerTTSProviderDisabled,
   resolveTTSApiKey,
   resolveTTSBaseUrl,
@@ -22,6 +23,7 @@ import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
 import { VOXCPM_AUTO_VOICE_ID, VOXCPM_TTS_PROVIDER_ID } from '@/lib/audio/voxcpm';
+import { QwenVoiceCloneError, qwenVoiceCloneErrorMessage } from '@/lib/audio/qwen-voice-clone';
 
 const log = createLogger('TTS API');
 
@@ -101,14 +103,20 @@ export async function POST(req: NextRequest) {
     const baseUrl = resolveTTSBaseUrl(ttsProviderId, clientBaseUrl);
 
     // Build TTS config (managed providers may pin the model server-side)
+    const resolvedModelId = resolveTTSModel(ttsProviderId, ttsModelId);
     const config = {
       providerId: ttsProviderId as TTSProviderId,
-      modelId: resolveTTSModel(ttsProviderId, ttsModelId),
+      modelId: resolvedModelId,
       voice: ttsVoice,
       speed: ttsSpeed ?? 1.0,
       apiKey,
       baseUrl,
-      providerOptions: ttsProviderOptions,
+      providerOptions: {
+        ...(ttsProviderOptions || {}),
+        ...(ttsProviderId === 'qwen-tts' && isResolvedQwenVoiceCloneModel(resolvedModelId)
+          ? { qwenVoiceClone: true }
+          : {}),
+      },
     };
 
     log.info(
@@ -138,6 +146,9 @@ export async function POST(req: NextRequest) {
     );
     if (error instanceof TTSRateLimitError) {
       return apiError('RATE_LIMITED', 429, error.message);
+    }
+    if (error instanceof QwenVoiceCloneError) {
+      return apiError(error.code, error.httpStatus || 502, qwenVoiceCloneErrorMessage(error));
     }
     return apiError(
       'GENERATION_FAILED',

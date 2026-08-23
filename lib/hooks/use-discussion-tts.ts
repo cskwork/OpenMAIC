@@ -5,6 +5,7 @@ import { useSettingsStore } from '@/lib/store/settings';
 import { useBrowserTTS } from '@/lib/hooks/use-browser-tts';
 import {
   resolveAgentVoice,
+  resolveNarratorVoiceBinding,
   getSelectableProvidersWithVoices,
   type ResolvedVoice,
 } from '@/lib/audio/voice-resolver';
@@ -131,12 +132,17 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       // could swap the user's chosen voice. Only if the global provider is itself
       // disabled does the teacher fall back to an enabled provider.
       if (agent.role === 'teacher') {
-        if (isTTSProviderEnabled(globalTtsProviderId, ttsProvidersConfig[globalTtsProviderId])) {
-          return {
+        const resolved = resolveNarratorVoiceBinding(
+          agent.voiceConfig,
+          {
             providerId: globalTtsProviderId,
             voiceId: globalTtsVoice,
             modelId: ttsProvidersConfig[globalTtsProviderId]?.modelId,
-          };
+          },
+          ttsProvidersConfig,
+        );
+        if (isTTSProviderEnabled(resolved.providerId, ttsProvidersConfig[resolved.providerId])) {
+          return resolved;
         }
         return firstVoice();
       }

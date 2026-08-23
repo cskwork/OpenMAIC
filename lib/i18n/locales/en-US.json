@@ -1407,6 +1407,8 @@
     "qwenCloneSaved": "Qwen cloned voice registered and saved",
     "qwenCloneSaveFailed": "Failed to register the Qwen cloned voice",
     "qwenCloneUnsupported": "Recording is not supported in this browser; upload an audio file instead.",
+    "qwenCloneSpeedHint": "Cloned voices always synthesize at 1× speed.",
+    "qwenCloneDeleteWarning": "The voice was removed locally, but provider deletion failed.",
     "providerOpenAIWhisper": "OpenAI ASR (gpt-4o-mini-transcribe)",
     "providerBrowserNative": "Browser Native ASR",
     "providerQwenASR": "Qwen ASR (Alibaba Cloud Bailian)",

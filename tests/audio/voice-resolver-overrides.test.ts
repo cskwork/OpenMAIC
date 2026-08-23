@@ -5,7 +5,12 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
-import { resolveAgentVoice, type ProviderWithVoices } from '@/lib/audio/voice-resolver';
+import {
+  resolveAgentVoice,
+  resolveNarratorVoiceBinding,
+  type ProviderWithVoices,
+} from '@/lib/audio/voice-resolver';
+import { QWEN_TTS_VOICE_CLONE_MODEL } from '@/lib/audio/constants';
 
 const agent = (id: string, voiceConfig?: AgentConfig['voiceConfig']) =>
   ({ id, voiceConfig }) as AgentConfig;
@@ -75,5 +80,73 @@ describe('resolveAgentVoice with overrides', () => {
       modelId: undefined,
       voiceId: 'Anna',
     });
+  });
+
+  it('never round-robins a model-bound clone voice into an unbound fallback', () => {
+    const withClone: ProviderWithVoices = {
+      ...qwen,
+      voices: [...qwen.voices, { id: 'clone-1', name: 'Clone' }],
+      modelGroups: [
+        { modelId: 'qwen3-tts-flash', modelName: 'Flash', voices: qwen.voices },
+        {
+          modelId: QWEN_TTS_VOICE_CLONE_MODEL,
+          modelName: 'VC',
+          voices: [{ id: 'clone-1', name: 'Clone' }],
+        },
+      ],
+    };
+    expect(resolveAgentVoice(agent('unbound'), 2, [withClone])).toEqual({
+      providerId: 'qwen-tts',
+      modelId: 'qwen3-tts-flash',
+      voiceId: 'Cherry',
+    });
+    expect(
+      resolveAgentVoice(agent('legacy-clone', { providerId: 'qwen-tts', voiceId: 'clone-1' }), 0, [
+        withClone,
+      ]),
+    ).toEqual({
+      providerId: 'qwen-tts',
+      modelId: 'qwen3-tts-flash',
+      voiceId: 'Cherry',
+    });
+    expect(
+      resolveAgentVoice(
+        agent('bound-clone', {
+          providerId: 'qwen-tts',
+          modelId: QWEN_TTS_VOICE_CLONE_MODEL,
+          voiceId: 'clone-1',
+        }),
+        0,
+        [withClone],
+      ),
+    ).toEqual({
+      providerId: 'qwen-tts',
+      modelId: QWEN_TTS_VOICE_CLONE_MODEL,
+      voiceId: 'clone-1',
+    });
+  });
+
+  it('uses a bound model when usable and falls back globally when its provider is unusable', () => {
+    const global = { providerId: 'qwen-tts' as const, modelId: 'flash', voiceId: 'Cherry' };
+    const bound = {
+      providerId: 'qwen-tts' as const,
+      modelId: QWEN_TTS_VOICE_CLONE_MODEL,
+      voiceId: 'clone-1',
+    };
+    expect(
+      resolveNarratorVoiceBinding(bound, global, {
+        'qwen-tts': { apiKey: 'key', enabled: true },
+      }),
+    ).toEqual(bound);
+    expect(
+      resolveNarratorVoiceBinding(
+        { providerId: 'openai-tts', modelId: 'tts-1', voiceId: 'alloy' },
+        global,
+        {
+          'openai-tts': { enabled: false },
+          'qwen-tts': { apiKey: 'key', enabled: true },
+        },
+      ),
+    ).toEqual(global);
   });
 });

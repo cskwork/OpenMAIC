@@ -9,6 +9,11 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { createLogger } from '@/lib/logger';
+import {
+  DEFAULT_QWEN_TTS_VOICE_CLONE_MODEL,
+  isQwenVoiceCloneModel,
+  TTS_PROVIDERS,
+} from '@/lib/audio/constants';
 
 const log = createLogger('ServerProviderConfig');
 
@@ -574,7 +579,22 @@ export function isServerTTSProviderDisabled(providerId: string): boolean {
 }
 
 export function resolveTTSBaseUrl(providerId: string, clientBaseUrl?: string): string | undefined {
-  return resolveSectionBaseUrl('tts', providerId, clientBaseUrl);
+  return (
+    resolveSectionBaseUrl('tts', providerId, clientBaseUrl) ||
+    TTS_PROVIDERS[providerId as keyof typeof TTS_PROVIDERS]?.defaultBaseUrl
+  );
+}
+
+/** Resolve the server-only Qwen VC model override without exposing env values to clients. */
+export function resolveQwenVoiceCloneModel(clientModel?: string): string {
+  const configured = process.env.TTS_QWEN_VOICE_CLONE_MODEL || DEFAULT_QWEN_TTS_VOICE_CLONE_MODEL;
+  if (clientModel && isQwenVoiceCloneModel(clientModel, configured)) return clientModel;
+  return configured;
+}
+
+/** Server-aware VC predicate, including an operator override without a conventional model name. */
+export function isResolvedQwenVoiceCloneModel(modelId?: string): boolean {
+  return isQwenVoiceCloneModel(modelId, process.env.TTS_QWEN_VOICE_CLONE_MODEL);
 }
 
 /**
@@ -584,6 +604,11 @@ export function resolveTTSBaseUrl(providerId: string, clientBaseUrl?: string): s
  * model wins.
  */
 export function resolveTTSModel(providerId: string, clientModel?: string): string | undefined {
+  // Clone voices are model-bound. A general Qwen model pin must never reroute
+  // a request that explicitly identifies itself as VC synthesis.
+  if (providerId === 'qwen-tts' && clientModel && isResolvedQwenVoiceCloneModel(clientModel)) {
+    return clientModel;
+  }
   const entry = getConfig().tts[providerId];
   if (entry?.models && entry.models.length > 0) return entry.models[0];
   return clientModel;

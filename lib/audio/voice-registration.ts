@@ -37,6 +37,8 @@ export interface VoiceRegistrationAdapter {
       refText?: string;
     },
   ): Promise<string>;
+  /** Delete a provider-side registered voice, when supported. */
+  deleteVoice?(cfg: VoiceRegistrationConfig, voiceId: string): Promise<void>;
   /** Synthesize the voice design once into a reference clip. */
   bootstrapReferenceClip(
     cfg: VoiceRegistrationConfig,

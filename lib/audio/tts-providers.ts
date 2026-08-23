@@ -94,8 +94,9 @@
 
 import type { TTSModelConfig } from './types';
 import { isCustomTTSProvider } from './types';
-import { isQwenVoiceCloneModel, QWEN_TTS_VOICE_CLONE_MODEL, TTS_PROVIDERS } from './constants';
-import { downloadAudio, synthesizeQwenVoiceClone } from './qwen-voice-clone';
+import { isQwenVoiceCloneModel, TTS_PROVIDERS } from './constants';
+import { downloadAudio, QwenVoiceCloneError, synthesizeQwenVoiceClone } from './qwen-voice-clone';
+import { evictQwenVoiceRegistrationMemo } from './qwen-voice-clone-registration';
 import { splitConcatenatedJsonObjects } from './json-stream';
 import {
   VOXCPM_VLLM_MODEL_ID,
@@ -646,13 +647,20 @@ async function generateGLMTTS(config: TTSModelConfig, text: string): Promise<TTS
 async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TTSGenerationResult> {
   const baseUrl = config.baseUrl || TTS_PROVIDERS['qwen-tts'].defaultBaseUrl;
 
-  if (isQwenVoiceCloneModel(config.modelId)) {
-    return synthesizeQwenVoiceClone(
-      { apiKey: config.apiKey, baseUrl, targetModel: QWEN_TTS_VOICE_CLONE_MODEL },
-      text,
-      config.voice,
-      config.speed,
-    );
+  if (isQwenVoiceCloneModel(config.modelId) || config.providerOptions?.qwenVoiceClone === true) {
+    try {
+      return await synthesizeQwenVoiceClone(
+        { apiKey: config.apiKey, baseUrl, targetModel: config.modelId },
+        text,
+        config.voice,
+        config.speed,
+      );
+    } catch (error) {
+      if (error instanceof QwenVoiceCloneError && error.code === 'QWEN_VC_VOICE_NOT_FOUND') {
+        evictQwenVoiceRegistrationMemo(config.voice);
+      }
+      throw error;
+    }
   }
 
   // Calculate speed: Qwen3 uses rate parameter from -500 to 500
@@ -692,7 +700,7 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
   }
 
   // Download audio from URL
-  const downloaded = await downloadAudio(data.output.audio.url);
+  const downloaded = await downloadAudio(data.output.audio.url, undefined, baseUrl);
 
   return {
     audio: downloaded.bytes,

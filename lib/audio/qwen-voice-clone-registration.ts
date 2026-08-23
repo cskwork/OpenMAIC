@@ -1,7 +1,12 @@
 import { createHash } from 'node:crypto';
 
-import { QwenVoiceCloneError, registerQwenVoice } from '@/lib/audio/qwen-voice-clone';
-import { isQwenVoiceCloneModel, QWEN_TTS_VOICE_CLONE_MODEL } from '@/lib/audio/constants';
+import {
+  QwenVoiceCloneError,
+  deleteQwenVoice,
+  qwenVoiceExists,
+  registerQwenVoice,
+} from '@/lib/audio/qwen-voice-clone';
+import { QWEN_TTS_VOICE_CLONE_MODEL } from '@/lib/audio/constants';
 import { validateReferenceAudio } from '@/lib/audio/wav-validate';
 import type {
   VoiceRegistrationAdapter,
@@ -9,6 +14,7 @@ import type {
 } from '@/lib/audio/voice-registration';
 
 const registrations = new Map<string, Promise<string>>();
+const registrationKeysByVoice = new Map<string, Set<string>>();
 
 function decodeBase64(value: string): Uint8Array {
   return new Uint8Array(Buffer.from(value, 'base64'));
@@ -60,10 +66,13 @@ async function registerVoice(
       {
         apiKey: cfg.apiKey,
         baseUrl: cfg.baseUrl,
-        targetModel: isQwenVoiceCloneModel(cfg.model) ? QWEN_TTS_VOICE_CLONE_MODEL : cfg.model,
+        targetModel: cfg.model || QWEN_TTS_VOICE_CLONE_MODEL,
       },
       { name: params.voiceId, audio, text: refText },
     );
+    const keys = registrationKeysByVoice.get(result.voiceId) ?? new Set<string>();
+    keys.add(key);
+    registrationKeysByVoice.set(result.voiceId, keys);
     return result.voiceId;
   })();
   registrations.set(key, pending);
@@ -75,9 +84,24 @@ async function registerVoice(
   }
 }
 
-/** Qwen does not expose a supported voice lookup endpoint, so callers re-register. */
-async function voiceExists(): Promise<boolean> {
-  return false;
+/**
+ * Query the provider rather than trusting the memo. The memo is intentionally
+ * process-local: it coalesces concurrent/repeated enrollment only within one
+ * server process and is neither durable nor shared across replicas.
+ */
+async function voiceExists(cfg: VoiceRegistrationConfig, voiceId: string): Promise<boolean> {
+  return qwenVoiceExists(
+    { apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, targetModel: cfg.model },
+    voiceId,
+  );
+}
+
+async function deleteVoice(cfg: VoiceRegistrationConfig, voiceId: string): Promise<void> {
+  await deleteQwenVoice(
+    { apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, targetModel: cfg.model },
+    voiceId,
+  );
+  evictQwenVoiceRegistrationMemo(voiceId);
 }
 
 /** Qwen enrollment requires a real voice sample and its verbatim transcript. */
@@ -90,9 +114,19 @@ export const qwenVoiceCloneRegistrationAdapter: VoiceRegistrationAdapter = {
   supportsBootstrapReferenceClip: false,
   voiceExists,
   registerVoice,
+  deleteVoice,
   bootstrapReferenceClip,
 };
 
 export function clearQwenVoiceRegistrationMemoForTests(): void {
   registrations.clear();
+  registrationKeysByVoice.clear();
+}
+
+/** Evict process-local registration entries after the provider reports a missing voice. */
+export function evictQwenVoiceRegistrationMemo(voiceId: string): void {
+  const keys = registrationKeysByVoice.get(voiceId);
+  if (!keys) return;
+  for (const key of keys) registrations.delete(key);
+  registrationKeysByVoice.delete(voiceId);
 }

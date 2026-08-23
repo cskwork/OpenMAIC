@@ -26,6 +26,7 @@ interface RequestBody {
   avatarDescriptions?: Array<{ path: string; desc: string }>;
   availableVoices?: Array<{
     providerId: string;
+    modelId?: string;
     voiceId: string;
     voiceName: string;
     voiceLanguage?: string;
@@ -93,7 +94,7 @@ export async function POST(req: NextRequest) {
       availableVoices && availableVoices.length > 0
         ? JSON.stringify(
             availableVoices.map((v) => ({
-              id: `${v.providerId}::${v.voiceId}`,
+              id: `${v.providerId}::${v.modelId || ''}::${v.voiceId}`,
               name: v.voiceName,
               language: v.voiceLanguage || 'unknown',
             })),
@@ -108,7 +109,7 @@ export async function POST(req: NextRequest) {
       : '';
 
     const voiceJsonField = voiceListStr
-      ? ',\n      "voice": "string (voice id from available list, e.g. \'qwen-tts::Cherry\')"'
+      ? ',\n      "voice": "string (voice id from available list, e.g. \'qwen-tts::qwen3-tts-flash::Cherry\')"'
       : '';
 
     const userPrompt = `Generate agent profiles for the following course:
@@ -209,12 +210,20 @@ Return a JSON object with this exact structure:
 
     // ── Build output with IDs ──
     const agents = parsed.agents.map((agent, index) => {
-      // Parse voice "providerId::voiceId" format
-      let voiceConfig: { providerId: string; voiceId: string } | undefined;
-      if (agent.voice && agent.voice.includes('::')) {
-        const [providerId, voiceId] = agent.voice.split('::');
-        if (providerId && voiceId) {
-          voiceConfig = { providerId, voiceId };
+      // Resolve only an advertised voice token so provider/model/voice remain bound together.
+      let voiceConfig: { providerId: string; modelId?: string; voiceId: string } | undefined;
+      if (agent.voice) {
+        const advertised = availableVoices?.find(
+          (voice) =>
+            `${voice.providerId}::${voice.modelId || ''}::${voice.voiceId}` === agent.voice ||
+            `${voice.providerId}::${voice.voiceId}` === agent.voice,
+        );
+        if (advertised) {
+          voiceConfig = {
+            providerId: advertised.providerId,
+            ...(advertised.modelId ? { modelId: advertised.modelId } : {}),
+            voiceId: advertised.voiceId,
+          };
         }
       }
 

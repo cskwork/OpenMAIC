@@ -835,12 +835,15 @@ function GenerationPreviewContent() {
               voiceProfiles,
             );
             return providers.flatMap((p) =>
-              p.voices.map((v) => ({
-                providerId: p.providerId,
-                voiceId: v.id,
-                voiceName: v.name,
-                voiceLanguage: v.language,
-              })),
+              p.modelGroups.flatMap((group) =>
+                group.voices.map((v) => ({
+                  providerId: p.providerId,
+                  ...(group.modelId ? { modelId: group.modelId } : {}),
+                  voiceId: v.id,
+                  voiceName: v.name,
+                  voiceLanguage: v.language,
+                })),
+              ),
             );
           };
 
