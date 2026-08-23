@@ -1325,7 +1325,6 @@ function QwenVoiceCloneManager() {
         {
           ttsApiKey: providerConfig?.apiKey || undefined,
           ttsBaseUrl: providerConfig?.baseUrl || providerConfig?.customDefaultBaseUrl || undefined,
-          ttsModelId: QWEN_TTS_VOICE_CLONE_MODEL,
         },
       );
       if (ttsProviderId === 'qwen-tts') setTTSVoice(voiceId);
@@ -1367,7 +1366,6 @@ function QwenVoiceCloneManager() {
     const vendorDeleted = await deleteVoice(voiceId, {
       ttsApiKey: providerConfig?.apiKey || undefined,
       ttsBaseUrl: providerConfig?.baseUrl || providerConfig?.customDefaultBaseUrl || undefined,
-      ttsModelId: QWEN_TTS_VOICE_CLONE_MODEL,
     });
     if (!vendorDeleted) toast.warning(t('settings.qwenCloneDeleteWarning'));
     if (ttsProviderId === 'qwen-tts' && ttsVoice === voiceId) {

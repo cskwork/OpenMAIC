@@ -107,7 +107,8 @@ describe('Qwen voice cloning', () => {
     expect(first).toBe(second);
     expect(first).toMatch(/^[a-z][a-z0-9_]{1,15}$/u);
     expect(first.length).toBeLessThanOrEqual(16);
-    expect(preferredVoiceName('!!!', pcmWav())).toMatch(/^voice_[a-f0-9]{8}$/u);
+    expect(preferredVoiceName('!!!', pcmWav())).toMatch(/^v_[a-f0-9]{8}$/u);
+    expect(preferredVoiceName('007 Agent', pcmWav())).toMatch(/^v007_[a-f0-9]{8}$/u);
   });
 
   it.each([
@@ -303,6 +304,94 @@ describe('Qwen voice cloning', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
+  it('retries an unexpectedly empty page once and returns unknown if it stays ambiguous', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            output: { total_count: 2, page_size: 1, voice_list: [] },
+          }),
+        ),
+    );
+    await expect(qwenVoiceExists(CONFIG, 'v1')).resolves.toBe('unknown');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(fetchSpy.mock.calls[1][1]?.body))).toMatchObject({
+      input: { page_index: 0 },
+    });
+  });
+
+  it('does not couple a shared enrollment to the first waiter aborting', async () => {
+    let resolveVendor!: (response: Response) => void;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveVendor = resolve;
+        }),
+    );
+    const adapter = getVoiceRegistrationAdapter('qwen-tts')!;
+    const params = {
+      voiceId: 'Teacher',
+      referenceAudioBase64: Buffer.from(pcmWav()).toString('base64'),
+      refText: 'Reference transcript.',
+    };
+    const cfg = { baseUrl: CONFIG.baseUrl, apiKey: CONFIG.apiKey, model: CONFIG.targetModel };
+    const firstController = new AbortController();
+    const first = adapter.registerVoice(cfg, params, firstController.signal);
+    const second = adapter.registerVoice(cfg, params);
+    firstController.abort(new DOMException('Caller disconnected', 'AbortError'));
+    await expect(first).rejects.toMatchObject({ name: 'AbortError' });
+    resolveVendor(new Response(JSON.stringify({ output: { voice: 'vendor_voice' } })));
+    await expect(second).resolves.toBe('vendor_voice');
+    expect(fetchSpy).toHaveBeenCalledOnce();
+  });
+
+  it('bounds the successful registration memo and evicts the least recently used entry', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(
+        async () => new Response(JSON.stringify({ output: { voice: 'vendor_voice' } })),
+      );
+    const adapter = getVoiceRegistrationAdapter('qwen-tts')!;
+    const cfg = { baseUrl: CONFIG.baseUrl, apiKey: CONFIG.apiKey, model: CONFIG.targetModel };
+    const referenceAudioBase64 = Buffer.from(pcmWav()).toString('base64');
+    for (let index = 0; index < 257; index++) {
+      await adapter.registerVoice(cfg, {
+        voiceId: `Teacher ${index}`,
+        referenceAudioBase64,
+        refText: 'Reference transcript.',
+      });
+    }
+    await adapter.registerVoice(cfg, {
+      voiceId: 'Teacher 0',
+      referenceAudioBase64,
+      refText: 'Reference transcript.',
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(258);
+  });
+
+  it('uses a successful memo to avoid duplicate enrollment after an ambiguous lookup', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ output: { voice: 'vendor_voice' } })))
+      .mockImplementation(
+        async () => new Response(JSON.stringify({ output: { total_count: 1, voice_list: [] } })),
+      );
+    const adapter = getVoiceRegistrationAdapter('qwen-tts')!;
+    const cfg = { baseUrl: CONFIG.baseUrl, apiKey: CONFIG.apiKey, model: CONFIG.targetModel };
+    await adapter.registerVoice(cfg, {
+      voiceId: 'Teacher',
+      referenceAudioBase64: Buffer.from(pcmWav()).toString('base64'),
+      refText: 'Reference transcript.',
+    });
+    await expect(adapter.voiceExists(cfg, 'vendor_voice')).resolves.toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    expect(
+      fetchSpy.mock.calls.filter(
+        ([, init]) => JSON.parse(String(init?.body)).input.action === 'create',
+      ),
+    ).toHaveLength(1);
+  });
+
   it('dispatches from the voice identity, not a stale model id', async () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
@@ -354,7 +443,10 @@ describe('Qwen voice cloning', () => {
         },
         'Hello',
       ),
-    ).rejects.toMatchObject({ code: 'QWEN_TTS_ERROR' });
+    ).rejects.toMatchObject({
+      code: 'QWEN_TTS_ERROR',
+      message: 'The generated Qwen audio URL host "untrusted.example.com" is not allowed.',
+    });
   });
 
   it('evicts the registration memo when synthesis reports that the voice is gone', async () => {

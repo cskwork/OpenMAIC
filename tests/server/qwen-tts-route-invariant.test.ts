@@ -48,13 +48,9 @@ describe('Qwen TTS route model-follows-voice invariant', () => {
     );
   });
 
-  it('routes a clone voice to VC and reports speed normalization', async () => {
+  it('routes a clone voice to VC and normalizes speed', async () => {
     const response = await POST(request('vendor-clone-id', 'qwen3-tts-flash'));
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      speedNormalized: true,
-      effectiveSpeed: 1,
-    });
     expect(mocks.generateTTS).toHaveBeenCalledWith(
       expect.objectContaining({
         voice: 'vendor-clone-id',
@@ -64,5 +60,17 @@ describe('Qwen TTS route model-follows-voice invariant', () => {
       }),
       'Hello',
     );
+  });
+
+  it('trims a catalog voice before clone detection and rejects whitespace-only voices', async () => {
+    const response = await POST(request(' Cherry ', QWEN_TTS_VOICE_CLONE_MODEL));
+    expect(response.status).toBe(200);
+    expect(mocks.generateTTS).toHaveBeenCalledWith(
+      expect.objectContaining({ voice: 'Cherry', modelId: 'qwen3-tts-flash' }),
+      'Hello',
+    );
+
+    const emptyResponse = await POST(request('   ', QWEN_TTS_VOICE_CLONE_MODEL));
+    expect(emptyResponse.status).toBe(400);
   });
 });

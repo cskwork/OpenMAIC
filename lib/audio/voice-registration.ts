@@ -25,12 +25,12 @@ export interface VoiceRegistrationAdapter {
   supportsRegistration(options?: Record<string, unknown>): boolean;
   /** Whether the adapter can synthesize its own reference clip from a voice design. */
   supportsBootstrapReferenceClip?: boolean;
-  /** Whether `voiceId` is already registered on the backend. */
+  /** Whether `voiceId` is registered, or `unknown` when the lookup is inconclusive. */
   voiceExists(
     cfg: VoiceRegistrationConfig,
     voiceId: string,
     signal?: AbortSignal,
-  ): Promise<boolean>;
+  ): Promise<boolean | 'unknown'>;
   /** Register (or idempotently re-register) a reference clip under `voiceId`; returns the id. */
   registerVoice(
     cfg: VoiceRegistrationConfig,

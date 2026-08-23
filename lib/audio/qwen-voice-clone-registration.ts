@@ -13,7 +13,11 @@ import type {
   VoiceRegistrationConfig,
 } from '@/lib/audio/voice-registration';
 
-const registrations = new Map<string, Promise<string>>();
+const REGISTRATION_MEMO_TTL_MS = 60 * 60 * 1000;
+const REGISTRATION_MEMO_MAX_ENTRIES = 256;
+
+const inFlightRegistrations = new Map<string, Promise<string>>();
+const registrations = new Map<string, { voiceId: string; expiresAt: number }>();
 const registrationKeysByVoice = new Map<string, Set<string>>();
 
 function decodeBase64(value: string): Uint8Array {
@@ -57,8 +61,18 @@ async function registerVoice(
   if (!refText.trim()) throw new QwenVoiceCloneError('QWEN_VC_CONFIG_MISSING', 400);
 
   const key = registrationKey(cfg, params);
-  const existing = registrations.get(key);
-  if (existing) return existing;
+  const memoized = registrations.get(key);
+  if (memoized) {
+    if (memoized.expiresAt > Date.now()) {
+      registrations.delete(key);
+      registrations.set(key, memoized);
+      return memoized.voiceId;
+    }
+    removeRegistrationKey(key, memoized.voiceId);
+  }
+
+  const existing = inFlightRegistrations.get(key);
+  if (existing) return waitForRegistration(existing, signal);
 
   const pending = (async () => {
     const audio = decodeBase64(params.referenceAudioBase64);
@@ -70,37 +84,72 @@ async function registerVoice(
         targetModel: cfg.model || QWEN_TTS_VOICE_CLONE_MODEL,
       },
       { name: params.voiceId, audio, text: refText },
-      signal,
+      undefined,
     );
-    const keys = registrationKeysByVoice.get(result.voiceId) ?? new Set<string>();
-    keys.add(key);
-    registrationKeysByVoice.set(result.voiceId, keys);
+    rememberRegistration(key, result.voiceId);
     return result.voiceId;
-  })();
-  registrations.set(key, pending);
-  try {
-    return await pending;
-  } catch (error) {
-    registrations.delete(key);
-    throw error;
+  })().finally(() => inFlightRegistrations.delete(key));
+  inFlightRegistrations.set(key, pending);
+  return waitForRegistration(pending, signal);
+}
+
+function waitForRegistration(pending: Promise<string>, signal?: AbortSignal): Promise<string> {
+  if (!signal) return pending;
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const aborted = () => reject(signal.reason);
+    signal.addEventListener('abort', aborted, { once: true });
+    pending.then(
+      (voiceId) => {
+        signal.removeEventListener('abort', aborted);
+        resolve(voiceId);
+      },
+      (error) => {
+        signal.removeEventListener('abort', aborted);
+        reject(error);
+      },
+    );
+  });
+}
+
+function rememberRegistration(key: string, voiceId: string): void {
+  registrations.delete(key);
+  registrations.set(key, { voiceId, expiresAt: Date.now() + REGISTRATION_MEMO_TTL_MS });
+  const keys = registrationKeysByVoice.get(voiceId) ?? new Set<string>();
+  keys.add(key);
+  registrationKeysByVoice.set(voiceId, keys);
+  while (registrations.size > REGISTRATION_MEMO_MAX_ENTRIES) {
+    const oldestKey = registrations.keys().next().value as string | undefined;
+    if (!oldestKey) break;
+    const oldest = registrations.get(oldestKey);
+    if (oldest) removeRegistrationKey(oldestKey, oldest.voiceId);
   }
+}
+
+function removeRegistrationKey(key: string, voiceId: string): void {
+  registrations.delete(key);
+  const keys = registrationKeysByVoice.get(voiceId);
+  keys?.delete(key);
+  if (keys?.size === 0) registrationKeysByVoice.delete(voiceId);
 }
 
 /**
  * Query the provider rather than trusting the memo. The memo is intentionally
- * process-local: it coalesces concurrent/repeated enrollment only within one
- * server process and is neither durable nor shared across replicas.
+ * process-local: it coalesces concurrent enrollment and retains up to 256
+ * successful registrations for one hour. It is neither durable nor shared
+ * across replicas.
  */
 async function voiceExists(
   cfg: VoiceRegistrationConfig,
   voiceId: string,
   signal?: AbortSignal,
-): Promise<boolean> {
-  return qwenVoiceExists(
+): Promise<boolean | 'unknown'> {
+  const result = await qwenVoiceExists(
     { apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, targetModel: cfg.model },
     voiceId,
     signal,
   );
+  return result === 'unknown' && registrationKeysByVoice.has(voiceId) ? true : result;
 }
 
 async function deleteVoice(
@@ -131,6 +180,7 @@ export const qwenVoiceCloneRegistrationAdapter: VoiceRegistrationAdapter = {
 };
 
 export function clearQwenVoiceRegistrationMemoForTests(): void {
+  inFlightRegistrations.clear();
   registrations.clear();
   registrationKeysByVoice.clear();
 }

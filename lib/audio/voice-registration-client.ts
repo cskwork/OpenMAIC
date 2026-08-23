@@ -12,6 +12,7 @@
 
 import { db } from '@/lib/utils/database';
 import { getDeterministicVoiceId, type VoiceDesign } from '@/lib/audio/voice-design';
+import { clearVoiceBindingUnavailable } from '@/lib/audio/unavailable-voice-bindings';
 
 export interface VoiceRegistrationRequestConfig {
   ttsApiKey?: string;
@@ -70,6 +71,8 @@ export async function registerVoiceFromReference(
   }
   const voiceId = typeof data.voiceId === 'string' ? data.voiceId.trim() : '';
   if (!voiceId) throw new Error('Voice registration returned no voice id');
+  clearVoiceBindingUnavailable({ providerId, voiceId: params.name.trim() });
+  clearVoiceBindingUnavailable({ providerId, voiceId });
   return voiceId;
 }
 
@@ -182,6 +185,8 @@ async function registerOnce(
     });
   }
   const registeredVoiceId = data.voiceId?.trim() || voiceId;
+  clearVoiceBindingUnavailable({ providerId, voiceId });
+  clearVoiceBindingUnavailable({ providerId, voiceId: registeredVoiceId });
   registeredThisSession.add(memoKey);
   if (registeredVoiceId !== voiceId) {
     registeredThisSession.add(memoKeyFor(registeredVoiceId, request));

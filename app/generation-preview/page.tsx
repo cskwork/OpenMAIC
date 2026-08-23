@@ -13,7 +13,7 @@ import { useStageStore } from '@/lib/store/stage';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
 import { getEnabledProvidersWithVoices } from '@/lib/audio/voice-resolver';
-import { resolveTTSModelForVoice } from '@/lib/audio/constants';
+import { isQwenCloneVoice, resolveTTSModelForVoice } from '@/lib/audio/constants';
 import { isTTSProviderEnabled } from '@/lib/audio/provider-enablement';
 import { useAllVoiceProfiles } from '@/lib/audio/voxcpm-voices';
 import { useI18n } from '@/lib/hooks/use-i18n';
@@ -836,17 +836,24 @@ function GenerationPreviewContent() {
               voiceProfiles,
             );
             return providers.flatMap((p) =>
-              p.modelGroups.flatMap((group) =>
-                group.voices.map((v) => ({
+              p.voices.map((v) => {
+                const cloneModelGroup =
+                  p.providerId === 'qwen-tts' && isQwenCloneVoice(v.id)
+                    ? p.modelGroups.find((group) =>
+                        group.voices.some((groupVoice) => groupVoice.id === v.id),
+                      )
+                    : undefined;
+                const modelId = cloneModelGroup
+                  ? resolveTTSModelForVoice(p.providerId, v.id, cloneModelGroup.modelId)
+                  : undefined;
+                return {
                   providerId: p.providerId,
-                  ...(resolveTTSModelForVoice(p.providerId, v.id, group.modelId)
-                    ? { modelId: resolveTTSModelForVoice(p.providerId, v.id, group.modelId) }
-                    : {}),
+                  ...(modelId ? { modelId } : {}),
                   voiceId: v.id,
                   voiceName: v.name,
                   voiceLanguage: v.language,
-                })),
-              ),
+                };
+              }),
             );
           };
 

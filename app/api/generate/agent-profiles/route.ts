@@ -94,7 +94,9 @@ export async function POST(req: NextRequest) {
       availableVoices && availableVoices.length > 0
         ? JSON.stringify(
             availableVoices.map((v) => ({
-              id: `${v.providerId}::${v.modelId || ''}::${v.voiceId}`,
+              id: v.modelId
+                ? `${v.providerId}::${v.modelId}::${v.voiceId}`
+                : `${v.providerId}::${v.voiceId}`,
               name: v.voiceName,
               language: v.voiceLanguage || 'unknown',
             })),
@@ -109,7 +111,7 @@ export async function POST(req: NextRequest) {
       : '';
 
     const voiceJsonField = voiceListStr
-      ? ',\n      "voice": "string (voice id from available list, e.g. \'qwen-tts::qwen3-tts-flash::Cherry\')"'
+      ? ',\n      "voice": "string (voice id from available list, e.g. \'qwen-tts::Cherry\')"'
       : '';
 
     const userPrompt = `Generate agent profiles for the following course:
@@ -215,8 +217,9 @@ Return a JSON object with this exact structure:
       if (agent.voice) {
         const advertised = availableVoices?.find(
           (voice) =>
-            `${voice.providerId}::${voice.modelId || ''}::${voice.voiceId}` === agent.voice ||
-            `${voice.providerId}::${voice.voiceId}` === agent.voice,
+            (voice.modelId
+              ? `${voice.providerId}::${voice.modelId}::${voice.voiceId}`
+              : `${voice.providerId}::${voice.voiceId}`) === agent.voice,
         );
         if (advertised) {
           voiceConfig = {
@@ -224,6 +227,11 @@ Return a JSON object with this exact structure:
             ...(advertised.modelId ? { modelId: advertised.modelId } : {}),
             voiceId: advertised.voiceId,
           };
+        } else {
+          console.warn(
+            '[AgentProfiles] Dropped voice token not present in the advertised list:',
+            agent.voice,
+          );
         }
       }
 

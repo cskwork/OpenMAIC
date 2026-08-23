@@ -18,6 +18,12 @@ import type { AudioIndicatorState } from '@/components/roundtable/audio-indicato
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { isQwenCloneVoice, resolveTTSModelForVoice } from '@/lib/audio/constants';
 import { toast } from 'sonner';
+import {
+  isVoiceBindingUnavailable,
+  markVoiceBindingNoticeShown,
+  markVoiceBindingUnavailable,
+  trackAssignedVoiceBinding,
+} from '@/lib/audio/unavailable-voice-bindings';
 
 interface DiscussionTTSOptions {
   enabled: boolean;
@@ -37,7 +43,7 @@ interface QueueItem {
 }
 
 export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: DiscussionTTSOptions) {
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const ttsProvidersConfig = useSettingsStore((s) => s.ttsProvidersConfig);
   const ttsSpeed = useSettingsStore((s) => s.ttsSpeed);
   const ttsMuted = useSettingsStore((s) => s.ttsMuted);
@@ -60,8 +66,7 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
   const onAudioStateChangeRef = useRef(onAudioStateChange);
   onAudioStateChangeRef.current = onAudioStateChange;
   const processQueueRef = useRef<() => void>(() => {});
-  const unavailableCloneAgentsRef = useRef(new Set<string>());
-  const noticedCloneAgentsRef = useRef(new Set<string>());
+  const agentBindingKeysRef = useRef(new Map<string, string>());
 
   const {
     speak: browserSpeak,
@@ -139,15 +144,6 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
         },
         ttsProvidersConfig,
       );
-      if (unavailableCloneAgentsRef.current.has(agent.id)) {
-        return isTTSProviderEnabled(
-          globalVoice.providerId,
-          ttsProvidersConfig[globalVoice.providerId],
-        )
-          ? globalVoice
-          : firstVoice();
-      }
-
       // Teacher's voice = the global lecture selection, honored VERBATIM (incl.
       // its model) whenever that provider is enabled — identical to what the
       // pre-generated lecture sends (use-scene-generator), so lecture and
@@ -164,14 +160,38 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
           },
           ttsProvidersConfig,
         );
-        if (isTTSProviderEnabled(resolved.providerId, ttsProvidersConfig[resolved.providerId])) {
-          return resolved;
-        }
-        return firstVoice();
+        const preferred = isTTSProviderEnabled(
+          resolved.providerId,
+          ttsProvidersConfig[resolved.providerId],
+        )
+          ? resolved
+          : firstVoice();
+        return applyUnavailableBindingFallback(agent.id, preferred, globalVoice, firstVoice);
       }
 
       const index = agentIndexMap.current.get(agentId!) ?? 0;
-      return resolveAgentVoice(agent, index, providers, agentVoiceOverrides);
+      return applyUnavailableBindingFallback(
+        agent.id,
+        resolveAgentVoice(agent, index, providers, agentVoiceOverrides),
+        globalVoice,
+        firstVoice,
+      );
+
+      function applyUnavailableBindingFallback(
+        id: string,
+        preferred: ResolvedVoice | null,
+        fallback: ResolvedVoice,
+        getFirstVoice: () => ResolvedVoice | null,
+      ): ResolvedVoice | null {
+        if (!preferred) return null;
+        const previousKey = agentBindingKeysRef.current.get(id);
+        const key = trackAssignedVoiceBinding(previousKey, preferred);
+        agentBindingKeysRef.current.set(id, key);
+        if (!isVoiceBindingUnavailable(preferred)) return preferred;
+        return isTTSProviderEnabled(fallback.providerId, ttsProvidersConfig[fallback.providerId])
+          ? fallback
+          : getFirstVoice();
+      }
     },
     [
       agents,
@@ -288,12 +308,12 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
         item.agentId &&
         item.fallbackVoice;
       if (cloneUnavailable) {
-        unavailableCloneAgentsRef.current.add(item.agentId!);
-        if (!noticedCloneAgentsRef.current.has(item.agentId!)) {
-          noticedCloneAgentsRef.current.add(item.agentId!);
-          toast.warning(
-            'The assigned cloned voice is unavailable. Discussion will use the global voice.',
-          );
+        const unavailableKey = markVoiceBindingUnavailable({
+          providerId: item.providerId,
+          voiceId: item.voiceId,
+        });
+        if (markVoiceBindingNoticeShown(unavailableKey)) {
+          toast.warning(t('settings.qwenCloneDiscussionUnavailable'));
         }
         queueRef.current.unshift({
           ...item,
@@ -314,7 +334,17 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
         queueMicrotask(() => processQueueRef.current());
       }
     }
-  }, [agents, enabled, locale, ttsMuted, ttsVolume, ttsProvidersConfig, ttsSpeed, playbackSpeed]);
+  }, [
+    agents,
+    enabled,
+    locale,
+    t,
+    ttsMuted,
+    ttsVolume,
+    ttsProvidersConfig,
+    ttsSpeed,
+    playbackSpeed,
+  ]);
 
   processQueueRef.current = processQueue;
 

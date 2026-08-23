@@ -591,11 +591,6 @@ export function resolveQwenVoiceCloneModel(): string {
   return process.env.TTS_QWEN_VOICE_CLONE_MODEL || DEFAULT_QWEN_TTS_VOICE_CLONE_MODEL;
 }
 
-/** Server-aware VC predicate. Only the operator-resolved effective model is authoritative. */
-export function isResolvedQwenVoiceCloneModel(modelId?: string): boolean {
-  return !!modelId && modelId === resolveQwenVoiceCloneModel();
-}
-
 export class TTSModelNotAllowedError extends Error {
   readonly code = 'INVALID_REQUEST';
   readonly httpStatus = 400;
@@ -636,13 +631,13 @@ export function resolveTTSModel(
 
     if (voiceId) {
       if (!isQwenCatalogVoice(voiceId)) return vcModel;
+      const pinnedCatalogModel = pinnedModels.find((model) => model !== vcModel);
+      if (pinnedModels.length > 0 && !pinnedCatalogModel) {
+        throw new TTSModelNotAllowedError(providerId, TTS_PROVIDERS['qwen-tts'].defaultModelId);
+      }
       // Self-heal persisted VC-model + catalog-voice wedges. Prefer the first
       // operator-pinned non-VC model, otherwise the catalog default.
       if (normalizedClientModel === vcModel) {
-        const pinnedCatalogModel = pinnedModels.find((model) => model !== vcModel);
-        if (pinnedModels.length > 0 && !pinnedCatalogModel) {
-          throw new TTSModelNotAllowedError(providerId, TTS_PROVIDERS['qwen-tts'].defaultModelId);
-        }
         return pinnedCatalogModel || TTS_PROVIDERS['qwen-tts'].defaultModelId;
       }
     }

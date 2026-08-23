@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
       ttsProviderOptions?: Record<string, unknown>;
     };
     ttsProviderId = body.ttsProviderId;
-    ttsVoice = body.ttsVoice;
+    ttsVoice = typeof body.ttsVoice === 'string' ? body.ttsVoice.trim() : undefined;
     audioId = body.audioId;
 
     // Validate required fields
@@ -143,8 +143,6 @@ export async function POST(req: NextRequest) {
       audioId,
       base64,
       format,
-      speedNormalized: qwenCloneVoice && requestedSpeed !== 1,
-      effectiveSpeed: config.speed,
     });
   } catch (error) {
     log.error(

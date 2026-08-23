@@ -173,4 +173,32 @@ describe('resolveAgentVoice with overrides', () => {
       ),
     ).toEqual(global);
   });
+
+  it('keeps a known legacy voice while dropping an unknown stale model id', () => {
+    const openai: ProviderWithVoices = {
+      providerId: 'openai-tts',
+      providerName: 'OpenAI',
+      voices: [{ id: 'alloy', name: 'Alloy' }],
+      modelGroups: [
+        { modelId: 'tts-current', modelName: 'Current', voices: [{ id: 'alloy', name: 'Alloy' }] },
+      ],
+    };
+    expect(
+      resolveAgentVoice(
+        agent('legacy', { providerId: 'openai-tts', modelId: 'tts-retired', voiceId: 'alloy' }),
+        0,
+        [openai],
+      ),
+    ).toEqual({ providerId: 'openai-tts', voiceId: 'alloy' });
+  });
+
+  it('falls back globally for an empty narrator voice id on every provider', () => {
+    const global = { providerId: 'qwen-tts' as const, voiceId: 'Cherry' };
+    expect(
+      resolveNarratorVoiceBinding({ providerId: 'openai-tts', voiceId: '   ' }, global, {
+        'openai-tts': { apiKey: 'key', enabled: true },
+        'qwen-tts': { apiKey: 'key', enabled: true },
+      }),
+    ).toEqual({ providerId: 'qwen-tts', modelId: 'qwen3-tts-flash', voiceId: 'Cherry' });
+  });
 });

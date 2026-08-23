@@ -168,7 +168,7 @@ export async function POST(req: NextRequest) {
     // Already registered → no-op (also avoids a redundant re-register when the
     // client offered a cached clip but the voice is still live on the backend).
     const lookup = childSignal(deadline.signal, EXISTS_LOOKUP_SLICE_MS);
-    let exists = false;
+    let exists: boolean | 'unknown' = false;
     try {
       exists = await adapter.voiceExists(cfg, voiceId, lookup.signal);
     } catch (error) {
@@ -178,12 +178,13 @@ export async function POST(req: NextRequest) {
     } finally {
       lookup.cleanup();
     }
-    if (exists) {
+    if (exists === true) {
       return apiSuccess({ voiceId, registered: true });
     }
 
-    // Not present, but the client has the cached reference clip → re-register it
-    // (register-on-invalid; preserves the original timbre instead of re-synthesizing).
+    // Missing or ambiguous, but the client has the cached reference clip →
+    // idempotently re-register it. This preserves the original timbre and avoids
+    // blind fresh enrollment after an inconclusive paginated lookup.
     if (body.referenceAudioBase64) {
       const registeredVoiceId = await adapter.registerVoice(
         cfg,

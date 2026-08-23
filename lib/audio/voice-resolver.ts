@@ -43,16 +43,18 @@ export function resolveNarratorVoiceBinding(
   globalVoice: ResolvedVoice,
   providerConfigs: ProviderConfigMap,
 ): ResolvedVoice {
-  if (bound && isTTSProviderEnabled(bound.providerId, providerConfigs[bound.providerId])) {
+  if (
+    bound &&
+    bound.voiceId.trim() &&
+    isTTSProviderEnabled(bound.providerId, providerConfigs[bound.providerId])
+  ) {
     // Qwen clone IDs are account-scoped but self-contained: local IndexedDB is
     // not an authority. Catalog voices remain validated against the catalog.
-    if (bound.providerId !== 'qwen-tts' || bound.voiceId.trim()) {
-      return {
-        providerId: bound.providerId,
-        modelId: resolveTTSModelForVoice(bound.providerId, bound.voiceId, bound.modelId),
-        voiceId: bound.voiceId,
-      };
-    }
+    return {
+      providerId: bound.providerId,
+      modelId: resolveTTSModelForVoice(bound.providerId, bound.voiceId, bound.modelId),
+      voiceId: bound.voiceId,
+    };
   }
   return {
     ...globalVoice,
@@ -119,11 +121,14 @@ export function resolveAgentVoice(
     const matchingModelGroup = choice.modelId
       ? fromEnabled.modelGroups.find((group) => group.modelId === choice.modelId)
       : undefined;
-    const modelCompatible = matchingModelGroup
-      ? matchingModelGroup.voices.some((voice) => voice.id === choice.voiceId)
-      : !choice.modelId;
+    const modelCompatible =
+      !matchingModelGroup || matchingModelGroup.voices.some((voice) => voice.id === choice.voiceId);
     if (allVoiceIds.has(choice.voiceId) && modelCompatible) {
-      return { providerId: choice.providerId, modelId: choice.modelId, voiceId: choice.voiceId };
+      return {
+        providerId: choice.providerId,
+        ...(matchingModelGroup ? { modelId: choice.modelId } : {}),
+        voiceId: choice.voiceId,
+      };
     }
   }
 

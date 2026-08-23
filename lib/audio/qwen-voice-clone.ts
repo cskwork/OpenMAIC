@@ -126,14 +126,16 @@ function endpoint(baseUrl: URL, path: string): URL {
 }
 
 export function preferredVoiceName(name: string, audio: Uint8Array): string {
-  const prefix = name
+  let prefix = name
     .normalize('NFKD')
     .toLowerCase()
     .replace(/[^a-z0-9]+/gu, '_')
     .replace(/^_+|_+$/gu, '')
     .slice(0, 6);
+  if (/^[0-9]/u.test(prefix)) prefix = `v${prefix.match(/^[0-9]+/u)?.[0] || ''}`.slice(0, 6);
+  else if (!/^[a-z]/u.test(prefix)) prefix = 'v';
   const digest = createHash('sha256').update(audio).digest('hex').slice(0, 8);
-  return `${prefix || 'voice'}_${digest}`.slice(0, 16);
+  return `${prefix}_${digest}`.slice(0, 16);
 }
 
 function timeoutSignal(parent: AbortSignal | undefined, timeoutMs: number) {
@@ -252,12 +254,13 @@ export async function qwenVoiceExists(
   config: QwenVoiceCloneConfig,
   voiceId: string,
   signal?: AbortSignal,
-): Promise<boolean> {
+): Promise<boolean | 'unknown'> {
   const resolved = resolveConfig(config);
   const wanted = voiceId.trim();
   if (!wanted) return false;
   const pageSize = 100;
   let fetched = 0;
+  let retriedEmptyPage = false;
   for (let pageIndex = 0; pageIndex < 100; pageIndex++) {
     const body = await postJson(
       endpoint(resolved.baseUrl, ENROLLMENT_PATH),
@@ -277,9 +280,21 @@ export async function qwenVoiceExists(
     fetched += voices.length;
     const total =
       typeof body.output?.total_count === 'number' ? body.output.total_count : undefined;
-    if (voices.length === 0 || (total !== undefined && fetched >= total)) return false;
+    if (voices.length === 0) {
+      if (total !== undefined && fetched < total) {
+        if (!retriedEmptyPage) {
+          retriedEmptyPage = true;
+          pageIndex--;
+          continue;
+        }
+        return 'unknown';
+      }
+      return false;
+    }
+    retriedEmptyPage = false;
+    if (total !== undefined && fetched >= total) return false;
   }
-  return false;
+  return 'unknown';
 }
 
 export function audioFormat(contentType: string | null, vendorFormat: unknown, url: URL): string {
@@ -304,6 +319,7 @@ export async function downloadAudio(
   } catch {
     throw new QwenVoiceCloneError('QWEN_VC_AUDIO_URL_INVALID', 502);
   }
+  // This strict result-host allowlist has been verified against live vendor responses.
   const trustedHost = /^dashscope-result-[a-z0-9-]+\.oss-[a-z]{2}-[a-z0-9-]+\.aliyuncs\.com$/u.test(
     url.hostname,
   );

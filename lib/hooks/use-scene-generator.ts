@@ -30,6 +30,13 @@ import { putAsset, removeAsset, replaceAsset } from '@/lib/media/asset-pool';
 import { lazyBoundedMap } from '@/lib/utils/concurrency';
 import { createLogger } from '@/lib/logger';
 import { toast } from 'sonner';
+import { getClientTranslation } from '@/lib/i18n';
+import {
+  isVoiceBindingUnavailable,
+  markVoiceBindingNoticeShown,
+  markVoiceBindingUnavailable,
+  voiceBindingKey,
+} from '@/lib/audio/unavailable-voice-bindings';
 import {
   isAbortError,
   withGenerationRetry,
@@ -37,12 +44,6 @@ import {
 } from '@openmaic/generation';
 
 const log = createLogger('SceneGenerator');
-const unavailableNarratorBindings = new Set<string>();
-const noticedNarratorBindings = new Set<string>();
-
-function voiceBindingKey(binding: { providerId: string; voiceId: string }): string {
-  return `${binding.providerId}\0${binding.voiceId}`;
-}
 
 function addGeneratedScene(scene: Scene): void {
   const state = useStageStore.getState();
@@ -281,7 +282,7 @@ export async function generateAndStoreTTS(
   const boundVoice = teacher?.voiceConfig;
   const boundKey = boundVoice ? voiceBindingKey(boundVoice) : undefined;
   const resolvedVoice = resolveNarratorVoiceBinding(
-    boundKey && unavailableNarratorBindings.has(boundKey) ? undefined : boundVoice,
+    boundVoice && isVoiceBindingUnavailable(boundVoice) ? undefined : boundVoice,
     {
       providerId: settings.ttsProviderId,
       modelId: globalProviderConfig?.modelId,
@@ -357,12 +358,9 @@ export async function generateAndStoreTTS(
       (boundVoice.providerId !== settings.ttsProviderId ||
         boundVoice.voiceId !== settings.ttsVoice);
     if (errorCode === 'QWEN_VC_VOICE_NOT_FOUND' && boundKey && globalDiffers) {
-      unavailableNarratorBindings.add(boundKey);
-      if (!noticedNarratorBindings.has(boundKey)) {
-        noticedNarratorBindings.add(boundKey);
-        toast.warning(
-          'The assigned cloned voice is unavailable. Narration will use the global voice.',
-        );
+      markVoiceBindingUnavailable(boundVoice);
+      if (markVoiceBindingNoticeShown(boundKey)) {
+        toast.warning(getClientTranslation('settings.qwenCloneNarrationUnavailable'));
       }
       return generateAndStoreTTS(
         requestId,

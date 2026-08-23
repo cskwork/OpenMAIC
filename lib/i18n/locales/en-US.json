@@ -1409,6 +1409,8 @@
     "qwenCloneUnsupported": "Recording is not supported in this browser; upload an audio file instead.",
     "qwenCloneSpeedHint": "Cloned voices always synthesize at 1× speed.",
     "qwenCloneDeleteWarning": "The voice was removed locally, but provider deletion failed.",
+    "qwenCloneNarrationUnavailable": "The assigned cloned voice is unavailable. Narration will use the global voice.",
+    "qwenCloneDiscussionUnavailable": "The assigned cloned voice is unavailable. Discussion will use the global voice.",
     "providerOpenAIWhisper": "OpenAI ASR (gpt-4o-mini-transcribe)",
     "providerBrowserNative": "Browser Native ASR",
     "providerQwenASR": "Qwen ASR (Alibaba Cloud Bailian)",

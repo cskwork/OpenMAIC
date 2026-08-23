@@ -648,11 +648,16 @@ pdf:
 
     it('reads the VC override only from server-side resolution', async () => {
       vi.stubEnv('TTS_QWEN_VOICE_CLONE_MODEL', 'operator-vc-model');
-      const { isResolvedQwenVoiceCloneModel, resolveQwenVoiceCloneModel } =
-        await import('@/lib/server/provider-config');
+      const { resolveQwenVoiceCloneModel } = await import('@/lib/server/provider-config');
       expect(resolveQwenVoiceCloneModel()).toBe('operator-vc-model');
-      expect(isResolvedQwenVoiceCloneModel('operator-vc-model')).toBe(true);
-      expect(isResolvedQwenVoiceCloneModel('qwen3-tts-vc-arbitrary')).toBe(false);
+    });
+
+    it('rejects catalog synthesis when the operator pins only the clone model', async () => {
+      vi.stubEnv('TTS_QWEN_API_KEY', 'key');
+      vi.stubEnv('TTS_QWEN_MODELS', 'operator-vc-model');
+      vi.stubEnv('TTS_QWEN_VOICE_CLONE_MODEL', 'operator-vc-model');
+      const { resolveTTSModel } = await import('@/lib/server/provider-config');
+      expect(() => resolveTTSModel('qwen-tts', undefined, 'Cherry')).toThrow('not allowed');
     });
   });
 

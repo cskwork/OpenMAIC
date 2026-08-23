@@ -20,7 +20,6 @@ import {
   registerVoiceFromReference,
   type VoiceRegistrationRequestConfig,
 } from '@/lib/audio/voice-registration-client';
-import { QWEN_TTS_VOICE_CLONE_MODEL } from '@/lib/audio/constants';
 import { InvalidReferenceAudioError, validateReferenceAudio } from '@/lib/audio/wav-validate';
 
 export type VoxCPMVoiceProfile = VoiceProfileRecord;
@@ -381,7 +380,7 @@ export function useQwenVoiceProfiles() {
           referenceAudio,
           refText: input.refText,
         },
-        { ...request, ttsModelId: QWEN_TTS_VOICE_CLONE_MODEL },
+        request,
       );
       const now = Date.now();
       await db.voiceProfiles.put({
@@ -405,10 +404,7 @@ export function useQwenVoiceProfiles() {
 
   const deleteVoice = useCallback(
     async (id: string, request: VoiceRegistrationRequestConfig) => {
-      const vendorDeleted = await deleteRegisteredVoice('qwen-tts', id, {
-        ...request,
-        ttsModelId: QWEN_TTS_VOICE_CLONE_MODEL,
-      });
+      const vendorDeleted = await deleteRegisteredVoice('qwen-tts', id, request);
       if (!vendorDeleted) {
         console.warn('[QwenVoiceProfiles] Provider deletion failed; removing local profile');
       }

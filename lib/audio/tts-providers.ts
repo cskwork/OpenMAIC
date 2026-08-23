@@ -723,7 +723,19 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
     downloaded = await downloadAudio(data.output.audio.url, undefined, baseUrl);
   } catch (error) {
     if (error instanceof QwenVoiceCloneError) {
-      throw new QwenTTSError('The generated Qwen audio could not be downloaded.', error.httpStatus);
+      const host = (() => {
+        try {
+          return new URL(String(data.output.audio.url)).hostname || 'unknown';
+        } catch {
+          return 'invalid';
+        }
+      })();
+      throw new QwenTTSError(
+        error.code === 'QWEN_VC_AUDIO_URL_INVALID'
+          ? `The generated Qwen audio URL host "${host}" is not allowed.`
+          : 'The generated Qwen audio could not be downloaded.',
+        error.httpStatus,
+      );
     }
     throw error;
   }

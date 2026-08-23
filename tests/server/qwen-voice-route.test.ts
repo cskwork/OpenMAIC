@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
 import { POST } from '@/app/api/generate/voice/route';
+import { clearQwenVoiceRegistrationMemoForTests } from '@/lib/audio/qwen-voice-clone-registration';
 
 function request(referenceAudioBase64 = 'unused-when-voice-exists'): NextRequest {
   return new NextRequest('http://localhost/api/generate/voice', {
@@ -44,6 +45,7 @@ function validReferenceAudioBase64(): string {
 }
 
 describe('Qwen voice registration route', () => {
+  beforeEach(clearQwenVoiceRegistrationMemoForTests);
   afterEach(() => vi.restoreAllMocks());
 
   it('uses the shared default Qwen base URL when the request omits one', async () => {
@@ -91,6 +93,24 @@ describe('Qwen voice registration route', () => {
     });
   });
 
+  it('re-registers the cached clip instead of fresh enrollment after an ambiguous lookup', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ output: { total_count: 1, voice_list: [] } })),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ output: { total_count: 1, voice_list: [] } })),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ output: { voice: 'voice-1' } })));
+    const response = await POST(request(validReferenceAudioBase64()));
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(String(fetchSpy.mock.calls[2][1]?.body))).toMatchObject({
+      input: { action: 'create', preferred_name: expect.any(String) },
+    });
+  });
+
   it('shares one route deadline across lookup and enrollment', async () => {
     vi.useFakeTimers();
     try {
@@ -103,11 +123,10 @@ describe('Qwen voice registration route', () => {
           }),
       );
       const pending = POST(request(validReferenceAudioBase64()));
-      await vi.advanceTimersByTimeAsync(5_000);
-      await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
-      await vi.advanceTimersByTimeAsync(24_000);
+      await vi.advanceTimersByTimeAsync(29_000);
       const response = await pending;
       expect(response.status).toBe(504);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
