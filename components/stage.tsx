@@ -14,6 +14,7 @@ import { useEditModeLock } from '@/components/edit/use-edit-mode-lock';
 import { MultiTabEditConflictPrompt } from '@/components/edit/MultiTabEditConflictPrompt';
 import { InteractiveIframeHost } from '@/components/scene-renderers/InteractiveIframeHost';
 import { CHROME_EASE } from '@/lib/edit/transitions';
+import { enterEditMode } from '@/lib/edit/enter-edit-mode';
 import { preloadEditor } from '@/lib/edit/preload-editor';
 
 /**
@@ -71,21 +72,21 @@ export function Stage({
     // the slide surface registered — no mid-animation pop-in / NOOP flash.
     // Runs concurrently with teardown; the import is promise-cached so it's
     // a no-op on subsequent toggles.
-    const editorLoad = preloadEditor();
-    try {
-      await Promise.all([playbackRef.current?.teardown(), editorLoad]);
-    } catch (err) {
+    await enterEditMode({
+      teardown: () => playbackRef.current?.teardown(),
+      preload: preloadEditor,
+      activate: () => setMode('edit'),
       // Teardown failed after the cross-tab lock was acquired but before we
       // flipped into edit mode. Release the lock we just took: otherwise it
       // stays HELD while mode stays 'playback', and the release effect (keyed
       // on `mode`) never re-fires, stranding the lock until tab close and
       // blocking this and every other tab from Pro mode. Stay in playback so
       // the failure surfaces rather than half-entering edit mode.
-      editLock.release();
-      console.error('[Stage] Pro mode entry failed during teardown', err);
-      return;
-    }
-    setMode('edit');
+      onError: (error) => {
+        editLock.release();
+        console.error('[Stage] Pro mode entry failed during teardown', error);
+      },
+    });
   }, [editLock, mode, setMode]);
 
   // Auto-exit edit mode when the current scene becomes uneditable
