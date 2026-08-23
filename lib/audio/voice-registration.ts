@@ -26,7 +26,11 @@ export interface VoiceRegistrationAdapter {
   /** Whether the adapter can synthesize its own reference clip from a voice design. */
   supportsBootstrapReferenceClip?: boolean;
   /** Whether `voiceId` is already registered on the backend. */
-  voiceExists(cfg: VoiceRegistrationConfig, voiceId: string): Promise<boolean>;
+  voiceExists(
+    cfg: VoiceRegistrationConfig,
+    voiceId: string,
+    signal?: AbortSignal,
+  ): Promise<boolean>;
   /** Register (or idempotently re-register) a reference clip under `voiceId`; returns the id. */
   registerVoice(
     cfg: VoiceRegistrationConfig,
@@ -36,13 +40,15 @@ export interface VoiceRegistrationAdapter {
       mimeType?: string;
       refText?: string;
     },
+    signal?: AbortSignal,
   ): Promise<string>;
   /** Delete a provider-side registered voice, when supported. */
-  deleteVoice?(cfg: VoiceRegistrationConfig, voiceId: string): Promise<void>;
+  deleteVoice?(cfg: VoiceRegistrationConfig, voiceId: string, signal?: AbortSignal): Promise<void>;
   /** Synthesize the voice design once into a reference clip. */
   bootstrapReferenceClip(
     cfg: VoiceRegistrationConfig,
     params: { design: VoiceDesign; language?: string },
+    signal?: AbortSignal,
   ): Promise<{ referenceAudioBase64: string; mimeType: string }>;
 }
 

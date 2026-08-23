@@ -16,12 +16,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { useSettingsStore } from '@/lib/store/settings';
-import {
-  getTTSVoices,
-  isQwenVoiceCloneModel,
-  QWEN_TTS_VOICE_CLONE_MODEL,
-  TTS_PROVIDERS,
-} from '@/lib/audio/constants';
+import { getTTSVoices, isQwenCloneVoice, resolveTTSModelForVoice } from '@/lib/audio/constants';
 import { useTTSPreview } from '@/lib/audio/use-tts-preview';
 import {
   getVoxCPMProviderOptions,
@@ -61,9 +56,9 @@ export function TtsConfigPopover() {
   const ttsProviderId = useSettingsStore((s) => s.ttsProviderId);
   const ttsVoice = useSettingsStore((s) => s.ttsVoice);
   const ttsSpeed = useSettingsStore((s) => s.ttsSpeed);
+  const setTTSSpeed = useSettingsStore((s) => s.setTTSSpeed);
   const ttsProvidersConfig = useSettingsStore((s) => s.ttsProvidersConfig);
   const setTTSVoice = useSettingsStore((s) => s.setTTSVoice);
-  const setTTSProviderConfig = useSettingsStore((s) => s.setTTSProviderConfig);
   const { profiles: voiceProfiles } = useAllVoiceProfiles();
   const voxcpmProfiles = voiceProfiles.filter((profile) => profile.providerId === 'voxcpm-tts');
   const qwenProfiles = voiceProfiles.filter((profile) => profile.providerId === 'qwen-tts');
@@ -95,20 +90,10 @@ export function TtsConfigPopover() {
   const pillCls =
     'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-all cursor-pointer select-none whitespace-nowrap border';
   const canPreview = ttsProviderId !== 'voxcpm-tts' || ttsVoice !== VOXCPM_AUTO_VOICE_ID;
-  const usesQwenClone =
-    ttsProviderId === 'qwen-tts' &&
-    isQwenVoiceCloneModel(ttsProvidersConfig[ttsProviderId]?.modelId);
+  const usesQwenClone = ttsProviderId === 'qwen-tts' && isQwenCloneVoice(ttsVoice);
 
   const handleVoiceChange = (voiceId: string) => {
     setTTSVoice(voiceId);
-    if (ttsProviderId !== 'qwen-tts') return;
-    if (qwenProfiles.some((profile) => profile.id === voiceId)) {
-      setTTSProviderConfig(ttsProviderId, { modelId: QWEN_TTS_VOICE_CLONE_MODEL });
-    } else if (isQwenVoiceCloneModel(ttsProvidersConfig[ttsProviderId]?.modelId)) {
-      setTTSProviderConfig(ttsProviderId, {
-        modelId: TTS_PROVIDERS[ttsProviderId].defaultModelId,
-      });
-    }
   };
 
   const handlePreview = useCallback(async () => {
@@ -132,7 +117,7 @@ export function TtsConfigPopover() {
       await startPreview({
         text: t('settings.ttsTestTextDefault'),
         providerId: ttsProviderId,
-        modelId: providerConfig?.modelId,
+        modelId: resolveTTSModelForVoice(ttsProviderId, ttsVoice, providerConfig?.modelId),
         voice: ttsVoice,
         speed: ttsSpeed,
         apiKey: providerConfig?.apiKey,
@@ -249,6 +234,23 @@ export function TtsConfigPopover() {
                 )}
                 {previewing ? t('toolbar.ttsPreviewing') : t('toolbar.ttsPreview')}
               </button>
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                <span>{t('settings.ttsSpeed')}</span>
+                <span>{usesQwenClone ? '1×' : `${ttsSpeed.toFixed(2)}×`}</span>
+              </div>
+              <input
+                aria-label={t('settings.ttsSpeed')}
+                type="range"
+                min={0.5}
+                max={2}
+                step={0.05}
+                value={usesQwenClone ? 1 : ttsSpeed}
+                disabled={usesQwenClone}
+                onChange={(event) => setTTSSpeed(Number(event.target.value))}
+                className="w-full disabled:cursor-not-allowed disabled:opacity-50"
+              />
             </div>
             {usesQwenClone && (
               <p className="text-[11px] text-muted-foreground">

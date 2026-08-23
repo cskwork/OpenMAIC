@@ -21,13 +21,14 @@ import {
   type VoiceRegistrationRequestConfig,
 } from '@/lib/audio/voice-registration-client';
 import { QWEN_TTS_VOICE_CLONE_MODEL } from '@/lib/audio/constants';
-import { validateReferenceAudio } from '@/lib/audio/wav-validate';
+import { InvalidReferenceAudioError, validateReferenceAudio } from '@/lib/audio/wav-validate';
 
 export type VoxCPMVoiceProfile = VoiceProfileRecord;
 
 const VOICE_PROFILES_CHANGED = 'voice-profiles-changed';
 export const VOXCPM_REFERENCE_AUDIO_MAX_BYTES = 10 * 1024 * 1024;
 export const VOXCPM_REFERENCE_AUDIO_MAX_SECONDS = 60;
+export const QWEN_DECODER_PADDING_TOLERANCE_SECONDS = 0.5;
 
 export function preserveRecordedVoiceName(currentName: string, defaultName: string): string {
   return currentName.trim() ? currentName : defaultName;
@@ -82,9 +83,14 @@ export function audioBufferToMonoWav(
   audioBuffer: AudioBuffer,
   sampleRate = audioBuffer.sampleRate,
 ): ArrayBuffer {
-  // Browser recorder timestamps and decoder padding can cross the advertised
-  // limit by a few frames. Truncate deterministically so normalized output is
-  // always accepted by the enrollment validator.
+  // Tolerate only small decoder padding. Truncating a genuinely long upload
+  // would silently pair a partial recording with the full transcript.
+  if (
+    audioBuffer.duration >
+    VOXCPM_REFERENCE_AUDIO_MAX_SECONDS + QWEN_DECODER_PADDING_TOLERANCE_SECONDS
+  ) {
+    throw new InvalidReferenceAudioError();
+  }
   const sampleCount = Math.min(Math.round(audioBuffer.duration * sampleRate), 60 * sampleRate);
   const dataSize = sampleCount * 2;
   const buffer = new ArrayBuffer(44 + dataSize);

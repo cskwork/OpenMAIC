@@ -90,6 +90,32 @@ export function isQwenVoiceCloneModel(modelId?: string, configuredModelId?: stri
   );
 }
 
+/** A Qwen catalog voice is provider-owned and must never use the clone model. */
+export function isQwenCatalogVoice(voiceId?: string): boolean {
+  return !!voiceId && TTS_PROVIDERS['qwen-tts'].voices.some((voice) => voice.id === voiceId);
+}
+
+/** A non-catalog Qwen voice ID is an enrolled clone; local profile storage is not authoritative. */
+export function isQwenCloneVoice(voiceId?: string): boolean {
+  return !!voiceId && !isQwenCatalogVoice(voiceId);
+}
+
+/**
+ * Enforce the client-side half of the model-follows-voice invariant. The server
+ * maps the VC sentinel to its operator-resolved model and applies model pins.
+ */
+export function resolveTTSModelForVoice(
+  providerId: TTSProviderId,
+  voiceId: string,
+  requestedModelId?: string,
+): string | undefined {
+  if (providerId !== 'qwen-tts') return requestedModelId;
+  if (isQwenCloneVoice(voiceId)) return QWEN_TTS_VOICE_CLONE_MODEL;
+  return requestedModelId && !isQwenVoiceCloneModel(requestedModelId)
+    ? requestedModelId
+    : TTS_PROVIDERS['qwen-tts'].defaultModelId;
+}
+
 export const TTS_PROVIDERS: Record<BuiltInTTSProviderId, TTSProviderConfig> = {
   'openai-tts': {
     id: 'openai-tts',

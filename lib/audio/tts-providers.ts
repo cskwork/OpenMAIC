@@ -94,7 +94,7 @@
 
 import type { TTSModelConfig } from './types';
 import { isCustomTTSProvider } from './types';
-import { isQwenVoiceCloneModel, TTS_PROVIDERS } from './constants';
+import { isQwenCloneVoice, resolveTTSModelForVoice, TTS_PROVIDERS } from './constants';
 import { downloadAudio, QwenVoiceCloneError, synthesizeQwenVoiceClone } from './qwen-voice-clone';
 import { evictQwenVoiceRegistrationMemo } from './qwen-voice-clone-registration';
 import { splitConcatenatedJsonObjects } from './json-stream';
@@ -127,6 +127,18 @@ export class TTSRateLimitError extends Error {
   ) {
     super(message);
     this.name = 'TTSRateLimitError';
+  }
+}
+
+/** Neutral identity for ordinary Qwen TTS failures (never VC-branded). */
+export class QwenTTSError extends Error {
+  readonly code = 'QWEN_TTS_ERROR';
+  readonly httpStatus: number;
+
+  constructor(message: string, httpStatus = 502) {
+    super(message);
+    this.name = 'QwenTTSError';
+    this.httpStatus = httpStatus;
   }
 }
 
@@ -646,11 +658,16 @@ async function generateGLMTTS(config: TTSModelConfig, text: string): Promise<TTS
  */
 async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TTSGenerationResult> {
   const baseUrl = config.baseUrl || TTS_PROVIDERS['qwen-tts'].defaultBaseUrl;
+  const cloneVoice = isQwenCloneVoice(config.voice);
 
-  if (isQwenVoiceCloneModel(config.modelId) || config.providerOptions?.qwenVoiceClone === true) {
+  if (cloneVoice) {
+    const targetModel =
+      config.providerOptions?.qwenVoiceClone === true
+        ? config.modelId
+        : resolveTTSModelForVoice('qwen-tts', config.voice, config.modelId);
     try {
       return await synthesizeQwenVoiceClone(
-        { apiKey: config.apiKey, baseUrl, targetModel: config.modelId },
+        { apiKey: config.apiKey, baseUrl, targetModel },
         text,
         config.voice,
         config.speed,
@@ -667,6 +684,7 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
   // speed 1.0 = rate 0, speed 2.0 = rate 500, speed 0.5 = rate -250
   const rate = Math.round(((config.speed || 1.0) - 1.0) * 500);
 
+  const modelId = resolveTTSModelForVoice('qwen-tts', config.voice, config.modelId);
   const response = await fetch(`${baseUrl}/services/aigc/multimodal-generation/generation`, {
     method: 'POST',
     headers: {
@@ -674,7 +692,7 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
       'Content-Type': 'application/json; charset=utf-8',
     },
     body: JSON.stringify({
-      model: config.modelId || 'qwen3-tts-flash',
+      model: modelId || 'qwen3-tts-flash',
       input: {
         text,
         voice: config.voice,
@@ -689,18 +707,26 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
   if (!response.ok) {
     throwIfTtsRateLimited('Qwen', response.status);
     const errorText = await response.text().catch(() => response.statusText);
-    throw new Error(`Qwen TTS API error: ${errorText}`);
+    throw new QwenTTSError(`Qwen TTS request failed: ${errorText}`, response.status);
   }
 
   const data = await response.json();
 
   // Check for audio URL in response
   if (!data.output?.audio?.url) {
-    throw new Error(`Qwen TTS error: No audio URL in response. Response: ${JSON.stringify(data)}`);
+    throw new QwenTTSError('Qwen TTS returned no audio URL.');
   }
 
   // Download audio from URL
-  const downloaded = await downloadAudio(data.output.audio.url, undefined, baseUrl);
+  let downloaded;
+  try {
+    downloaded = await downloadAudio(data.output.audio.url, undefined, baseUrl);
+  } catch (error) {
+    if (error instanceof QwenVoiceCloneError) {
+      throw new QwenTTSError('The generated Qwen audio could not be downloaded.', error.httpStatus);
+    }
+    throw error;
+  }
 
   return {
     audio: downloaded.bytes,

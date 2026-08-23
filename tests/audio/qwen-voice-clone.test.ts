@@ -237,7 +237,14 @@ describe('Qwen voice cloning', () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ output: { total_count: 1, voice_list: [{ voice: 'v1' }] } })),
+        new Response(
+          JSON.stringify({
+            output: {
+              total_count: 1,
+              voice_list: [{ voice: 'v1', target_model: QWEN_TTS_VOICE_CLONE_MODEL }],
+            },
+          }),
+        ),
       )
       .mockResolvedValueOnce(new Response(JSON.stringify({ output: { voice: 'v1' } })));
 
@@ -251,6 +258,103 @@ describe('Qwen voice cloning', () => {
       model: 'qwen-voice-enrollment',
       input: { action: 'delete', voice: 'v1' },
     });
+  });
+
+  it('matches both voice id and target model during existence checks', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          output: {
+            total_count: 1,
+            voice_list: [{ voice: 'v1', target_model: 'different-vc-model' }],
+          },
+        }),
+      ),
+    );
+    await expect(qwenVoiceExists(CONFIG, 'v1')).resolves.toBe(false);
+  });
+
+  it('continues pagination when the vendor clamps page size below the request', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            output: {
+              total_count: 2,
+              page_size: 1,
+              voice_list: [{ voice: 'other', target_model: CONFIG.targetModel }],
+            },
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            output: {
+              total_count: 2,
+              page_size: 1,
+              voice_list: [{ voice: 'v1', target_model: CONFIG.targetModel }],
+            },
+          }),
+        ),
+      );
+    await expect(qwenVoiceExists(CONFIG, 'v1')).resolves.toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('dispatches from the voice identity, not a stale model id', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            output: {
+              audio: {
+                url: 'https://dashscope.example.com/audio.wav',
+              },
+            },
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(new Response(new Uint8Array([1])));
+
+    await generateTTS(
+      {
+        providerId: 'qwen-tts',
+        modelId: QWEN_TTS_VOICE_CLONE_MODEL,
+        voice: 'Cherry',
+        speed: 1,
+        apiKey: CONFIG.apiKey,
+        baseUrl: CONFIG.baseUrl,
+      },
+      'Hello',
+    );
+    const requestBody = JSON.parse(String(fetchSpy.mock.calls[0][1]?.body));
+    expect(requestBody.model).toBe('qwen3-tts-flash');
+    expect(requestBody.input).toMatchObject({ voice: 'Cherry', language_type: 'Chinese' });
+    expect(requestBody.parameters).toBeDefined();
+  });
+
+  it('uses a neutral error identity for ordinary Qwen audio download failures', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ output: { audio: { url: 'https://untrusted.example.com/audio.wav' } } }),
+      ),
+    );
+    await expect(
+      generateTTS(
+        {
+          providerId: 'qwen-tts',
+          modelId: 'qwen3-tts-flash',
+          voice: 'Cherry',
+          speed: 1,
+          apiKey: CONFIG.apiKey,
+          baseUrl: CONFIG.baseUrl,
+        },
+        'Hello',
+      ),
+    ).rejects.toMatchObject({ code: 'QWEN_TTS_ERROR' });
   });
 
   it('evicts the registration memo when synthesis reports that the voice is gone', async () => {

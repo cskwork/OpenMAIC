@@ -85,7 +85,8 @@ export async function deleteRegisteredVoice(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ providerId, voiceId, action: 'delete', ...request }),
     });
-    return res.ok;
+    const data = (await res.json().catch(() => ({}))) as { vendorDeleted?: unknown };
+    return res.ok && data.vendorDeleted === true;
   } catch {
     return false;
   }

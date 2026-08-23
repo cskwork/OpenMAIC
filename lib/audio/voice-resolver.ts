@@ -1,7 +1,12 @@
 import type { TTSProviderId } from '@/lib/audio/types';
 import { isCustomTTSProvider } from '@/lib/audio/types';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
-import { isQwenVoiceCloneModel, TTS_PROVIDERS } from '@/lib/audio/constants';
+import {
+  isQwenCatalogVoice,
+  isQwenVoiceCloneModel,
+  resolveTTSModelForVoice,
+  TTS_PROVIDERS,
+} from '@/lib/audio/constants';
 import {
   BROWSER_NATIVE_TTS_PROVIDER_ID,
   isTTSProviderEnabled,
@@ -39,9 +44,24 @@ export function resolveNarratorVoiceBinding(
   providerConfigs: ProviderConfigMap,
 ): ResolvedVoice {
   if (bound && isTTSProviderEnabled(bound.providerId, providerConfigs[bound.providerId])) {
-    return { providerId: bound.providerId, modelId: bound.modelId, voiceId: bound.voiceId };
+    // Qwen clone IDs are account-scoped but self-contained: local IndexedDB is
+    // not an authority. Catalog voices remain validated against the catalog.
+    if (bound.providerId !== 'qwen-tts' || bound.voiceId.trim()) {
+      return {
+        providerId: bound.providerId,
+        modelId: resolveTTSModelForVoice(bound.providerId, bound.voiceId, bound.modelId),
+        voiceId: bound.voiceId,
+      };
+    }
   }
-  return globalVoice;
+  return {
+    ...globalVoice,
+    modelId: resolveTTSModelForVoice(
+      globalVoice.providerId,
+      globalVoice.voiceId,
+      globalVoice.modelId,
+    ),
+  };
 }
 
 /**
@@ -83,21 +103,25 @@ export function resolveAgentVoice(
     }
     const fromEnabled = enabledProviders.find((p) => p.providerId === choice.providerId);
     if (!fromEnabled) continue;
+    if (choice.providerId === 'qwen-tts') {
+      const catalogVoice = isQwenCatalogVoice(choice.voiceId);
+      if (catalogVoice || choice.voiceId.trim()) {
+        return {
+          providerId: choice.providerId,
+          modelId: resolveTTSModelForVoice(choice.providerId, choice.voiceId, choice.modelId),
+          voiceId: choice.voiceId,
+        };
+      }
+      continue;
+    }
     const list = getServerVoiceList(choice.providerId);
     const allVoiceIds = new Set([...list, ...fromEnabled.voices.map((v) => v.id)]);
-    const cloneOnlyVoice =
-      choice.providerId === 'qwen-tts' &&
-      fromEnabled.modelGroups.some(
-        (group) =>
-          isQwenVoiceCloneModel(group.modelId) &&
-          group.voices.some((voice) => voice.id === choice.voiceId),
-      );
     const matchingModelGroup = choice.modelId
       ? fromEnabled.modelGroups.find((group) => group.modelId === choice.modelId)
       : undefined;
     const modelCompatible = matchingModelGroup
       ? matchingModelGroup.voices.some((voice) => voice.id === choice.voiceId)
-      : !choice.modelId && !cloneOnlyVoice;
+      : !choice.modelId;
     if (allVoiceIds.has(choice.voiceId) && modelCompatible) {
       return { providerId: choice.providerId, modelId: choice.modelId, voiceId: choice.voiceId };
     }
@@ -106,14 +130,13 @@ export function resolveAgentVoice(
   // Fallback: deterministic pick among enabled providers (canonical order).
   if (enabledProviders.length > 0) {
     const first = enabledProviders[0];
-    const fallbackGroup = first.modelGroups.find(
-      (group) => !isQwenVoiceCloneModel(group.modelId) && group.voices.length > 0,
-    );
-    const fallbackVoices = fallbackGroup?.voices ?? first.voices;
+    const fallbackVoices =
+      first.providerId === 'qwen-tts'
+        ? first.voices.filter((voice) => isQwenCatalogVoice(voice.id))
+        : first.voices;
     if (fallbackVoices.length > 0) {
       return {
         providerId: first.providerId,
-        ...(fallbackGroup?.modelId ? { modelId: fallbackGroup.modelId } : {}),
         voiceId: fallbackVoices[agentIndex % fallbackVoices.length].id,
       };
     }

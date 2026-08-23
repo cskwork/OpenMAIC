@@ -29,8 +29,9 @@ import { useSettingsStore } from '@/lib/store/settings';
 import {
   TTS_PROVIDERS,
   DEFAULT_TTS_VOICES,
-  isQwenVoiceCloneModel,
+  isQwenCloneVoice,
   QWEN_TTS_VOICE_CLONE_MODEL,
+  resolveTTSModelForVoice,
 } from '@/lib/audio/constants';
 import type { TTSProviderId } from '@/lib/audio/types';
 import {
@@ -88,6 +89,7 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
 
   const ttsVoice = useSettingsStore((state) => state.ttsVoice);
   const ttsSpeed = useSettingsStore((state) => state.ttsSpeed);
+  const setTTSSpeed = useSettingsStore((state) => state.setTTSSpeed);
   const ttsProvidersConfig = useSettingsStore((state) => state.ttsProvidersConfig);
   const setTTSProviderConfig = useSettingsStore((state) => state.setTTSProviderConfig);
   const activeProviderId = useSettingsStore((state) => state.ttsProviderId);
@@ -122,6 +124,7 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
         ? ((providerConfig?.customVoices as Array<{ id: string }> | undefined) || [])[0]?.id ||
           'default'
         : DEFAULT_TTS_VOICES[selectedProviderId as keyof typeof DEFAULT_TTS_VOICES] || 'default';
+  const cloneSpeedDisabled = selectedProviderId === 'qwen-tts' && isQwenCloneVoice(effectiveVoice);
 
   const [showApiKey, setShowApiKey] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -177,8 +180,11 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
       await startPreview({
         text: testText,
         providerId: selectedProviderId,
-        modelId:
+        modelId: resolveTTSModelForVoice(
+          selectedProviderId,
+          effectiveVoice,
           ttsProvidersConfig[selectedProviderId]?.modelId || ttsProvider?.defaultModelId || '',
+        ),
         voice: effectiveVoice,
         speed: ttsSpeed,
         apiKey: ttsProvidersConfig[selectedProviderId]?.apiKey,
@@ -490,6 +496,29 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
           </>
         ))}
 
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <Label className="text-sm">{t('settings.ttsSpeed')}</Label>
+          <span className="text-xs text-muted-foreground">
+            {cloneSpeedDisabled ? '1×' : `${ttsSpeed.toFixed(2)}×`}
+          </span>
+        </div>
+        <input
+          aria-label={t('settings.ttsSpeed')}
+          type="range"
+          min={ttsProvider?.speedRange?.min ?? 0.5}
+          max={ttsProvider?.speedRange?.max ?? 2}
+          step={0.05}
+          value={cloneSpeedDisabled ? 1 : ttsSpeed}
+          disabled={cloneSpeedDisabled}
+          onChange={(event) => setTTSSpeed(Number(event.target.value))}
+          className="w-full disabled:cursor-not-allowed disabled:opacity-50"
+        />
+        {cloneSpeedDisabled && (
+          <p className="text-xs text-muted-foreground">{t('settings.qwenCloneSpeedHint')}</p>
+        )}
+      </div>
+
       {/* Test TTS */}
       <div className="space-y-2">
         <Label className="text-sm">{t('settings.testTTS')}</Label>
@@ -559,10 +588,6 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
             {t('settings.modelSelectedViaVoice')}
           </p>
         </div>
-      )}
-
-      {selectedProviderId === 'qwen-tts' && isQwenVoiceCloneModel(providerConfig?.modelId) && (
-        <p className="text-xs text-muted-foreground">{t('settings.qwenCloneSpeedHint')}</p>
       )}
 
       {selectedProviderId === 'voxcpm-tts' && <VoxCPMVoiceManager />}
@@ -1303,7 +1328,6 @@ function QwenVoiceCloneManager() {
           ttsModelId: QWEN_TTS_VOICE_CLONE_MODEL,
         },
       );
-      setTTSProviderConfig('qwen-tts', { modelId: QWEN_TTS_VOICE_CLONE_MODEL });
       if (ttsProviderId === 'qwen-tts') setTTSVoice(voiceId);
       setName('');
       setRefText('');

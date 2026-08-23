@@ -13,6 +13,7 @@ import { useStageStore } from '@/lib/store/stage';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
 import { getEnabledProvidersWithVoices } from '@/lib/audio/voice-resolver';
+import { resolveTTSModelForVoice } from '@/lib/audio/constants';
 import { isTTSProviderEnabled } from '@/lib/audio/provider-enablement';
 import { useAllVoiceProfiles } from '@/lib/audio/voxcpm-voices';
 import { useI18n } from '@/lib/hooks/use-i18n';
@@ -838,7 +839,9 @@ function GenerationPreviewContent() {
               p.modelGroups.flatMap((group) =>
                 group.voices.map((v) => ({
                   providerId: p.providerId,
-                  ...(group.modelId ? { modelId: group.modelId } : {}),
+                  ...(resolveTTSModelForVoice(p.providerId, v.id, group.modelId)
+                    ? { modelId: resolveTTSModelForVoice(p.providerId, v.id, group.modelId) }
+                    : {}),
                   voiceId: v.id,
                   voiceName: v.name,
                   voiceLanguage: v.language,

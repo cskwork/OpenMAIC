@@ -20,6 +20,7 @@ import { measureAudioDuration } from '@/lib/audio/audio-duration';
 import { isTTSProviderEnabled } from '@/lib/audio/provider-enablement';
 import { resolveAgentVoiceOptions, pickNarratorAgent } from '@/lib/audio/agent-voice';
 import { resolveNarratorVoiceBinding } from '@/lib/audio/voice-resolver';
+import { resolveTTSModelForVoice } from '@/lib/audio/constants';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
 import {
   generateMediaForOutlines,
@@ -28,6 +29,7 @@ import {
 import { putAsset, removeAsset, replaceAsset } from '@/lib/media/asset-pool';
 import { lazyBoundedMap } from '@/lib/utils/concurrency';
 import { createLogger } from '@/lib/logger';
+import { toast } from 'sonner';
 import {
   isAbortError,
   withGenerationRetry,
@@ -35,6 +37,12 @@ import {
 } from '@openmaic/generation';
 
 const log = createLogger('SceneGenerator');
+const unavailableNarratorBindings = new Set<string>();
+const noticedNarratorBindings = new Set<string>();
+
+function voiceBindingKey(binding: { providerId: string; voiceId: string }): string {
+  return `${binding.providerId}\0${binding.voiceId}`;
+}
 
 function addGeneratedScene(scene: Scene): void {
   const state = useStageStore.getState();
@@ -270,8 +278,10 @@ export async function generateAndStoreTTS(
   // Global settings remain the fallback for classrooms without a binding.
   const teacher = pickNarratorAgent(useAgentRegistry.getState().listAgents());
   const globalProviderConfig = settings.ttsProvidersConfig?.[settings.ttsProviderId];
+  const boundVoice = teacher?.voiceConfig;
+  const boundKey = boundVoice ? voiceBindingKey(boundVoice) : undefined;
   const resolvedVoice = resolveNarratorVoiceBinding(
-    teacher?.voiceConfig,
+    boundKey && unavailableNarratorBindings.has(boundKey) ? undefined : boundVoice,
     {
       providerId: settings.ttsProviderId,
       modelId: globalProviderConfig?.modelId,
@@ -282,7 +292,11 @@ export async function generateAndStoreTTS(
   const ttsProviderId = resolvedVoice.providerId;
   const ttsVoice = resolvedVoice.voiceId;
   const ttsProviderConfig = settings.ttsProvidersConfig?.[ttsProviderId];
-  const ttsModelId = resolvedVoice.modelId ?? ttsProviderConfig?.modelId;
+  const ttsModelId = resolveTTSModelForVoice(
+    ttsProviderId,
+    ttsVoice,
+    resolvedVoice.modelId ?? ttsProviderConfig?.modelId,
+  );
 
   if (ttsProviderId === 'browser-native-tts') return null;
   // Don't server-generate against a disabled/unconfigured provider (#665).
@@ -296,41 +310,72 @@ export async function generateAndStoreTTS(
     voiceId: ttsVoice,
     language,
   });
-  const data = await withGenerationRetry(
-    async () => {
-      const response = await fetch('/api/generate/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text,
-          audioId: requestId,
-          ttsProviderId,
-          ttsModelId,
-          ttsVoice,
-          ttsSpeed: settings.ttsSpeed,
-          ttsApiKey: ttsProviderConfig?.apiKey || undefined,
-          // Managed providers resolve their base URL server-side; only send the
-          // client's own base URL (custom providers).
-          ttsBaseUrl:
-            ttsProviderConfig?.baseUrl || ttsProviderConfig?.customDefaultBaseUrl || undefined,
-          ttsProviderOptions: providerOptions,
-        }),
-        signal,
-      });
+  let data: TTSApiResponse;
+  try {
+    data = await withGenerationRetry(
+      async () => {
+        const response = await fetch('/api/generate/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text,
+            audioId: requestId,
+            ttsProviderId,
+            ttsModelId,
+            ttsVoice,
+            ttsSpeed: settings.ttsSpeed,
+            ttsApiKey: ttsProviderConfig?.apiKey || undefined,
+            // Managed providers resolve their base URL server-side; only send the
+            // client's own base URL (custom providers).
+            ttsBaseUrl:
+              ttsProviderConfig?.baseUrl || ttsProviderConfig?.customDefaultBaseUrl || undefined,
+            ttsProviderOptions: providerOptions,
+          }),
+          signal,
+        });
 
-      const data = (await readJsonResponse(response)) as TTSApiResponse;
-      if (!response.ok) {
-        throw createHttpError(response, data, 'TTS request failed');
+        const data = (await readJsonResponse(response)) as TTSApiResponse;
+        if (!response.ok) {
+          throw createHttpError(response, data, 'TTS request failed');
+        }
+        return data;
+      },
+      {
+        label: `tts "${requestId}"`,
+        shouldRetryResult: (result) => !result.success || !result.base64 || !result.format,
+        ...retryOptions,
+        signal,
+      },
+    );
+  } catch (error) {
+    const errorCode =
+      error && typeof error === 'object' && 'errorCode' in error
+        ? (error as { errorCode?: unknown }).errorCode
+        : undefined;
+    const globalDiffers =
+      boundVoice &&
+      (boundVoice.providerId !== settings.ttsProviderId ||
+        boundVoice.voiceId !== settings.ttsVoice);
+    if (errorCode === 'QWEN_VC_VOICE_NOT_FOUND' && boundKey && globalDiffers) {
+      unavailableNarratorBindings.add(boundKey);
+      if (!noticedNarratorBindings.has(boundKey)) {
+        noticedNarratorBindings.add(boundKey);
+        toast.warning(
+          'The assigned cloned voice is unavailable. Narration will use the global voice.',
+        );
       }
-      return data;
-    },
-    {
-      label: `tts "${requestId}"`,
-      shouldRetryResult: (result) => !result.success || !result.base64 || !result.format,
-      ...retryOptions,
-      signal,
-    },
-  );
+      return generateAndStoreTTS(
+        requestId,
+        text,
+        language,
+        signal,
+        retryOptions,
+        replaceAssetId,
+        stageId,
+      );
+    }
+    throw error;
+  }
   if (!data.success || !data.base64 || !data.format) {
     const err = new Error(
       data.details || data.error || 'TTS request failed: invalid response payload',

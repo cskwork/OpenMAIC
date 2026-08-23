@@ -632,12 +632,18 @@ pdf:
       expect(resolveTTSBaseUrl('qwen-tts')).toBe('https://dashscope.aliyuncs.com/api/v1');
     });
 
-    it('does not let a managed general-model pin reroute an explicit VC request', async () => {
+    it('maps VC sentinels to the resolved model and rejects pin bypasses', async () => {
       vi.stubEnv('TTS_QWEN_API_KEY', 'key');
       vi.stubEnv('TTS_QWEN_MODELS', 'qwen3-tts-flash');
+      vi.stubEnv('TTS_QWEN_VOICE_CLONE_MODEL', 'operator-vc-model');
       const { resolveTTSModel } = await import('@/lib/server/provider-config');
-      expect(resolveTTSModel('qwen-tts', 'qwen3-tts-vc-custom')).toBe('qwen3-tts-vc-custom');
-      expect(resolveTTSModel('qwen-tts', 'qwen3-tts-flash-other')).toBe('qwen3-tts-flash');
+      expect(resolveTTSModel('qwen-tts', 'qwen3-tts-vc-custom', 'clone-1')).toBe(
+        'operator-vc-model',
+      );
+      expect(() => resolveTTSModel('qwen-tts', 'qwen3-tts-flash-other', 'Cherry')).toThrow(
+        'not allowed',
+      );
+      expect(resolveTTSModel('qwen-tts', 'operator-vc-model', 'Cherry')).toBe('qwen3-tts-flash');
     });
 
     it('reads the VC override only from server-side resolution', async () => {
@@ -646,6 +652,7 @@ pdf:
         await import('@/lib/server/provider-config');
       expect(resolveQwenVoiceCloneModel()).toBe('operator-vc-model');
       expect(isResolvedQwenVoiceCloneModel('operator-vc-model')).toBe(true);
+      expect(isResolvedQwenVoiceCloneModel('qwen3-tts-vc-arbitrary')).toBe(false);
     });
   });
 

@@ -257,6 +257,7 @@ export async function qwenVoiceExists(
   const wanted = voiceId.trim();
   if (!wanted) return false;
   const pageSize = 100;
+  let fetched = 0;
   for (let pageIndex = 0; pageIndex < 100; pageIndex++) {
     const body = await postJson(
       endpoint(resolved.baseUrl, ENROLLMENT_PATH),
@@ -268,10 +269,15 @@ export async function qwenVoiceExists(
       signal,
     );
     const voices = Array.isArray(body.output?.voice_list) ? body.output.voice_list : [];
-    if (voices.some((item) => item.voice === wanted)) return true;
+    if (
+      voices.some((item) => item.voice === wanted && item.target_model === resolved.targetModel)
+    ) {
+      return true;
+    }
+    fetched += voices.length;
     const total =
-      typeof body.output?.total_count === 'number' ? body.output.total_count : voices.length;
-    if (voices.length < pageSize || (pageIndex + 1) * pageSize >= total) return false;
+      typeof body.output?.total_count === 'number' ? body.output.total_count : undefined;
+    if (voices.length === 0 || (total !== undefined && fetched >= total)) return false;
   }
   return false;
 }

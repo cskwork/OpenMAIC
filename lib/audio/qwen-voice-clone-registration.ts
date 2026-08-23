@@ -51,6 +51,7 @@ async function registerVoice(
     mimeType?: string;
     refText?: string;
   },
+  signal?: AbortSignal,
 ): Promise<string> {
   const refText = params.refText || '';
   if (!refText.trim()) throw new QwenVoiceCloneError('QWEN_VC_CONFIG_MISSING', 400);
@@ -69,6 +70,7 @@ async function registerVoice(
         targetModel: cfg.model || QWEN_TTS_VOICE_CLONE_MODEL,
       },
       { name: params.voiceId, audio, text: refText },
+      signal,
     );
     const keys = registrationKeysByVoice.get(result.voiceId) ?? new Set<string>();
     keys.add(key);
@@ -89,17 +91,27 @@ async function registerVoice(
  * process-local: it coalesces concurrent/repeated enrollment only within one
  * server process and is neither durable nor shared across replicas.
  */
-async function voiceExists(cfg: VoiceRegistrationConfig, voiceId: string): Promise<boolean> {
+async function voiceExists(
+  cfg: VoiceRegistrationConfig,
+  voiceId: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
   return qwenVoiceExists(
     { apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, targetModel: cfg.model },
     voiceId,
+    signal,
   );
 }
 
-async function deleteVoice(cfg: VoiceRegistrationConfig, voiceId: string): Promise<void> {
+async function deleteVoice(
+  cfg: VoiceRegistrationConfig,
+  voiceId: string,
+  signal?: AbortSignal,
+): Promise<void> {
   await deleteQwenVoice(
     { apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, targetModel: cfg.model },
     voiceId,
+    signal,
   );
   evictQwenVoiceRegistrationMemo(voiceId);
 }
