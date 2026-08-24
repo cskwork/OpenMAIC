@@ -802,9 +802,19 @@ export class PgAgentSessionStore
            AND EXISTS (SELECT 1 FROM ${this.table('sessions')} s
                        WHERE s.id = $1 AND s.deleted_at IS NULL)
          ORDER BY e.seq LIMIT $3
+       ), span AS (
+         -- One extra row on each side of the page so lag/lead see the true
+         -- neighbors across page boundaries instead of NULL at the edges; the
+         -- anchor row (seq = $2) is the cursor's own row, discarded below.
+         SELECT e.seq, e.type
+         FROM ${this.table('events')} e
+         WHERE e.session_id = $1 AND e.seq >= $2
+           AND EXISTS (SELECT 1 FROM ${this.table('sessions')} s
+                       WHERE s.id = $1 AND s.deleted_at IS NULL)
+         ORDER BY e.seq LIMIT $4
        ), ranked AS (
          SELECT seq, lag(type) OVER (ORDER BY seq) AS prev_type,
-                lead(type) OVER (ORDER BY seq) AS next_type FROM page
+                lead(type) OVER (ORDER BY seq) AS next_type FROM span
        )
        SELECT p.seq, p.ts, p.attempt, p.type, p.data, p.scanned
        FROM page p INNER JOIN ranked r ON r.seq = p.seq
@@ -812,7 +822,7 @@ export class PgAgentSessionStore
           OR r.prev_type IS DISTINCT FROM 'message_update'
           OR r.next_type IS DISTINCT FROM 'message_update'
        ORDER BY p.seq`,
-      [sessionId, afterSeq, limit],
+      [sessionId, afterSeq, limit, limit + 2],
     );
     return {
       events: result.rows.map((row) => ({

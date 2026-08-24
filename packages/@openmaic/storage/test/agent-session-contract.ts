@@ -155,6 +155,43 @@ export function runAgentSessionStoreContract(
       expect(replay.events.map((event) => event.id)).toEqual([1, 2, 4, 5]);
     });
 
+    test('carries message_update compaction across page boundaries', async () => {
+      const store = makeStore();
+      await store.createSession(makeAgentSessionInput());
+      // Reviewer repro: one non-update, a run of ten updates, then another
+      // non-update, read in pages of six. Page-local lag/lead used to keep the
+      // first and last update of each page (2,6,7,11) instead of the true run
+      // survivors (2,11).
+      for (const [index, type] of [
+        'before',
+        ...Array.from({ length: 10 }, () => 'message_update'),
+        'after',
+      ].entries()) {
+        await store.appendControlEvent('session-1', {
+          ts: index + 1,
+          type,
+          data: { index },
+        });
+      }
+      expect(await store.lastEventSeq('session-1')).toBe(12);
+
+      const first = await store.readEventsAfterForReplay('session-1', 0, 6);
+      // `scanned` counts the raw rows after the cursor (12 total), untouched by
+      // the compaction window; the page itself still returns at most `limit`.
+      expect(first.scanned).toBe(12);
+      expect(first.events.map((event) => event.id)).toEqual([1, 2]);
+
+      const second = await store.readEventsAfterForReplay('session-1', 6, 6);
+      expect(second.scanned).toBe(6);
+      expect(second.events.map((event) => event.id)).toEqual([11, 12]);
+
+      expect(
+        [...first.events, ...second.events]
+          .filter((event) => event.type === 'message_update')
+          .map((event) => event.id),
+      ).toEqual([2, 11]);
+    });
+
     test('records control events with the current attempt generation', async () => {
       const store = makeStore();
       await store.createSession(makeAgentSessionInput());

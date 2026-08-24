@@ -256,6 +256,7 @@ export interface AgentSessionStore {
   /**
    * Lock, persist, classify delivery, and revive a terminal session in one
    * transaction so a message cannot fall into the runner's settle window.
+   * A message posted to a queued session clears any pending cancel request.
    */
   postUserMessage(
     sessionId: string,
