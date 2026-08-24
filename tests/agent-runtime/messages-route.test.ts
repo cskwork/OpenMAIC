@@ -22,6 +22,7 @@ vi.mock('@/lib/server/agent-runtime/store', () => ({
 }));
 
 import { POST } from '@/app/api/agent/sessions/[id]/messages/route';
+import { MAX_SESSION_TEXT_LENGTH } from '@/lib/server/agent-runtime/limits';
 
 function call(body: unknown) {
   const request = new NextRequest('http://localhost/api/agent/sessions/session-1/messages', {
@@ -74,16 +75,37 @@ describe('POST agent session message', () => {
     expect(mocks.postUserMessage).not.toHaveBeenCalled();
   });
 
+  it('rejects a message that exceeds the text length cap', async () => {
+    const response = await call({ text: 'x'.repeat(MAX_SESSION_TEXT_LENGTH + 1) });
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get('set-cookie')).toContain('anonymous_id=test');
+    expect(mocks.postUserMessage).not.toHaveBeenCalled();
+  });
+
   it('hides an absent or foreign session', async () => {
     mocks.getSession.mockResolvedValue({ id: 'session-1', ownerId: 'owner-2' });
 
-    expect((await call({ text: 'Continue' })).status).toBe(404);
+    const response = await call({ text: 'Continue' });
+    expect(response.status).toBe(404);
+    expect(response.headers.get('set-cookie')).toContain('anonymous_id=test');
     expect(mocks.postUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('keeps the minted owner cookie when the store fails', async () => {
+    mocks.getSession.mockRejectedValue(new Error('database unavailable'));
+
+    const response = await call({ text: 'Continue' });
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get('set-cookie')).toContain('anonymous_id=test');
   });
 
   it('maps a transactional ownership race to forbidden', async () => {
     mocks.postUserMessage.mockRejectedValue(new AgentSessionAccessError('session-1'));
 
-    expect((await call({ text: 'Continue' })).status).toBe(403);
+    const response = await call({ text: 'Continue' });
+    expect(response.status).toBe(403);
+    expect(response.headers.get('set-cookie')).toContain('anonymous_id=test');
   });
 });

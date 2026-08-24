@@ -35,4 +35,18 @@ describe('GET one agent session', () => {
     mocks.getSession.mockResolvedValue({ id: 'session-1', ownerId: 'owner-2' });
     expect((await call()).status).toBe(404);
   });
+
+  it.each(['not-a-real-id', 'x'.repeat(4096)])(
+    'answers a malformed or oversized session id (%s) with not found',
+    async (id) => {
+      mocks.getSession.mockResolvedValue(null);
+
+      const response = await GET(new NextRequest(`http://localhost/api/agent/sessions/${id}`), {
+        params: Promise.resolve({ id }),
+      });
+
+      expect(mocks.getSession).toHaveBeenCalledWith(id);
+      expect(response.status).toBe(404);
+    },
+  );
 });

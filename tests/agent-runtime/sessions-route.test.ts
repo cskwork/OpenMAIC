@@ -22,6 +22,7 @@ vi.mock('@/lib/server/agent-runtime/store', () => ({
 }));
 
 import { GET, POST } from '@/app/api/agent/sessions/route';
+import { MAX_SESSION_TEXT_LENGTH } from '@/lib/server/agent-runtime/limits';
 
 function post(body: unknown, headers?: HeadersInit) {
   return POST(
@@ -96,6 +97,31 @@ describe('agent session collection route', () => {
 
     expect(response.status).toBe(400);
     expect(mocks.createSession).not.toHaveBeenCalled();
+  });
+
+  it('rejects an existing-course stage id that fails the classroom id format', async () => {
+    const response = await post({ existingCourse: true, stageId: 'not a valid id!' });
+
+    expect(response.status).toBe(400);
+    expect(mocks.resolveRequestOwnerId).not.toHaveBeenCalled();
+    expect(mocks.createSession).not.toHaveBeenCalled();
+  });
+
+  it('rejects a prompt that exceeds the text length cap', async () => {
+    const response = await post({ prompt: 'x'.repeat(MAX_SESSION_TEXT_LENGTH + 1) });
+
+    expect(response.status).toBe(400);
+    expect(mocks.resolveRequestOwnerId).not.toHaveBeenCalled();
+    expect(mocks.createSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps the minted owner cookie when session creation fails', async () => {
+    mocks.createSession.mockRejectedValue(new Error('database unavailable'));
+
+    const response = await post({ prompt: 'Build a course' });
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get('set-cookie')).toContain('anonymous_id=test');
   });
 
   it('lists only sessions for the resolved owner', async () => {
