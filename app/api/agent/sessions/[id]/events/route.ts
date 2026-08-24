@@ -22,6 +22,11 @@
  * the stream. Native `EventSource` then reconnects with `Last-Event-ID` and
  * resumes through the same replay path without losing durable events.
  *
+ * Access model: there is no per-route auth challenge. Every request is
+ * granted an anonymous cookie identity, and every store read is scoped to
+ * that identity. A session owned by another identity is indistinguishable
+ * from a missing one — both are 404 with the same response.
+ *
  * This handler is a pure READER of the store. A disconnect closes this
  * reader and nothing else: the runner keeps running, and its events keep
  * landing in the log.
@@ -57,13 +62,22 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     return new Response('Not found', { status: 404 });
   }
   const { id } = await params;
+  const responseHeaders = new Headers();
+  // The identity cookie is minted for the requester regardless of the target
+  // session, and the owner is resolved before the session lookup: a request
+  // for a missing session and one for a session owned by someone else return
+  // byte-identical 404s (same status, body, and cookie headers), so the
+  // response cannot be used to probe whether a session UUID exists. This
+  // slice resolves only the anonymous cookie identity; a future auth
+  // integration must thread `authenticatedOwnerId` through here, or sessions
+  // created under authenticated identities would be unreachable by their own
+  // owner.
+  const ownerId = resolveRequestOwnerId(req, responseHeaders);
   const store = await getAgentSessionStore();
   const meta = await store.getSession(id);
   if (!meta) {
-    return new Response('Not found', { status: 404 });
+    return new Response('Not found', { status: 404, headers: responseHeaders });
   }
-  const responseHeaders = new Headers();
-  const ownerId = resolveRequestOwnerId(req, responseHeaders);
   if (meta.ownerId !== ownerId) {
     return new Response('Not found', { status: 404, headers: responseHeaders });
   }

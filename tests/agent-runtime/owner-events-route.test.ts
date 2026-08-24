@@ -77,6 +77,54 @@ describe('GET owner session events', () => {
     await reader.cancel();
   });
 
+  it('scopes every store read to the resolved request owner', async () => {
+    mocks.resolveRequestOwnerId.mockReturnValue('user:requestor');
+    mocks.readOwnerSessionEventMaxId.mockResolvedValueOnce(BigInt(1));
+    mocks.readOwnerSessionEventsAfter.mockResolvedValueOnce([
+      {
+        id: '1',
+        ownerId: 'user:requestor',
+        sessionId: 'session-1',
+        ts: 123,
+        type: 'session_status',
+        status: 'running',
+        attempt: 1,
+      },
+    ]);
+
+    const response = await call({ header: '0' });
+    const reader = response.body!.getReader();
+    const event = await readChunk(reader);
+
+    expect(event).toContain('id: 1\nevent: session_status');
+    expect(event).toContain('"ownerId":"user:requestor"');
+    expect(mocks.readOwnerSessionEventMaxId).toHaveBeenCalledWith('user:requestor');
+    expect(mocks.readOwnerSessionEventsAfter).toHaveBeenCalledWith(
+      'user:requestor',
+      BigInt(0),
+      500,
+    );
+    await reader.cancel();
+  });
+
+  it('an owner with no sessions receives an empty stream scoped to that owner', async () => {
+    mocks.resolveRequestOwnerId.mockReturnValue('user:requestor');
+
+    const response = await call();
+    const reader = response.body!.getReader();
+    const caughtUp = await readChunk(reader);
+
+    expect(caughtUp).toContain('event: caught_up');
+    expect(caughtUp).toContain('"replayed":0');
+    expect(mocks.readOwnerSessionEventMaxId).toHaveBeenCalledWith('user:requestor');
+    expect(mocks.readOwnerSessionEventsAfter).toHaveBeenCalledWith(
+      'user:requestor',
+      BigInt(0),
+      500,
+    );
+    await reader.cancel();
+  });
+
   it.each([
     ['query lastEventId=0', { query: '0' }, BigInt(0)],
     ['Last-Event-ID header', { header: '7', query: '2' }, BigInt(7)],

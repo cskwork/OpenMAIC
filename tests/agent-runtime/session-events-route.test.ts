@@ -87,6 +87,43 @@ describe('GET per-session events', () => {
     await reader.cancel();
   });
 
+  it('does not stream a session owned by another identity: 404 and no event-log reads', async () => {
+    mocks.getSession.mockResolvedValue({ id: 'session-1', ownerId: 'user:someone-else' });
+    mocks.resolveRequestOwnerId.mockReturnValue('user:mine');
+
+    const response = await call();
+
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe('Not found');
+    expect(mocks.resolveRequestOwnerId).toHaveBeenCalledOnce();
+    expect(mocks.readEventsAfterForReplay).not.toHaveBeenCalled();
+  });
+
+  it('mints the identity cookie on the 404 for a missing and a not-owned session alike', async () => {
+    const mint = () => {
+      mocks.resolveRequestOwnerId.mockImplementationOnce((_request, responseHeaders: Headers) => {
+        responseHeaders.set('Set-Cookie', 'anonymous_id=test; Path=/; HttpOnly');
+        return 'user:mine';
+      });
+    };
+
+    mint();
+    mocks.getSession.mockResolvedValue(null);
+    const missing = await call();
+    expect(missing.status).toBe(404);
+    expect(await missing.text()).toBe('Not found');
+    expect(missing.headers.get('set-cookie')).toBe('anonymous_id=test; Path=/; HttpOnly');
+    expect(mocks.readEventsAfterForReplay).not.toHaveBeenCalled();
+
+    mint();
+    mocks.getSession.mockResolvedValue({ id: 'session-1', ownerId: 'user:someone-else' });
+    const notOwned = await call();
+    expect(notOwned.status).toBe(404);
+    expect(await notOwned.text()).toBe('Not found');
+    expect(notOwned.headers.get('set-cookie')).toBe('anonymous_id=test; Path=/; HttpOnly');
+    expect(mocks.readEventsAfterForReplay).not.toHaveBeenCalled();
+  });
+
   it('converges within the 5s polling interval', async () => {
     // Absolute time bound, not the imported constant: this test pins how FAST
     // the fallback converges. If the advance used the constant itself, a

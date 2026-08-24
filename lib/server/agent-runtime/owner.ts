@@ -42,6 +42,12 @@ function anonymousCookieHeader(id: string): string {
  * is minted. A mint is only useful when it is persisted, so `responseHeaders`
  * — the headers the caller returns to the client — is required: it receives
  * the outgoing Set-Cookie header whenever a new cookie is issued.
+ *
+ * Current callers (the agent event-stream routes) pass no authenticated
+ * owner: for them this slice resolves only the anonymous cookie identity. A
+ * future auth integration must thread `authenticatedOwnerId` through those
+ * call sites, or sessions created under authenticated identities would be
+ * unreachable by their own owner.
  */
 export function resolveRequestOwnerId(
   req: Pick<Request, 'headers'>,

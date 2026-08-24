@@ -2,6 +2,10 @@
  * Durable, sparse SSE tail for the current owner's session summaries.
  * A degraded caught_up is not authoritative: clients should schedule one full
  * reconciliation and may later receive a non-degraded caught_up on recovery.
+ *
+ * Access model: there is no per-route auth challenge. Every request is
+ * granted an anonymous cookie identity, and every store read is scoped to
+ * that identity.
  */
 import type { PersistedOwnerSessionEvent } from '@openmaic/storage';
 import type { NextRequest } from 'next/server';
@@ -36,6 +40,10 @@ export async function GET(req: NextRequest) {
 
   // Identity belongs to the request, not the URL. EventSource reconnects to
   // this same stable path with the anonymous cookie minted on first attach.
+  // This slice resolves only the anonymous cookie identity; a future auth
+  // integration must thread `authenticatedOwnerId` through here, or sessions
+  // created under authenticated identities would be unreachable by their own
+  // owner.
   const responseHeaders = new Headers();
   const ownerId = resolveRequestOwnerId(req, responseHeaders);
   const store = await getAgentSessionStore();
