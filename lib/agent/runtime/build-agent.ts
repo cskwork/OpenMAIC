@@ -43,6 +43,11 @@ export interface BuildAgentOptions {
   streamFn: StreamFn;
   systemPrompt: string;
   tools: AgentTool[];
+  /**
+   * Optional pi model for the agent's initial state. Defaults to the connector
+   * metadata stub; the injected StreamFn resolves the real model itself.
+   */
+  model?: Model<Api>;
   /** Tool names allowed for this agent. Defaults to the editor v0 allowlist. */
   allowedToolNames?: ReadonlySet<string>;
   /** Prior conversation turns to seed the agent with, so it has multi-turn memory. */
@@ -67,7 +72,7 @@ export function buildAgent(opts: BuildAgentOptions): Agent {
     toolExecution: 'sequential',
     initialState: {
       systemPrompt: opts.systemPrompt,
-      model: STUB_MODEL,
+      model: opts.model ?? STUB_MODEL,
       tools: opts.tools,
       // Seed prior turns so `agent.prompt(newMessage)` runs with the full
       // conversation in context — without this the agent is stateless per turn.
