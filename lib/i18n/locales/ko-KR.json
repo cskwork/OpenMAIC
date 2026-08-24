@@ -227,13 +227,6 @@
       "interactive": "인터랙티브",
       "pbl": "PBL"
     },
-    "multiTab": {
-      "conflict": {
-        "title": "다른 탭에서 이 강좌를 편집 중입니다",
-        "body": "충돌 방지를 위해 편집은 하나의 탭에서만 가능합니다. 다른 탭을 닫거나(또는 세션이 만료될 때까지 기다린 후) 여기서 편집 모드로 진입하세요.",
-        "actionDismiss": "확인했습니다"
-      }
-    },
     "text": {
       "toolbar": "텍스트 도구 모음",
       "label": "텍스트",
@@ -1401,6 +1394,16 @@
     "voxcpmStopPreview": "미리 듣기 중지",
     "voxcpmPreviewVoice": "음성 미리 듣기",
     "voxcpmDeleteVoice": "음성 삭제",
+    "qwenCloneVoicesTitle": "Qwen TTS Cloned Voices",
+    "qwenCloneRefText": "Enter the verbatim transcript of the reference audio",
+    "qwenCloneRefAudioHint": "Use a clean 1–60 second voice sample. A 10–20 second sample is recommended; audio is converted to 24 kHz mono PCM WAV.",
+    "qwenCloneSaved": "Qwen cloned voice registered and saved",
+    "qwenCloneSaveFailed": "Failed to register the Qwen cloned voice",
+    "qwenCloneUnsupported": "Recording is not supported in this browser; upload an audio file instead.",
+    "qwenCloneSpeedHint": "Cloned voices always synthesize at 1× speed.",
+    "qwenCloneDeleteWarning": "The voice was removed locally, but provider deletion failed.",
+    "qwenCloneNarrationUnavailable": "The assigned voice is unavailable. Narration will use another enabled voice instead.",
+    "qwenCloneDiscussionUnavailable": "The assigned voice is unavailable. Discussion will use another enabled voice instead.",
     "providerOpenAIWhisper": "OpenAI ASR (gpt-4o-mini-transcribe)",
     "providerBrowserNative": "브라우저 기본 ASR",
     "providerQwenASR": "Qwen ASR (Alibaba Cloud Bailian)",
