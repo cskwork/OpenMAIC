@@ -41,15 +41,26 @@ const VALID_EFFORTS: readonly ThinkingEffort[] = [
 ];
 const VALID_LEVELS: readonly ThinkingLevel[] = ['minimal', 'low', 'medium', 'high'];
 
-/** A resolved route entry: the model string plus an optional full thinking config. */
+/**
+ * A resolved route entry: the model string plus an optional full thinking config.
+ *
+ * `api`/`dialect` and `contextWindow` are parsed for every routable stage but are
+ * currently consumed only by the agent-driver stage (`maic-agent-driver`); on any
+ * other stage they are inert (accepted silently, never applied). `thinking` is the
+ * only field honored by the generic callLLM stages.
+ */
 export interface StageRoute {
   model: string;
-  /** Explicit pi transport dialect (for example openai-completions). */
+  /**
+   * Explicit pi transport dialect (for example openai-completions). Consumed only
+   * by the agent-driver stage; inert on every other routable stage.
+   */
   api?: string;
   /**
    * Effective context window for this stage, overriding the provider catalog
    * value. Consumed by pi-native compaction thresholds (e.g. the agent driver)
    * so an operator can pin a conservative window below the catalog number.
+   * Consumed only by the agent-driver stage; inert on every other routable stage.
    */
   contextWindow?: number;
   /**
@@ -162,10 +173,18 @@ function parseRouteValue(key: string, value: unknown): StageRoute | undefined {
     const dialect = typeof obj.dialect === 'string' ? obj.dialect.trim() : '';
     if (api || dialect) route.api = api || dialect;
     if (obj.api !== undefined && !api) {
-      log.warn(`Invalid api for stage "${key}" in MODEL_ROUTES; ignored.`);
+      log.warn(
+        dialect
+          ? `Invalid api for stage "${key}" in MODEL_ROUTES; using dialect "${dialect}" instead.`
+          : `Invalid api for stage "${key}" in MODEL_ROUTES; ignored.`,
+      );
     }
     if (obj.dialect !== undefined && !dialect) {
-      log.warn(`Invalid dialect for stage "${key}" in MODEL_ROUTES; ignored.`);
+      log.warn(
+        api
+          ? `Invalid dialect for stage "${key}" in MODEL_ROUTES; using api "${api}" instead.`
+          : `Invalid dialect for stage "${key}" in MODEL_ROUTES; ignored.`,
+      );
     }
     if (api && dialect && api !== dialect) {
       log.warn(`Both api and dialect are set for stage "${key}"; api wins.`);
@@ -179,7 +198,7 @@ function parseRouteValue(key: string, value: unknown): StageRoute | undefined {
       if (
         typeof contextWindow === 'number' &&
         Number.isFinite(contextWindow) &&
-        contextWindow > 0
+        Math.floor(contextWindow) >= 1
       ) {
         route.contextWindow = Math.floor(contextWindow);
       } else {

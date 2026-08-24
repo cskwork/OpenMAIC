@@ -180,6 +180,28 @@ describe('model-routes', () => {
     );
   });
 
+  it('uses dialect when api is invalid and warns that dialect won', async () => {
+    const warn = vi.fn();
+    vi.doMock('@/lib/logger', () => ({
+      createLogger: () => ({ warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+    }));
+    process.env.MODEL_ROUTES = JSON.stringify({
+      'maic-agent-driver': {
+        model: 'openai:gpt-5.6-luna',
+        api: 123,
+        dialect: 'openai-completions',
+      },
+    });
+    const { getStageRoute } = await import('@/lib/server/model-routes');
+    expect(getStageRoute('maic-agent-driver')).toEqual({
+      model: 'openai:gpt-5.6-luna',
+      api: 'openai-completions',
+    });
+    expect(warn).toHaveBeenCalledWith(
+      'Invalid api for stage "maic-agent-driver" in MODEL_ROUTES; using dialect "openai-completions" instead.',
+    );
+  });
+
   it('ignores a non-string api with a warning but keeps the model', async () => {
     const warn = vi.fn();
     vi.doMock('@/lib/logger', () => ({
@@ -215,6 +237,19 @@ describe('model-routes', () => {
       model: 'openai:gpt-5.6-luna',
       contextWindow: 32_000,
     });
+  });
+
+  it('drops a contextWindow that floors below 1 with a warning but keeps the model', async () => {
+    const warn = vi.fn();
+    vi.doMock('@/lib/logger', () => ({
+      createLogger: () => ({ warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+    }));
+    process.env.MODEL_ROUTES = JSON.stringify({
+      'maic-agent-driver': { model: 'openai:gpt-5.6-luna', contextWindow: 0.5 },
+    });
+    const { getStageRoute } = await import('@/lib/server/model-routes');
+    expect(getStageRoute('maic-agent-driver')).toEqual({ model: 'openai:gpt-5.6-luna' });
+    expect(warn).toHaveBeenCalled();
   });
 
   it('drops a non-positive contextWindow with a warning but keeps the model', async () => {
