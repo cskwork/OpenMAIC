@@ -14,6 +14,7 @@ import { APP_RUNTIME_PAYLOAD_VALIDATORS } from '@/lib/runtime/payload-validators
 export type PersistencePoolFactory = (connectionString: string) => Pool;
 
 export interface ServerPersistenceProvider {
+  pool: Pool;
   runtimeStore: PgRuntimeStore;
   documentStore: PgDocumentStore;
   assetStore: PgAssetStore;
@@ -43,6 +44,7 @@ async function createServerPersistenceProvider(
     const withTransaction = nodePostgresTransaction(queryable);
     const byteStore = lazyAssetByteStore(process.env.ASSET_S3_BUCKET, queryable);
     return {
+      pool,
       runtimeStore: new PgRuntimeStore(queryable, {
         withTransaction,
         payloadValidators: APP_RUNTIME_PAYLOAD_VALIDATORS,
