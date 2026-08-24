@@ -113,6 +113,46 @@ export type {
 export { RuntimeAppendConflictError } from './runtime/types.js';
 export { BrowserRuntimeStore, type BrowserRuntimeStoreOptions } from './runtime/browser.js';
 
+export {
+  AGENT_SESSION_LIFECYCLE,
+  AGENT_SESSION_STATUSES,
+  OWNER_SESSION_EVENT_TYPES,
+  AgentSessionAccessError,
+  AgentSessionEntryTreeError,
+  AgentSessionLeaseLostError,
+  type AgentSessionClaimReason,
+  type AgentSessionCompactionEntry,
+  type AgentSessionCustomMessageEntry,
+  type AgentSessionEntry,
+  type AgentSessionEntryBase,
+  type AgentSessionEntryTree,
+  type AgentSessionEntryTreeHandle,
+  type AgentSessionEventLog,
+  type AgentSessionHooks,
+  type AgentSessionLabelEntry,
+  type AgentSessionLeafEntry,
+  type AgentSessionLease,
+  type AgentSessionLifecycleEventType,
+  type AgentSessionMessageEntry,
+  type AgentSessionMeta,
+  type AgentSessionStatus,
+  type AgentSessionStore,
+  type AgentSessionTransaction,
+  type AgentSessionUserMessage,
+  type ClaimedAgentSession,
+  type ClaimAgentSessionOptions,
+  type CreateAgentSessionInput,
+  type FinishAgentSessionPatch,
+  type NewAgentSessionEvent,
+  type NewOwnerSessionEvent,
+  type OwnerSessionEventProjection,
+  type OwnerSessionEventType,
+  type PersistedAgentSessionEvent,
+  type PersistedOwnerSessionEvent,
+  type PostAgentUserMessageOptions,
+  type PostAgentUserMessageResult,
+} from './agent-session/types.js';
+
 // Re-export the DSL-owned asset contract for convenience, so consumers can get
 // the interface and a backend from one import without reaching into the DSL.
 export type { AssetRef, AssetMeta, BinaryBlob, StorageProvider } from '@openmaic/dsl';
