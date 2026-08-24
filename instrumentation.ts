@@ -22,8 +22,8 @@ export async function register(): Promise<void> {
 
   let runner: import('@/lib/server/agent-runtime/runner').AgentRunnerHandle | undefined;
   try {
-    const { isAgentRuntimeEnabled } = await import('@/lib/config/feature-flags');
-    if (isAgentRuntimeEnabled() && !!process.env.DATABASE_URL?.trim()) {
+    const { isAgentRuntimeConfigured } = await import('@/lib/config/feature-flags');
+    if (isAgentRuntimeConfigured()) {
       // startAgentRunner only installs a timer. Store/schema initialization is
       // retained behind the store's lazy promise and never blocks register().
       const runtime = await import('@/lib/server/agent-runtime/runner');

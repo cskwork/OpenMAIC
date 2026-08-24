@@ -31,7 +31,7 @@ export function runAgentSessionConcurrencyContract(
         maxAttempts: 3,
       });
       expect(stolen).toMatchObject({
-        attempt: 2,
+        attempt: 1,
         claimReason: 'orphaned',
         claimSeq: 1,
         lease: { workerId: 'worker-b' },
@@ -45,6 +45,32 @@ export function runAgentSessionConcurrencyContract(
         }),
       ).toBeNull();
       expect(await store.heartbeat('session-1', 'worker-a')).toBe(false);
+    });
+
+    test('does not charge clean park and takeover cycles to the attempt cap', async () => {
+      const store = makeStore();
+      await store.createSession(makeAgentSessionInput());
+
+      let claim = await store.claimNextSession('worker-0', 100, {
+        leaseTtlMs: 10_000,
+        maxAttempts: 5,
+      });
+      expect(claim).toMatchObject({ attempt: 1, claimReason: 'queued' });
+
+      for (let cycle = 0; cycle < 6; cycle += 1) {
+        await store.releaseLease('session-1', `worker-${cycle}`);
+        const workerId = `worker-${cycle + 1}`;
+        claim = await store.claimNextSession(workerId, 101 + cycle, {
+          leaseTtlMs: 10_000,
+          maxAttempts: 5,
+        });
+        expect(claim).toMatchObject({ attempt: 1, claimReason: 'orphaned' });
+      }
+
+      expect(await store.getSession('session-1')).toMatchObject({
+        status: 'running',
+        attempt: 1,
+      });
     });
 
     test.skipIf(!options.genuineConcurrency)(

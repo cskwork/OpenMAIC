@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { isAgentRuntimeEnabled, isProWorkbenchEnabled } from '@/lib/config/feature-flags';
+import { isAgentRuntimeConfigured, isProWorkbenchEnabled } from '@/lib/config/feature-flags';
 
 /** Convert string to Uint8Array */
 function encode(str: string): Uint8Array {
@@ -47,13 +47,13 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Return an actual server-side 404 when either half of the workbench is off.
-  // The public flag is inlined into the client build, while the runtime flag
-  // remains server-only; requiring both prevents a visible interface from
-  // targeting a background runtime that is not running.
-  if (
-    !(isProWorkbenchEnabled() && isAgentRuntimeEnabled()) &&
-    (pathname === '/workbench' || pathname.startsWith('/workbench/'))
-  ) {
+  // Edge middleware cannot reliably inspect server-only deployment variables,
+  // so it enforces the public gate and leaves the complete runtime/database
+  // check to Node. A Node-hosted middleware uses the same gate as startup.
+  const canInspectServerRuntime = process.env.NEXT_RUNTIME !== 'edge';
+  const workbenchEnabled =
+    isProWorkbenchEnabled() && (!canInspectServerRuntime || isAgentRuntimeConfigured());
+  if (!workbenchEnabled && (pathname === '/workbench' || pathname.startsWith('/workbench/'))) {
     return new NextResponse('Not found', { status: 404 });
   }
 

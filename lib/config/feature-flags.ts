@@ -19,6 +19,11 @@ export function isAgentRuntimeEnabled(): boolean {
   return readBoolean(process.env.OPENMAIC_AGENT_RUNTIME_ENABLED);
 }
 
+/** The Node runtime can start the runner only with a non-empty database URL. */
+export function isAgentRuntimeConfigured(): boolean {
+  return isAgentRuntimeEnabled() && Boolean(process.env.DATABASE_URL?.trim());
+}
+
 /**
  * Build-time workbench affordance. This public flag is separate from the
  * server runtime gate because Next.js inlines NEXT_PUBLIC values into client

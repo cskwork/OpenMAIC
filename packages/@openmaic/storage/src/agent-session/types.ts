@@ -233,6 +233,7 @@ export interface AgentSessionStore {
   /**
    * Scan optimistically, then lock and recheck one candidate. The second
    * check is the authority: candidate snapshots are stale as soon as read.
+   * Queued claims advance the failure generation; orphaned takeovers retain it.
    */
   claimNextSession(
     workerId: string,

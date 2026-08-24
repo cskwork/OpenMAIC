@@ -372,6 +372,7 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
   let chain: Promise<void> = Promise.resolve();
   let criticalWriteError: unknown;
   let entryWritesHealthy = true;
+  let terminalFrameEmitted = false;
 
   const markLeaseLost = () => {
     leaseLost = true;
@@ -446,6 +447,10 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       return;
     }
     runEventEmitted = true;
+    if (type === LIFECYCLE.sessionEnd) terminalFrameEmitted = true;
+    // Once another worker owns the lease, both the event log and entry tree
+    // reject this generation's writes. The new owner's session_resumed frame
+    // is therefore the durable interruption marker for a lease steal.
     if (leaseLost) return;
 
     const now = Date.now();
@@ -691,6 +696,9 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       return cursor.idle ? users : Math.max(0, users - 1);
     };
     const drainMessages = async (): Promise<number> => {
+      // These reads deliberately avoid a shared transaction: a message added
+      // between them is left for the next serialized drain, while the lease
+      // snapshot prevents steering after ownership has already changed.
       const all = await store.listUserMessages(id);
       const current = await store.getSession(id);
       if (!leaseMatches(current, WORKER_ID, attempt)) {
@@ -748,8 +756,9 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
         await agent.continue();
       }
 
-      // A follow-up arriving while the loop winds down extends this run. Only
-      // settle after an idle/drain cycle finds no new durable message.
+      // Capture messages that arrive while the loop winds down. Pi is already
+      // idle here, so an accepted steer is durably detected and requeued by
+      // the settle check for the next claim rather than extending this run.
       for (;;) {
         await agent.waitForIdle();
         if (abort.signal.aborted) break;
@@ -777,8 +786,10 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
         return;
       }
 
-      const error = !cancelled && loopError ? loopError : undefined;
-      const status = cancelled ? 'cancelled' : error ? 'failed' : 'succeeded';
+      const settledCancelled = cancelled || (await store.isCancelRequested(id));
+      if (settledCancelled) abort.abort();
+      const error = !settledCancelled && loopError ? loopError : undefined;
+      const status = settledCancelled ? 'cancelled' : error ? 'failed' : 'succeeded';
       emit(LIFECYCLE.sessionEnd, { status, toolCalls, ...(error ? { error } : {}) });
       await flushAll();
       await store.finishSession(id, WORKER_ID, {
@@ -786,7 +797,9 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
         ...(error ? { error } : {}),
         resetAttempt: status !== 'failed',
       });
-      if (cancelled) {
+      // Clear only the cancel request included in the terminal verdict. A poll
+      // that observes a later request must not erase it with a stale verdict.
+      if (settledCancelled) {
         await store.clearCancel(id);
       } else {
         await requeueIfUndelivered('settle');
@@ -797,13 +810,19 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       const message = error instanceof Error ? error.message : String(error);
       if (ctx.shuttingDown || leaseLost || tripwireViolated) {
         emit(LIFECYCLE.sessionInterrupted, {
-          reason: tripwireViolated ? 'runner event-order tripwire' : 'runner shutdown',
+          reason: tripwireViolated
+            ? 'runner event-order tripwire'
+            : leaseLost
+              ? 'lease lost'
+              : 'runner shutdown',
           attempt,
         });
         await flushAll(false);
         if (!leaseLost) await store.releaseLease(id, WORKER_ID);
       } else {
-        emit(LIFECYCLE.sessionEnd, { status: 'failed', error: message });
+        if (!terminalFrameEmitted) {
+          emit(LIFECYCLE.sessionEnd, { status: 'failed', error: message });
+        }
         await flushAll(false);
         await store.finishSession(id, WORKER_ID, { status: 'failed', error: message });
         await requeueIfUndelivered('run failure');
@@ -827,7 +846,9 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       }
       if (!leaseLost) await store.releaseLease(id, WORKER_ID).catch(() => {});
     } else {
-      emit(LIFECYCLE.sessionEnd, { status: 'failed', error: message });
+      if (!terminalFrameEmitted) {
+        emit(LIFECYCLE.sessionEnd, { status: 'failed', error: message });
+      }
       await flushAll(false).catch(() => {});
       await store
         .finishSession(id, WORKER_ID, { status: 'failed', error: message })

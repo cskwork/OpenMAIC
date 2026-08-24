@@ -495,7 +495,9 @@ export class PgAgentSessionStore
         const now = this.clock();
         const updated = await tx.query<SessionRow>(
           `UPDATE ${this.table('sessions')}
-           SET status = 'running', attempt = attempt + 1, lease_worker_id = $2,
+           SET status = 'running',
+               attempt = attempt + CASE WHEN status = 'queued' THEN 1 ELSE 0 END,
+               lease_worker_id = $2,
                lease_worker_pid = $3, lease_heartbeat_at = $4, error = NULL, updated_at = now()
            WHERE id = $1 AND deleted_at IS NULL RETURNING ${SESSION_COLUMNS}`,
           [candidate.id, workerId, workerPid, now],
