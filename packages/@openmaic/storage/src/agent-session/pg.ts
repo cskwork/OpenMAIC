@@ -458,6 +458,11 @@ export class PgAgentSessionStore
     });
   }
 
+  /**
+   * Attempt charging is per takeover: queued claims and abandoned (non-null
+   * stale lease) takeovers increment `attempt`; clean-park (null lease)
+   * takeovers do not. Full contract in {@link AgentSessionStore}.
+   */
   async claimNextSession(
     workerId: string,
     workerPid: number,
@@ -493,9 +498,17 @@ export class PgAgentSessionStore
         const previous = locked.rows[0];
         if (!previous) return null;
         const now = this.clock();
+        // PostgreSQL evaluates every SET expression from the locked pre-update
+        // row, so lease_worker_id still identifies the prior holder here.
         const updated = await tx.query<SessionRow>(
           `UPDATE ${this.table('sessions')}
-           SET status = 'running', attempt = attempt + 1, lease_worker_id = $2,
+           SET status = 'running',
+               attempt = attempt + CASE
+                 WHEN status = 'queued'
+                   OR (status = 'running' AND lease_worker_id IS NOT NULL) THEN 1
+                 ELSE 0
+               END,
+               lease_worker_id = $2,
                lease_worker_pid = $3, lease_heartbeat_at = $4, error = NULL, updated_at = now()
            WHERE id = $1 AND deleted_at IS NULL RETURNING ${SESSION_COLUMNS}`,
           [candidate.id, workerId, workerPid, now],

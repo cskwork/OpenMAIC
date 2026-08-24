@@ -18,5 +18,51 @@ export async function register(): Promise<void> {
   // Imported dynamically so the Edge bundle never pulls in `pg`.
   const { startAssetCollectorSchedule } =
     await import('@/lib/persistence/asset-collector-schedule');
-  startAssetCollectorSchedule();
+  const assetSchedule = startAssetCollectorSchedule();
+
+  let runner: import('@/lib/server/agent-runtime/runner').AgentRunnerHandle | undefined;
+  try {
+    const { isAgentRuntimeConfigured } = await import('@/lib/config/feature-flags');
+    if (isAgentRuntimeConfigured()) {
+      // startAgentRunner only installs a timer. Store/schema initialization is
+      // retained behind the store's lazy promise and never blocks register().
+      const runtime = await import('@/lib/server/agent-runtime/runner');
+      runner = runtime.startAgentRunner();
+    }
+  } catch (error) {
+    console.error('[instrumentation] Agent runtime startup failed', error);
+  }
+
+  let shutdownPromise: Promise<void> | undefined;
+  const shutdown = (): Promise<void> => {
+    shutdownPromise ??= (async () => {
+      // Park sessions before any pool they use is closed. This preserves the
+      // last durable entry-tree checkpoint for immediate takeover.
+      try {
+        await runner?.stop();
+      } catch (error) {
+        console.error('[instrumentation] Agent runner drain failed', error);
+      }
+      try {
+        await assetSchedule?.stop();
+      } catch (error) {
+        console.error('[instrumentation] Asset collector drain failed', error);
+      }
+      const connectionString = process.env.DATABASE_URL?.trim();
+      if (connectionString) {
+        try {
+          const { getServerPersistenceProvider } =
+            await import('@/lib/persistence/server-provider');
+          const { pool } = await getServerPersistenceProvider(connectionString);
+          await pool.end();
+        } catch (error) {
+          console.error('[instrumentation] Persistence pool shutdown failed', error);
+        }
+      }
+    })();
+    return shutdownPromise;
+  };
+
+  process.once('SIGTERM', () => void shutdown());
+  process.once('SIGINT', () => void shutdown());
 }
