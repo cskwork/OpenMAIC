@@ -458,6 +458,11 @@ export class PgAgentSessionStore
     });
   }
 
+  /**
+   * Attempt charging is per takeover: queued claims and abandoned (non-null
+   * stale lease) takeovers increment `attempt`; clean-park (null lease)
+   * takeovers do not. Full contract in {@link AgentSessionStore}.
+   */
   async claimNextSession(
     workerId: string,
     workerPid: number,

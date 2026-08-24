@@ -233,7 +233,12 @@ export interface AgentSessionStore {
   /**
    * Scan optimistically, then lock and recheck one candidate. The second
    * check is the authority: candidate snapshots are stale as soon as read.
-   * Queued claims advance the failure generation; orphaned takeovers retain it.
+   *
+   * Attempt charging is per takeover: queued claims and takeovers of an
+   * abandoned (non-null stale) lease each consume one attempt, while takeovers
+   * of a cleanly-released (null) lease consume none. Clean parks therefore
+   * never falsely cap a healthy session, while crashloops stay bounded by
+   * {@link ClaimAgentSessionOptions.maxAttempts}.
    */
   claimNextSession(
     workerId: string,

@@ -7,7 +7,6 @@ import {
   type Queryable,
   type WithTransaction,
 } from '../../packages/@openmaic/storage/src/agent-session/pg';
-import { isOverAttemptCap } from '@/lib/server/agent-runtime/runner';
 
 const contractUrl = process.env.PG_CONTRACT_URL;
 
@@ -29,6 +28,11 @@ function transactionFor(pool: Pool): WithTransaction {
 }
 
 describe.skipIf(!contractUrl)('session attempt budget takeovers', () => {
+  /** The suite's own bound; every claim below tells the store the same value. */
+  const maxAttempts = 5;
+  /** Mirrors the runner's verdict against this suite's bound, not its config. */
+  const overAttemptCap = (claim: { attempt: number }) => claim.attempt > maxAttempts;
+
   let pool: Pool;
   let store: PgAgentSessionStore;
 
@@ -60,19 +64,19 @@ describe.skipIf(!contractUrl)('session attempt budget takeovers', () => {
 
     let claim = await store.claimNextSession('worker-0', 100, {
       leaseTtlMs: 10_000,
-      maxAttempts: 5,
+      maxAttempts,
     });
     expect(claim).not.toBeNull();
-    expect(isOverAttemptCap(claim!)).toBe(false);
+    expect(overAttemptCap(claim!)).toBe(false);
 
     for (let cycle = 0; cycle < 6; cycle += 1) {
       await store.releaseLease('parked-session', `worker-${cycle}`);
       claim = await store.claimNextSession(`worker-${cycle + 1}`, 101 + cycle, {
         leaseTtlMs: 10_000,
-        maxAttempts: 5,
+        maxAttempts,
       });
       expect(claim).toMatchObject({ attempt: 1, claimReason: 'orphaned' });
-      expect(isOverAttemptCap(claim!)).toBe(false);
+      expect(overAttemptCap(claim!)).toBe(false);
     }
 
     expect(await store.getSession('parked-session')).toMatchObject({
@@ -91,10 +95,10 @@ describe.skipIf(!contractUrl)('session attempt budget takeovers', () => {
 
     let claim = await store.claimNextSession('worker-0', 100, {
       leaseTtlMs: 10_000,
-      maxAttempts: 5,
+      maxAttempts,
     });
     expect(claim).not.toBeNull();
-    expect(isOverAttemptCap(claim!)).toBe(false);
+    expect(overAttemptCap(claim!)).toBe(false);
 
     for (let cycle = 0; cycle < 6; cycle += 1) {
       await pool.query(
@@ -103,12 +107,12 @@ describe.skipIf(!contractUrl)('session attempt budget takeovers', () => {
       );
       claim = await store.claimNextSession(`worker-${cycle + 1}`, 101 + cycle, {
         leaseTtlMs: 10_000,
-        maxAttempts: 5,
+        maxAttempts,
       });
       expect(claim).toMatchObject({ attempt: cycle + 2, claimReason: 'orphaned' });
     }
 
-    expect(isOverAttemptCap(claim!)).toBe(true);
+    expect(overAttemptCap(claim!)).toBe(true);
     expect(await store.getSession('crashloop-session')).toMatchObject({
       status: 'running',
       attempt: 7,
