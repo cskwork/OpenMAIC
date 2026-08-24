@@ -74,5 +74,44 @@ export function runAgentSessionConcurrencyContract(
         expect(await store.readMaxId('owner-a')).toBe(BigInt(4));
       },
     );
+
+    test.skipIf(!options.genuineConcurrency)(
+      'keeps mergeOwner and cross-owner projections free of an ABBA deadlock',
+      async () => {
+        const store = makeStore();
+        await store.createSession(makeAgentSessionInput());
+        await store.createSession(
+          makeAgentSessionInput({ id: 'session-2', ownerId: 'owner-b', stageId: 'stage-2' }),
+        );
+        await store.createSession(
+          makeAgentSessionInput({ id: 'session-3', ownerId: 'owner-b', stageId: 'stage-3' }),
+        );
+        // The order-sensitive path is the cross-owner one: mergeOwner locks
+        // every session of both owners (id-ordered single statement) before the
+        // two counters in sorted order, while each concurrent projection locks
+        // its session row first and then that owner's counter. Racing them must
+        // never form a lock-acquisition cycle (a deadlock surfaces here as a
+        // PostgreSQL 40P01 abort, failing the test).
+        await Promise.all([
+          store.mergeOwner('owner-a', 'owner-b'),
+          store.setActiveStage('session-1', 'stage-1b'),
+          store.requestCancel('session-2'),
+          store.postUserMessage('session-3', { text: 'Concurrent message' }),
+        ]);
+        // All four committed: the merged owner stream is duplicate-free and
+        // its durable counter matches the highest allocated id.
+        const targetEvents = await store.readAfter('owner-b', BigInt(0));
+        const ids = targetEvents.map((event) => Number(event.id));
+        expect(new Set(ids).size).toBe(ids.length);
+        expect(await store.readMaxId('owner-b')).toBe(BigInt(Math.max(0, ...ids)));
+        expect(await store.readMaxId('owner-a')).toBe(BigInt(0));
+        expect(await store.listSessionsByOwner('owner-a')).toEqual([]);
+        expect((await store.listSessionsByOwner('owner-b')).map((session) => session.id)).toEqual([
+          'session-1',
+          'session-2',
+          'session-3',
+        ]);
+      },
+    );
   });
 }

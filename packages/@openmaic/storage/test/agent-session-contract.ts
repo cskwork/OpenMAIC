@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, expectTypeOf, test } from 'vitest';
 
 import {
   AGENT_SESSION_LIFECYCLE,
@@ -6,6 +6,7 @@ import {
   AgentSessionLeaseLostError,
   type AgentSessionEntryTree,
   type AgentSessionEventLog,
+  type AgentSessionMessageEntry,
   type AgentSessionStore,
   type OwnerSessionEventProjection,
 } from '../src/agent-session/types.js';
@@ -64,7 +65,6 @@ export function runAgentSessionStoreContract(
       await store.createSession(makeAgentSessionInput());
       await store.appendControlEvent('session-1', {
         ts: 1,
-        attempt: 0,
         type: 'control',
         data: { retained: true },
       });
@@ -142,7 +142,6 @@ export function runAgentSessionStoreContract(
       ].entries()) {
         await store.appendControlEvent('session-1', {
           ts: index + 1,
-          attempt: 0,
           type,
           data: { index },
         });
@@ -154,6 +153,23 @@ export function runAgentSessionStoreContract(
       const replay = await store.readEventsAfterForReplay('session-1', 0);
       expect(replay.scanned).toBe(5);
       expect(replay.events.map((event) => event.id)).toEqual([1, 2, 4, 5]);
+    });
+
+    test('records control events with the current attempt generation', async () => {
+      const store = makeStore();
+      await store.createSession(makeAgentSessionInput());
+      await store.claimNextSession('worker-a', 101, { leaseTtlMs: 10_000, maxAttempts: 3 });
+      // The attempt is derived from the parent row under the lock (reference
+      // material-event semantics), never accepted from the caller.
+      const seq = await store.appendControlEvent('session-1', {
+        ts: 5,
+        type: 'control',
+        data: { ok: true },
+      });
+      expect(seq).toBe(1);
+      expect(await store.readEventsAfter('session-1', 0)).toMatchObject([
+        { id: 1, ts: 5, attempt: 1, type: 'control' },
+      ]);
     });
 
     test('classifies posted messages and atomically revives terminal sessions', async () => {
@@ -228,7 +244,11 @@ export function runAgentSessionStoreContract(
 
       const reopened = await store.openEntryTree('session-1', 'worker-a', 1);
       expect(await reopened.getLeafId()).toBe('child');
-      expect((await reopened.findEntries('message')).map((entry) => entry.id)).toEqual(['root']);
+      // `findEntries` keeps the reference's narrowing: a 'message' query
+      // yields exactly AgentSessionMessageEntry[] (compile-time pinned).
+      const messages = await reopened.findEntries('message');
+      expectTypeOf(messages).toEqualTypeOf<AgentSessionMessageEntry[]>();
+      expect(messages.map((entry) => entry.id)).toEqual(['root']);
       await expect(
         reopened.appendEntry({
           id: 'dangling',

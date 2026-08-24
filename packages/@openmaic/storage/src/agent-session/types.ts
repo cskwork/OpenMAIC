@@ -205,9 +205,10 @@ export type AgentSessionEntry =
 export interface AgentSessionEntryTreeHandle {
   getEntries(): Promise<AgentSessionEntry[]>;
   getEntry(id: string): Promise<AgentSessionEntry | undefined>;
+  /** Entries whose `type` is exactly the requested type, narrowed like the reference. */
   findEntries<TType extends AgentSessionEntry['type']>(
     type: TType,
-  ): Promise<Array<Extract<AgentSessionEntry, { type: TType }> | AgentSessionEntry>>;
+  ): Promise<Array<Extract<AgentSessionEntry, { type: TType }>>>;
   getLabel(id: string): Promise<string | undefined>;
   getPathToRoot(leafId: string | null): Promise<AgentSessionEntry[]>;
   getLeafId(): Promise<string | null>;
@@ -295,7 +296,17 @@ export interface AgentSessionEventLog {
     workerId: string,
     event: NewAgentSessionEvent,
   ): Promise<number | null>;
-  appendControlEvent(sessionId: string, event: NewAgentSessionEvent): Promise<number | null>;
+  /**
+   * Append a control-plane event without borrowing the runner's lease. The
+   * stored attempt is the session's current generation, read under the session
+   * row lock — it is never host-chosen — so the log carries the generation
+   * that was current when the event was written (reference material-event
+   * semantics).
+   */
+  appendControlEvent(
+    sessionId: string,
+    event: Omit<NewAgentSessionEvent, 'attempt'>,
+  ): Promise<number | null>;
   appendUserMessage(
     sessionId: string,
     input: { text: string; delivery: 'steer' | 'queued'; clientRequestId?: string },
@@ -371,7 +382,14 @@ export interface OwnerSessionEventProjection {
   ): Promise<PersistedOwnerSessionEvent[]>;
   /** Reads the durable counter, not max(id), because event rows may be pruned. */
   readMaxId(ownerId: string): Promise<bigint>;
-  /** Returns a replacement identity when the host's resolver retires this owner. */
+  /**
+   * Returns a replacement identity when the host's resolver retires this owner.
+   * Unlike the reference's direct `owner_merges` table read, this package has
+   * no retirement table — the host resolver is the source of truth, so it is
+   * invoked inside a short transaction because the hook contract assumes
+   * transactional execution (its advisory locks are transaction-scoped). A host
+   * whose resolver is a plain read-only lookup sees a single-statement read.
+   */
   readRetirement(ownerId: string): Promise<string | null>;
 }
 
@@ -396,7 +414,16 @@ export interface AgentSessionHooks {
     transaction: AgentSessionTransaction,
     meta: AgentSessionMeta,
   ) => Promise<void>;
-  /** Runs after the message event is durable but before classification commits. */
+  /**
+   * Runs after the message event is staged in the transaction but before the
+   * delivery classification and any requeue commit. The event is NOT durable
+   * yet — durability exists only at COMMIT — and this hook is an abort point:
+   * a throwing hook aborts the whole `postUserMessage`, the message is not
+   * persisted, the session is not requeued, and the caller receives the error.
+   * That veto semantics matches the reference, whose in-transaction host steps
+   * (`bindMaterials`) abort the same way; the hook is never a fire-and-forget
+   * notification.
+   */
   onUserMessagePosted?: (
     transaction: AgentSessionTransaction,
     input: {

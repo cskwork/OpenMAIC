@@ -8,6 +8,7 @@ import {
   type PgAgentSessionStoreOptions,
   type Queryable,
 } from '../src/agent-session/pg.js';
+import { AgentSessionEntryTreeError } from '../src/agent-session/types.js';
 import { runAgentSessionConcurrencyContract } from './agent-session-concurrency-contract.js';
 import { makeAgentSessionInput, runAgentSessionStoreContract } from './agent-session-contract.js';
 
@@ -96,11 +97,82 @@ describe('PgAgentSessionStore with PGlite', () => {
     expect(logged).toHaveLength(1);
   });
 
+  test('lets a throwing onUserMessagePosted veto the message and its requeue', async () => {
+    const hooked = new PgAgentSessionStore(db, {
+      ...optionsFor(db),
+      onUserMessagePosted: async () => {
+        throw new Error('host material binding failed');
+      },
+    });
+    await hooked.createSession(makeAgentSessionInput({ status: 'succeeded' }));
+    // The hook is a veto point (reference semantics): a throw aborts the whole
+    // postUserMessage — the message row is not persisted, the terminal session
+    // is not requeued, and the caller receives the error.
+    await expect(hooked.postUserMessage('session-1', { text: 'Continue' })).rejects.toThrow(
+      'host material binding failed',
+    );
+    expect(await hooked.listUserMessages('session-1')).toEqual([]);
+    expect(await hooked.getSession('session-1')).toMatchObject({ status: 'succeeded' });
+    expect(await hooked.readMaxId('owner-a')).toBe(BigInt(1));
+  });
+
+  test('treats a resolver-collapsed merge target as a no-op self-merge', async () => {
+    const hooked = new PgAgentSessionStore(db, {
+      ...optionsFor(db),
+      resolveFinalOwner: async (_tx, ownerId) => (ownerId === 'owner-b' ? 'owner-a' : ownerId),
+    });
+    await hooked.createSession(makeAgentSessionInput());
+    await hooked.createSession(makeAgentSessionInput({ id: 'session-2', stageId: 'stage-2' }));
+    // toOwnerId resolves back onto fromOwnerId: the merge must be a no-op
+    // instead of re-keying sessions to themselves and renumbering the owner's
+    // own projection above its high-water mark.
+    expect(await hooked.mergeOwner('owner-a', 'owner-b')).toBe(0);
+    expect((await hooked.listSessionsByOwner('owner-a')).map((session) => session.id)).toEqual([
+      'session-1',
+      'session-2',
+    ]);
+    expect(await hooked.listSessionsByOwner('owner-b')).toEqual([]);
+    expect(await hooked.readMaxId('owner-a')).toBe(BigInt(2));
+    expect((await hooked.readAfter('owner-a', BigInt(0))).map((event) => event.id)).toEqual([
+      '1',
+      '2',
+    ]);
+  });
+
+  test('reads retirement through the host resolver inside a transaction', async () => {
+    const hooked = new PgAgentSessionStore(db, {
+      ...optionsFor(db),
+      resolveFinalOwner: async (_tx, ownerId) =>
+        ownerId === 'retired-owner' ? 'current-owner' : ownerId,
+    });
+    await hooked.createSession(
+      makeAgentSessionInput({ id: 'session-1', ownerId: 'current-owner' }),
+    );
+    expect(await hooked.readRetirement('current-owner')).toBeNull();
+    expect(await hooked.readRetirement('retired-owner')).toBe('current-owner');
+  });
+
+  test('preserves an empty-string leaf target instead of collapsing it to null', async () => {
+    await store.createSession(makeAgentSessionInput());
+    await store.claimNextSession('worker-a', 101, { leaseTtlMs: 10_000, maxAttempts: 3 });
+    const tree = await store.openEntryTree('session-1', 'worker-a', 1);
+    await tree.appendEntry({
+      id: 'marker',
+      parentId: null,
+      type: 'leaf',
+      timestamp: '2026-01-01T00:00:00.000Z',
+      targetId: '',
+    });
+    // The '' target is preserved as the leaf id (reference leafIdAfterEntry
+    // returns it verbatim), so getLeafId validates it like any other leaf id
+    // and finds no entry with id '' — instead of silently returning null.
+    await expect(tree.getLeafId()).rejects.toBeInstanceOf(AgentSessionEntryTreeError);
+  });
+
   test('keeps event and tree rows physically present after a tombstone', async () => {
     await store.createSession(makeAgentSessionInput());
     await store.appendControlEvent('session-1', {
       ts: 1,
-      attempt: 0,
       type: 'control',
       data: {},
     });
@@ -135,5 +207,21 @@ describe('PgAgentSessionStore with PGlite', () => {
     await customStore.createSession(makeAgentSessionInput({ id: 'custom-1' }));
     expect(await customStore.getSession('custom-1')).toMatchObject({ id: 'custom-1' });
     expect(await store.getSession('custom-1')).toBeNull();
+    // Index names derive from the table-name substitution verbatim — the
+    // template index names are re-keyed by the same replaceAll that re-keys
+    // their tables, with no separate prefix rewriting. This pins that the
+    // entries index is `spec_entries_type_idx`, never the prefix-derived
+    // `spec_session_entries_type_idx` that the old dead rename lines claimed.
+    const indexNames = (
+      await db.query<{ index_name: string }>(
+        `SELECT indexname AS index_name FROM pg_indexes
+         WHERE schemaname = 'public' AND tablename = ANY($1::text[])`,
+        [['spec_sessions', 'spec_entries']],
+      )
+    ).rows.map((row) => row.index_name);
+    expect(indexNames).toContain('spec_sessions_status_live_idx');
+    expect(indexNames).toContain('spec_sessions_owner_live_idx');
+    expect(indexNames).toContain('spec_entries_type_idx');
+    expect(indexNames).not.toContain('spec_session_entries_type_idx');
   });
 });

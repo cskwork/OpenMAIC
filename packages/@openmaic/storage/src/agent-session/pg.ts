@@ -8,7 +8,7 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import type { QueryResult, Queryable, WithTransaction } from '../runtime/pg.js';
+import type { Queryable, WithTransaction } from '../runtime/pg.js';
 import {
   AGENT_SESSION_LIFECYCLE,
   AgentSessionAccessError,
@@ -187,7 +187,10 @@ function schemaFor(names: AgentSessionTableNames): string {
   const t = quoteIdentifier(names.entries);
   const c = quoteIdentifier(names.ownerEventCounters);
   const o = quoteIdentifier(names.ownerEvents);
-  const prefix = names.sessions.replace(/_sessions$/, '').replace(/[^a-z0-9_]/g, '_');
+  // Index names derive from the table-name substitution verbatim: the template
+  // index names (`agent_sessions_status_live_idx`, ...) are re-keyed by the
+  // same replaceAll that re-keys their tables, so no separate prefix rewriting
+  // is performed or needed.
   return AGENT_SESSION_PG_SCHEMA.replaceAll(
     'agent_owner_session_event_counters',
     names.ownerEventCounters,
@@ -196,9 +199,6 @@ function schemaFor(names: AgentSessionTableNames): string {
     .replaceAll('agent_session_entries', names.entries)
     .replaceAll('agent_session_events', names.events)
     .replaceAll('agent_sessions', names.sessions)
-    .replaceAll('agent_session_entries_type_idx', `${prefix}_session_entries_type_idx`)
-    .replaceAll('agent_sessions_status_live_idx', `${prefix}_sessions_status_live_idx`)
-    .replaceAll('agent_sessions_owner_live_idx', `${prefix}_sessions_owner_live_idx`)
     .replaceAll(`REFERENCES ${names.sessions}`, `REFERENCES ${s}`)
     .replaceAll(`ON ${names.sessions}`, `ON ${s}`)
     .replaceAll(`ON ${names.entries}`, `ON ${t}`)
@@ -633,11 +633,19 @@ export class PgAgentSessionStore
     });
   }
 
-  async appendControlEvent(sessionId: string, event: NewAgentSessionEvent): Promise<number | null> {
+  async appendControlEvent(
+    sessionId: string,
+    event: Omit<NewAgentSessionEvent, 'attempt'>,
+  ): Promise<number | null> {
     return this.transaction(async (tx) => {
       const parent = await this.lockForAppend(tx, sessionId, null);
       if (!parent) return null;
-      return this.insertEvent(tx, sessionId, event);
+      // The stored attempt is the current generation under the row lock
+      // (reference material-event semantics), never a host-chosen value.
+      return this.insertEvent(tx, sessionId, {
+        ...event,
+        attempt: Number(parent.attempt),
+      });
     });
   }
 
@@ -684,6 +692,9 @@ export class PgAgentSessionStore
         data: { text: input.text, delivery, clientRequestId },
       });
       const row = await this.loadSession(tx, sessionId, false);
+      // The hook is a deliberate veto point (reference semantics): a throw
+      // rolls back the staged message and any requeue, and the caller must
+      // retry. The event only becomes durable at COMMIT.
       await this.messageHook?.(tx, {
         session: sessionMeta(row!),
         text: input.text,
@@ -1077,6 +1088,11 @@ export class PgAgentSessionStore
   }
 
   async readRetirement(ownerId: string): Promise<string | null> {
+    // The host resolver runs inside a transaction because the hook contract
+    // assumes transactional execution (its advisory locks are transaction-
+    // scoped); running it on the shared queryable would release those locks
+    // before the resolver's read. The read itself takes no row locks beyond
+    // what the resolver chooses to take.
     return this.transaction(async (tx) => {
       const finalOwner = await this.resolveOwnerHook(tx, ownerId);
       return finalOwner === ownerId ? null : finalOwner;
@@ -1087,6 +1103,12 @@ export class PgAgentSessionStore
     if (fromOwnerId === toOwnerId) return 0;
     return this.transaction(async (tx) => {
       const finalTarget = await this.resolveOwnerHook(tx, toOwnerId);
+      // The literal guard above only catches the same-string case. A resolver
+      // that collapses the target back onto the source (a merge chain that
+      // already collapsed) must also be a no-op: proceeding would re-key
+      // sessions to themselves and renumber the owner's own projection above
+      // its high-water mark.
+      if (fromOwnerId === finalTarget) return 0;
       const locked = await tx.query<{ id: string; owner_id: string }>(
         `SELECT id, owner_id FROM ${this.table('sessions')}
          WHERE owner_id IN ($1, $2) ORDER BY id FOR UPDATE`,
@@ -1175,6 +1197,14 @@ class PgAgentSessionEntryTreeHandle implements AgentSessionEntryTreeHandle {
   private readonly labelsById = new Map<string, string>();
   private currentLeafId: string | null = null;
 
+  /** Reference `leafIdAfterEntry`: a leaf target is the leaf id, verbatim. */
+  private static leafIdAfter(entry: AgentSessionEntry): string | null {
+    if (entry.type !== 'leaf') return entry.id;
+    // An empty-string target is preserved as '' instead of collapsing to null;
+    // only a missing (malformed) target normalizes to null.
+    return (entry.targetId as string | null | undefined) ?? null;
+  }
+
   constructor(
     private readonly store: PgAgentSessionStore,
     private readonly sessionId: string,
@@ -1193,7 +1223,7 @@ class PgAgentSessionEntryTreeHandle implements AgentSessionEntryTreeHandle {
       }
       this.byId.set(entry.id, entry);
       this.updateLabel(entry);
-      this.currentLeafId = entry.type === 'leaf' ? String(entry.targetId ?? '') || null : entry.id;
+      this.currentLeafId = PgAgentSessionEntryTreeHandle.leafIdAfter(entry);
     }
   }
 
@@ -1215,8 +1245,10 @@ class PgAgentSessionEntryTreeHandle implements AgentSessionEntryTreeHandle {
 
   async findEntries<TType extends AgentSessionEntry['type']>(
     type: TType,
-  ): Promise<Array<Extract<AgentSessionEntry, { type: TType }> | AgentSessionEntry>> {
-    return this.entries.filter((entry) => entry.type === type);
+  ): Promise<Array<Extract<AgentSessionEntry, { type: TType }>>> {
+    return this.entries.filter(
+      (entry): entry is Extract<AgentSessionEntry, { type: TType }> => entry.type === type,
+    );
   }
 
   async getLabel(id: string): Promise<string | undefined> {
@@ -1271,7 +1303,7 @@ class PgAgentSessionEntryTreeHandle implements AgentSessionEntryTreeHandle {
     this.entries.push(entry);
     this.byId.set(entry.id, entry);
     this.updateLabel(entry);
-    this.currentLeafId = entry.type === 'leaf' ? String(entry.targetId ?? '') || null : entry.id;
+    this.currentLeafId = PgAgentSessionEntryTreeHandle.leafIdAfter(entry);
   }
 
   async createEntryId(): Promise<string> {
