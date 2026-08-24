@@ -76,7 +76,7 @@ export function runAgentSessionConcurrencyContract(
     );
 
     test.skipIf(!options.genuineConcurrency)(
-      'keeps mergeOwner and cross-owner projections free of an ABBA deadlock',
+      'keeps mergeOwner and cross-owner projections result-consistent under concurrent contention',
       async () => {
         const store = makeStore();
         await store.createSession(makeAgentSessionInput());
@@ -86,12 +86,17 @@ export function runAgentSessionConcurrencyContract(
         await store.createSession(
           makeAgentSessionInput({ id: 'session-3', ownerId: 'owner-b', stageId: 'stage-3' }),
         );
-        // The order-sensitive path is the cross-owner one: mergeOwner locks
-        // every session of both owners (id-ordered single statement) before the
-        // two counters in sorted order, while each concurrent projection locks
-        // its session row first and then that owner's counter. Racing them must
-        // never form a lock-acquisition cycle (a deadlock surfaces here as a
-        // PostgreSQL 40P01 abort, failing the test).
+        // This is a result-consistency probe, not a deadlock probe. Every
+        // writer in this package (mergeOwner and the projection writers) uses a
+        // single global lock order — the parent session row before its child
+        // rows, and the session row before that owner's counter — so no
+        // opposite-order path exists for this race to exercise a deadlock.
+        // Deadlock freedom follows from that invariant, which this free-running
+        // race cannot falsify. What it does verify deterministically: the
+        // session-row locks serialize each projection against the merge, so all
+        // four transactions commit, and the assertions below pin the merged
+        // result (duplicate-free stream, durable counter == highest allocated
+        // id, source counter deleted, owner rosters).
         await Promise.all([
           store.mergeOwner('owner-a', 'owner-b'),
           store.setActiveStage('session-1', 'stage-1b'),

@@ -415,9 +415,11 @@ export interface AgentSessionHooks {
     meta: AgentSessionMeta,
   ) => Promise<void>;
   /**
-   * Runs after the message event is staged in the transaction but before the
-   * delivery classification and any requeue commit. The event is NOT durable
-   * yet — durability exists only at COMMIT — and this hook is an abort point:
+   * Runs after the message event is staged in the transaction, once its
+   * delivery (steer/queued) has already been classified and written into the
+   * staged event, but before any requeue and before COMMIT. The event is NOT
+   * durable yet — durability exists only at COMMIT — and this hook is an
+   * abort point:
    * a throwing hook aborts the whole `postUserMessage`, the message is not
    * persisted, the session is not requeued, and the caller receives the error.
    * That veto semantics matches the reference, whose in-transaction host steps
