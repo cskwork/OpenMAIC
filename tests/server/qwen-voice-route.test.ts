@@ -67,10 +67,16 @@ describe('Qwen voice registration route', () => {
   });
 
   it('returns a readable message while retaining the typed Qwen error code', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ code: 'UpstreamFailure' }), { status: 502 }),
-    );
-    const response = await POST(request());
+    // A lookup 5xx is tolerated (falls through to re-register), so surface the
+    // Qwen error from the authoritative create action instead.
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ output: { total_count: 0, voice_list: [] } })),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ code: 'UpstreamFailure' }), { status: 502 }),
+      );
+    const response = await POST(request(validReferenceAudioBase64()));
     const body = await response.json();
     expect(body).toMatchObject({
       success: false,
@@ -108,6 +114,38 @@ describe('Qwen voice registration route', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(3);
     expect(JSON.parse(String(fetchSpy.mock.calls[2][1]?.body))).toMatchObject({
       input: { action: 'create', preferred_name: expect.any(String) },
+    });
+  });
+
+  it('re-registers the cached clip when the existence lookup hits a vendor 5xx', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ code: 'UpstreamFailure' }), { status: 500 }),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ output: { voice: 'voice-1' } })));
+    const response = await POST(request(validReferenceAudioBase64()));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      success: true,
+      voiceId: 'voice-1',
+      registered: true,
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(fetchSpy.mock.calls[1][1]?.body))).toMatchObject({
+      input: { action: 'create' },
+    });
+  });
+
+  it('fails loudly when the existence lookup reports an auth error', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ code: 'InvalidApiKey' }), { status: 401 }),
+    );
+    const response = await POST(request(validReferenceAudioBase64()));
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({
+      success: false,
+      errorCode: 'QWEN_VC_HTTP_ERROR',
     });
   });
 

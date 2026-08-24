@@ -324,6 +324,28 @@ describe('Qwen voice cloning', () => {
     });
   });
 
+  it('treats a vendor 5xx on the existence lookup as unknown', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ code: 'UpstreamFailure' }), { status: 500 }),
+    );
+    await expect(qwenVoiceExists(CONFIG, 'v1')).resolves.toBe('unknown');
+  });
+
+  it('treats a network error on the existence lookup as unknown', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
+    await expect(qwenVoiceExists(CONFIG, 'v1')).resolves.toBe('unknown');
+  });
+
+  it('fails loudly on a 401 existence lookup', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ code: 'InvalidApiKey' }), { status: 401 }),
+    );
+    await expect(qwenVoiceExists(CONFIG, 'v1')).rejects.toMatchObject({
+      code: 'QWEN_VC_HTTP_ERROR',
+      httpStatus: 401,
+    });
+  });
+
   it('does not couple a shared enrollment to the first waiter aborting', async () => {
     let resolveVendor!: (response: Response) => void;
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(

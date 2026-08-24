@@ -91,6 +91,22 @@ function isUnknownVoiceResponse(body: QwenResponse): boolean {
   );
 }
 
+/**
+ * Vendor-side failures that make an existence lookup inconclusive: a 5xx or a
+ * network/transport error means the voice may still exist, so the caller should
+ * fall back to the idempotent re-register path rather than fail registration.
+ * Real client/config problems (e.g. 401/403) must still surface.
+ */
+function isTransientLookupFailure(error: unknown): boolean {
+  return (
+    error instanceof QwenVoiceCloneError &&
+    (error.code === 'QWEN_VC_TRANSPORT_ERROR' ||
+      (error.code === 'QWEN_VC_HTTP_ERROR' &&
+        typeof error.httpStatus === 'number' &&
+        error.httpStatus >= 500))
+  );
+}
+
 function resolveConfig(config: QwenVoiceCloneConfig): {
   apiKey: string;
   baseUrl: URL;
@@ -262,15 +278,24 @@ export async function qwenVoiceExists(
   let fetched = 0;
   let retriedEmptyPage = false;
   for (let pageIndex = 0; pageIndex < 100; pageIndex++) {
-    const body = await postJson(
-      endpoint(resolved.baseUrl, ENROLLMENT_PATH),
-      resolved.apiKey,
-      {
-        model: QWEN_VOICE_ENROLLMENT_MODEL,
-        input: { action: 'list', page_size: pageSize, page_index: pageIndex },
-      },
-      signal,
-    );
+    let body: QwenResponse;
+    try {
+      body = await postJson(
+        endpoint(resolved.baseUrl, ENROLLMENT_PATH),
+        resolved.apiKey,
+        {
+          model: QWEN_VOICE_ENROLLMENT_MODEL,
+          input: { action: 'list', page_size: pageSize, page_index: pageIndex },
+        },
+        signal,
+      );
+    } catch (error) {
+      // A transient vendor failure (5xx or network error) makes the lookup
+      // inconclusive: report 'unknown' so callers fall back to the cached-clip
+      // idempotent re-register path instead of surfacing an error.
+      if (isTransientLookupFailure(error)) return 'unknown';
+      throw error;
+    }
     const voices = Array.isArray(body.output?.voice_list) ? body.output.voice_list : [];
     if (
       voices.some((item) => item.voice === wanted && item.target_model === resolved.targetModel)
