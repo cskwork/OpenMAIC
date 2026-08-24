@@ -214,3 +214,65 @@ describe('generateAndStoreTTS — pinned narrator fallback (bound == global)', (
     expect(mocks.toastWarning).toHaveBeenCalledOnce();
   });
 });
+
+describe('generateAndStoreTTS — bound clone dead, global clone dead (review finding)', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+    mocks.audioPut.mockReset().mockResolvedValue(undefined);
+    mocks.audioDelete.mockReset().mockResolvedValue(undefined);
+    mocks.poolPut.mockReset().mockResolvedValue('ast_audio_allocated');
+    mocks.poolReplace.mockReset().mockResolvedValue(undefined);
+    mocks.poolRemove.mockReset().mockResolvedValue(undefined);
+    mocks.getCurrentModelConfig.mockReturnValue({});
+    mocks.pickNarratorAgent.mockReturnValue(undefined);
+    mocks.resolveAgentVoiceOptions.mockResolvedValue({});
+    mocks.listAgents.mockReturnValue([]);
+    mocks.toastWarning.mockReset();
+    clearUnavailableVoiceBindingsForTests();
+  });
+
+  it('rejects after exactly 2 attempts when the bound clone differs from the global clone and both are missing', async () => {
+    const { generateAndStoreTTS } = await import('@/lib/hooks/use-scene-generator');
+    mocks.settingsState.mockReturnValue({
+      ttsProviderId: 'qwen-tts',
+      ttsProvidersConfig: {
+        'qwen-tts': { apiKey: 'tts-key', modelId: QWEN_TTS_VOICE_CLONE_MODEL },
+      },
+      ttsVoice: 'clone-global-dead',
+      ttsSpeed: 1,
+    });
+    // Bound voice differs from the global voice; every synthesis is missing.
+    mocks.isTTSProviderEnabled.mockReturnValue(true);
+    mocks.pickNarratorAgent.mockReturnValue({
+      id: 'teacher-bound-dead',
+      role: 'teacher',
+      voiceConfig: { providerId: 'qwen-tts', voiceId: 'clone-bound-dead' },
+    });
+    mockFetch.mockResolvedValue(
+      jsonResponse(400, {
+        errorCode: 'QWEN_VC_VOICE_NOT_FOUND',
+        error: 'The cloned Qwen voice no longer exists.',
+      }),
+    );
+
+    await expect(generateAndStoreTTS('request-bound-dead', 'Hello class')).rejects.toThrow(
+      /no longer exists/,
+    );
+
+    // Bound attempt, then the global fallback attempt — then it stops. The
+    // retry is bounded to a single fallback hop: with both clones dead it must
+    // NOT recurse on the same dead global voice and hot-loop /api/generate/tts.
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const firstBody = JSON.parse(String(mockFetch.mock.calls[0][1]?.body));
+    const secondBody = JSON.parse(String(mockFetch.mock.calls[1][1]?.body));
+    expect(firstBody).toMatchObject({
+      ttsVoice: 'clone-bound-dead',
+      ttsModelId: QWEN_TTS_VOICE_CLONE_MODEL,
+    });
+    expect(secondBody).toMatchObject({
+      ttsVoice: 'clone-global-dead',
+      ttsModelId: QWEN_TTS_VOICE_CLONE_MODEL,
+    });
+    expect(mocks.toastWarning).toHaveBeenCalledOnce();
+  });
+});

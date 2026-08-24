@@ -269,6 +269,14 @@ interface TTSApiResponse {
   details?: string;
 }
 
+// A dead narrator voice is retried at most once against a DIFFERENT voice (the
+// global voice when the binding differs from it, or the deterministic
+// enabled-provider pick when bound == global). This bounds the total
+// /api/generate/tts attempts to 2 per call and guarantees the
+// QWEN_VC_VOICE_NOT_FOUND retry cannot loop a chain of dead voices
+// (bound-dead → global-dead → deterministic-dead → …) forever.
+const MAX_NARRATOR_VOICE_FALLBACK_HOPS = 1;
+
 /** Generate TTS for one speech action and return its allocated asset reference. */
 export async function generateAndStoreTTS(
   requestId: string,
@@ -282,6 +290,10 @@ export async function generateAndStoreTTS(
   // to retry narration against the deterministic enabled-provider pick when the
   // pinned narrator voice (bound == global) turns out to be unusable.
   overrideVoice?: ResolvedVoice,
+  // Internal: number of narrator voice-fallback hops already taken. Guards the
+  // QWEN_VC_VOICE_NOT_FOUND retry so a chain of dead voices can never loop
+  // /api/generate/tts beyond a single fallback hop.
+  fallbackHops = 0,
 ): Promise<string | null> {
   const settings = useSettingsStore.getState();
   // A generated roster's explicit voice binding is the course voice source of truth.
@@ -401,31 +413,28 @@ export async function generateAndStoreTTS(
       error && typeof error === 'object' && 'errorCode' in error
         ? (error as { errorCode?: unknown }).errorCode
         : undefined;
-    if (errorCode === 'QWEN_VC_VOICE_NOT_FOUND' && boundKey && boundVoice) {
-      markVoiceBindingUnavailable(boundVoice);
-      if (markVoiceBindingNoticeShown(boundKey)) {
-        toast.warning(getClientTranslation('settings.qwenCloneNarrationUnavailable'));
-      }
-      if (globalDiffers) {
-        // The binding is a voice distinct from the global one: retry with the
-        // binding marked unavailable, which makes the resolver fall back to the
-        // global voice.
-        return generateAndStoreTTS(
-          requestId,
-          text,
-          language,
-          signal,
-          retryOptions,
-          replaceAssetId,
-          stageId,
-        );
-      }
-      // Bound == global (pinned narrator): a retry would hit the same missing
-      // clone, so fall back to the deterministic enabled-provider pick once.
-      // (mark/notice were applied above; the helper's repeat is idempotent.)
-      if (!overrideVoice) {
-        const fallbackVoice = fallbackForUnusablePin();
-        if (fallbackVoice) {
+    // Recover from a missing clone only when the attempt that just failed used
+    // the bound binding itself: marking it unavailable makes the resolver fall
+    // back to the global voice, a DIFFERENT voice. When the failure is already
+    // on the global voice (or on the deterministic pick), retrying would hit
+    // the same dead voice — fall through and surface the error instead of
+    // hot-looping /api/generate/tts (bound-dead → global-dead → …). The
+    // fallbackHops bound keeps even pathological chains at a single hop.
+    if (
+      errorCode === 'QWEN_VC_VOICE_NOT_FOUND' &&
+      boundKey &&
+      boundVoice &&
+      fallbackHops < MAX_NARRATOR_VOICE_FALLBACK_HOPS
+    ) {
+      if (voiceBindingKey(resolvedVoice) === boundKey) {
+        markVoiceBindingUnavailable(boundVoice);
+        if (markVoiceBindingNoticeShown(boundKey)) {
+          toast.warning(getClientTranslation('settings.qwenCloneNarrationUnavailable'));
+        }
+        if (globalDiffers) {
+          // The binding is a voice distinct from the global one: retry with the
+          // binding marked unavailable, which makes the resolver fall back to the
+          // global voice.
           return generateAndStoreTTS(
             requestId,
             text,
@@ -434,8 +443,28 @@ export async function generateAndStoreTTS(
             retryOptions,
             replaceAssetId,
             stageId,
-            fallbackVoice,
+            undefined,
+            fallbackHops + 1,
           );
+        }
+        // Bound == global (pinned narrator): a retry would hit the same missing
+        // clone, so fall back to the deterministic enabled-provider pick once.
+        // (mark/notice were applied above; the helper's repeat is idempotent.)
+        if (!overrideVoice) {
+          const fallbackVoice = fallbackForUnusablePin();
+          if (fallbackVoice) {
+            return generateAndStoreTTS(
+              requestId,
+              text,
+              language,
+              signal,
+              retryOptions,
+              replaceAssetId,
+              stageId,
+              fallbackVoice,
+              fallbackHops + 1,
+            );
+          }
         }
       }
     }
