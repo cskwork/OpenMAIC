@@ -73,6 +73,33 @@ export function runAgentSessionConcurrencyContract(
       });
     });
 
+    test('charges abandoned lease takeovers to the attempt cap', async () => {
+      const store = makeStore();
+      await store.createSession(makeAgentSessionInput());
+
+      let claim = await store.claimNextSession('worker-0', 100, {
+        leaseTtlMs: 10_000,
+        maxAttempts: 5,
+      });
+      expect(claim).toMatchObject({ attempt: 1, claimReason: 'queued' });
+
+      for (let cycle = 0; cycle < 6; cycle += 1) {
+        const workerId = `worker-${cycle + 1}`;
+        // A negative TTL deterministically treats the still-owned lease as
+        // stale without cleanly releasing it through the store contract.
+        claim = await store.claimNextSession(workerId, 101 + cycle, {
+          leaseTtlMs: -1,
+          maxAttempts: 5,
+        });
+        expect(claim).toMatchObject({ attempt: cycle + 2, claimReason: 'orphaned' });
+      }
+
+      expect(await store.getSession('session-1')).toMatchObject({
+        status: 'running',
+        attempt: 7,
+      });
+    });
+
     test.skipIf(!options.genuineConcurrency)(
       'allows exactly one worker to win a simultaneous claim',
       async () => {

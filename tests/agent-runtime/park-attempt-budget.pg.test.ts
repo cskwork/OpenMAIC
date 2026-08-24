@@ -28,7 +28,7 @@ function transactionFor(pool: Pool): WithTransaction {
   };
 }
 
-describe.skipIf(!contractUrl)('parked session attempt budget', () => {
+describe.skipIf(!contractUrl)('session attempt budget takeovers', () => {
   let pool: Pool;
   let store: PgAgentSessionStore;
 
@@ -78,6 +78,40 @@ describe.skipIf(!contractUrl)('parked session attempt budget', () => {
     expect(await store.getSession('parked-session')).toMatchObject({
       status: 'running',
       attempt: 1,
+    });
+  });
+
+  it('caps six unclean-death takeovers with a cap of five', async () => {
+    await store.createSession({
+      id: 'crashloop-session',
+      ownerId: 'owner',
+      prompt: 'Keep crashing',
+      stageId: 'stage',
+    });
+
+    let claim = await store.claimNextSession('worker-0', 100, {
+      leaseTtlMs: 10_000,
+      maxAttempts: 5,
+    });
+    expect(claim).not.toBeNull();
+    expect(isOverAttemptCap(claim!)).toBe(false);
+
+    for (let cycle = 0; cycle < 6; cycle += 1) {
+      await pool.query(
+        `UPDATE agent_sessions SET lease_heartbeat_at = 0
+         WHERE id = 'crashloop-session'`,
+      );
+      claim = await store.claimNextSession(`worker-${cycle + 1}`, 101 + cycle, {
+        leaseTtlMs: 10_000,
+        maxAttempts: 5,
+      });
+      expect(claim).toMatchObject({ attempt: cycle + 2, claimReason: 'orphaned' });
+    }
+
+    expect(isOverAttemptCap(claim!)).toBe(true);
+    expect(await store.getSession('crashloop-session')).toMatchObject({
+      status: 'running',
+      attempt: 7,
     });
   });
 });
