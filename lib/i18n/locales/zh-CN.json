@@ -51,6 +51,14 @@
     "exportFailed": "导出失败",
     "classroomZip": "导出课堂 ZIP",
     "classroomZipDesc": "课程结构 + 媒体文件",
+    "scriptMd": "下载演讲稿 (.md)",
+    "scriptMdDesc": "以 Markdown 导出语音播报文字",
+    "script": "下载演讲稿",
+    "scriptDocx": "下载演讲稿 (.docx)",
+    "scriptDocxDesc": "真正的 Word DOCX 文档",
+    "slideFallback": "幻灯片 {{order}}",
+    "textOnly": "导出演讲稿",
+    "mediaPending": "等待媒体生成完成",
     "inlinePartial": "{{count}} 个外部资源未能打包，离线时课程可能无法正常显示。",
     "video": "导出视频",
     "videoDesc": "自包含 Hyperframes 工程（可渲染为 MP4）",
@@ -218,13 +226,6 @@
       "quiz": "测验",
       "interactive": "互动",
       "pbl": "PBL"
-    },
-    "multiTab": {
-      "conflict": {
-        "title": "另一个标签页正在编辑此课程",
-        "body": "编辑模式同一时间只允许一个标签页持有，避免变更冲突。请先关闭其他标签页（或等待对方会话超时），再在此进入编辑模式。",
-        "actionDismiss": "知道了"
-      }
     },
     "text": {
       "toolbar": "文本工具栏",
@@ -1393,6 +1394,16 @@
     "voxcpmStopPreview": "停止试听",
     "voxcpmPreviewVoice": "试听音色",
     "voxcpmDeleteVoice": "删除音色",
+    "qwenCloneVoicesTitle": "Qwen TTS 克隆音色",
+    "qwenCloneRefText": "请输入与参考音频完全一致的逐字文本",
+    "qwenCloneRefAudioHint": "请使用 1–60 秒的干净人声，推荐 10–20 秒；音频会转换为 24 kHz 单声道 PCM WAV。",
+    "qwenCloneSaved": "Qwen 克隆音色已注册并保存",
+    "qwenCloneSaveFailed": "Qwen 克隆音色注册失败",
+    "qwenCloneUnsupported": "当前浏览器不支持录音，请改为上传音频文件。",
+    "qwenCloneSpeedHint": "克隆音色始终以 1× 语速合成。",
+    "qwenCloneDeleteWarning": "音色已从本地移除，但服务商端删除失败。",
+    "qwenCloneNarrationUnavailable": "指定音色不可用，旁白将改用其他可用音色。",
+    "qwenCloneDiscussionUnavailable": "指定音色不可用，讨论将改用其他可用音色。",
     "providerOpenAIWhisper": "OpenAI ASR (gpt-4o-mini-transcribe)",
     "providerBrowserNative": "浏览器原生 ASR",
     "providerQwenASR": "Qwen ASR（阿里云百炼）",

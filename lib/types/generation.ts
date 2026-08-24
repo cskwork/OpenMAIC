@@ -41,6 +41,14 @@ export interface SelectedCourseMaterial {
   lastModified: number;
   type: string;
   order: number;
+  /** Allocated asset-pool id once the file has been ingested (part 0). */
+  assetId?: string;
+  /**
+   * SHA-256 of the file bytes, computed at upload time. This is the stable
+   * half of the extraction-cache key: two uploads of the same bytes get
+   * different allocated asset ids but the same digest (part 1).
+   */
+  contentDigest?: string;
 }
 
 export interface SessionDocumentSource {
@@ -51,6 +59,17 @@ export interface SessionDocumentSource {
   mimeType?: string;
   order: number;
   storageKey: string;
+  /**
+   * Allocated asset-pool id for this source. New sessions write it; legacy
+   * sessions carry only `storageKey` and keep working (back-compat).
+   */
+  assetId?: string;
+  /**
+   * SHA-256 of the source bytes, computed at upload time. Together with the
+   * extractor identity it keys the extraction derivation cache (part 1);
+   * legacy sessions predating the digest carry only `storageKey`.
+   */
+  contentDigest?: string;
   providerId?: string;
 }
 

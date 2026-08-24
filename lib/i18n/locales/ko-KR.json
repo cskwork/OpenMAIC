@@ -51,6 +51,14 @@
     "exportFailed": "내보내기 실패",
     "classroomZip": "교실 ZIP 내보내기",
     "classroomZipDesc": "강좌 구조 + 미디어 파일",
+    "scriptMd": "대본 다운로드 (.md)",
+    "scriptMdDesc": "Markdown으로 내레이션 텍스트",
+    "script": "대본 다운로드",
+    "scriptDocx": "대본 다운로드 (.docx)",
+    "scriptDocxDesc": "DOCX 형식의 실제 Word 문서",
+    "slideFallback": "슬라이드 {{order}}",
+    "textOnly": "스크립트 내보내기",
+    "mediaPending": "미디어 생성이 완료되기를 기다리는 중",
     "inlinePartial": "{{count}}개의 외부 에셋을 번들에 포함할 수 없어 오프라인에서 강좌가 올바르게 표시되지 않을 수 있습니다.",
     "video": "동영상 내보내기",
     "videoDesc": "독립형 Hyperframes 프로젝트(MP4로 렌더링 가능)",
@@ -218,13 +226,6 @@
       "quiz": "퀴즈",
       "interactive": "인터랙티브",
       "pbl": "PBL"
-    },
-    "multiTab": {
-      "conflict": {
-        "title": "다른 탭에서 이 강좌를 편집 중입니다",
-        "body": "충돌 방지를 위해 편집은 하나의 탭에서만 가능합니다. 다른 탭을 닫거나(또는 세션이 만료될 때까지 기다린 후) 여기서 편집 모드로 진입하세요.",
-        "actionDismiss": "확인했습니다"
-      }
     },
     "text": {
       "toolbar": "텍스트 도구 모음",
@@ -1393,6 +1394,16 @@
     "voxcpmStopPreview": "미리 듣기 중지",
     "voxcpmPreviewVoice": "음성 미리 듣기",
     "voxcpmDeleteVoice": "음성 삭제",
+    "qwenCloneVoicesTitle": "Qwen TTS Cloned Voices",
+    "qwenCloneRefText": "Enter the verbatim transcript of the reference audio",
+    "qwenCloneRefAudioHint": "Use a clean 1–60 second voice sample. A 10–20 second sample is recommended; audio is converted to 24 kHz mono PCM WAV.",
+    "qwenCloneSaved": "Qwen cloned voice registered and saved",
+    "qwenCloneSaveFailed": "Failed to register the Qwen cloned voice",
+    "qwenCloneUnsupported": "Recording is not supported in this browser; upload an audio file instead.",
+    "qwenCloneSpeedHint": "Cloned voices always synthesize at 1× speed.",
+    "qwenCloneDeleteWarning": "The voice was removed locally, but provider deletion failed.",
+    "qwenCloneNarrationUnavailable": "The assigned voice is unavailable. Narration will use another enabled voice instead.",
+    "qwenCloneDiscussionUnavailable": "The assigned voice is unavailable. Discussion will use another enabled voice instead.",
     "providerOpenAIWhisper": "OpenAI ASR (gpt-4o-mini-transcribe)",
     "providerBrowserNative": "브라우저 기본 ASR",
     "providerQwenASR": "Qwen ASR (Alibaba Cloud Bailian)",
