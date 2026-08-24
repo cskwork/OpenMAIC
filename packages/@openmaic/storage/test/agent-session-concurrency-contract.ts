@@ -71,7 +71,7 @@ export function runAgentSessionConcurrencyContract(
           store.postUserMessage('session-1', { text: 'Concurrent message' }),
           store.requestCancel('session-1'),
         ]);
-        expect(await store.readMaxId('owner-a')).toBe(4n);
+        expect(await store.readMaxId('owner-a')).toBe(BigInt(4));
       },
     );
   });

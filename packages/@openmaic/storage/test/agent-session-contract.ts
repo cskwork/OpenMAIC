@@ -263,14 +263,14 @@ export function runAgentSessionStoreContract(
       await store.createSession(makeAgentSessionInput());
       await store.setActiveStage('session-1', 'stage-2');
       await store.requestCancel('session-1');
-      const events = await store.readAfter('owner-a', 0n);
+      const events = await store.readAfter('owner-a', BigInt(0));
       expect(events.map((event) => event.type)).toEqual([
         'session_created',
         'session_active_stage',
         'session_cancel_requested',
       ]);
       expect(events.map((event) => event.id)).toEqual(['1', '2', '3']);
-      expect(await store.readMaxId('owner-a')).toBe(3n);
+      expect(await store.readMaxId('owner-a')).toBe(BigInt(3));
       expect(await store.readRetirement('owner-a')).toBeNull();
     });
 
@@ -287,9 +287,9 @@ export function runAgentSessionStoreContract(
         'session-1',
         'session-2',
       ]);
-      const targetEvents = await store.readAfter('owner-b', 0n);
+      const targetEvents = await store.readAfter('owner-b', BigInt(0));
       expect(targetEvents.map((event) => event.id)).toEqual(['1', '3', '4']);
-      expect(await store.readMaxId('owner-b')).toBe(4n);
+      expect(await store.readMaxId('owner-b')).toBe(BigInt(4));
       expect(await store.mergeOwner('owner-a', 'owner-b')).toBe(0);
     });
   });

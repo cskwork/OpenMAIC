@@ -92,7 +92,7 @@ describe('PgAgentSessionStore with PGlite', () => {
       id: 'session-1',
     });
     expect(await brokenProjection.getSession('session-1')).not.toBeNull();
-    expect(await brokenProjection.readMaxId('owner-a')).toBe(0n);
+    expect(await brokenProjection.readMaxId('owner-a')).toBe(BigInt(0));
     expect(logged).toHaveLength(1);
   });
 
