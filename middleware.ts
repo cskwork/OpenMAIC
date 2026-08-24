@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import { isAgentRuntimeEnabled, isProWorkbenchEnabled } from '@/lib/config/feature-flags';
+
 /** Convert string to Uint8Array */
 function encode(str: string): Uint8Array {
   return new TextEncoder().encode(str);
@@ -42,12 +44,23 @@ async function verifyToken(token: string, accessCode: string): Promise<boolean> 
 }
 
 export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
+  // Return an actual server-side 404 when either half of the workbench is off.
+  // The public flag is inlined into the client build, while the runtime flag
+  // remains server-only; requiring both prevents a visible interface from
+  // targeting a background runtime that is not running.
+  if (
+    !(isProWorkbenchEnabled() && isAgentRuntimeEnabled()) &&
+    (pathname === '/workbench' || pathname.startsWith('/workbench/'))
+  ) {
+    return new NextResponse('Not found', { status: 404 });
+  }
+
   const accessCode = process.env.ACCESS_CODE;
   if (!accessCode) {
     return NextResponse.next();
   }
-
-  const { pathname } = request.nextUrl;
 
   // Whitelist: access-code endpoints, health check
   if (pathname.startsWith('/api/access-code/') || pathname === '/api/health') {
