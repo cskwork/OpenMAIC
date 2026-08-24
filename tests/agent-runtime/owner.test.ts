@@ -50,4 +50,27 @@ describe('resolveRequestOwnerId', () => {
 
     expect(responseHeaders.get('set-cookie')).toMatch(/; Secure$/);
   });
+
+  it('uses an explicit authenticated owner without minting an anonymous cookie', () => {
+    const responseHeaders = new Headers();
+
+    const ownerId = resolveRequestOwnerId(
+      new Request('http://localhost/agent'),
+      responseHeaders,
+      'user-42',
+    );
+
+    expect(ownerId).toBe('user-42');
+    expect(responseHeaders.has('set-cookie')).toBe(false);
+  });
+
+  it('prefers an authenticated owner over an existing anonymous cookie', () => {
+    const responseHeaders = new Headers();
+    const request = new Request('http://localhost/agent', {
+      headers: { cookie: 'anonymous_id=a652e716-0e2e-47f5-8432-4ee60f6f0977' },
+    });
+
+    expect(resolveRequestOwnerId(request, responseHeaders, 'user-42')).toBe('user-42');
+    expect(responseHeaders.has('set-cookie')).toBe(false);
+  });
 });

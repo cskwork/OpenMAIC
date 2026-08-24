@@ -128,10 +128,25 @@ export interface AgentSessionEntryStorageOpenOptions {
 
 function translateStorageError(error: unknown): never {
   if (error instanceof AgentSessionEntryTreeError) {
-    throw new SessionError('invalid_session', error.message, error);
+    // Keep the reference's distinction between a caller-referenced entry that
+    // is merely absent (not_found) and a tree whose own structure is corrupt
+    // (invalid_session): the package reports both as the same class, keyed by
+    // the reason text.
+    throw new SessionError(
+      error.message.includes('missing entry') ? 'not_found' : 'invalid_session',
+      error.message,
+      error,
+    );
   }
   if (error instanceof AgentSessionLeaseLostError) {
     throw new SessionError('storage', error.message, error);
+  }
+  // A session can vanish (for example, a concurrent soft-delete) between
+  // open()'s existence pre-check and the package's own load; the package
+  // reports that race as a plain error rather than a typed one, so classify
+  // it the same way as the pre-check's not_found.
+  if (error instanceof Error && error.message.includes('unknown session')) {
+    throw new SessionError('not_found', error.message, error);
   }
   throw error;
 }

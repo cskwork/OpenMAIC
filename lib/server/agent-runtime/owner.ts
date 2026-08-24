@@ -32,21 +32,28 @@ function anonymousCookieHeader(id: string): string {
  *
  * Session lists are user-visible data keyed by owner. A shared constant would
  * let unrelated visitors see one another's sessions, while an anonymous cookie
- * provides the smallest useful isolation boundary. This function is also the
- * single seam that a future authenticated principal resolver can replace.
+ * provides the smallest useful isolation boundary.
  *
- * When a cookie must be minted, `responseHeaders` receives the outgoing
- * Set-Cookie header. Until HTTP routes consume this seam, it may be omitted;
- * route callers must pass the headers they return to the client.
+ * An explicit `authenticatedOwnerId` (from the host's auth layer) is returned
+ * verbatim: authenticated principals must not be partitioned under a fresh
+ * anonymous identity, and no anonymous cookie is minted for them.
+ *
+ * Otherwise the identity comes from a valid anonymous cookie, or a fresh UUID
+ * is minted. A mint is only useful when it is persisted, so `responseHeaders`
+ * — the headers the caller returns to the client — is required: it receives
+ * the outgoing Set-Cookie header whenever a new cookie is issued.
  */
 export function resolveRequestOwnerId(
   req: Pick<Request, 'headers'>,
-  responseHeaders?: Headers,
+  responseHeaders: Headers,
+  authenticatedOwnerId?: string,
 ): string {
+  if (authenticatedOwnerId) return authenticatedOwnerId;
+
   const existingId = readCookie(req.headers, ANONYMOUS_COOKIE);
   if (existingId && UUID_V4.test(existingId)) return `anon:${existingId}`;
 
   const id = randomUUID();
-  responseHeaders?.append('Set-Cookie', anonymousCookieHeader(id));
+  responseHeaders.append('Set-Cookie', anonymousCookieHeader(id));
   return `anon:${id}`;
 }

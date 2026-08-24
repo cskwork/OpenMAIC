@@ -17,7 +17,13 @@ export const agentRuntimeConfig = {
   maxConcurrent: numberFromEnv(process.env.OPENMAIC_AGENT_RUNTIME_MAX_CONCURRENT, 2),
   /** Maximum consecutive unattended starts or resumptions. */
   maxAttempts: numberFromEnv(process.env.OPENMAIC_AGENT_RUNTIME_MAX_ATTEMPTS, 5),
-  /** Native conversation compaction is deliberately opt-in at this layer. */
+  /**
+   * Native conversation compaction is opt-in at this layer: it runs only when
+   * OPENMAIC_AGENT_COMPACTION_ENABLED=true. This is a deliberate inversion of
+   * the reference runtime's opt-out default — the reusable compaction runtime
+   * lands in a later slice, and until then the runner runs without context
+   * transformation.
+   */
   compaction: {
     enabled: process.env.OPENMAIC_AGENT_COMPACTION_ENABLED === 'true',
     ...(process.env.OPENMAIC_AGENT_COMPACTION_RESERVE_TOKENS

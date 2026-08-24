@@ -35,7 +35,7 @@
  * on (stageId, sceneId), and `generate_scene` derives its scene id from the
  * outline entry rather than minting one.
  *
- * Ported verbatim (semantics) from the spike's `spike/src/resume.ts`.
+ * Ported verbatim (semantics) from the runtime spike prototype.
  */
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai';

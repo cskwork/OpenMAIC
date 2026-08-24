@@ -126,4 +126,51 @@ describe.skipIf(!contractUrl)('AgentSessionEntryStorage with PostgreSQL 16', () 
     } satisfies Partial<SessionError>);
     await expect(staleTree.getEntries()).resolves.toEqual([]);
   });
+
+  it('maps a missing referenced entry to not_found and a corrupt tree to invalid_session', async () => {
+    const session = await store.createSession({
+      id: 'adapter-code-mapping',
+      ownerId: 'anon:test-owner',
+      prompt: 'Distinguish error codes.',
+    });
+    const claim = await store.claimNextSession('worker-a', 101, {
+      leaseTtlMs: 10_000,
+      maxAttempts: 5,
+      sessionId: session.id,
+    });
+    expect(claim).not.toBeNull();
+    const tree = await store.openEntryTree(session.id, 'worker-a', claim!.attempt);
+    const storage = AgentSessionEntryStorage.fromHandle(session, tree);
+    const root: SessionTreeEntry = {
+      type: 'message',
+      id: 'code-map-root',
+      parentId: null,
+      timestamp: '2026-08-24T00:00:00.000Z',
+      message: { role: 'user', content: 'Start.', timestamp: 1 },
+    };
+    await storage.appendEntry(root);
+
+    // A caller-referenced entry that is not in the tree is not_found...
+    await expect(storage.setLeafId('missing-target')).rejects.toMatchObject({
+      name: 'SessionError',
+      code: 'not_found',
+    });
+    await expect(storage.getPathToRoot('missing-leaf')).rejects.toMatchObject({
+      name: 'SessionError',
+      code: 'not_found',
+    });
+
+    // ...while a tree whose own leaf pointer dangles is invalid_session.
+    await storage.appendEntry({
+      type: 'leaf',
+      id: 'code-map-leaf',
+      parentId: root.id,
+      timestamp: '2026-08-24T00:00:01.000Z',
+      targetId: 'ghost-leaf',
+    });
+    await expect(storage.getLeafId()).rejects.toMatchObject({
+      name: 'SessionError',
+      code: 'invalid_session',
+    });
+  });
 });
