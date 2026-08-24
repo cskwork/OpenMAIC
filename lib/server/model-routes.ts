@@ -44,6 +44,14 @@ const VALID_LEVELS: readonly ThinkingLevel[] = ['minimal', 'low', 'medium', 'hig
 /** A resolved route entry: the model string plus an optional full thinking config. */
 export interface StageRoute {
   model: string;
+  /** Explicit pi transport dialect (for example openai-completions). */
+  api?: string;
+  /**
+   * Effective context window for this stage, overriding the provider catalog
+   * value. Consumed by pi-native compaction thresholds (e.g. the agent driver)
+   * so an operator can pin a conservative window below the catalog number.
+   */
+  contextWindow?: number;
   /**
    * Full thinking config for this stage (the unified ThinkingConfig abstraction:
    * mode / effort / level / enabled / budgetTokens / excludeReasoningOutput).
@@ -129,6 +137,7 @@ export const LLM_STAGES = [
   'generate-classroom',
   'web-search-query-rewrite',
   'maic-agent',
+  'maic-agent-driver',
 ] as const;
 
 export type LlmStage = (typeof LLM_STAGES)[number];
@@ -149,9 +158,33 @@ function parseRouteValue(key: string, value: unknown): StageRoute | undefined {
       return undefined;
     }
     const route: StageRoute = { model };
+    const api = typeof obj.api === 'string' ? obj.api.trim() : '';
+    const dialect = typeof obj.dialect === 'string' ? obj.dialect.trim() : '';
+    if (api || dialect) route.api = api || dialect;
+    if (obj.api !== undefined && !api) {
+      log.warn(`Invalid api for stage "${key}" in MODEL_ROUTES; ignored.`);
+    }
+    if (obj.dialect !== undefined && !dialect) {
+      log.warn(`Invalid dialect for stage "${key}" in MODEL_ROUTES; ignored.`);
+    }
+    if (api && dialect && api !== dialect) {
+      log.warn(`Both api and dialect are set for stage "${key}"; api wins.`);
+    }
     if (obj.thinking !== undefined) {
       const thinking = parseThinking(key, obj.thinking);
       if (thinking) route.thinking = thinking;
+    }
+    if (obj.contextWindow !== undefined) {
+      const contextWindow = obj.contextWindow;
+      if (
+        typeof contextWindow === 'number' &&
+        Number.isFinite(contextWindow) &&
+        contextWindow > 0
+      ) {
+        route.contextWindow = Math.floor(contextWindow);
+      } else {
+        log.warn(`Invalid contextWindow for stage "${key}" in MODEL_ROUTES; ignored.`);
+      }
     }
     return route;
   }
