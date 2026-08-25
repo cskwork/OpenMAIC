@@ -149,7 +149,7 @@ describe('planResume', () => {
     if (plan.kind === 'continue') expect(plan.repairedToolCalls).toEqual([]);
   });
 
-  it('synthesizes error results for dangling tool calls (died DURING tool execution)', () => {
+  it('reports dangling tool calls without mutating the durable recovery view', () => {
     const transcript = [
       user('build a course'),
       assistantWithCalls([
@@ -165,16 +165,7 @@ describe('planResume', () => {
     expect(plan.kind).toBe('continue');
     if (plan.kind !== 'continue') throw new Error('unreachable');
     expect(plan.repairedToolCalls).toEqual(['c3']);
-    const repaired = plan.messages[plan.messages.length - 1] as unknown as {
-      role: string;
-      toolCallId: string;
-      isError: boolean;
-      content: { text: string }[];
-    };
-    expect(repaired.role).toBe('toolResult');
-    expect(repaired.toolCallId).toBe('c3');
-    expect(repaired.isError).toBe(true);
-    expect(repaired.content[0].text).toMatch(/interrupted/);
+    expect(plan.messages).toEqual(transcript);
   });
 
   it('reports already-complete when the tail assistant message has no tool calls', () => {
@@ -291,11 +282,7 @@ describe('planResume', () => {
     if (plan.kind !== 'continue') throw new Error('unreachable');
     expect(plan.repairedToolCalls).toEqual(['c1']);
     expect(plan.messages).not.toContain(transcript[2]);
-    expect(plan.messages.at(-1)).toMatchObject({
-      role: 'toolResult',
-      toolCallId: 'c1',
-      isError: true,
-    });
+    expect(plan.messages).toEqual(transcript.slice(0, -1));
   });
 
   it('preserves a successful terminal side effect exposed by stripping an empty tail', () => {

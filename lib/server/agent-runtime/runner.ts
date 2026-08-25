@@ -29,6 +29,12 @@ import {
   type SessionEntryHistory,
 } from './entry-tree-storage';
 import { planResume, type ResumeAction } from './resume';
+import {
+  appendInterruptedToolCallResults,
+  repairOrphanedToolCalls,
+  trackToolCallMessage,
+  type PendingToolCall,
+} from './tool-call-integrity';
 import { getAgentSessionStore } from './store';
 
 const log = createLogger('AgentRunner');
@@ -575,24 +581,32 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
     const recovery = await loadEntryHistory();
     const historyMessages = recovery.messages;
     const plan = planResume(historyMessages);
-    const repairedCount = plan.kind === 'continue' ? plan.repairedToolCalls.length : 0;
     const plannedMessages = plan.kind === 'start' ? [] : plan.messages;
-    const retainedCount = plannedMessages.length - repairedCount;
+    // planResume now contains durable messages only; synthetic receipts are a
+    // read-time provider view owned by repairOrphanedToolCalls.
+    const retainedCount = plannedMessages.length;
 
-    // planResume may strip an incomplete suffix and synthesize missing tool
-    // results. Reflect both changes in the append-only tree before execution.
+    // planResume may strip an incomplete suffix. Reflect the truncation in the
+    // append-only tree before execution; missing tool results are repaired at
+    // the read boundary and are deliberately never persisted.
     if (retainedCount < historyMessages.length) {
       const targetId = retainedCount > 0 ? recovery.contextEntryIds[retainedCount - 1]! : null;
       await writeRequiredSessionEntry(async () => {
         await entrySession!.moveTo(targetId);
       }, markLeaseLost);
     }
-    for (const repaired of plannedMessages.slice(retainedCount)) {
-      await writeRequiredSessionEntry(async () => {
-        await entrySession!.appendMessage(repaired);
-      }, markLeaseLost);
-    }
     if (leaseLost) throw new AgentSessionLeaseLostError(id, WORKER_ID, attempt);
+    // planResume still owns tail classification/truncation, but its synthetic
+    // results are a read-time view only. The general repair below also covers
+    // old middle-of-history orphans without mutating the entry tree.
+    const contextRepair = repairOrphanedToolCalls(plannedMessages);
+    const modelMessages = contextRepair.messages;
+    const repairedToolCallIds = [
+      ...new Set([
+        ...(plan.kind === 'continue' ? plan.repairedToolCalls : []),
+        ...contextRepair.repairedToolCalls,
+      ]),
+    ];
 
     const loggedMessages = await store.listUserMessages(id);
     const historyUsers = recovery.cursorMessages.filter((message) => message.role === 'user');
@@ -634,8 +648,8 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
         pid: process.pid,
         attempt,
         reason: plan.kind === 'start' || meta.claimReason === 'queued' ? 'follow_up' : 'crash',
-        transcriptMessages: plan.kind === 'start' ? 0 : plan.messages.length,
-        repairedToolCalls: plan.kind === 'continue' ? plan.repairedToolCalls : [],
+        transcriptMessages: modelMessages.length,
+        repairedToolCalls: repairedToolCallIds,
       });
     }
 
@@ -667,7 +681,7 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       model: driver.piModel,
       tools,
       allowedToolNames: MINIMAL_AGENT_TOOL_NAMES,
-      ...(plan.kind === 'start' ? {} : { history: plan.messages }),
+      ...(plan.kind === 'start' ? {} : { history: modelMessages }),
       afterToolCall: (toolContext) => {
         toolCalls += 1;
         if (askUserLatch.shouldTerminate(toolContext.toolCall.name, toolContext.isError)) {
@@ -677,14 +691,47 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       },
     });
 
+    // Every finalized pi message is inserted into the only history source on
+    // the same ordered chain as its event. The INSERT is a critical write: a
+    // failure aborts the loop and prevents a successful settlement.
+    const inFlightToolCalls = new Map<string, PendingToolCall>();
     const unsubscribe = agent.subscribe((event: AgentEvent) => {
       emit(event.type, event);
       if (event.type === 'message_end') {
+        // A tool call becomes pending as soon as its assistant frame is
+        // emitted, so an abort can queue its receipt even while that frame is
+        // still waiting on the ordered write chain. A result stops being
+        // pending only AFTER its fenced append succeeds; clearing it at event
+        // time would reopen the orphan race during write-chain drain.
+        if (event.message.role === 'assistant') {
+          trackToolCallMessage(inFlightToolCalls, event.message);
+        }
         enqueue(async () => {
           await entrySession!.appendMessage(event.message);
+          if (event.message.role === 'toolResult') {
+            trackToolCallMessage(inFlightToolCalls, event.message);
+          }
         }, true);
       }
     });
+    let interruptedResultsQueued = false;
+    const queueInterruptedToolResults = (): void => {
+      if (interruptedResultsQueued || inFlightToolCalls.size === 0) return;
+      interruptedResultsQueued = true;
+      enqueue(async () => {
+        // Resolve the set only after all preceding message appends have
+        // drained. Successfully persisted results remove themselves above;
+        // calls still present here are the genuinely orphaned durable set.
+        const calls = [...inFlightToolCalls.values()];
+        inFlightToolCalls.clear();
+        await appendInterruptedToolCallResults(calls, {
+          append: async (message) => {
+            await entrySession!.appendMessage(message);
+          },
+          onFenceLost: markLeaseLost,
+        });
+      }, true);
+    };
     const abortAgent = () => agent.abort();
     abort.signal.addEventListener('abort', abortAgent);
 
@@ -767,6 +814,12 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
         if (abort.signal.aborted) break;
         if (delivered === 0 || steeredThisAttempt === before) break;
       }
+
+      // A tool call that was still in flight when the loop wound down has no
+      // durable receipt yet. Append its interrupted result before the terminal
+      // flush so the tree is provider-safe for the next claim, and so a
+      // shutdown/lease-loss park leaves no orphaned call behind.
+      queueInterruptedToolResults();
       await flushAll();
 
       const loopError = terminalLoopError(agent.state.messages, agent.state.errorMessage);
@@ -806,6 +859,7 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       }
       log.info(`session ${id} -> ${status} (attempt ${attempt}, ${toolCalls} tool calls)`);
     } catch (error) {
+      queueInterruptedToolResults();
       if (isLeaseLostError(error)) markLeaseLost();
       const message = error instanceof Error ? error.message : String(error);
       if (ctx.shuttingDown || leaseLost || tripwireViolated) {
