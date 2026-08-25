@@ -232,7 +232,6 @@ interface SessionRow extends Record<string, unknown> {
   owner_id: string;
   prompt: string;
   stage_id: string;
-  active_stage_id: string | null;
   skill_id: string | null;
   origin: string | null;
   existing_course: boolean;
@@ -246,7 +245,7 @@ interface SessionRow extends Record<string, unknown> {
   updated_at: Date | string;
 }
 
-const SESSION_COLUMNS = `id, owner_id, prompt, stage_id, active_stage_id, skill_id, origin,
+const SESSION_COLUMNS = `id, owner_id, prompt, stage_id, skill_id, origin,
   existing_course, status, attempt, lease_worker_id, lease_worker_pid,
   lease_heartbeat_at, error, created_at, updated_at`;
 
@@ -260,7 +259,6 @@ function sessionMeta(row: SessionRow): AgentSessionMeta {
     ownerId: row.owner_id,
     prompt: row.prompt,
     stageId: row.stage_id,
-    ...(row.active_stage_id ? { activeStageId: row.active_stage_id } : {}),
     ...(row.skill_id ? { skillId: row.skill_id } : {}),
     ...(row.origin ? { origin: row.origin } : {}),
     existingCourse: row.existing_course,
@@ -419,41 +417,6 @@ export class PgAgentSessionStore
       );
       if (!result.rows[0]) return false;
       await this.appendProjection({ type: 'session_deleted', sessionId, ts: this.clock() }, tx);
-      return true;
-    });
-  }
-
-  async resolveActiveStage(sessionId: string): Promise<string> {
-    const result = await this.queryable.query<{ stage_id: string; active_stage_id: string | null }>(
-      `SELECT stage_id, active_stage_id FROM ${this.table('sessions')}
-       WHERE id = $1 AND deleted_at IS NULL`,
-      [sessionId],
-    );
-    const row = result.rows[0];
-    if (!row) throw new Error(`@openmaic/storage: unknown session ${JSON.stringify(sessionId)}`);
-    return row.active_stage_id ?? row.stage_id;
-  }
-
-  async setActiveStage(sessionId: string, stageId: string): Promise<boolean> {
-    return this.transaction(async (tx) => {
-      const locked = await tx.query<{ active_stage_id: string | null }>(
-        `SELECT active_stage_id FROM ${this.table('sessions')}
-         WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
-        [sessionId],
-      );
-      const prior = locked.rows[0];
-      if (!prior) return false;
-      await tx.query(
-        `UPDATE ${this.table('sessions')} SET active_stage_id = $2, updated_at = now()
-         WHERE id = $1 AND deleted_at IS NULL`,
-        [sessionId, stageId],
-      );
-      if (prior.active_stage_id !== stageId) {
-        await this.appendProjection(
-          { type: 'session_active_stage', sessionId, ts: this.clock(), activeStageId: stageId },
-          tx,
-        );
-      }
       return true;
     });
   }
@@ -1021,8 +984,7 @@ export class PgAgentSessionStore
       if (!counter) throw new Error(`cannot allocate owner event id for ${session.owner_id}`);
       const status = 'status' in event ? event.status : null;
       const attempt = 'attempt' in event ? event.attempt : null;
-      const data =
-        event.type === 'session_active_stage' ? { activeStageId: event.activeStageId } : {};
+      const data = {};
       await transaction.query(
         `INSERT INTO ${this.table('ownerEvents')}
           (owner_id, id, ts, session_id, type, status, attempt, data)
@@ -1083,13 +1045,6 @@ export class PgAgentSessionStore
         sessionId: row.session_id,
         ts: Number(row.ts),
       };
-      if (row.type === 'session_active_stage') {
-        return {
-          ...base,
-          type: row.type,
-          activeStageId: String(decodedObject(row.data).activeStageId ?? ''),
-        };
-      }
       if (row.type === 'session_created' || row.type === 'session_status') {
         return {
           ...base,
