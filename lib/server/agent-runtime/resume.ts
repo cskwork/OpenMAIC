@@ -22,14 +22,14 @@
  *                                   its own question)
  *   ends with `assistant` + calls-> we died DURING tool execution. The calls have
  *                                   no results, so the transcript is not a legal
- *                                   continuation point. We synthesize an error
- *                                   tool result per dangling call telling the
- *                                   model the step was interrupted, then continue.
+ *                                   continuation point. We report the dangling
+ *                                   ids; the shared read-boundary repair adds
+ *                                   provider-safe interrupted results.
  *   ends with non-empty
  *   `assistant`, none            -> the model had already stopped calling tools;
  *                                   the run was effectively complete.
  *
- * The synthesized-error branch is what makes tool execution AT-LEAST-ONCE: a
+ * The interrupted-result repair is what makes tool execution AT-LEAST-ONCE: a
  * tool that ran but whose result never got persisted will be re-issued by the
  * model. Every tool in this system must therefore be idempotent — `putScene` is,
  * on (stageId, sceneId), and `generate_scene` derives its scene id from the
@@ -44,10 +44,6 @@ export type ResumeAction =
   | { kind: 'start' }
   | { kind: 'continue'; messages: AgentMessage[]; repairedToolCalls: string[] }
   | { kind: 'already-complete'; messages: AgentMessage[] };
-
-const INTERRUPTED_TEXT =
-  'This tool call was interrupted by a worker restart and produced no recorded result. ' +
-  'The underlying store is idempotent, so re-issue the same call if the step is still needed.';
 
 function isEmptyAssistantMessage(message: AgentMessage): boolean {
   if (message.role !== 'assistant') return false;
@@ -154,16 +150,9 @@ export function planResume(transcript: AgentMessage[] | null): ResumeAction {
       // assistant message; treat as a normal continuation point.
       return { kind: 'continue', messages, repairedToolCalls: [] };
     }
-    for (const call of dangling) {
-      messages.push({
-        role: 'toolResult',
-        toolCallId: call.id,
-        toolName: call.name,
-        content: [{ type: 'text', text: INTERRUPTED_TEXT }],
-        isError: true,
-        timestamp: Date.now(),
-      } as unknown as AgentMessage);
-    }
+    // Keep planResume deterministic and limited to durable-tail
+    // classification. The shared read-boundary normalizer owns synthetic
+    // receipts for both tail and middle-of-history orphans.
     return { kind: 'continue', messages, repairedToolCalls: dangling.map((c) => c.id) };
   }
 
