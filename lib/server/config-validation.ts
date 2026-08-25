@@ -55,8 +55,11 @@ function routeModel(value: unknown): string | undefined {
  * Check one model string the way parseModelString would resolve it: a bare id
  * gets the shared deprecation warning; a prefixed id is checked for a
  * registered provider and (for key-requiring providers) a configured key.
+ * `routed` distinguishes MODEL_ROUTES entries — where the server key is the
+ * only key that can be used — from unrouted sites like DEFAULT_MODEL, where a
+ * client-supplied key still works and a missing server key is only a note.
  */
-function checkModelString(model: string, where: string): void {
+function checkModelString(model: string, where: string, routed: boolean): void {
   const colonIndex = model.indexOf(':');
   if (colonIndex <= 0) {
     warnBareModelIdDeprecation(model, where);
@@ -69,9 +72,15 @@ function checkModelString(model: string, where: string): void {
     return;
   }
   if (provider.requiresApiKey && !resolveApiKey(providerId)) {
-    warn(
-      `Provider "${providerId}" in ${where} has no API key configured — add a <PREFIX>_API_KEY env var (or server-providers.yml), or requests using it will fail.`,
-    );
+    if (routed) {
+      warn(
+        `Provider "${providerId}" in ${where} has no API key configured — add a <PREFIX>_API_KEY env var (or server-providers.yml), or requests using it will fail.`,
+      );
+    } else {
+      warn(
+        `Provider "${providerId}" in ${where} has no server API key configured — requests will only work when the client supplies its own key.`,
+      );
+    }
   }
 }
 
@@ -102,14 +111,14 @@ function validateModelRoutes(): void {
     }
     const model = routeModel(value);
     if (!model) continue; // no model string; model-routes warns about bad values at request time
-    checkModelString(model, `MODEL_ROUTES stage "${key}"`);
+    checkModelString(model, `MODEL_ROUTES stage "${key}"`, true);
   }
 }
 
 function validateDefaultModel(): void {
   const model = process.env.DEFAULT_MODEL?.trim();
   if (!model) return;
-  checkModelString(model, 'DEFAULT_MODEL');
+  checkModelString(model, 'DEFAULT_MODEL', false);
 }
 
 /**
@@ -129,7 +138,7 @@ function validateModelsEnvPins(): void {
     }
     const configured = provider.requiresApiKey
       ? !!resolveApiKey(providerId)
-      : isServerConfiguredProvider('providers', providerId);
+      : isServerConfiguredProvider('providers', providerId) || !!provider.defaultBaseUrl;
     if (!configured) {
       const missing = provider.requiresApiKey ? `${prefix}_API_KEY` : `${prefix}_BASE_URL`;
       warn(

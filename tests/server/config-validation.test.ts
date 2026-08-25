@@ -157,12 +157,14 @@ describe('validateServerConfig — warning matrix', () => {
     expect(String(warnSpy.mock.calls[0][0])).toContain(BARE_MODEL_ID_DEPRECATION_MSG);
   });
 
-  it('warns when DEFAULT_MODEL points at a provider with no key', async () => {
+  it('warns softly when DEFAULT_MODEL points at a provider with no server key (client keys still work)', async () => {
     vi.stubEnv('DEFAULT_MODEL', 'deepseek:deepseek-v4-pro');
     const { validateServerConfig } = await import('@/lib/server/config-validation');
     validateServerConfig();
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(String(warnSpy.mock.calls[0][0])).toContain('deepseek');
+    // Unrouted sites honor client-supplied keys, so the message must not claim requests will fail.
+    expect(String(warnSpy.mock.calls[0][0])).toContain('client supplies its own key');
   });
 
   it('warns when <PREFIX>_MODELS is set without the provider key env', async () => {
@@ -194,9 +196,8 @@ describe('validateServerConfig — warning matrix', () => {
     vi.stubEnv('OLLAMA_MODELS', 'llama3.3');
     const { validateServerConfig } = await import('@/lib/server/config-validation');
     validateServerConfig();
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(String(warnSpy.mock.calls[0][0])).toContain('OLLAMA_MODELS');
-    expect(String(warnSpy.mock.calls[0][0])).toContain('OLLAMA_BASE_URL');
+    // Ollama ships a default base URL, so a bare _MODELS pin is functional — no warning.
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it('does not throw on garbage config (warn-only)', async () => {
@@ -230,28 +231,38 @@ describe('validateServerConfig — warning matrix', () => {
   });
 });
 
-describe('parseModelString — bare-id deprecation dedup', () => {
-  it('warns once per unique bare model id, never for prefixed ids', async () => {
+describe('parseModelString — request-derived strings never warn', () => {
+  it('resolves bare and prefixed ids without logging (client input must not drive log volume)', async () => {
     vi.resetModules();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const { parseModelString } = await import('@/lib/ai/providers');
 
       expect(parseModelString('gpt-5.5')).toEqual({ providerId: 'openai', modelId: 'gpt-5.5' });
+      expect(parseModelString('anthropic:claude-sonnet-4')).toEqual({
+        providerId: 'anthropic',
+        modelId: 'claude-sonnet-4',
+      });
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('warnBareModelIdDeprecation dedupes per unique config-site id', async () => {
+    vi.resetModules();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { warnBareModelIdDeprecation } = await import('@/lib/ai/providers');
+
+      expect(warnBareModelIdDeprecation('gpt-5.5', 'DEFAULT_MODEL')).toBe(true);
       expect(warnSpy).toHaveBeenCalledTimes(1);
       expect(String(warnSpy.mock.calls[0][0])).toContain(BARE_MODEL_ID_DEPRECATION_MSG);
 
-      // Same bare id again — deduped, no new warning.
-      expect(parseModelString('gpt-5.5')).toEqual({ providerId: 'openai', modelId: 'gpt-5.5' });
+      expect(warnBareModelIdDeprecation('gpt-5.5', 'DEFAULT_MODEL')).toBe(false);
       expect(warnSpy).toHaveBeenCalledTimes(1);
 
-      // A different bare id warns again.
-      parseModelString('gpt-4.1');
-      expect(warnSpy).toHaveBeenCalledTimes(2);
-
-      // Prefixed ids never warn.
-      parseModelString('anthropic:claude-sonnet-4');
-      parseModelString('openai:gpt-5.5');
+      expect(warnBareModelIdDeprecation('gpt-4.1', 'MODEL_ROUTES stage "pbl-chat"')).toBe(true);
       expect(warnSpy).toHaveBeenCalledTimes(2);
     } finally {
       warnSpy.mockRestore();

@@ -2309,9 +2309,9 @@ export function getModel(config: ModelConfig): ModelWithInfo {
 /**
  * Deprecation notice for bare model ids (no `provider:` prefix). parseModelString
  * keeps defaulting them to `openai` for backward compatibility, but that fallback
- * is deprecated: configs should write `provider:model` explicitly. Emitted by
- * parseModelString at runtime and by the boot-time config validation, exactly
- * once per unique bare id per process.
+ * is deprecated: configs should write `provider:model` explicitly. Emitted only
+ * by the boot-time config validation for config-derived sites — never for
+ * request-derived strings, which would let clients drive log volume.
  */
 export const BARE_MODEL_ID_DEPRECATION_MSG =
   'bare model ids default to openai for backward compatibility; this fallback is deprecated — write provider:model';
@@ -2321,10 +2321,9 @@ const warnedBareModelIds = new Set<string>();
 
 /**
  * Warn once per unique bare model id. `where` names the config site (e.g.
- * `DEFAULT_MODEL` or a MODEL_ROUTES stage) when the warning comes from the
- * boot-time validation; the runtime call from parseModelString omits it. The
- * shared dedupe set means a bare id that boot already flagged never re-warns
- * at request time.
+ * `DEFAULT_MODEL` or a MODEL_ROUTES stage). Callers must pass only
+ * config-derived ids (the config surface is finite, so the dedupe set is
+ * bounded); request-derived strings must never reach this function.
  */
 export function warnBareModelIdDeprecation(bareModelId: string, where?: string): boolean {
   if (warnedBareModelIds.has(bareModelId)) return false;
@@ -2351,8 +2350,10 @@ export function parseModelString(modelString: string): {
     };
   }
 
-  // Default to OpenAI for backward compatibility (deprecated, warn-first)
-  warnBareModelIdDeprecation(modelString);
+  // Default to OpenAI for backward compatibility (deprecated; boot-time config
+  // validation warns for config-derived bare ids). Deliberately no warning
+  // here: this path is reachable with request-controlled strings, which must
+  // not drive logging or dedupe-set growth.
   return {
     providerId: 'openai',
     modelId: modelString,
