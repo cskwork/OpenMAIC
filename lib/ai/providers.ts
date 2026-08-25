@@ -2307,6 +2307,34 @@ export function getModel(config: ModelConfig): ModelWithInfo {
 }
 
 /**
+ * Deprecation notice for bare model ids (no `provider:` prefix). parseModelString
+ * keeps defaulting them to `openai` for backward compatibility, but that fallback
+ * is deprecated: configs should write `provider:model` explicitly. Emitted by
+ * parseModelString at runtime and by the boot-time config validation, exactly
+ * once per unique bare id per process.
+ */
+export const BARE_MODEL_ID_DEPRECATION_MSG =
+  'bare model ids default to openai for backward compatibility; this fallback is deprecated — write provider:model';
+
+/** Bare model ids already surfaced, so the deprecation fires once per unique id. */
+const warnedBareModelIds = new Set<string>();
+
+/**
+ * Warn once per unique bare model id. `where` names the config site (e.g.
+ * `DEFAULT_MODEL` or a MODEL_ROUTES stage) when the warning comes from the
+ * boot-time validation; the runtime call from parseModelString omits it. The
+ * shared dedupe set means a bare id that boot already flagged never re-warns
+ * at request time.
+ */
+export function warnBareModelIdDeprecation(bareModelId: string, where?: string): boolean {
+  if (warnedBareModelIds.has(bareModelId)) return false;
+  warnedBareModelIds.add(bareModelId);
+  const context = where ? `${where}: ` : '';
+  console.warn(`[config] ${context}${BARE_MODEL_ID_DEPRECATION_MSG} (bare id "${bareModelId}")`);
+  return true;
+}
+
+/**
  * Parse model string in format "providerId:modelId" or just "modelId" (defaults to OpenAI)
  */
 export function parseModelString(modelString: string): {
@@ -2323,7 +2351,8 @@ export function parseModelString(modelString: string): {
     };
   }
 
-  // Default to OpenAI for backward compatibility
+  // Default to OpenAI for backward compatibility (deprecated, warn-first)
+  warnBareModelIdDeprecation(modelString);
   return {
     providerId: 'openai',
     modelId: modelString,
