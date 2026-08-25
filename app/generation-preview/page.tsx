@@ -12,9 +12,13 @@ import { cn } from '@/lib/utils';
 import { useStageStore } from '@/lib/store/stage';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
-import { getEnabledProvidersWithVoices } from '@/lib/audio/voice-resolver';
+import {
+  getEnabledProvidersWithVoices,
+  resolveNarratorVoiceForGeneration,
+} from '@/lib/audio/voice-resolver';
+import { isQwenCloneVoice, resolveTTSModelForVoice } from '@/lib/audio/constants';
 import { isTTSProviderEnabled } from '@/lib/audio/provider-enablement';
-import { useVoxCPMVoiceProfiles } from '@/lib/audio/voxcpm-voices';
+import { useAllVoiceProfiles } from '@/lib/audio/voxcpm-voices';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import {
   fetchSceneActions,
@@ -33,7 +37,19 @@ import { getCurrentModelConfig } from '@/lib/utils/model-config';
 import { isAssetPoolServerBacked } from '@/lib/media/asset-pool-config';
 import { getPersistenceRequestHeaders } from '@/lib/persistence/bootstrap';
 import { resolveSessionDocumentSources } from '@/lib/document/session-sources';
-import { fetchExtractionResponse } from '@/lib/document/extract-source';
+import {
+  computeConfigFingerprint,
+  createExtractionDeduplicator,
+  fetchExtractionWithCache,
+  resolveExpectedExtractor,
+  type ExtractionCacheDomain,
+} from '@/lib/document/extraction-cache';
+import { DEFAULT_INGEST_AWAIT_TIMEOUT_MS } from '@/lib/document/extract-source';
+import {
+  awaitWithFallback,
+  materializeBundleImages,
+} from '@/lib/document/extraction-materialization';
+import { SUPPORTED_MEDIA_MIME_TYPES } from '@/lib/document/mime';
 import { MAX_VISION_IMAGES } from '@/lib/constants/generation';
 import {
   MAX_DOCUMENT_BUNDLE_FILES,
@@ -71,6 +87,8 @@ type ParsedDocumentResponseImage = {
   description?: string;
   width?: number;
   height?: number;
+  /** Pool asset id of the image bytes (server-backed cache-hit rebuilds). */
+  assetId?: string;
 };
 
 function validateDocumentSources(
@@ -108,7 +126,7 @@ function GenerationPreviewContent() {
   // streaming card mid-stream, or by restoring a session that was already in review).
   // Combined with `reviewOutlineEnabled` to decide whether the post-stream timer fires.
   const outlineReviewIntentRef = useRef(false);
-  const { profiles: voxcpmProfiles } = useVoxCPMVoiceProfiles();
+  const { profiles: voiceProfiles } = useAllVoiceProfiles();
 
   const [session, setSession] = useState<GenerationSessionState | null>(null);
   const [sessionLoaded, setSessionLoaded] = useState(false);
@@ -315,6 +333,13 @@ function GenerationPreviewContent() {
     // Use a local mutable copy so we can update it after document extraction
     let currentSession = generationSession;
 
+    // A server-backed asset pool can resolve bytes by allocated asset id; a
+    // browser-backed (self-deploy) pool cannot, so the client keeps the byte
+    // transport. The probe is read ONCE per run so a mid-run configuration
+    // change cannot split the bundle across the two forms (RFC #1153 part 0/1,
+    // and part 2's imageMapping transport decision rides the same probe).
+    const serverBacked = isAssetPoolServerBacked();
+
     setError(null);
     setCurrentStepIndex(0);
 
@@ -335,13 +360,11 @@ function GenerationPreviewContent() {
       if (hasPdfToAnalyze) {
         log.debug('=== Generation Preview: Extracting course material bundle ===');
         validateDocumentSources(documentSources, t);
-        // A server-backed asset pool can resolve the uploaded bytes by asset
-        // id; a browser-backed (self-deploy) pool cannot, so the client keeps
-        // uploading the bytes exactly as before. The probe is read once per
-        // run so a mid-run configuration change cannot split the bundle across
-        // the two forms.
-        const serverBacked = isAssetPoolServerBacked();
         const sortedDocumentSources = [...documentSources].sort((a, b) => a.order - b.order);
+        // K3 (in-run dedupe): sources with the same content digest AND the same
+        // expected extractor identity share ONE extraction, so two same-byte
+        // files under different names never both pay for the paid extraction.
+        const deduplicateExtraction = createExtractionDeduplicator();
         const parsedParts = await Promise.all(
           sortedDocumentSources.map(async (source): Promise<ParsedDocumentPart> => {
             const providerId = source.providerId || currentSession.pdfProviderId;
@@ -356,102 +379,187 @@ function GenerationPreviewContent() {
               }
             ).providerConfig;
             const providerConfig = currentSession.pdfProviderConfig || legacySourceConfig;
+            // The caller-supplied endpoint (fingerprinted into the cache key)
+            // and the derivation domain (L6: `alidocmind` exists in both the
+            // document and media registries at the same version, so the page —
+            // which knows which path a source takes — must discriminate them).
+            const sourceBaseUrl = providerConfig?.baseUrl?.trim() || undefined;
+            const sourceDomain: ExtractionCacheDomain =
+              source.mimeType && SUPPORTED_MEDIA_MIME_TYPES.includes(source.mimeType.toLowerCase())
+                ? 'media'
+                : 'doc';
+            // The config fingerprint feeds ONLY the in-run dedupe key below. A
+            // computation failure (Web Crypto unavailable) must never fail the
+            // extraction: the source falls back to un-deduped extraction, and
+            // the cache lookup/write paths recompute the fingerprint under
+            // their own degrade-to-miss guards (RFC #1153 part 1, M1).
+            let sourceConfigFingerprint: string | undefined;
+            try {
+              sourceConfigFingerprint = await computeConfigFingerprint(sourceBaseUrl);
+            } catch (error) {
+              log.warn(
+                'Config fingerprinting failed; skipping in-run dedupe for this source:',
+                error,
+              );
+            }
 
-            // Per-source form selection: asset-id JSON first when the pool is
-            // server-backed and the source has an id, with a per-source
-            // fallback to the legacy byte upload if that form fails for any
-            // reason (see `fetchExtractionResponse`).
-            const parseResponse = await fetchExtractionResponse({
-              serverBacked,
-              hasAssetId: Boolean(source.assetId),
-              logWarning: (message, ...args) => log.warn(message, ...args),
-              fetchers: {
-                submitAssetIdForm: async () => {
-                  // Server-backed pool: extract by the asset id allocated at
-                  // upload. The server resolves the original bytes from the
-                  // server asset store, so no bytes cross the wire.
-                  const persistenceHeaders = await getPersistenceRequestHeaders();
-                  return fetch('/api/extract-document', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', ...persistenceHeaders },
-                    body: JSON.stringify({
-                      assetId: source.assetId,
-                      fileName: source.name,
-                      mimeType: source.mimeType,
-                      providerId: providerId || undefined,
-                      apiKey: providerConfig?.apiKey?.trim() ? providerConfig.apiKey : undefined,
-                      baseUrl: providerConfig?.baseUrl?.trim() ? providerConfig.baseUrl : undefined,
-                      // AliDocMind uses AK/SK instead of a single apiKey.
-                      accessKeyId: providerConfig?.accessKeyId?.trim()
-                        ? providerConfig.accessKeyId
-                        : undefined,
-                      accessKeySecret: providerConfig?.accessKeySecret?.trim()
-                        ? providerConfig.accessKeySecret
-                        : undefined,
-                    }),
-                    signal,
-                  });
-                },
-                submitByteForm: async () => {
-                  // Browser-backed pool (or a legacy storageKey-only session,
-                  // or a fallback after a failed asset-id form): the server
-                  // cannot resolve a browser-side asset, so upload the bytes
-                  // exactly as before.
-                  const documentBlob = await loadDocumentBlob(source.storageKey);
-                  if (!documentBlob) {
-                    throw new Error(t('generation.courseMaterialLoadFailed'));
-                  }
+            // The extractor the route is expected to run under, resolved
+            // client-side. It feeds the extraction-cache lookup, which must
+            // happen BEFORE the extract API is called: the cache key is
+            // (content digest × domain × extractor identity × config
+            // fingerprint), and on a hit the rebuilt parse result skips the
+            // paid extraction entirely.
+            const expectedExtractor = source.contentDigest
+              ? resolveExpectedExtractor(source.mimeType ?? 'application/pdf', providerId)
+              : null;
 
-                  if (!(documentBlob instanceof Blob) || documentBlob.size === 0) {
-                    log.error('Invalid course material blob:', {
-                      source: source.name,
-                      type: typeof documentBlob,
-                      size: documentBlob instanceof Blob ? documentBlob.size : 'N/A',
+            // Cache lookup first; on a miss this runs the extract API (asset-id
+            // JSON form with a per-source fallback to the legacy byte upload,
+            // see `fetchExtractionResponse`) and caches the result best-effort.
+            // The full outcome is kept — a server-backed run needs the
+            // best-effort cache write's derived image ids, not just the data.
+            const runExtraction = () =>
+              fetchExtractionWithCache({
+                serverBacked,
+                hasAssetId: Boolean(source.assetId),
+                logWarning: (message, ...args) => log.warn(message, ...args),
+                fetchers: {
+                  submitAssetIdForm: async () => {
+                    // Server-backed pool: extract by the asset id allocated at
+                    // upload. The server resolves the original bytes from the
+                    // server asset store, so no bytes cross the wire.
+                    const persistenceHeaders = await getPersistenceRequestHeaders();
+                    return fetch('/api/extract-document', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', ...persistenceHeaders },
+                      body: JSON.stringify({
+                        assetId: source.assetId,
+                        fileName: source.name,
+                        mimeType: source.mimeType,
+                        providerId: providerId || undefined,
+                        apiKey: providerConfig?.apiKey?.trim() ? providerConfig.apiKey : undefined,
+                        baseUrl: providerConfig?.baseUrl?.trim()
+                          ? providerConfig.baseUrl
+                          : undefined,
+                        // AliDocMind uses AK/SK instead of a single apiKey.
+                        accessKeyId: providerConfig?.accessKeyId?.trim()
+                          ? providerConfig.accessKeyId
+                          : undefined,
+                        accessKeySecret: providerConfig?.accessKeySecret?.trim()
+                          ? providerConfig.accessKeySecret
+                          : undefined,
+                      }),
+                      signal,
                     });
-                    throw new Error(t('generation.courseMaterialLoadFailed'));
-                  }
+                  },
+                  submitByteForm: async () => {
+                    // Browser-backed pool (or a legacy storageKey-only session,
+                    // or a fallback after a failed asset-id form): the server
+                    // cannot resolve a browser-side asset, so upload the bytes
+                    // exactly as before.
+                    const documentBlob = await loadDocumentBlob(source.storageKey);
+                    if (!documentBlob) {
+                      throw new Error(t('generation.courseMaterialLoadFailed'));
+                    }
 
-                  const documentFile = new File([documentBlob], source.name || 'document.pdf', {
-                    type: source.mimeType || documentBlob.type || 'application/pdf',
-                  });
+                    if (!(documentBlob instanceof Blob) || documentBlob.size === 0) {
+                      log.error('Invalid course material blob:', {
+                        source: source.name,
+                        type: typeof documentBlob,
+                        size: documentBlob instanceof Blob ? documentBlob.size : 'N/A',
+                      });
+                      throw new Error(t('generation.courseMaterialLoadFailed'));
+                    }
 
-                  const parseFormData = new FormData();
-                  parseFormData.append('file', documentFile);
-                  if (providerId) parseFormData.append('providerId', providerId);
-                  if (providerConfig?.apiKey?.trim()) {
-                    parseFormData.append('apiKey', providerConfig.apiKey);
-                  }
-                  if (providerConfig?.baseUrl?.trim()) {
-                    parseFormData.append('baseUrl', providerConfig.baseUrl);
-                  }
-                  // AliDocMind uses AK/SK instead of a single apiKey.
-                  if (providerConfig?.accessKeyId?.trim()) {
-                    parseFormData.append('accessKeyId', providerConfig.accessKeyId);
-                  }
-                  if (providerConfig?.accessKeySecret?.trim()) {
-                    parseFormData.append('accessKeySecret', providerConfig.accessKeySecret);
-                  }
+                    const documentFile = new File([documentBlob], source.name || 'document.pdf', {
+                      type: source.mimeType || documentBlob.type || 'application/pdf',
+                    });
 
-                  return fetch('/api/extract-document', {
-                    method: 'POST',
-                    body: parseFormData,
-                    signal,
-                  });
+                    const parseFormData = new FormData();
+                    parseFormData.append('file', documentFile);
+                    if (providerId) parseFormData.append('providerId', providerId);
+                    if (providerConfig?.apiKey?.trim()) {
+                      parseFormData.append('apiKey', providerConfig.apiKey);
+                    }
+                    if (providerConfig?.baseUrl?.trim()) {
+                      parseFormData.append('baseUrl', providerConfig.baseUrl);
+                    }
+                    // AliDocMind uses AK/SK instead of a single apiKey.
+                    if (providerConfig?.accessKeyId?.trim()) {
+                      parseFormData.append('accessKeyId', providerConfig.accessKeyId);
+                    }
+                    if (providerConfig?.accessKeySecret?.trim()) {
+                      parseFormData.append('accessKeySecret', providerConfig.accessKeySecret);
+                    }
+
+                    return fetch('/api/extract-document', {
+                      method: 'POST',
+                      body: parseFormData,
+                      signal,
+                    });
+                  },
                 },
-              },
-            });
+                contentDigest: source.contentDigest,
+                domain: sourceDomain,
+                extractorId: expectedExtractor?.extractorId,
+                extractorVersion: expectedExtractor?.extractorVersion,
+                baseUrl: sourceBaseUrl,
+                sourceDocAssetId: source.assetId,
+                parseFailedMessage: t('generation.courseMaterialParseFailed'),
+                // Part 2 B: a server-backed deployment names images by their
+                // allocated pool asset ids, so a cache hit feeds generation by
+                // id instead of materializing image bytes client-side.
+                imageMappingMode: serverBacked ? 'asset-id' : 'data-url',
+              });
+            // K3 (in-run dedupe): sources whose extraction cache key is
+            // identical (same content digest + domain + expected extractor +
+            // config fingerprint) share ONE extraction; two same-byte files
+            // never both pay, and per-source config differences never share.
+            // The memo now carries the FULL outcome, so a deduplicated second
+            // source reaches the shared derivation's image asset ids through
+            // the winner's cacheWrite (part 2 B).
+            const extractionOutcome =
+              source.contentDigest && expectedExtractor && sourceConfigFingerprint
+                ? await deduplicateExtraction.run(
+                    {
+                      contentDigest: source.contentDigest,
+                      domain: sourceDomain,
+                      extractorId: expectedExtractor.extractorId,
+                      extractorVersion: expectedExtractor.extractorVersion,
+                      configFingerprint: sourceConfigFingerprint,
+                    },
+                    runExtraction,
+                  )
+                : await runExtraction();
+            const parseData = extractionOutcome.data;
 
-            if (!parseResponse.ok) {
-              const errorData = await parseResponse.json();
-              throw new Error(errorData.error || t('generation.courseMaterialParseFailed'));
+            // Part 2 B: on a server-backed deployment the extracted images are
+            // pool assets (part 1). A cache hit carries their ids on the
+            // rebuilt result; a fresh extraction's ids come from the
+            // best-effort cache write — awaited here because the session must
+            // name the images by id without materializing their bytes. When
+            // no ids are available (KV unavailable), the source falls back to
+            // the data-URL transport below — the routes accept both.
+            //
+            // N2: the await is BOUNDED by the same 15 s budget as the
+            // upload-time ingest drain, so a server that accepts the
+            // connection but never answers degrades to the per-source
+            // data-URL fallback instead of hanging startGeneration. The
+            // detached write keeps running and benefits the NEXT run (the
+            // extraction-cache L5 contract stays true — it is this caller's
+            // await that is bounded).
+            let imageAssetIds: Map<string, string> | undefined;
+            if (serverBacked && !extractionOutcome.cacheHit) {
+              const derived = await awaitWithFallback(
+                (extractionOutcome.cacheWrite ?? Promise.resolve([])).catch(() => []),
+                DEFAULT_INGEST_AWAIT_TIMEOUT_MS,
+                [],
+              );
+              if (derived.length > 0) {
+                imageAssetIds = new Map(derived.map((image) => [image.id, image.assetId]));
+              }
             }
-
-            const parseResult = await parseResponse.json();
-            if (!parseResult.success || !parseResult.data) {
-              throw new Error(t('generation.courseMaterialParseFailed'));
-            }
-
-            const rawImages = parseResult.data.metadata?.pdfImages;
+            const rawImages = parseData.metadata?.pdfImages;
             const images = rawImages
               ? rawImages.map((img: ParsedDocumentResponseImage) => ({
                   id: img.id,
@@ -460,8 +568,10 @@ function GenerationPreviewContent() {
                   description: img.description,
                   width: img.width,
                   height: img.height,
+                  ...(img.assetId ? { assetId: img.assetId } : {}),
+                  ...(imageAssetIds?.get(img.id) ? { assetId: imageAssetIds.get(img.id) } : {}),
                 }))
-              : ((parseResult.data.images as string[] | undefined) ?? []).map((src, i) => ({
+              : ((parseData.images as string[] | undefined) ?? []).map((src, i) => ({
                   id: `img_${i + 1}`,
                   src,
                   pageNumber: 1,
@@ -477,16 +587,31 @@ function GenerationPreviewContent() {
                 order: source.order,
                 providerId,
               },
-              text: parseResult.data.text as string,
-              rawTextLength: (parseResult.data.text as string).length,
-              pageCount: parseResult.data.metadata?.pageCount,
+              text: parseData.text as string,
+              rawTextLength: (parseData.text as string).length,
+              pageCount: parseData.metadata?.pageCount,
               images,
             };
           }),
         );
 
         const bundle = buildDocumentBundle(parsedParts);
-        const imageStorageIds = await storeImages(bundle.images);
+        // Part 2 B/C + N4: the byte transport is decided PER SOURCE, not for
+        // the whole bundle. A server-backed source whose images all carry
+        // allocated asset ids feeds generation by id; a source with any image
+        // lacking an id (a failed best-effort cache write, a legacy session)
+        // materializes ITS images into IndexedDB as data URLs — one source's
+        // failure never silently drops another source's images. The resulting
+        // `imageMapping` may MIX asset ids and data URLs; the routes and
+        // `resolveImageIds` are shape-based and accept both.
+        const { storageIds: perImageStorageIds } = await materializeBundleImages(
+          serverBacked,
+          bundle.images,
+          storeImages,
+        );
+        const imageStorageIds = perImageStorageIds.filter(
+          (storageId): storageId is string => storageId !== undefined,
+        );
 
         const pdfImages: PdfImage[] = bundle.images.map((img, i) => ({
           id: img.id,
@@ -500,7 +625,10 @@ function GenerationPreviewContent() {
           sourceDocumentName: img.sourceDocumentName,
           sourceDocumentOrder: img.sourceDocumentOrder,
           visionPriority: img.visionPriority,
-          storageId: imageStorageIds[i],
+          // Per source: id-fed images carry their pool asset id; materialized
+          // images carry their IndexedDB storage id (never both).
+          ...(img.assetId && perImageStorageIds[i] === undefined ? { assetId: img.assetId } : {}),
+          ...(perImageStorageIds[i] !== undefined ? { storageId: perImageStorageIds[i] } : {}),
         }));
 
         // Update session with extracted document data
@@ -586,9 +714,36 @@ function GenerationPreviewContent() {
         activeSteps = getActiveSteps(currentSession);
       }
 
-      // Load imageMapping early (needed for both outline and scene generation)
+      // Load imageMapping early (needed for both outline and scene generation).
+      // The transport is decided once per run by the same probe as part 0/1
+      // (RFC #1153 part 2 B): a server-backed pool names images by their
+      // allocated asset ids (the extracted images are pool assets — part 1); a
+      // browser-backed pool materializes base64 data URLs exactly as before.
+      // Per source (N4) the mapping may MIX allocated asset ids and IndexedDB
+      // data URLs — a source whose cache write failed materializes its own
+      // images — and the routes / `resolveImageIds` are shape-based, so both
+      // value kinds ride the same mapping.
       let imageMapping: ImageMapping = {};
-      if (currentSession.imageStorageIds && currentSession.imageStorageIds.length > 0) {
+      const sessionImages = currentSession.pdfImages ?? [];
+      if (serverBacked) {
+        const mapped: ImageMapping = {};
+        for (const img of sessionImages) {
+          if (img.assetId) mapped[img.id] = img.assetId;
+        }
+        const storageIds = sessionImages
+          .filter((img): img is PdfImage & { storageId: string } => !img.assetId && !!img.storageId)
+          .map((img) => img.storageId);
+        if (storageIds.length > 0) {
+          Object.assign(mapped, await loadImageMapping(storageIds));
+        } else if (currentSession.imageStorageIds && currentSession.imageStorageIds.length > 0) {
+          // Legacy session: storage ids live on the session, not on pdfImages.
+          Object.assign(mapped, await loadImageMapping(currentSession.imageStorageIds));
+        }
+        if (Object.keys(mapped).length > 0) {
+          log.debug('Using per-source imageMapping (server-backed pool, ids + data URLs)');
+          imageMapping = mapped;
+        }
+      } else if (currentSession.imageStorageIds && currentSession.imageStorageIds.length > 0) {
         log.debug('Loading images from IndexedDB');
         imageMapping = await loadImageMapping(currentSession.imageStorageIds);
       } else if (
@@ -869,17 +1024,43 @@ function GenerationPreviewContent() {
           const getAvailableVoicesForGeneration = () => {
             const providers = getEnabledProvidersWithVoices(
               settings.ttsProvidersConfig,
-              voxcpmProfiles,
+              voiceProfiles,
             );
             return providers.flatMap((p) =>
-              p.voices.map((v) => ({
-                providerId: p.providerId,
-                voiceId: v.id,
-                voiceName: v.name,
-                voiceLanguage: v.language,
-              })),
+              p.voices.map((v) => {
+                const cloneModelGroup =
+                  p.providerId === 'qwen-tts' && isQwenCloneVoice(v.id)
+                    ? p.modelGroups.find((group) =>
+                        group.voices.some((groupVoice) => groupVoice.id === v.id),
+                      )
+                    : undefined;
+                const modelId = cloneModelGroup
+                  ? resolveTTSModelForVoice(p.providerId, v.id, cloneModelGroup.modelId)
+                  : undefined;
+                return {
+                  providerId: p.providerId,
+                  ...(modelId ? { modelId } : {}),
+                  voiceId: v.id,
+                  voiceName: v.name,
+                  voiceLanguage: v.language,
+                };
+              }),
             );
           };
+
+          // The user's global TTS voice is the narrator voice. Pass it along so
+          // the server pins the teacher agent to it instead of letting the LLM
+          // pick a different voice. Reuse the same resolution helpers as the
+          // advertised list: the model follows the voice, and only clones carry
+          // a model on the wire. An unusable global voice (disabled/unconfigured
+          // provider) is NOT pinned — the LLM then picks a working advertised
+          // voice and the narration fallback machinery stays alive.
+          const getNarratorVoiceForGeneration = () =>
+            resolveNarratorVoiceForGeneration(
+              settings.ttsProviderId,
+              settings.ttsVoice,
+              settings.ttsProvidersConfig[settings.ttsProviderId],
+            );
 
           const agentResp = await fetch('/api/generate/agent-profiles', {
             method: 'POST',
@@ -895,6 +1076,7 @@ function GenerationPreviewContent() {
                 availableAvatars: allAvatars.map((a) => a.path),
                 avatarDescriptions: allAvatars.map((a) => ({ path: a.path, desc: a.desc })),
                 availableVoices: getAvailableVoicesForGeneration(),
+                narratorVoice: getNarratorVoiceForGeneration(),
               }),
             ),
             signal,
