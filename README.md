@@ -409,6 +409,28 @@ and
 Leave `NEXT_PUBLIC_PERSISTENCE` unset to retain the existing browser-only
 behavior.
 
+### Optional: Agent runtime (experimental)
+
+Background agent sessions — the `/api/agent/*` control-plane routes plus an
+in-process session runner — are experimental and off by default. To enable
+them, set the server-side flag and provide the same PostgreSQL connection used
+by server-backed persistence:
+
+```env
+OPENMAIC_AGENT_RUNTIME_ENABLED=true
+DATABASE_URL=postgres://openmaic:openmaic-dev@postgres:5432/openmaic
+```
+
+While the flag is off, the `/api/agent/sessions*` and `/api/agent/owner-events`
+routes answer `404`. Enabling it
+without a `DATABASE_URL` never starts the runner and makes the session routes
+error, so the runtime is server-backed by design. While enabled, `MODEL_ROUTES`
+must explicitly route the `maic-agent-driver` stage to a provider-prefixed
+model with an `openai-completions` or `openai-responses` `api`/`dialect`; there
+is intentionally no fallback. Runner cadence (scan interval, heartbeat, lease
+TTL, concurrency, attempts) and the reserved compaction knobs are listed in
+`.env.example` under **Agent runtime (experimental)**.
+
 ### Optional: MP4 Video Export (Render Service)
 
 The "Export Video" menu builds a self-contained [Hyperframes](https://www.npmjs.com/package/@hyperframes/producer) project entirely in the browser. Turning that into an MP4 needs Chromium + FFmpeg on Node 22, so it runs in an isolated `render-service` container rather than the app.
