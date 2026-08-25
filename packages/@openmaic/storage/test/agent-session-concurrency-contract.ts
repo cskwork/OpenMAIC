@@ -120,11 +120,10 @@ export function runAgentSessionConcurrencyContract(
         const store = makeStore();
         await store.createSession(makeAgentSessionInput());
         await Promise.all([
-          store.setActiveStage('session-1', 'stage-2'),
           store.postUserMessage('session-1', { text: 'Concurrent message' }),
           store.requestCancel('session-1'),
         ]);
-        expect(await store.readMaxId('owner-a')).toBe(BigInt(4));
+        expect(await store.readMaxId('owner-a')).toBe(BigInt(3));
       },
     );
 
@@ -147,16 +146,15 @@ export function runAgentSessionConcurrencyContract(
         // Deadlock freedom follows from that invariant, which this free-running
         // race cannot falsify. What it does verify deterministically: the
         // session-row locks serialize each projection against the merge, so all
-        // four transactions commit, and the assertions below pin the merged
+        // three transactions commit, and the assertions below pin the merged
         // result (duplicate-free stream, durable counter == highest allocated
         // id, source counter deleted, owner rosters).
         await Promise.all([
           store.mergeOwner('owner-a', 'owner-b'),
-          store.setActiveStage('session-1', 'stage-1b'),
           store.requestCancel('session-2'),
           store.postUserMessage('session-3', { text: 'Concurrent message' }),
         ]);
-        // All four committed: the merged owner stream is duplicate-free and
+        // All three committed: the merged owner stream is duplicate-free and
         // its durable counter matches the highest allocated id.
         const targetEvents = await store.readAfter('owner-b', BigInt(0));
         const ids = targetEvents.map((event) => Number(event.id));

@@ -29,7 +29,6 @@ export const AGENT_SESSION_LIFECYCLE = {
   thinkingEnd: 'thinking_end',
   materialExtraction: 'material_extraction',
   userQuestion: 'user_question',
-  activeStageChanged: 'active_stage_changed',
   libraryChanged: 'library_changed',
 } as const;
 
@@ -48,8 +47,6 @@ export interface AgentSessionMeta {
   prompt: string;
   /** The immutable stage with which the conversation was created. */
   stageId: string;
-  /** The current tool target; absence means that {@link stageId} is active. */
-  activeStageId?: string;
   skillId?: string;
   origin?: string;
   existingCourse: boolean;
@@ -228,8 +225,6 @@ export interface AgentSessionStore {
   listSessionsByOwner(ownerId: string): Promise<AgentSessionMeta[]>;
   /** Tombstone a visible session while deliberately preserving every child row. */
   softDeleteSession(sessionId: string, ownerId: string): Promise<boolean>;
-  resolveActiveStage(sessionId: string): Promise<string>;
-  setActiveStage(sessionId: string, stageId: string): Promise<boolean>;
   /**
    * Scan optimistically, then lock and recheck one candidate. The second
    * check is the authority: candidate snapshots are stale as soon as read.
@@ -347,7 +342,6 @@ export const OWNER_SESSION_EVENT_TYPES = [
   'session_created',
   'session_status',
   'session_deleted',
-  'session_active_stage',
   'session_cancel_requested',
 ] as const;
 
@@ -364,8 +358,7 @@ export type NewOwnerSessionEvent =
       status: AgentSessionStatus;
       attempt: number;
     })
-  | (OwnerSessionEventBase & { type: 'session_deleted' | 'session_cancel_requested' })
-  | (OwnerSessionEventBase & { type: 'session_active_stage'; activeStageId: string });
+  | (OwnerSessionEventBase & { type: 'session_deleted' | 'session_cancel_requested' });
 
 export type PersistedOwnerSessionEvent = NewOwnerSessionEvent & {
   /** Decimal bigint text avoids rounding a replay cursor in JavaScript. */

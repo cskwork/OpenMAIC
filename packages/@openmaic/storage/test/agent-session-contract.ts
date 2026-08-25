@@ -39,7 +39,7 @@ export function runAgentSessionStoreContract(
   makeStore: () => AgentSessionContractStore,
 ): void {
   describe(`AgentSessionStore contract: ${name}`, () => {
-    test('creates, reads, lists, and resolves an active stage', async () => {
+    test('creates, reads, and lists sessions', async () => {
       const store = makeStore();
       const created = await store.createSession(
         makeAgentSessionInput({ skillId: 'skill-a', origin: 'https://example.test' }),
@@ -55,9 +55,6 @@ export function runAgentSessionStoreContract(
       });
       expect(await store.getSession('session-1')).toEqual(created);
       expect(await store.listSessionsByOwner('owner-a')).toEqual([created]);
-      expect(await store.resolveActiveStage('session-1')).toBe('stage-1');
-      expect(await store.setActiveStage('session-1', 'stage-2')).toBe(true);
-      expect(await store.resolveActiveStage('session-1')).toBe('stage-2');
     });
 
     test('tombstones only through the owner and hides all public child reads', async () => {
@@ -318,16 +315,14 @@ export function runAgentSessionStoreContract(
     test('maintains a sparse per-owner projection and its durable counter', async () => {
       const store = makeStore();
       await store.createSession(makeAgentSessionInput());
-      await store.setActiveStage('session-1', 'stage-2');
       await store.requestCancel('session-1');
       const events = await store.readAfter('owner-a', BigInt(0));
       expect(events.map((event) => event.type)).toEqual([
         'session_created',
-        'session_active_stage',
         'session_cancel_requested',
       ]);
-      expect(events.map((event) => event.id)).toEqual(['1', '2', '3']);
-      expect(await store.readMaxId('owner-a')).toBe(BigInt(3));
+      expect(events.map((event) => event.id)).toEqual(['1', '2']);
+      expect(await store.readMaxId('owner-a')).toBe(BigInt(2));
       expect(await store.readRetirement('owner-a')).toBeNull();
     });
 
