@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { transcribeAudio } from '@/lib/audio/asr-providers';
 import {
   isServerConfiguredProvider,
+  isServerProviderDisabled,
   resolveASRApiKey,
   resolveASRBaseUrl,
   resolveASRModel,
@@ -37,6 +38,12 @@ export async function POST(req: NextRequest) {
     const effectiveProviderId = providerId || ('openai-whisper' as ASRProviderId);
     resolvedProviderId = effectiveProviderId;
     resolvedModelId = modelId;
+
+    // Enforce server precedence: a force-disabled provider is off for everyone,
+    // regardless of any client key/selection — mirror the TTS contract (#665).
+    if (isServerProviderDisabled('asr', effectiveProviderId)) {
+      return apiError('PROVIDER_DISABLED', 403, 'This ASR provider is disabled by the server');
+    }
 
     // Managed providers are admin-owned: ignore any client-sent key/baseUrl.
     const managed = isServerConfiguredProvider('asr', effectiveProviderId);
