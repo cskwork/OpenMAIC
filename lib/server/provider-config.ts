@@ -133,6 +133,8 @@ const WEB_SEARCH_ENV_MAP: Record<string, string> = {
   // WEB_SEARCH_ prefix avoids colliding with ANTHROPIC_* LLM provider vars.
   WEB_SEARCH_CLAUDE: 'claude',
   WEB_SEARCH_MINIMAX: 'minimax',
+  // Dedicated prefix avoids colliding with the Doubao LLM provider vars.
+  WEB_SEARCH_DOUBAO: 'doubao',
   SEARXNG: 'searxng',
 };
 
@@ -737,6 +739,12 @@ export function resolveASRApiKey(providerId: string, clientKey?: string): string
 
 export function resolveASRBaseUrl(providerId: string, clientBaseUrl?: string): string | undefined {
   return resolveSectionBaseUrl('asr', providerId, clientBaseUrl);
+}
+
+/** First operator-configured ASR provider that is not force-disabled. */
+export function resolveServerASRProviderId(): string | undefined {
+  const cfg = getConfig();
+  return Object.keys(cfg.asr).find((id) => !cfg.disabled.asr.has(id));
 }
 
 /**

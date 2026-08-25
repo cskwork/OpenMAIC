@@ -56,6 +56,7 @@ const ENV_PREFIXES_TO_CLEAR = [
   'BOCHA',
   'WEB_SEARCH_MINIMAX',
   'WEB_SEARCH_CLAUDE',
+  'WEB_SEARCH_DOUBAO',
 ];
 
 function clearProviderEnv() {
@@ -842,6 +843,12 @@ video:
       expect(getServerWebSearchProviders()['searxng']).toEqual({ disabled: true });
     });
 
+    it('web-search: force-disables the built-in Doubao provider via its dedicated env', async () => {
+      vi.stubEnv('WEB_SEARCH_DOUBAO_ENABLED', 'false');
+      const { getServerWebSearchProviders } = await import('@/lib/server/provider-config');
+      expect(getServerWebSearchProviders().doubao).toEqual({ disabled: true });
+    });
+
     it('isServerProviderDisabled reflects the per-section force-disable set', async () => {
       vi.stubEnv('IMAGE_OPENAI_API_KEY', 'sk-img');
       vi.stubEnv('IMAGE_OPENAI_ENABLED', 'false');
@@ -878,6 +885,14 @@ video:
       vi.stubEnv('VIDEO_GROK_ENABLED', 'false');
       const { resolveServerVideoProviderId } = await import('@/lib/server/provider-config');
       expect(resolveServerVideoProviderId()).toBe('kling');
+    });
+
+    it('resolveServerASRProviderId skips a disabled provider', async () => {
+      vi.stubEnv('ASR_OPENAI_API_KEY', 'sk-1');
+      vi.stubEnv('ASR_QWEN_API_KEY', 'sk-2');
+      vi.stubEnv('ASR_OPENAI_ENABLED', 'false');
+      const { resolveServerASRProviderId } = await import('@/lib/server/provider-config');
+      expect(resolveServerASRProviderId()).toBe('qwen-asr');
     });
 
     it('web-search preference chain skips disabled providers', async () => {

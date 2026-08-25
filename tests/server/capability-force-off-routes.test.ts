@@ -260,13 +260,13 @@ describe('capability force-off route guards (#665)', () => {
       expect(mocks.transcribeAudio).not.toHaveBeenCalled();
     });
 
-    it('rejects the default openai-whisper fallback when it is force-disabled', async () => {
+    it('fails loudly instead of guessing a vendor when no enabled ASR backend exists', async () => {
       vi.stubEnv('ASR_OPENAI_API_KEY', 'sk-asr');
       vi.stubEnv('ASR_OPENAI_ENABLED', 'false');
       const { POST } = await import('@/app/api/transcription/route');
 
-      // No providerId in the form ⇒ the route defaults to openai-whisper, which
-      // must still be rejected when force-disabled.
+      // No providerId in the form and no enabled server backend must not fall
+      // through to a hardcoded vendor default.
       const form = new FormData();
       form.append(
         'audio',
@@ -277,9 +277,31 @@ describe('capability force-off route guards (#665)', () => {
       );
       const json = await res.json();
 
-      expect(res.status).toBe(403);
-      expect(json).toMatchObject({ success: false, errorCode: 'PROVIDER_DISABLED' });
+      expect(res.status).toBe(400);
+      expect(json).toMatchObject({ success: false, errorCode: 'MISSING_PROVIDER' });
       expect(mocks.transcribeAudio).not.toHaveBeenCalled();
+    });
+
+    it('uses an enabled server ASR backend when the client omits providerId', async () => {
+      vi.stubEnv('ASR_OPENAI_API_KEY', 'sk-openai');
+      vi.stubEnv('ASR_OPENAI_ENABLED', 'false');
+      vi.stubEnv('ASR_QWEN_API_KEY', 'sk-qwen');
+      const { POST } = await import('@/app/api/transcription/route');
+
+      const form = new FormData();
+      form.append(
+        'audio',
+        new File([new Uint8Array([1, 2, 3])], 'test.wav', { type: 'audio/wav' }),
+      );
+      const res = await POST(
+        new NextRequest('http://localhost/api/transcription', { method: 'POST', body: form }),
+      );
+
+      expect(res.status).toBe(200);
+      expect(mocks.transcribeAudio).toHaveBeenCalledWith(
+        expect.objectContaining({ providerId: 'qwen-asr', apiKey: 'sk-qwen' }),
+        expect.any(File),
+      );
     });
   });
 });
