@@ -668,6 +668,17 @@ export function resolveASRBaseUrl(providerId: string, clientBaseUrl?: string): s
   return resolveSectionBaseUrl('asr', providerId, clientBaseUrl);
 }
 
+/**
+ * Resolve the ASR model. A managed provider may pin its model server-side
+ * (`ASR_<PREFIX>_MODELS`, first entry) — authoritative like its key/baseUrl.
+ * Otherwise the client model wins.
+ */
+export function resolveASRModel(providerId: string, clientModel?: string): string | undefined {
+  const serverModel = getConfig().asr[providerId]?.models?.[0];
+  if (serverModel) return serverModel;
+  return clientModel;
+}
+
 // ---------------------------------------------------------------------------
 // Public API — PDF
 // ---------------------------------------------------------------------------
@@ -711,6 +722,26 @@ export function resolveImageBaseUrl(
   return resolveSectionBaseUrl('image', providerId, clientBaseUrl);
 }
 
+/**
+ * Resolve the server-side default image provider, used when the client sends
+ * no provider preference: the first operator-configured image provider. Returns
+ * undefined when no image provider is configured at all (callers fail loud).
+ */
+export function resolveServerImageProviderId(): string | undefined {
+  return Object.keys(getConfig().image)[0];
+}
+
+/**
+ * Resolve the image model. A managed provider may pin its model server-side
+ * (`IMAGE_<PREFIX>_MODELS`, first entry) — authoritative like its key/baseUrl.
+ * Otherwise the client model wins.
+ */
+export function resolveImageModel(providerId: string, clientModel?: string): string | undefined {
+  const serverModel = getConfig().image[providerId]?.models?.[0];
+  if (serverModel) return serverModel;
+  return clientModel;
+}
+
 // ---------------------------------------------------------------------------
 // Public API — Video Generation
 // ---------------------------------------------------------------------------
@@ -729,6 +760,29 @@ export function resolveVideoBaseUrl(
   clientBaseUrl?: string,
 ): string | undefined {
   return resolveSectionBaseUrl('video', providerId, clientBaseUrl);
+}
+
+/**
+ * Resolve the server-side default video provider, used when the client sends
+ * no provider preference: the first operator-configured video provider. Returns
+ * undefined when no video provider is configured at all (callers fail loud).
+ */
+export function resolveServerVideoProviderId(): string | undefined {
+  return Object.keys(getConfig().video)[0];
+}
+
+/**
+ * Resolve the video model. When the operator pinned models server-side
+ * (`VIDEO_<PREFIX>_MODELS`), the allowlisted client choice wins and the first
+ * entry is the managed default; otherwise the client model wins.
+ */
+export function resolveVideoModel(providerId: string, clientModel?: string): string | undefined {
+  const serverModels = getConfig().video[providerId]?.models;
+  if (serverModels?.length) {
+    if (clientModel && serverModels.includes(clientModel)) return clientModel;
+    return serverModels[0];
+  }
+  return clientModel;
 }
 
 // ---------------------------------------------------------------------------

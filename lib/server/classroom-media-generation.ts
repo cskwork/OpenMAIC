@@ -14,15 +14,16 @@ import { generateVideo, normalizeVideoOptions } from '@/lib/media/video-provider
 import { generateTTS } from '@/lib/audio/tts-providers';
 import { DEFAULT_TTS_VOICES, DEFAULT_TTS_MODELS, TTS_PROVIDERS } from '@/lib/audio/constants';
 import { IMAGE_PROVIDERS } from '@/lib/media/image-providers';
-import { VIDEO_PROVIDERS } from '@/lib/media/video-providers';
 import {
   getServerImageProviders,
   getServerVideoProviders,
   getServerTTSProviders,
   resolveImageApiKey,
   resolveImageBaseUrl,
+  resolveImageModel,
   resolveVideoApiKey,
   resolveVideoBaseUrl,
+  resolveVideoModel,
   resolveTTSApiKey,
   resolveTTSBaseUrl,
 } from '@/lib/server/provider-config';
@@ -112,7 +113,9 @@ export async function generateMediaForClassroom(
           log.warn(`No API key for image provider "${providerId}", skipping ${req.elementId}`);
           continue;
         }
-        const model = providerConfig?.models?.[0]?.id;
+        // No client model here — the server-side `IMAGE_<PREFIX>_MODELS` pin
+        // (first entry) decides; otherwise the adapter fails loud.
+        const model = resolveImageModel(providerId);
 
         const result = await generateImage(
           { providerId, apiKey, baseUrl: resolveImageBaseUrl(providerId), model },
@@ -152,8 +155,9 @@ export async function generateMediaForClassroom(
           log.warn(`No API key for video provider "${providerId}", skipping ${req.elementId}`);
           continue;
         }
-        const providerConfig = VIDEO_PROVIDERS[providerId];
-        const model = providerConfig?.models?.[0]?.id;
+        // No client model here — the server-side `VIDEO_<PREFIX>_MODELS` pin
+        // (first entry) decides; otherwise the adapter fails loud.
+        const model = resolveVideoModel(providerId);
 
         const normalized = normalizeVideoOptions(providerId, {
           prompt: req.prompt,

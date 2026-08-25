@@ -4,6 +4,7 @@ import {
   isServerConfiguredProvider,
   resolveASRApiKey,
   resolveASRBaseUrl,
+  resolveASRModel,
 } from '@/lib/server/provider-config';
 import type { ASRProviderId } from '@/lib/audio/types';
 import { createLogger } from '@/lib/logger';
@@ -46,11 +47,15 @@ export async function POST(req: NextRequest) {
 
     const config = {
       providerId: effectiveProviderId,
-      modelId: modelId || undefined,
+      // A managed provider may pin its model server-side (ASR_<PREFIX>_MODELS),
+      // which is authoritative; otherwise the client model wins.
+      modelId: resolveASRModel(effectiveProviderId, modelId || undefined),
       language: language || 'auto',
       apiKey: resolveASRApiKey(effectiveProviderId, managed ? undefined : apiKey || undefined),
       baseUrl: resolveASRBaseUrl(effectiveProviderId, clientBaseUrl),
     };
+    // Reflect the resolved (possibly server-pinned) model in failure logs.
+    resolvedModelId = config.modelId;
 
     // Transcribe using the provider system
     const result = await transcribeAudio(config, audioFile);

@@ -555,6 +555,97 @@ pdf:
       expect(providers['grok-video']).toEqual({});
       expect(resolveVideoBaseUrl('grok-video')).toBe('https://proxy.example.com/video');
     });
+
+    it('activates keyless image providers (lemonade) from a base URL alone', async () => {
+      vi.stubEnv('IMAGE_LEMONADE_BASE_URL', 'http://localhost:13305/v1');
+      const { getServerImageProviders, resolveImageApiKey, isServerConfiguredProvider } =
+        await import('@/lib/server/provider-config');
+
+      expect(isServerConfiguredProvider('image', 'lemonade')).toBe(true);
+      expect(getServerImageProviders().lemonade).toBeDefined();
+      expect(resolveImageApiKey('lemonade')).toBe('');
+    });
+  });
+
+  describe('media model resolution', () => {
+    it('pins the image model from server config (IMAGE_<PREFIX>_MODELS first entry)', async () => {
+      vi.stubEnv('IMAGE_SEEDREAM_API_KEY', 'sk-seedream');
+      vi.stubEnv('IMAGE_SEEDREAM_MODELS', 'model-a,model-b');
+      const { resolveImageModel } = await import('@/lib/server/provider-config');
+      expect(resolveImageModel('seedream', 'client-model')).toBe('model-a');
+    });
+
+    it('lets the client image model win when nothing is pinned server-side', async () => {
+      const { resolveImageModel } = await import('@/lib/server/provider-config');
+      expect(resolveImageModel('seedream', 'client-model')).toBe('client-model');
+    });
+
+    it('returns undefined for the image model when neither client nor server provides one', async () => {
+      const { resolveImageModel } = await import('@/lib/server/provider-config');
+      expect(resolveImageModel('seedream')).toBeUndefined();
+    });
+
+    it('resolves the default image provider as the first server-configured one', async () => {
+      vi.stubEnv('IMAGE_SEEDREAM_API_KEY', 'sk-seedream');
+      vi.stubEnv('IMAGE_GROK_API_KEY', 'sk-grok');
+      const { resolveServerImageProviderId } = await import('@/lib/server/provider-config');
+      expect(resolveServerImageProviderId()).toBe('seedream');
+    });
+
+    it('returns undefined for the default image provider when none is configured', async () => {
+      const { resolveServerImageProviderId } = await import('@/lib/server/provider-config');
+      expect(resolveServerImageProviderId()).toBeUndefined();
+    });
+
+    it('pins the video model from server config and allowlists the client choice', async () => {
+      vi.stubEnv('VIDEO_SEEDANCE_API_KEY', 'sk-seedance');
+      vi.stubEnv('VIDEO_SEEDANCE_MODELS', 'v1,v2');
+      const { resolveVideoModel } = await import('@/lib/server/provider-config');
+      // Allowlisted client choice wins over the managed default.
+      expect(resolveVideoModel('seedance', 'v2')).toBe('v2');
+      // Non-allowlisted client choice falls back to the managed default.
+      expect(resolveVideoModel('seedance', 'not-allowed')).toBe('v1');
+      expect(resolveVideoModel('seedance')).toBe('v1');
+    });
+
+    it('lets the client video model win when nothing is pinned server-side', async () => {
+      const { resolveVideoModel } = await import('@/lib/server/provider-config');
+      expect(resolveVideoModel('seedance', 'client-model')).toBe('client-model');
+    });
+
+    it('returns undefined for the video model when neither client nor server provides one', async () => {
+      const { resolveVideoModel } = await import('@/lib/server/provider-config');
+      expect(resolveVideoModel('seedance')).toBeUndefined();
+    });
+
+    it('resolves the default video provider as the first server-configured one', async () => {
+      vi.stubEnv('VIDEO_SEEDANCE_API_KEY', 'sk-seedance');
+      vi.stubEnv('VIDEO_VEO_API_KEY', 'sk-veo');
+      const { resolveServerVideoProviderId } = await import('@/lib/server/provider-config');
+      expect(resolveServerVideoProviderId()).toBe('seedance');
+    });
+
+    it('returns undefined for the default video provider when none is configured', async () => {
+      const { resolveServerVideoProviderId } = await import('@/lib/server/provider-config');
+      expect(resolveServerVideoProviderId()).toBeUndefined();
+    });
+
+    it('pins the ASR model from server config (ASR_<PREFIX>_MODELS first entry)', async () => {
+      vi.stubEnv('ASR_OPENAI_API_KEY', 'sk-asr');
+      vi.stubEnv('ASR_OPENAI_MODELS', 'whisper-x');
+      const { resolveASRModel } = await import('@/lib/server/provider-config');
+      expect(resolveASRModel('openai-whisper', 'client-model')).toBe('whisper-x');
+    });
+
+    it('lets the client ASR model win when nothing is pinned server-side', async () => {
+      const { resolveASRModel } = await import('@/lib/server/provider-config');
+      expect(resolveASRModel('openai-whisper', 'client-model')).toBe('client-model');
+    });
+
+    it('returns undefined for the ASR model when neither client nor server provides one', async () => {
+      const { resolveASRModel } = await import('@/lib/server/provider-config');
+      expect(resolveASRModel('openai-whisper')).toBeUndefined();
+    });
   });
 
   describe('isServerConfiguredProvider', () => {
