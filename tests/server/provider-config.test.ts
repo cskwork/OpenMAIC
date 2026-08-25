@@ -568,11 +568,15 @@ pdf:
   });
 
   describe('media model resolution', () => {
-    it('pins the image model from server config (IMAGE_<PREFIX>_MODELS first entry)', async () => {
+    it('allowlists the client image model against IMAGE_<PREFIX>_MODELS', async () => {
       vi.stubEnv('IMAGE_SEEDREAM_API_KEY', 'sk-seedream');
       vi.stubEnv('IMAGE_SEEDREAM_MODELS', 'model-a,model-b');
       const { resolveImageModel } = await import('@/lib/server/provider-config');
+      // Allowlisted client choice wins over the managed default.
+      expect(resolveImageModel('seedream', 'model-b')).toBe('model-b');
+      // Non-allowlisted client choice falls back to the managed default.
       expect(resolveImageModel('seedream', 'client-model')).toBe('model-a');
+      expect(resolveImageModel('seedream')).toBe('model-a');
     });
 
     it('lets the client image model win when nothing is pinned server-side', async () => {
@@ -630,11 +634,15 @@ pdf:
       expect(resolveServerVideoProviderId()).toBeUndefined();
     });
 
-    it('pins the ASR model from server config (ASR_<PREFIX>_MODELS first entry)', async () => {
+    it('allowlists the client ASR model against ASR_<PREFIX>_MODELS', async () => {
       vi.stubEnv('ASR_OPENAI_API_KEY', 'sk-asr');
-      vi.stubEnv('ASR_OPENAI_MODELS', 'whisper-x');
+      vi.stubEnv('ASR_OPENAI_MODELS', 'whisper-x,whisper-y');
       const { resolveASRModel } = await import('@/lib/server/provider-config');
+      // Allowlisted client choice wins over the managed default.
+      expect(resolveASRModel('openai-whisper', 'whisper-y')).toBe('whisper-y');
+      // Non-allowlisted client choice falls back to the managed default.
       expect(resolveASRModel('openai-whisper', 'client-model')).toBe('whisper-x');
+      expect(resolveASRModel('openai-whisper')).toBe('whisper-x');
     });
 
     it('lets the client ASR model win when nothing is pinned server-side', async () => {

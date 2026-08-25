@@ -47,8 +47,10 @@ export async function POST(req: NextRequest) {
 
     const config = {
       providerId: effectiveProviderId,
-      // A managed provider may pin its model server-side (ASR_<PREFIX>_MODELS),
-      // which is authoritative; otherwise the client model wins.
+      // A managed provider may pin its model list server-side
+      // (ASR_<PREFIX>_MODELS): an allowlisted client choice wins, otherwise the
+      // first pinned entry is the managed default; unmanaged providers use the
+      // client model directly.
       modelId: resolveASRModel(effectiveProviderId, modelId || undefined),
       language: language || 'auto',
       apiKey: resolveASRApiKey(effectiveProviderId, managed ? undefined : apiKey || undefined),

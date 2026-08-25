@@ -14,6 +14,7 @@ import { generateVideo, normalizeVideoOptions } from '@/lib/media/video-provider
 import { generateTTS } from '@/lib/audio/tts-providers';
 import { DEFAULT_TTS_VOICES, DEFAULT_TTS_MODELS, TTS_PROVIDERS } from '@/lib/audio/constants';
 import { IMAGE_PROVIDERS } from '@/lib/media/image-providers';
+import { VIDEO_PROVIDERS } from '@/lib/media/video-providers';
 import {
   getServerImageProviders,
   getServerVideoProviders,
@@ -114,8 +115,12 @@ export async function generateMediaForClassroom(
           continue;
         }
         // No client model here — the server-side `IMAGE_<PREFIX>_MODELS` pin
-        // (first entry) decides; otherwise the adapter fails loud.
-        const model = resolveImageModel(providerId);
+        // (first entry) is authoritative when set; otherwise fall back to the
+        // first catalog model so key-only deployments keep generating. This
+        // path is internal (no HTTP response to fail loud with), so the
+        // adapter's requireModel must stay a backstop, never the primary
+        // failure mode.
+        const model = resolveImageModel(providerId) ?? providerConfig?.models?.[0]?.id;
 
         const result = await generateImage(
           { providerId, apiKey, baseUrl: resolveImageBaseUrl(providerId), model },
@@ -156,8 +161,13 @@ export async function generateMediaForClassroom(
           continue;
         }
         // No client model here — the server-side `VIDEO_<PREFIX>_MODELS` pin
-        // (first entry) decides; otherwise the adapter fails loud.
-        const model = resolveVideoModel(providerId);
+        // (first entry) is authoritative when set; otherwise fall back to the
+        // first catalog model so key-only deployments keep generating. This
+        // path is internal (no HTTP response to fail loud with), so the
+        // adapter's requireModel must stay a backstop, never the primary
+        // failure mode.
+        const providerConfig = VIDEO_PROVIDERS[providerId];
+        const model = resolveVideoModel(providerId) ?? providerConfig?.models?.[0]?.id;
 
         const normalized = normalizeVideoOptions(providerId, {
           prompt: req.prompt,

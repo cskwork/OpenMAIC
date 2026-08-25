@@ -669,13 +669,16 @@ export function resolveASRBaseUrl(providerId: string, clientBaseUrl?: string): s
 }
 
 /**
- * Resolve the ASR model. A managed provider may pin its model server-side
- * (`ASR_<PREFIX>_MODELS`, first entry) — authoritative like its key/baseUrl.
- * Otherwise the client model wins.
+ * Resolve the ASR model. When the operator pinned models server-side
+ * (`ASR_<PREFIX>_MODELS`), the allowlisted client choice wins and the first
+ * entry is the managed default; otherwise the client model wins.
  */
 export function resolveASRModel(providerId: string, clientModel?: string): string | undefined {
-  const serverModel = getConfig().asr[providerId]?.models?.[0];
-  if (serverModel) return serverModel;
+  const serverModels = getConfig().asr[providerId]?.models;
+  if (serverModels?.length) {
+    if (clientModel && serverModels.includes(clientModel)) return clientModel;
+    return serverModels[0];
+  }
   return clientModel;
 }
 
@@ -732,13 +735,16 @@ export function resolveServerImageProviderId(): string | undefined {
 }
 
 /**
- * Resolve the image model. A managed provider may pin its model server-side
- * (`IMAGE_<PREFIX>_MODELS`, first entry) — authoritative like its key/baseUrl.
- * Otherwise the client model wins.
+ * Resolve the image model. When the operator pinned models server-side
+ * (`IMAGE_<PREFIX>_MODELS`), the allowlisted client choice wins and the first
+ * entry is the managed default; otherwise the client model wins.
  */
 export function resolveImageModel(providerId: string, clientModel?: string): string | undefined {
-  const serverModel = getConfig().image[providerId]?.models?.[0];
-  if (serverModel) return serverModel;
+  const serverModels = getConfig().image[providerId]?.models;
+  if (serverModels?.length) {
+    if (clientModel && serverModels.includes(clientModel)) return clientModel;
+    return serverModels[0];
+  }
   return clientModel;
 }
 

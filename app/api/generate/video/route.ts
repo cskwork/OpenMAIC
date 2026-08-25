@@ -74,8 +74,10 @@ export async function POST(request: NextRequest) {
 
     const baseUrl = resolveVideoBaseUrl(providerId, clientBaseUrl);
 
-    // A managed provider may pin its model server-side (VIDEO_<PREFIX>_MODELS),
-    // which is authoritative; otherwise the client header wins.
+    // A managed provider may pin its model list server-side
+    // (VIDEO_<PREFIX>_MODELS): an allowlisted client choice wins, otherwise the
+    // first pinned entry is the managed default; unmanaged providers use the
+    // client header directly.
     const model = resolveVideoModel(providerId, clientModel);
     if (!model) {
       return apiError(
