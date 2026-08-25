@@ -622,6 +622,33 @@ pdf:
       expect(resolveVideoModel('seedance')).toBeUndefined();
     });
 
+    it('normalizes YAML model lists like env (trim + drop empties, never a garbage pin)', async () => {
+      yamlOverride = `
+video:
+  seedance:
+    apiKey: sk-yaml-seedance
+    models:
+      - " doubao-seedance-2-0-260128 "
+      - ""
+      - "   "
+  kling:
+    apiKey: sk-yaml-kling
+    models:
+      - ""
+`;
+      const { resolveVideoModel } = await import('@/lib/server/provider-config');
+
+      // Whitespace-trimmed real entries survive; empty entries are dropped.
+      expect(resolveVideoModel('seedance')).toBe('doubao-seedance-2-0-260128');
+      // The stored list is trimmed, so an exact-match client choice is allowlisted.
+      expect(resolveVideoModel('seedance', 'doubao-seedance-2-0-260128')).toBe(
+        'doubao-seedance-2-0-260128',
+      );
+      // A garbage-only `models: [""]` list normalizes to no pin at all — it must
+      // never become a truthy pin of "" (the YAML path used to copy it verbatim).
+      expect(resolveVideoModel('kling')).toBeUndefined();
+    });
+
     it('resolves the default video provider as the first server-configured one', async () => {
       vi.stubEnv('VIDEO_SEEDANCE_API_KEY', 'sk-seedance');
       vi.stubEnv('VIDEO_VEO_API_KEY', 'sk-veo');

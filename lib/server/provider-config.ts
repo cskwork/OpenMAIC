@@ -178,6 +178,18 @@ function loadYamlFile(filename: string): YamlData {
 // Env-var helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Normalize a configured model list the same way the env-var path does:
+ * trim whitespace and drop empty entries. The YAML path stores model arrays
+ * verbatim, so without this a garbage `models: [""]` would surface as a
+ * truthy pin (its first entry, an empty string). Returns undefined when
+ * nothing survives normalization ("no models configured").
+ */
+function normalizeModelList(models: string[] | undefined): string[] | undefined {
+  const parsed = models?.map((model) => model.trim()).filter(Boolean);
+  return parsed && parsed.length > 0 ? parsed : undefined;
+}
+
 function loadEnvSection(
   envMap: Record<string, string>,
   yamlSection: Record<string, Partial<ServerProviderEntry>> | undefined,
@@ -206,7 +218,7 @@ function loadEnvSection(
         result[id] = {
           apiKey: entry.apiKey || '',
           baseUrl: entry.baseUrl,
-          models: entry.models,
+          models: normalizeModelList(entry.models),
           proxy: entry.proxy,
         };
       }
