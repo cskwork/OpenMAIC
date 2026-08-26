@@ -16,8 +16,8 @@ vi.mock('@/lib/config/feature-flags', () => ({
 vi.mock('@/lib/server/agent-runtime/owner', () => ({
   resolveRequestOwnerId: mocks.resolveRequestOwnerId,
 }));
-vi.mock('@/lib/persistence/server-provider', () => ({
-  getServerPersistenceProvider: async () => ({ documentStore: mocks.fakeStore!.store }),
+vi.mock('@/lib/server/agent-runtime/owner-scoped-documents', () => ({
+  getOwnerScopedDocumentStore: async () => mocks.fakeStore!.store,
 }));
 
 import { GET, STAGE_FRESHNESS_POLL_INTERVAL_MS } from '@/app/api/stages/[id]/freshness/route';

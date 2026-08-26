@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
 import type { AgentSessionMaterial } from '@openmaic/storage';
+import type { OwnerMaterialRecord } from '@/lib/persistence/owner-materials';
 
 const mocks = vi.hoisted(() => ({
   runtimeConfigured: true,
@@ -9,6 +10,17 @@ const mocks = vi.hoisted(() => ({
   resolveOwnedSession: vi.fn(),
   listSessionMaterials: vi.fn(),
   createSourceMaterial: vi.fn(),
+  registerOwnerMaterial: vi.fn(),
+  finalizeOwnerMaterial: vi.fn(),
+  abandonOwnerMaterial: vi.fn(),
+  assetStore: {
+    put: vi.fn(),
+    remove: vi.fn(),
+  },
+  queryPool: {
+    query: vi.fn(),
+    connect: vi.fn(),
+  },
 }));
 
 vi.mock('@/lib/config/feature-flags', () => ({
@@ -27,8 +39,24 @@ vi.mock('@/lib/server/agent-runtime/session-materials', async (importOriginal) =
     createSourceMaterial: mocks.createSourceMaterial,
   };
 });
+vi.mock('@/lib/persistence/server-provider', () => ({
+  getServerPersistenceProvider: async () => ({
+    pool: mocks.queryPool,
+    assetStore: mocks.assetStore,
+  }),
+}));
+vi.mock('@/lib/persistence/owner-materials', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/persistence/owner-materials')>();
+  return {
+    ...actual,
+    registerOwnerMaterial: mocks.registerOwnerMaterial,
+    finalizeOwnerMaterial: mocks.finalizeOwnerMaterial,
+    abandonOwnerMaterial: mocks.abandonOwnerMaterial,
+  };
+});
 
 import { GET, POST } from '@/app/api/materials/route';
+import { agentRuntimeConfig } from '@/lib/server/agent-runtime/config';
 
 const SESSION_ID = 'session-1';
 
@@ -49,16 +77,41 @@ function material(overrides: Partial<AgentSessionMaterial> = {}): AgentSessionMa
   };
 }
 
+function ownerMaterial(overrides: Partial<OwnerMaterialRecord> = {}): OwnerMaterialRecord {
+  return {
+    id: 'mat_00000000000000000000000000',
+    ownerId: 'owner-1',
+    kind: 'source',
+    derivedFrom: null,
+    mime: 'application/pdf',
+    bytes: 5,
+    originalName: '讲义.pdf',
+    assetId: 'asset-1',
+    sha256: '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+    status: 'ready',
+    extraction: { status: 'idle' },
+    createdAt: 1_700_000_000_000,
+    deletedAt: null,
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.runtimeConfigured = true;
   mocks.resolveRequestOwnerId.mockReturnValue('owner-1');
   mocks.resolveOwnedSession.mockResolvedValue({ id: SESSION_ID, ownerId: 'owner-1' });
   mocks.listSessionMaterials.mockResolvedValue([material()]);
-  mocks.createSourceMaterial.mockImplementation(
-    async (_sessionId: string, input: { filename: string; mimeType: string; bytes: Buffer }) =>
-      material({ kind: 'source', title: input.filename }),
+  mocks.registerOwnerMaterial.mockResolvedValue({
+    record: ownerMaterial(),
+    stale: [],
+  });
+  mocks.finalizeOwnerMaterial.mockImplementation(async (_pool: unknown, id: string) =>
+    ownerMaterial({ id }),
   );
+  mocks.abandonOwnerMaterial.mockResolvedValue(undefined);
+  mocks.assetStore.put.mockResolvedValue('asset-1');
+  mocks.assetStore.remove.mockResolvedValue(undefined);
 });
 
 describe('GET /api/materials', () => {
@@ -131,119 +184,102 @@ describe('GET /api/materials', () => {
 });
 
 describe('POST /api/materials', () => {
-  it('uploads raw bytes as a source material', async () => {
-    const response = await POST(
-      new NextRequest(`http://localhost/api/materials?sessionId=${SESSION_ID}`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/pdf',
-          'x-material-filename': encodeURIComponent('讲义.pdf'),
-        },
-        body: Buffer.from('hello'),
-      }),
-    );
-    expect(response.status).toBe(201);
-    await expect(response.json()).resolves.toEqual({
-      material: expect.objectContaining({ materialId: 'mat_00000000000000000000000000' }),
-    });
-    expect(mocks.createSourceMaterial).toHaveBeenCalledWith(
-      SESSION_ID,
-      expect.objectContaining({
-        filename: '讲义.pdf',
-        mimeType: 'application/pdf',
-      }),
-    );
-    const input = mocks.createSourceMaterial.mock.calls[0]![1] as { bytes: Buffer };
-    expect(Buffer.from(input.bytes).toString('utf8')).toBe('hello');
-  });
-
-  it('defaults the mime type to octet-stream when the header is absent', async () => {
-    const response = await POST(
-      new NextRequest(`http://localhost/api/materials?sessionId=${SESSION_ID}`, {
-        method: 'POST',
-        headers: { 'x-material-filename': 'notes.txt' },
-        body: Buffer.from('text'),
-      }),
-    );
-    expect(response.status).toBe(201);
-    expect(mocks.createSourceMaterial).toHaveBeenCalledWith(
-      SESSION_ID,
-      expect.objectContaining({ mimeType: 'application/octet-stream' }),
-    );
-  });
-
-  it('rejects a missing sessionId', async () => {
-    const response = await POST(
+  async function post(body: unknown, headers: Record<string, string> = {}) {
+    return POST(
       new NextRequest('http://localhost/api/materials', {
         method: 'POST',
-        headers: { 'x-material-filename': 'a.pdf' },
-        body: Buffer.from('x'),
+        headers: { 'content-type': 'application/pdf', 'x-material-filename': 'a.pdf', ...headers },
+        body: body as BodyInit,
       }),
     );
-    expect(response.status).toBe(400);
-    expect(mocks.createSourceMaterial).not.toHaveBeenCalled();
+  }
+
+  it('uploads raw bytes into the owner library and returns the flat 201 view', async () => {
+    const response = await post(Buffer.from('hello'));
+    expect(response.status).toBe(201);
+    const body = (await response.json()) as {
+      materialId: string;
+      originalName: string;
+      bytes: number;
+      mime: string;
+      extraction: { status: string };
+    };
+    expect(body.materialId).toMatch(/^mat_/);
+    expect(body).toEqual({
+      materialId: body.materialId,
+      originalName: '讲义.pdf',
+      bytes: 5,
+      mime: 'application/pdf',
+      extraction: { status: 'idle' },
+    });
+    // The uploader's error pairing header is echoed.
+    expect(response.headers.get('x-request-id')).toBeTruthy();
+    expect(mocks.registerOwnerMaterial).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ ownerId: 'owner-1', kind: 'source', mime: 'application/pdf' }),
+      expect.objectContaining({
+        maxCount: agentRuntimeConfig.maxMaterialsPerOwner,
+        maxTotalBytes: agentRuntimeConfig.maxMaterialBytesPerOwner,
+      }),
+    );
+    expect(mocks.assetStore.put).toHaveBeenCalled();
+    const putBlob = mocks.assetStore.put.mock.calls[0]![1] as Blob;
+    await expect(putBlob.text()).resolves.toBe('hello');
+    expect(mocks.finalizeOwnerMaterial).toHaveBeenCalledWith(
+      expect.anything(),
+      body.materialId,
+      5,
+      '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+      'asset-1',
+    );
+  });
+
+  it('rejects an unsupported mime type with 415', async () => {
+    const response = await post(Buffer.from('x'), { 'content-type': 'application/x-unknown' });
+    expect(response.status).toBe(415);
+    await expect(response.json()).resolves.toMatchObject({
+      errorCode: 'INVALID_REQUEST',
+      error: expect.stringContaining('unsupported material mime type'),
+    });
+    expect(mocks.registerOwnerMaterial).not.toHaveBeenCalled();
   });
 
   it('rejects a missing filename header', async () => {
-    const response = await POST(
-      new NextRequest(`http://localhost/api/materials?sessionId=${SESSION_ID}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/pdf' },
-        body: Buffer.from('x'),
-      }),
-    );
+    const response = await post(Buffer.from('x'), { 'x-material-filename': '' });
     expect(response.status).toBe(400);
-    expect(mocks.createSourceMaterial).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      errorCode: 'MISSING_REQUIRED_FIELD',
+    });
+    expect(mocks.registerOwnerMaterial).not.toHaveBeenCalled();
   });
 
   it('rejects a body over the upload cap with 413', async () => {
-    const { MAX_MATERIAL_UPLOAD_BYTES } = await import('@/app/api/materials/route');
-    const response = await POST(
-      new NextRequest(`http://localhost/api/materials?sessionId=${SESSION_ID}`, {
-        method: 'POST',
-        headers: { 'x-material-filename': 'big.bin' },
-        body: Buffer.alloc(MAX_MATERIAL_UPLOAD_BYTES + 1),
-      }),
-    );
+    const response = await post(Buffer.alloc(agentRuntimeConfig.maxUploadBytes + 1));
     expect(response.status).toBe(413);
-    expect(mocks.createSourceMaterial).not.toHaveBeenCalled();
+    expect(mocks.finalizeOwnerMaterial).not.toHaveBeenCalled();
   });
 
-  it('answers 404 for a foreign or missing session', async () => {
-    mocks.resolveOwnedSession.mockResolvedValue(null);
-    const response = await POST(
-      new NextRequest(`http://localhost/api/materials?sessionId=${SESSION_ID}`, {
-        method: 'POST',
-        headers: { 'x-material-filename': 'a.pdf' },
-        body: Buffer.from('x'),
-      }),
+  it('answers 429 when the owner quota is exceeded and cleans stale bytes', async () => {
+    const { MaterialQuotaExceededError } = await import('@/lib/persistence/owner-materials');
+    mocks.registerOwnerMaterial.mockRejectedValue(
+      new MaterialQuotaExceededError('bytes', 1024, [{ id: 'mat_stale', assetId: 'asset-stale' }]),
     );
-    expect(response.status).toBe(404);
-    expect(mocks.createSourceMaterial).not.toHaveBeenCalled();
+    const response = await post(Buffer.from('hello'));
+    expect(response.status).toBe(429);
+    expect(mocks.assetStore.remove).toHaveBeenCalledWith(expect.anything(), 'asset-stale');
   });
 
-  it('answers 500 when persisting the material fails', async () => {
-    mocks.createSourceMaterial.mockRejectedValue(new Error('asset registry unavailable'));
-    const response = await POST(
-      new NextRequest(`http://localhost/api/materials?sessionId=${SESSION_ID}`, {
-        method: 'POST',
-        headers: { 'x-material-filename': 'a.pdf' },
-        body: Buffer.from('x'),
-      }),
-    );
+  it('abandons the reservation and answers 500 when the asset store fails', async () => {
+    mocks.assetStore.put.mockRejectedValue(new Error('asset registry unavailable'));
+    const response = await post(Buffer.from('hello'));
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toMatchObject({ errorCode: 'INTERNAL_ERROR' });
+    expect(mocks.abandonOwnerMaterial).toHaveBeenCalled();
   });
 
   it('answers 404 when the agent runtime is not configured', async () => {
     mocks.runtimeConfigured = false;
-    const response = await POST(
-      new NextRequest(`http://localhost/api/materials?sessionId=${SESSION_ID}`, {
-        method: 'POST',
-        headers: { 'x-material-filename': 'a.pdf' },
-        body: Buffer.from('x'),
-      }),
-    );
+    const response = await post(Buffer.from('x'));
     expect(response.status).toBe(404);
   });
 });

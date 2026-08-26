@@ -1807,6 +1807,24 @@
     "alidocmindAccessKeyId": "AccessKey ID",
     "alidocmindAccessKeySecret": "AccessKey Secret"
   },
+  "workspace": {
+    "untitledCourse": "未命名课堂",
+    "sceneCount": "{{count}} 页",
+    "sceneCount_one": "{{count}} 页",
+    "sceneCount_other": "{{count}} 页",
+    "courseLinkHint": "在右侧打开《{{name}}》",
+    "courseLinkMore": "还有 {{count}} 节课堂",
+    "courseMention": {
+      "title": "为这条消息引用课堂",
+      "empty": "没有匹配的课堂",
+      "alreadyNamed": "已引用",
+      "remove": "移除{{name}}",
+      "pillHint": "这条消息引用了「{{name}}」",
+      "notAccepted": "引用的课堂未生效，服务端发布中，请稍后重发",
+      "reference": "引用「{{name}}」",
+      "capped": "仅显示前 {{count}} 个，继续输入以缩小范围"
+    }
+  },
   "profile": {
     "title": "プロフィール",
     "defaultNickname": "学習者",
@@ -1838,24 +1856,6 @@
     "placeholder": "アクセスコード",
     "error": "アクセスコードが正しくありません。もう一度お試しください。"
   },
-  "workspace": {
-    "untitledCourse": "未命名课堂",
-    "sceneCount": "{{count}} 页",
-    "sceneCount_one": "{{count}} 页",
-    "sceneCount_other": "{{count}} 页",
-    "courseLinkHint": "在右侧打开《{{name}}》",
-    "courseLinkMore": "还有 {{count}} 节课堂",
-    "courseMention": {
-      "title": "为这条消息引用课堂",
-      "empty": "没有匹配的课堂",
-      "alreadyNamed": "已引用",
-      "remove": "移除{{name}}",
-      "pillHint": "这条消息引用了「{{name}}」",
-      "notAccepted": "引用的课堂未生效，服务端发布中，请稍后重发",
-      "reference": "引用「{{name}}」",
-      "capped": "仅显示前 {{count}} 个，继续输入以缩小范围"
-    }
-  },
   "proMode": {
     "attach": "添加材料",
     "mentionCourse": "引用课堂",
@@ -1868,5 +1868,16 @@
     "skillsLoadFailed": "Skill 加载失败，点击重试",
     "retrySkills": "重试",
     "noSkillMatch": "没有匹配“{{query}}”的 Skill"
+  },
+  "workbench": {
+    "tool": {
+      "label": {
+        "extractMaterial": null,
+        "waitMaterials": null
+      },
+      "error": {
+        "materialExtraction": null
+      }
+    }
   }
 }

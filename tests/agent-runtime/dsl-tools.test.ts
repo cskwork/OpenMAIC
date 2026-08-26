@@ -3,8 +3,7 @@ import { Check } from 'typebox/value';
 import { PGlite } from '@electric-sql/pglite';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import type { PPTTextElement } from '@openmaic/dsl';
-import { PgDocumentStore, ensureDocumentSchema } from '@openmaic/storage/document/pg';
-import type { DocumentStore } from '@openmaic/storage';
+import { ensureDocumentSchema } from '@openmaic/storage/document/pg';
 import {
   buildCourseAllowlist,
   buildDslCourseToolset,
@@ -19,9 +18,16 @@ import {
   PATCH_COURSE_SCHEMA,
   READ_COURSE_SCHEMA,
 } from '@/lib/server/agent-runtime/dsl-tools';
-import { buildCurriculumTools } from '@/lib/server/agent-runtime/curriculum-tools';
+import {
+  buildCurriculumTools,
+  probeStageAccess,
+  type StageAccess,
+} from '@/lib/server/agent-runtime/curriculum-tools';
 import { buildRunnerCoursePrompt } from '@/lib/server/agent-runtime/runner-contract';
 import { withPlainJsonDocumentWrites } from '@/lib/document-store/plain-json-store';
+import { createOwnerBoundDocumentStore } from '@/lib/persistence/owner-bound-document-store';
+import { ensureStageMetaSchema } from '@/lib/persistence/stage-meta';
+import { validateAppScene, validateAppStage } from '@/lib/document-store/validators';
 import type {
   InteractiveContent,
   PBLContent,
@@ -29,8 +35,6 @@ import type {
   Scene,
   SlideContent,
 } from '@/lib/types/stage';
-import type { AppStage } from '@/lib/document-store/persistence-types';
-import type { AppScene } from '@/lib/types/stage';
 
 function slideScene(order = 1, id = 'scene_slide'): Scene {
   return {
@@ -209,9 +213,12 @@ function state(initial = course()) {
   };
 }
 
+const OWNED: StageAccess = { kind: 'owned', stage: { stageId: 'stage-test', name: 'Test course' } };
+
 function dslTools(store: CourseStore) {
   return buildDslCourseTools({
     store,
+    stageAccess: async () => OWNED,
     onCheckpoint: () => undefined,
   });
 }
@@ -448,6 +455,7 @@ describe('patch_stage', () => {
     const checkpoints: { tool: string; stageId?: string; sceneId?: string }[] = [];
     const tools = buildDslCourseTools({
       store: current.store,
+      stageAccess: async () => OWNED,
       onCheckpoint: (info) => checkpoints.push(info),
     });
     const patch = tool(tools, 'patch_stage');
@@ -1146,6 +1154,7 @@ describe('grep_stage', () => {
 describe('DSL course-tool wiring', () => {
   const deps = (store: CourseStore) => ({
     store,
+    stageAccess: async () => OWNED,
     onCheckpoint: () => undefined,
   });
 
@@ -1261,33 +1270,62 @@ describe('grep_stage source scope searches the bounded projection (R6-P2-6)', ()
 });
 
 /**
- * Cross-owner isolation through the run's OWNER-BOUND store.
+ * Cross-owner isolation through the run's OWNER-BOUND store and the
+ * three-state owner probe.
  *
- * The runner binds ONE store per run: `documentStore.forOwner(ownerId)`, the
- * same seam the storage package contracts. These tests drive the real
- * `PgDocumentStore` owner scope over PGlite through the actual tool entry
- * points, so "a stage owned by another owner is not readable or patchable"
- * is asserted against the SQL scope predicate, not a hand-written fake.
+ * These tests drive the reference's tool-layer contract over PGlite through
+ * the actual tool entry points: every stageId-bearing course/DSL tool is
+ * owner-gated by `withOwnerStageAuthorization` before it touches the store, so
+ * a FOREIGN stage is refused with the not-yours message on read, patch, AND
+ * grep — the reference treats the whole open-domain course toolset as
+ * owner-scoped, and only the owner's own tools read it.
  */
 describe('cross-owner isolation (owner-scoped store)', () => {
   let db: PGlite;
 
+  class PGlitePool {
+    constructor(readonly database: PGlite) {}
+
+    query(text: string, params?: unknown[]) {
+      return this.database.query(text, params);
+    }
+
+    async connect() {
+      return {
+        query: (text: string, params?: unknown[]) => this.database.query(text, params),
+        release() {},
+      };
+    }
+  }
+
   function ownerStore(ownerId: string): CourseStore {
-    const pg = new PgDocumentStore(db, {
-      withTransaction: (body) => db.transaction((tx) => body(tx)),
-    }).forOwner(ownerId);
+    // The same seam the runner uses: the owner-bound document store claims
+    // `stage_meta` inside its create transaction, so a stage minted through
+    // `create_stage` is immediately visible to `probeStageAccess`.
     return withPlainJsonDocumentWrites(
-      pg as unknown as DocumentStore<AppScene, AppStage>,
-    ) as CourseStore;
+      createOwnerBoundDocumentStore({
+        pool: new PGlitePool(db),
+        ownerId,
+        validateScene: validateAppScene,
+        validateStage: validateAppStage,
+      }),
+    ) as unknown as CourseStore;
   }
 
   function toolsFor(ownerId: string, sessionId: string) {
     const store = ownerStore(ownerId);
-    const dsl = dslTools(store);
+    const stageAccess = (stageId: string) => probeStageAccess(ownerId, stageId, db);
+    const dsl = buildDslCourseToolset({
+      store,
+      stageAccess,
+      onCheckpoint: () => undefined,
+      sessionId,
+    });
     const curriculum = buildCurriculumTools({
       store,
       ownerId,
       sessionId,
+      stageAccess,
     });
     const run = (toolList: AgentTool<never, never>[], name: string) => {
       const found = toolList.find((item) => item.name === name);
@@ -1298,6 +1336,7 @@ describe('cross-owner isolation (owner-scoped store)', () => {
       store,
       readStage: run(dsl, 'read_stage'),
       patchStage: run(dsl, 'patch_stage'),
+      grepStage: run(dsl, 'grep_stage'),
       createStage: run(curriculum, 'create_stage'),
     };
   }
@@ -1306,13 +1345,14 @@ describe('cross-owner isolation (owner-scoped store)', () => {
     db = new PGlite();
     await db.waitReady;
     await ensureDocumentSchema(db);
+    await ensureStageMetaSchema(db);
   });
 
   afterEach(async () => {
     await db.close();
   });
 
-  it('a stage owned by another owner is not readable or patchable through the run store', async () => {
+  it('refuses a foreign stage on read, patch, and grep; the owner still reads it', async () => {
     const alice = toolsFor('anon:alice', 'session-alice');
     const bob = toolsFor('anon:bob', 'session-bob');
 
@@ -1323,25 +1363,46 @@ describe('cross-owner isolation (owner-scoped store)', () => {
     expect(created.isError).toBeUndefined();
     const stageId = created.details.stageId;
 
-    // Bob's read_stage on Alice's stage: fail-closed "not found or not
-    // accessible" — never a confirmation that the id exists.
-    const foreignRead = (await bob.readStage.execute('read-1', {
-      stageId,
-      path: '/scenes/1',
-    } as never)) as { isError?: boolean; content: { text: string }[] };
-    expect(foreignRead.isError).toBe(true);
-    expect(foreignRead.content[0]!.text).toContain('not accessible');
+    // Holding the id does NOT grant tool access: every course/DSL tool is
+    // owner-gated, so Bob's read of Alice's stage is refused with the single
+    // not-yours message the reference uses, and the store is never touched.
+    const refusalShape = {
+      isError: true,
+      details: { refused: true, stageId },
+      content: [
+        {
+          type: 'text',
+          text: 'The stage was not found, or does not belong to this session user. Use list_folder_stages to see the stages you can work on.',
+        },
+      ],
+    };
+    const foreignRead = (await bob.readStage.execute('read-1', { stageId } as never)) as {
+      isError?: boolean;
+      content: { type: string; text: string }[];
+      details?: Record<string, unknown>;
+    };
+    expect(foreignRead).toMatchObject(refusalShape);
 
-    // Bob's patch_stage on Alice's stage: refused, nothing persisted.
     const foreignPatch = (await bob.patchStage.execute('patch-1', {
       stageId,
       target: '/scenes/1',
       intent: 'Tamper with a foreign stage',
       ops: [{ op: 'set', path: '/actions', value: [] }],
     } as never)) as { isError?: boolean };
-    expect(foreignPatch.isError).toBe(true);
+    expect(foreignPatch).toMatchObject(refusalShape);
 
-    // Alice's own tools still read the stage, and the document is intact.
+    const foreignGrep = (await bob.grepStage.execute('grep-1', {
+      stageId,
+      query: 'Alice',
+    } as never)) as { isError?: boolean };
+    expect(foreignGrep).toMatchObject(refusalShape);
+
+    // The document is untouched — the refusal happened before any IO.
+    await expect(alice.store.loadDocument(stageId)).resolves.toMatchObject({
+      stage: { id: stageId, name: 'Alice stage' },
+    });
+
+    // Alice's own tools read the stage through the same probe.
     const ownRead = (await alice.readStage.execute('read-2', { stageId } as never)) as {
       isError?: boolean;
       content: { text: string }[];
@@ -1350,11 +1411,9 @@ describe('cross-owner isolation (owner-scoped store)', () => {
     expect(JSON.parse(ownRead.content[0]!.text)).toMatchObject({
       stage: { id: stageId, name: 'Alice stage' },
     });
-    // Bob's store can never list Alice's stage.
-    await expect(bob.store.loadDocument(stageId)).resolves.toBeNull();
   });
 
-  it('an owner can read and patch only what its own store sees, after another owner wrote it', async () => {
+  it('each owner list contains only that owner’s stage', async () => {
     const alice = toolsFor('anon:alice', 'session-alice');
     const bob = toolsFor('anon:bob', 'session-bob');
 
@@ -1371,7 +1430,7 @@ describe('cross-owner isolation (owner-scoped store)', () => {
     expect(bobCreated.isError).toBeUndefined();
     expect(bobCreated.details.stageId).not.toBe(stageId);
 
-    // Each owner reads exactly their own document.
+    // Direct reads resolve by id; library listings remain owner-filtered.
     const bobList = await bob.store.loadDocument(bobCreated.details.stageId);
     expect(bobList?.stage.name).toBe('Bob stage');
     expect(bobList?.stage.id).not.toBe(stageId);

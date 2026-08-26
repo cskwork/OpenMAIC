@@ -10,7 +10,8 @@ import { ChatSession } from '../types/chat';
 import { db } from './database';
 import type { FolderRecord } from './database';
 import { nanoid } from 'nanoid';
-import { validateFolderName, FOLDER_COUNT_LIMIT } from './folder-name-validation';
+import { validateFolderName, FOLDER_COUNT_LIMIT, FolderNameError } from './folder-name-validation';
+export { FolderNameError } from './folder-name-validation';
 import {
   ChatStorageLockUnavailableError,
   saveChatSessions,
@@ -1056,17 +1057,6 @@ export async function stageExists(stageId: string): Promise<boolean> {
 export async function listFolders(): Promise<FolderRecord[]> {
   const folders = await db.folders.toArray();
   return folders.sort((a, b) => a.order - b.order);
-}
-
-/** Error thrown when a folder name fails validation at the storage boundary. */
-export class FolderNameError extends Error {
-  constructor(
-    message: string,
-    readonly kind: 'empty' | 'tooLong' | 'duplicate' | 'limit',
-  ) {
-    super(message);
-    this.name = 'FolderNameError';
-  }
 }
 
 /** Validate a folder name against the width rule and (optionally) duplicates. */

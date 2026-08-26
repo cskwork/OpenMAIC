@@ -1,12 +1,9 @@
 /**
  * Shared in-memory DocumentStore facade for the stage route tests.
  *
- * The routes reach the store through `getOwnerScopedDocumentStore`, which
- * binds the provider's document store to the request owner with `forOwner`.
- * Route tests mock `@/lib/persistence/server-provider` to return THIS facade,
- * already scoped to one owner: seeding it with a document is "a document this
- * owner owns", and an id absent from it reads as missing — the same
- * no-existence-oracle the real owner-bound store produces for a foreign id.
+ * Route tests inject this facade at `getOwnerScopedDocumentStore`. It already
+ * represents one owner: seeding it with a document means that owner may mutate
+ * it, and an absent id is missing.
  *
  * The facade also mirrors the PG backend's trigger-maintained freshness
  * revisions: every write method bumps the stage revision, and a scene write
@@ -14,7 +11,13 @@
  * relies on. Route tests seed `stageRevs` / `sceneRevs` to fix the numbers a
  * manifest response must carry.
  */
-import type { DocumentStore, MaicDocument, StageFreshnessManifestStore } from '@openmaic/storage';
+import type {
+  DocumentFolder,
+  DocumentFolderStore,
+  DocumentStore,
+  MaicDocument,
+  StageFreshnessManifestStore,
+} from '@openmaic/storage';
 
 import type { AppStage } from '@/lib/document-store/persistence-types';
 import type { AppScene } from '@/lib/types/stage';
@@ -33,9 +36,8 @@ export interface FakeDocumentStore {
 
 /** The fake store is already one owner's partition, so scoping is identity. */
 export type OwnerScopedFakeStore = DocumentStore<AppScene, AppStage> &
-  StageFreshnessManifestStore & {
-    forOwner(ownerId: string): OwnerScopedFakeStore;
-  };
+  StageFreshnessManifestStore &
+  DocumentFolderStore & { forOwner(ownerId: string): OwnerScopedFakeStore };
 
 export function createFakeDocumentStore(): FakeDocumentStore {
   const docs = new Map<string, MaicDocument<AppScene, AppStage>>();
@@ -54,6 +56,11 @@ export function createFakeDocumentStore(): FakeDocumentStore {
     sceneRevs.set(stageId, perScene);
   };
   const revOf = (stageId: string, sceneId: string) => sceneRevs.get(stageId)?.get(sceneId) ?? 0;
+
+  // In-memory folder store, one owner's partition (same as `docs`).
+  const folders = new Map<string, DocumentFolder>();
+  const stageFolder = new Map<string, string | null>();
+  let nextOrder = 0;
 
   const store = {
     forOwner: () => store,
@@ -136,6 +143,67 @@ export function createFakeDocumentStore(): FakeDocumentStore {
       }
       bumpStage(stageId);
       sceneRevs.get(stageId)?.delete(sceneId);
+    },
+    async listFolders(): Promise<DocumentFolder[]> {
+      return [...folders.values()].sort((left, right) => left.order - right.order);
+    },
+    async createFolder(
+      folderId: string,
+      name: string,
+      _limit?: number,
+    ): Promise<{ folder: DocumentFolder; reused: boolean }> {
+      const existing = [...folders.values()].find(
+        (folder) => folder.name.toLowerCase() === name.toLowerCase(),
+      );
+      if (existing) return { folder: existing, reused: true };
+      const now = Date.now();
+      const folder: DocumentFolder = {
+        id: folderId,
+        name,
+        order: nextOrder,
+        createdAt: now,
+        updatedAt: now,
+      };
+      nextOrder += 1;
+      folders.set(folderId, folder);
+      return { folder, reused: false };
+    },
+    async renameFolder(id: string, name: string): Promise<DocumentFolder | null> {
+      const folder = folders.get(id);
+      if (!folder) return null;
+      const updated = { ...folder, name, updatedAt: Date.now() };
+      folders.set(id, updated);
+      return updated;
+    },
+    async deleteFolder(
+      id: string,
+      mode: 'ungroup' | 'remove',
+    ): Promise<{ removedStageIds: string[] } | null> {
+      if (!folders.has(id)) return null;
+      const removedStageIds =
+        mode === 'remove'
+          ? [...stageFolder.entries()]
+              .filter(([, folderId]) => folderId === id)
+              .map(([stageId]) => stageId)
+              .sort()
+          : [];
+      for (const stageId of [...stageFolder.keys()]) {
+        if (stageFolder.get(stageId) === id) stageFolder.set(stageId, null);
+      }
+      folders.delete(id);
+      return { removedStageIds };
+    },
+    async moveDocumentToFolder(stageId: string, folderId: string): Promise<boolean> {
+      return this.setStageFolder(stageId, folderId);
+    },
+    async setStageFolder(stageId: string, folderId: string | null): Promise<boolean> {
+      if (folderId === null) {
+        stageFolder.set(stageId, null);
+        return true;
+      }
+      if (!folders.has(folderId)) return false;
+      stageFolder.set(stageId, folderId);
+      return true;
     },
   } as OwnerScopedFakeStore;
 
