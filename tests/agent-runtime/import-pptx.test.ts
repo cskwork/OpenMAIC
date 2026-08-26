@@ -127,6 +127,8 @@ function sourceRecord(overrides: Partial<AgentSessionMaterial> = {}): AgentSessi
     textAssetId: null,
     rawAssetId: 'ast_raw_ppt',
     textChars: 0,
+    derivedFrom: null,
+    extraction: { status: 'idle' as const, attempts: 0 },
     createdAt: new Date(0).toISOString(),
     ...overrides,
   };
@@ -559,6 +561,8 @@ describe('session material prompt', () => {
         textAssetId: null,
         rawAssetId: null,
         textChars: 0,
+        derivedFrom: null,
+        extraction: { status: 'idle' as const, attempts: 0 },
         createdAt: new Date(0).toISOString(),
       },
     ]);
@@ -574,6 +578,8 @@ describe('session material prompt', () => {
         textAssetId: null,
         rawAssetId: 'ast_raw_ppt',
         textChars: 0,
+        derivedFrom: null,
+        extraction: { status: 'idle' as const, attempts: 0 },
         createdAt: new Date(0).toISOString(),
       },
     ]);
