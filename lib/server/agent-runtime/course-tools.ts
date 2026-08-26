@@ -1,11 +1,8 @@
 /**
  * The stage read/patch toolset — the agent's document-level DSL surface.
  *
- * This slice wires the three generic stage tools (`read_stage`, `patch_stage`,
- * `grep_stage` from `./dsl-tools`) and the stage-level CRUD they need
- * (`create_stage`, `read_stage_outline` from `./curriculum-tools`) into the
- * background runner. Generation, media, page-list and folder tools belong to
- * later slices and are deliberately NOT registered here.
+ * This layer combines the generic stage DSL with page generation, playback,
+ * deck structure, media promotion, and preview tools for the background runner.
  *
  * What this layer owns:
  *
@@ -36,6 +33,11 @@ import type { Scene } from '@/lib/types/stage';
 import { STAGE_WRITER_TOOL_NAMES } from '@/lib/agent-runtime/stage-writer-tools';
 import { buildDslCourseTools, DSL_COURSE_TOOL_NAMES } from './dsl-tools';
 import { CURRICULUM_ALLOWLIST } from './curriculum-tools';
+import { buildGenerationTools, GENERATION_TOOL_NAMES } from './generation-tools';
+import { buildCourseAudioAndDeckTools, COURSE_AUDIO_DECK_TOOL_NAMES } from './course-edit/tools';
+import { buildMaterialMediaTool, MATERIAL_MEDIA_TOOL_NAME } from './material-media';
+import { buildScenePreviewTools, RENDER_SCENE_PREVIEW_TOOL_NAME } from './scene-preview';
+import type { SceneTtsInput, SceneTtsSummary } from './scene-tts';
 
 export type CourseDocument = MaicDocument<Scene, Stage>;
 export type CourseStore = DocumentStore<Scene, Stage>;
@@ -60,6 +62,10 @@ export interface CourseToolDeps {
   onCheckpoint: (info: CheckpointInfo) => void;
   /** The session id, recorded on the document as the producer reference. */
   sessionId?: string;
+  /** Cancel generation, preview, and synthesis when the run stops. */
+  abortSignal?: AbortSignal;
+  /** Test seam for the neutral TTS path. */
+  synthesizeTts?: (input: SceneTtsInput) => Promise<SceneTtsSummary>;
 }
 
 /**
@@ -116,12 +122,26 @@ export function markDocumentWritersSequential(
  * registry.
  */
 export function buildDslCourseToolset(deps: CourseToolDeps): AgentTool<never, never>[] {
-  return markDocumentWritersSequential(buildDslCourseTools(deps));
+  const tools = [
+    ...buildGenerationTools(deps),
+    ...buildCourseAudioAndDeckTools(deps),
+    ...(deps.sessionId ? [buildMaterialMediaTool({ sessionId: deps.sessionId })] : []),
+    ...buildScenePreviewTools({ store: deps.store }),
+    ...buildDslCourseTools(deps),
+  ];
+  return markDocumentWritersSequential(tools);
 }
 
 /** The exact registered tool names of this slice's toolset. */
 export function buildCourseAllowlist(): ReadonlySet<string> {
-  return new Set([...DSL_COURSE_TOOL_NAMES, ...CURRICULUM_ALLOWLIST]);
+  return new Set([
+    ...DSL_COURSE_TOOL_NAMES,
+    ...GENERATION_TOOL_NAMES,
+    ...COURSE_AUDIO_DECK_TOOL_NAMES,
+    MATERIAL_MEDIA_TOOL_NAME,
+    RENDER_SCENE_PREVIEW_TOOL_NAME,
+    ...CURRICULUM_ALLOWLIST,
+  ]);
 }
 
 export const DSL_TOOLS_PROMPT = [
@@ -134,6 +154,9 @@ export const DSL_TOOLS_PROMPT = [
   'For one targeted change inside a large HTML or long text field, use patch_stage op "str_replace" (path, oldText, newText; set replaceAll only when the anchor repeats) instead of rewriting the whole field with set.',
   'Use grep_stage for literal stage-wide text/source search.',
   'Start with detail:"tree" to see structure; read source only for the subtree you will edit; for long content, prefer grep_stage over paging with offset.',
+  'Use generate_scene once per page: each successful call is a durable checkpoint. Use list_scenes to inspect persisted pages and generate_actions to rebuild playback actions for one page.',
+  'Use duplicate_scene to copy a layout, edit_deck for retitle/insert/delete/reorder, and generate_tts after narration edits. Page-list writers keep the saved outline numbering aligned with the real pages.',
+  'Use use_material_media before placing session image, video, or audio bytes into a page. Use render_scene_preview selectively to inspect a persisted page when the render capability is available.',
 ].join(' ');
 
 /** Base runner identity/environment lines, shared by every runner prompt. */
