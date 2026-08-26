@@ -40,4 +40,6 @@ export const agentRuntimeConfig = {
         }
       : {}),
   },
+  /** Directory skills are loaded from. Overridable so a deployment can mount its own set. */
+  skillsDir: process.env.OPENMAIC_AGENT_SKILLS_DIR ?? `${process.cwd()}/skills/agent-runtime`,
 } as const;

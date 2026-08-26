@@ -10,6 +10,7 @@ import { NextResponse } from 'next/server';
 import { isAgentRuntimeEnabled } from '@/lib/config/feature-flags';
 import { apiError } from '@/lib/server/api-response';
 import { MAX_SESSION_TEXT_LENGTH } from '@/lib/server/agent-runtime/limits';
+import { inferSkillIdFromPrompt, listSkills } from '@/lib/server/agent-runtime/skills';
 import { getAgentSessionStore } from '@/lib/server/agent-runtime/store';
 import { withRequestOwnerId } from '@/lib/server/agent-runtime/with-owner';
 import { buildRequestOrigin, isValidClassroomId } from '@/lib/server/classroom-storage';
@@ -59,7 +60,41 @@ export async function POST(req: NextRequest) {
   }
 
   return withRequestOwnerId(req, async (ownerId, responseHeaders) => {
-    const skillId = (body.skill ?? '').toString().trim() || undefined;
+    // An EXPLICIT skill — a `?skill=` launch link, not composer UI — is
+    // rejected here rather than at claim time: a session created with a typo'd
+    // skill would otherwise sit queued and then quietly build an ordinary
+    // conversation.
+    const explicitSkillId = (body.skill ?? '').toString().trim() || undefined;
+    if (explicitSkillId) {
+      const known = await listSkills(ownerId);
+      if (!known.some((s) => s.id === explicitSkillId)) {
+        return new NextResponse(
+          JSON.stringify({
+            success: false as const,
+            errorCode: 'INVALID_REQUEST',
+            error: `unknown skill "${explicitSkillId}"; installed: ${
+              known.map((s) => s.id).join(', ') || '(none)'
+            }`,
+          }),
+          { status: 400, headers: responseHeaders },
+        );
+      }
+    }
+    /**
+     * Otherwise, read the skill off the message itself.
+     *
+     * Skills are written as `/handle` TEXT — there is no chip and no skill
+     * field in the UI, because an input box is an input box. Nothing needs to
+     * parse that text for the agent (skills are listed in the system prompt
+     * and opened with pi's native `read`), but the session's `skillId` still
+     * feeds the outline-constraint pointer. So the SERVER recognises the
+     * structure in the text and records it.
+     *
+     * Forgiving by design: an unrecognised handle simply means no skill — never
+     * an error, never a fallback to a default — and the text stays in the
+     * prompt either way, so the model still sees what the user asked for.
+     */
+    const skillId = explicitSkillId ?? (await inferSkillIdFromPrompt(prompt, ownerId));
 
     // Upstream classrooms do not carry an owner partition, so existing-course
     // sessions validate only the identifier format here. Full existence and

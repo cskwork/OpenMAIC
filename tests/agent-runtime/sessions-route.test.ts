@@ -14,6 +14,13 @@ vi.mock('@/lib/config/feature-flags', () => ({
 vi.mock('@/lib/server/agent-runtime/owner', () => ({
   resolveRequestOwnerId: mocks.resolveRequestOwnerId,
 }));
+// The route now reads skills off the prompt; pin them to none so no
+// user-skill store or skill directory is touched.
+vi.mock('@/lib/server/agent-runtime/skills', () => ({
+  listSkills: vi.fn(async () => [{ id: 'custom-skill', name: 'custom-skill' }]),
+  inferSkillIdFromPrompt: vi.fn(async () => undefined),
+}));
+
 vi.mock('@/lib/server/agent-runtime/store', () => ({
   getAgentSessionStore: async () => ({
     createSession: mocks.createSession,
