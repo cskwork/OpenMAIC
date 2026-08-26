@@ -45,8 +45,15 @@ CREATE TABLE IF NOT EXISTS document_stages (
   task_engine_mode BOOLEAN,
   created_at DOUBLE PRECISION NOT NULL,
   updated_at DOUBLE PRECISION NOT NULL,
+  owner_id TEXT,
   data JSONB NOT NULL
 );
+
+ALTER TABLE document_stages
+  ADD COLUMN IF NOT EXISTS owner_id TEXT;
+
+CREATE INDEX IF NOT EXISTS document_stages_owner_idx
+  ON document_stages (owner_id, id) WHERE owner_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS document_scenes (
   stage_id TEXT NOT NULL REFERENCES document_stages(id) ON DELETE CASCADE,
@@ -333,8 +340,9 @@ describe.each(schemas)('$name is a pinned contract', ({ name, actual, expected, 
     expect(statements.length).toBeGreaterThan(0);
     for (const statement of statements) {
       expect(
-        /^CREATE (TABLE|INDEX|UNIQUE INDEX) IF NOT EXISTS /.test(statement),
-        `${name} statement is not an IF NOT EXISTS create: ${statement}`,
+        /^CREATE (TABLE|INDEX|UNIQUE INDEX) IF NOT EXISTS /.test(statement) ||
+          /^ALTER TABLE [a-z_]+\s+ADD COLUMN IF NOT EXISTS /.test(statement),
+        `${name} statement is not an idempotent create or additive migration: ${statement}`,
       ).toBe(true);
     }
   });
