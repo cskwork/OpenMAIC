@@ -1,5 +1,3 @@
-/* eslint-disable @typescript-eslint/ban-ts-comment -- U1/U2 are sibling integration slices. */
-// @ts-nocheck -- removed when the concrete sibling declarations land.
 'use client';
 
 /**
@@ -815,8 +813,11 @@ function WorkspaceShellController({ initialPanes }: { readonly initialPanes: Wor
   // The tree already knows: a course saved from Discover carries
   // `isOwner === false`. The stage store's own answer arrives after the load
   // and is authoritative once it does; before that the tree's flag keeps the
-  // header from claiming an edit deck it is about to lose.
-  const storeIsOwner = useStageStore((s) => s.isOwner);
+  // header from claiming an edit deck it is about to lose. The real store
+  // carries that answer as `outlineProducer` (the reference's `isOwner` was
+  // not ported): a course whose document a server job produced is server-owned,
+  // not client-authored, and therefore not the current user's own to edit.
+  const storeIsOwner = useStageStore((s) => s.outlineProducer) !== 'server-job';
   const courseIsOwner = useMemo(
     () => courses.classrooms.find((course) => course.id === panes.courseId)?.isOwner,
     [courses.classrooms, panes.courseId],

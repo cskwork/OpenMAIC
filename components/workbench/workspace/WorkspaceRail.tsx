@@ -1,5 +1,3 @@
-/* eslint-disable @typescript-eslint/ban-ts-comment -- U1 is a sibling integration slice. */
-// @ts-nocheck -- removed when the concrete U1 declarations land.
 'use client';
 
 /**

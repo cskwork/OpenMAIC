@@ -1808,103 +1808,21 @@
     "alidocmindAccessKeySecret": "AccessKey Secret"
   },
   "workspace": {
-    "heroTitle": "What will you create today?",
-    "heroSubtitle": "Share an idea and turn it into a learning journey people can step into",
-    "newSession": "New chat",
-    "sections": {
-      "courses": "Courses",
-      "sessions": "Chats",
-      "favorites": "Saved"
-    },
-    "coursesEmpty": "No courses yet",
-    "sessionsEmpty": "No chats yet",
-    "loading": "Loading",
-    "loadFailed": "Couldn't load",
-    "retry": "Retry",
-    "untitledCourse": "Untitled course",
-    "untitledSession": "Untitled chat",
-    "sceneCount": "{{count}} pages",
-    "pagePosition": "Page {{index}} of {{total}}",
-    "exitPro": "Exit Pro",
-    "navAria": "Workspace navigation",
-    "homeAria": "Back to home",
-    "currentSession": "Current chat",
-    "startLearning": "학습 시작",
-    "time": {
-      "justNow": "Just now",
-      "minutesAgo": "{{count}}m ago",
-      "hoursAgo": "{{count}}h ago",
-      "daysAgo": "{{count}}d ago"
-    },
-    "sessionStatus": {
-      "connecting": "Connecting",
-      "queued": "Queued",
-      "running": "Running",
-      "succeeded": "Ready",
-      "failed": "Needs attention",
-      "cancelled": "Stopped"
-    },
-    "backToWorkspace": "Back to workspace",
-    "sceneCount_one": "{{count}} page",
-    "sceneCount_other": "{{count}} pages",
-    "savedCourse": "Saved course, read-only",
-    "savedNote": "다른 사용자가 제작 · 읽기 전용",
-    "savedEmpty": "저장한 코스가 없습니다",
-    "searchPlaceholder": "Filter by name",
-    "searchAria": "Search {{section}}",
-    "searchEmpty": "No matches",
-    "showMore": "Show {{count}} more",
-    "showLess": "Show less",
-    "utilitiesAria": "Preferences and account",
-    "resizeAria": "Drag to resize the sidebar",
-    "chatPaneAria": "Chat panel",
-    "classroomPaneAria": "Classroom",
-    "collapseNav": "Collapse navigation",
-    "expandNav": "Expand navigation",
-    "expandNavInto": "Expand navigation · {{section}}",
-    "collapseChat": "Collapse conversation",
-    "expandChat": "Conversation",
-    "collapseClassroom": "Collapse classroom",
-    "expandClassroom": "Classroom",
-    "readOnlyBadge": "Read-only",
-    "noCourseTitle": "No course open",
-    "noCourseHint": "대화의 코스 링크로 열거나 왼쪽 목록에서 선택하세요. 대화는 그대로 남습니다",
-    "resizeChatAria": "Drag to resize the conversation pane",
-    "firstPageLanding": "The first page is landing…",
-    "autoSaving": "자동 저장 중…",
-    "autoSaved": "저장됨",
-    "collapsedTitle": "Both panes are collapsed",
-    "collapsedHint": "Use the tabs on the left to bring the conversation or the classroom back",
-    "moreUtilities": "More",
-    "rowMore": "{{name}} 추가 작업",
-    "folderDeleteHint": "폴더 안의 강의는 최상위 목록으로 돌아갑니다. 삭제되지 않습니다.",
-    "dropToUnfile": "여기에 놓으면 폴더에서 빼냅니다",
-    "renameInvalid": "이름은 1~120자여야 합니다",
-    "renameForbidden": "내가 만든 강의가 아니어서 이름을 바꿀 수 없습니다",
-    "renameGone": "강의가 없거나 이미 삭제되었습니다",
-    "renameSession": "대화 이름 변경",
-    "renameSessionAria": "대화 “{{name}}” 이름 변경",
-    "renameSessionFailed": "이름 변경에 실패했습니다. 다시 시도해 주세요",
-    "delete": "삭제",
-    "confirmDelete": "삭제 확인",
-    "deleting": "삭제 중…",
-    "deleteFailed": "삭제하지 못했습니다. 다시 시도해 주세요.",
-    "tabsAria": "Chats and courses",
-    "savedDrawerAria": "Saved courses",
-    "courseTabsAria": "열린 코스",
-    "courseTabClose": "탭 닫기: {{name}}",
-    "courseTabRunning": "생성 중",
-    "courseLinkHint": "{{name}}을(를) 오른쪽 패널에서 열기",
-    "courseLinkMore": "다른 교실 {{count}}개",
+    "untitledCourse": "未命名课堂",
+    "sceneCount": "{{count}} 页",
+    "sceneCount_one": "{{count}} 页",
+    "sceneCount_other": "{{count}} 页",
+    "courseLinkHint": "在右侧打开《{{name}}》",
+    "courseLinkMore": "还有 {{count}} 节课堂",
     "courseMention": {
-      "title": "이 메시지에서 참조할 교실",
-      "empty": "일치하는 교실이 없습니다",
-      "alreadyNamed": "참조됨",
-      "remove": "{{name}} 제거",
-      "pillHint": "이 메시지는 {{name}}을(를) 참조합니다",
-      "notAccepted": "서버 배포 중이라 참조한 교실이 적용되지 않았습니다. 잠시 후 다시 보내 주세요.",
-      "reference": "“{{name}}” 참조",
-      "capped": "처음 {{count}}개만 표시 — 더 입력하면 좁혀집니다"
+      "title": "为这条消息引用课堂",
+      "empty": "没有匹配的课堂",
+      "alreadyNamed": "已引用",
+      "remove": "移除{{name}}",
+      "pillHint": "这条消息引用了「{{name}}」",
+      "notAccepted": "引用的课堂未生效，服务端发布中，请稍后重发",
+      "reference": "引用「{{name}}」",
+      "capped": "仅显示前 {{count}} 个，继续输入以缩小范围"
     }
   },
   "profile": {
@@ -1938,24 +1856,6 @@
     "placeholder": "접근 코드",
     "error": "유효하지 않은 접근 코드입니다. 다시 시도해 주세요."
   },
-  "workspace": {
-    "untitledCourse": "未命名课堂",
-    "sceneCount": "{{count}} 页",
-    "sceneCount_one": "{{count}} 页",
-    "sceneCount_other": "{{count}} 页",
-    "courseLinkHint": "在右侧打开《{{name}}》",
-    "courseLinkMore": "还有 {{count}} 节课堂",
-    "courseMention": {
-      "title": "为这条消息引用课堂",
-      "empty": "没有匹配的课堂",
-      "alreadyNamed": "已引用",
-      "remove": "移除{{name}}",
-      "pillHint": "这条消息引用了「{{name}}」",
-      "notAccepted": "引用的课堂未生效，服务端发布中，请稍后重发",
-      "reference": "引用「{{name}}」",
-      "capped": "仅显示前 {{count}} 个，继续输入以缩小范围"
-    }
-  },
   "proMode": {
     "attach": "添加材料",
     "mentionCourse": "引用课堂",
@@ -1968,5 +1868,16 @@
     "skillsLoadFailed": "Skill 加载失败，点击重试",
     "retrySkills": "重试",
     "noSkillMatch": "没有匹配“{{query}}”的 Skill"
+  },
+  "workbench": {
+    "tool": {
+      "label": {
+        "extractMaterial": null,
+        "waitMaterials": null
+      },
+      "error": {
+        "materialExtraction": null
+      }
+    }
   }
 }
