@@ -25,6 +25,8 @@ const mocks = vi.hoisted(() => ({
   createCallLlmStreamFn: vi.fn(),
   buildAgent: vi.fn(),
   resolveWebSearchCapability: vi.fn(),
+  searchWeb: vi.fn(),
+  formatSearchResultsAsContext: vi.fn(),
 }));
 
 vi.mock('node:crypto', async (importActual) => {
@@ -34,6 +36,11 @@ vi.mock('node:crypto', async (importActual) => {
 
 vi.mock('@/lib/server/agent-runtime/store', () => ({
   getAgentSessionStore: mocks.getAgentSessionStore,
+}));
+
+vi.mock('@/lib/web-search', () => ({
+  searchWeb: mocks.searchWeb,
+  formatSearchResultsAsContext: mocks.formatSearchResultsAsContext,
 }));
 
 vi.mock('@/lib/server/agent-runtime/entry-tree-storage', async (importActual) => {
@@ -112,6 +119,7 @@ function makeStore(meta: ClaimedAgentSession) {
     heartbeat: vi.fn(async () => true),
     isCancelRequested: vi.fn(async () => false),
     listUserMessages: vi.fn(async () => []),
+    registerSessionUrls: vi.fn(async () => []),
     releaseLease: vi.fn(async () => undefined),
     requeueForRetry: vi.fn(async () => false),
     requeueSession: vi.fn(async () => false),
@@ -226,5 +234,49 @@ describe('web_search runner registration', () => {
     expect(options.systemPrompt).not.toContain('## Web search');
     // In this state the ask_user-only claim is accurate and stays in place.
     expect(options.systemPrompt).toContain('Your only available tool is ask_user');
+  });
+
+  it('wires web_search result URLs to the session URL trust gate', async () => {
+    mocks.resolveWebSearchCapability.mockReturnValue({
+      providerId: 'searxng',
+      apiKey: '',
+      baseUrl: 'https://search.example',
+    });
+    mocks.searchWeb.mockResolvedValue({
+      answer: '',
+      query: 'q',
+      responseTime: 0.1,
+      sources: [{ title: 'A', url: 'https://a.example/', content: 'a', score: 1 }],
+    });
+    mocks.formatSearchResultsAsContext.mockReturnValue('search context');
+
+    const meta = makeMeta();
+    const session = await makeEntryTree();
+    const store = makeStore(meta);
+    mocks.openEntryStorage.mockResolvedValue(session.getStorage());
+    mocks.getAgentSessionStore.mockResolvedValue(store);
+
+    let options: BuildAgentOptions | undefined;
+    mocks.buildAgent.mockImplementation((agentOptions: BuildAgentOptions) => {
+      options = agentOptions;
+      return makeFakeAgent();
+    });
+
+    await runSession({ running: new Map(), shuttingDown: false }, meta);
+
+    const tool = options!.tools.find(
+      (candidate) => candidate.name === 'web_search',
+    )! as unknown as {
+      execute: (id: string, params: never, signal?: AbortSignal) => Promise<unknown>;
+    };
+    await tool.execute('call_1', { query: 'q' } as never, undefined);
+
+    // The runner-bound callback registers with THIS session id and the
+    // web_search source, before the tool result is returned.
+    expect(store.registerSessionUrls).toHaveBeenCalledWith(
+      SESSION_ID,
+      ['https://a.example/'],
+      'web_search',
+    );
   });
 });

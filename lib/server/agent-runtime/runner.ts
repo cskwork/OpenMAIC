@@ -25,6 +25,7 @@ import { buildAskUserTool } from './ask-user';
 import { agentRuntimeConfig as config } from './config';
 import { assembleRunnerTools } from './runner-contract';
 import { buildWebSearchTool, resolveWebSearchCapability, searchPromptBlock } from './web-search';
+import { registerSessionUrls } from './session-urls';
 import {
   AgentSessionEntryStorage,
   loadSessionEntryHistory,
@@ -697,8 +698,16 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
     // web_search is capability-registered: the tool exists in the toolset
     // exactly when this deployment has a working web-search backend. An
     // unconfigured deployment gets no tool, so the model never sees a dead one.
+    // Every result URL is registered with this session's durable URL trust
+    // gate before the tool result is returned (reference semantics).
     const search = resolveWebSearchCapability();
-    const webSearchTools = search ? [buildWebSearchTool(search)] : [];
+    const webSearchTools = search
+      ? [
+          buildWebSearchTool(search, (urls) =>
+            registerSessionUrls(id, urls, 'web_search').then(() => undefined),
+          ),
+        ]
+      : [];
     const tools = assembleRunnerTools([askUserTool], webSearchTools);
     const askUserLatch = createAskUserTerminateLatch();
     let toolCalls = 0;
