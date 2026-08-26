@@ -123,4 +123,3 @@ export function buildAgent(opts: BuildAgentOptions): Agent {
 
   return agent;
 }
-
