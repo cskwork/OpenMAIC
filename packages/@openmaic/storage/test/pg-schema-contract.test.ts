@@ -37,6 +37,17 @@ import type { Queryable } from '../src/runtime/pg.js';
  */
 
 const EXPECTED_DOCUMENT_PG_SCHEMA = `
+CREATE TABLE IF NOT EXISTS document_folders (
+  owner_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  normalized_name TEXT NOT NULL,
+  created_at DOUBLE PRECISION NOT NULL,
+  updated_at DOUBLE PRECISION NOT NULL,
+  PRIMARY KEY (owner_id, id),
+  UNIQUE (owner_id, normalized_name)
+);
+
 CREATE TABLE IF NOT EXISTS document_stages (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -46,14 +57,22 @@ CREATE TABLE IF NOT EXISTS document_stages (
   created_at DOUBLE PRECISION NOT NULL,
   updated_at DOUBLE PRECISION NOT NULL,
   owner_id TEXT,
+  folder_id TEXT,
   data JSONB NOT NULL
 );
 
 ALTER TABLE document_stages
   ADD COLUMN IF NOT EXISTS owner_id TEXT;
 
+ALTER TABLE document_stages
+  ADD COLUMN IF NOT EXISTS folder_id TEXT;
+
 CREATE INDEX IF NOT EXISTS document_stages_owner_idx
   ON document_stages (owner_id, id) WHERE owner_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS document_stages_owner_folder_idx
+  ON document_stages (owner_id, folder_id, id)
+  WHERE owner_id IS NOT NULL AND folder_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS document_scenes (
   stage_id TEXT NOT NULL REFERENCES document_stages(id) ON DELETE CASCADE,

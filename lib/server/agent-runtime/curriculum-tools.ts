@@ -1,14 +1,8 @@
 /**
  * Multi-stage curriculum tools — the backend half of "user says '7 days of
  * python', ONE agent session runs start to finish": create stages (one class
- * per unit/day) and read cross-stage outlines for chaining.
- *
- * This slice ports ONLY `create_stage` and `read_stage_outline` from the
- * reference curriculum toolset. The folder tools (`create_folder`,
- * `move_to_folder`), `rename_stage` and `list_folder_stages` belong to the
- * folder slice and are deliberately absent here, so `create_stage` never takes
- * a `folderId` (a stage is always created ungrouped until the folder slice
- * lands).
+ * per unit/day), organize them into folders, rename them, and read cross-stage
+ * outlines for chaining.
  *
  * Every tool is scoped to the run's owner: the store handed to these tools is
  * the owner-bound `PgDocumentStore` (`documentStore.forOwner(ownerId)`), so a
@@ -18,12 +12,14 @@
  */
 import { Type, type Static } from 'typebox';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
+import { DocumentFolderLimitError } from '@openmaic/storage';
 import type { StageLinkLifecycleData } from '@/lib/agent-runtime/lifecycle';
 
 import type { AppDocumentOutline } from '@/lib/document-store/persistence-types';
 import type { CourseDocument, CourseStore } from './course-tools';
-import { stageIdForCall } from './course-stage';
+import { folderIdForCall, stageIdForCall } from './course-stage';
 import { mergeStageOutline } from './course-outline-union';
+import { FOLDER_COUNT_LIMIT, validateFolderName } from '@/lib/utils/folder-name-validation';
 
 export { stageIdForCall } from './course-stage';
 
@@ -48,15 +44,25 @@ export interface CurriculumToolDeps {
    * request for the same bytes back.
    */
   onLibraryChanged?: (change: LibraryChange) => void;
+  /** Fired after a successful stage-document write. */
+  onCheckpoint?: (info: {
+    tool: string;
+    stageId: string;
+    detail: string;
+    courseTitle?: string;
+  }) => void;
 }
 
 /**
  * What moved in the library. The client refetches the whole list either way, so
  * this rides along for the log and for debugging rather than for a diff — see
- * `LIFECYCLE.libraryChanged`. The folder-shaped variants land with the folder
- * slice.
+ * `LIFECYCLE.libraryChanged`.
  */
-export type LibraryChange = { change: 'stage_created'; stageId: string; title: string };
+export type LibraryChange =
+  | { change: 'stage_created'; stageId: string; title: string }
+  | { change: 'folder_created'; folderId: string; name: string }
+  | { change: 'stage_moved'; stageId: string; folderId: string }
+  | { change: 'stage_renamed'; stageId: string; title: string };
 
 // ── Params ────────────────────────────────────────────────────────────────────
 
@@ -67,6 +73,35 @@ const CreateStageParams = Type.Object({
   }),
   brief: Type.Optional(
     Type.String({ description: 'Optional one-line brief, stored as the stage description.' }),
+  ),
+  folderId: Type.Optional(
+    Type.String({
+      description:
+        'An owner folder id from create_folder or list_folder_stages. Omit to create an ungrouped stage.',
+    }),
+  ),
+});
+
+const CreateFolderParams = Type.Object({
+  name: Type.String({ description: 'Folder name with display width at most 40.' }),
+});
+
+const MoveToFolderParams = Type.Object({
+  stageId: Type.String({ description: 'An owner stage id.' }),
+  folderId: Type.String({ description: 'An owner folder id.' }),
+});
+
+const RenameStageParams = Type.Object({
+  stageId: Type.String({ description: 'An owner stage id.' }),
+  name: Type.String({ description: 'New stage name with display width at most 40.' }),
+  description: Type.Optional(
+    Type.String({ description: 'Optional non-empty replacement stage description.' }),
+  ),
+});
+
+const ListFolderStagesParams = Type.Object({
+  folderId: Type.Optional(
+    Type.String({ description: 'Omit to list every stage owned by this session user.' }),
   ),
 });
 
@@ -95,7 +130,7 @@ function toolResult(text: string, details: Record<string, unknown>, isError = fa
  */
 function notYoursResult(subject: string) {
   return toolResult(
-    `${subject} was not found, or does not belong to this session user. You can only read and write stages this session created.`,
+    `${subject} was not found, or does not belong to this session user. Use list_folder_stages to see the stages you can work on.`,
     { refused: true },
     true,
   );
@@ -113,6 +148,18 @@ export function buildCurriculumTools(deps: CurriculumToolDeps): AgentTool<never,
       const title = params.title?.trim();
       if (!title) {
         return toolResult('create_stage needs a non-empty title.', { error: 'empty-title' }, true);
+      }
+      const folderId = params.folderId?.trim() || undefined;
+      if (folderId) {
+        const folders = await deps.store.listFolders();
+        if (signal?.aborted) throw new Error('aborted');
+        if (!folders.some((folder) => folder.id === folderId)) {
+          return toolResult(
+            'The folder was not found, or does not belong to this session user.',
+            { refused: true, error: 'unknown-folder' },
+            true,
+          );
+        }
       }
       // Idempotent by construction: the SAME tool call (same call id, replayed
       // after a crash between the save and the result checkpoint) derives the
@@ -139,6 +186,17 @@ export function buildCurriculumTools(deps: CurriculumToolDeps): AgentTool<never,
             true,
           );
         }
+        if (folderId) {
+          const moved = await deps.store.moveDocumentToFolder(stageId, folderId);
+          if (signal?.aborted) throw new Error('aborted');
+          if (!moved) {
+            return toolResult(
+              'The folder was not found, or does not belong to this session user.',
+              { refused: true, error: 'unknown-folder' },
+              true,
+            );
+          }
+        }
         deps.onStageLink?.({
           stageId,
           title: existing.stage.name,
@@ -150,6 +208,7 @@ export function buildCurriculumTools(deps: CurriculumToolDeps): AgentTool<never,
             stageId,
             title: existing.stage.name,
             url: `/classroom/${stageId}`,
+            ...(folderId ? { folderId } : {}),
             reused: true,
           },
         );
@@ -188,18 +247,193 @@ export function buildCurriculumTools(deps: CurriculumToolDeps): AgentTool<never,
       // the loadDocument pre-check above is the ordering guarantee.
       await deps.store.saveDocument(document);
       if (signal?.aborted) throw new Error('aborted');
+      if (folderId) {
+        const moved = await deps.store.moveDocumentToFolder(stageId, folderId);
+        if (signal?.aborted) throw new Error('aborted');
+        if (!moved) {
+          return toolResult(
+            `Stage "${title}" was created but could not be filed because the folder no longer exists.`,
+            { stageId, title, url: `/classroom/${stageId}`, archived: false },
+            true,
+          );
+        }
+      }
       // The owner's library gained a course — the left rail's tree is stale
       // until it refetches. Fired exactly once per mint.
       deps.onLibraryChanged?.({ change: 'stage_created', stageId, title });
       deps.onStageLink?.({ stageId, title, url: `/classroom/${stageId}` });
       return toolResult(
-        `Created stage "${title}" — open it at /classroom/${stageId}. Pass stageId=${stageId} explicitly to every stage tool for this stage.`,
+        `Created stage "${title}" — open it at /classroom/${stageId}.${folderId ? ` Filed into folder ${folderId}.` : ''} Pass stageId=${stageId} explicitly to every stage tool for this stage.`,
         {
           stageId,
           title,
           url: `/classroom/${stageId}`,
+          ...(folderId ? { folderId, archived: true } : {}),
         },
       );
+    },
+  };
+
+  const createFolder: AgentTool<typeof CreateFolderParams, unknown> = {
+    name: 'create_folder',
+    label: 'Create folder',
+    description:
+      'Create an owner-scoped stage folder. A case-insensitive duplicate reuses the existing folder.',
+    parameters: CreateFolderParams,
+    async execute(callId, params: Static<typeof CreateFolderParams>, signal) {
+      if (signal?.aborted) throw new Error('aborted');
+      const name = params.name?.trim() ?? '';
+      const validation = validateFolderName(name);
+      if (!validation.ok) {
+        return toolResult(
+          validation.kind === 'empty'
+            ? 'Folder name must not be empty.'
+            : 'Folder name is too long (display width > 40).',
+          { error: validation.kind, width: validation.width },
+          true,
+        );
+      }
+      try {
+        const created = await deps.store.createFolder(
+          folderIdForCall(deps.sessionId, callId),
+          name,
+          FOLDER_COUNT_LIMIT,
+        );
+        if (signal?.aborted) throw new Error('aborted');
+        if (!created.reused) {
+          deps.onLibraryChanged?.({
+            change: 'folder_created',
+            folderId: created.folder.id,
+            name: created.folder.name,
+          });
+        }
+        return toolResult(
+          created.reused
+            ? `A folder named "${created.folder.name}" already exists — reusing folderId=${created.folder.id}.`
+            : `Created folder "${created.folder.name}" with folderId=${created.folder.id}.`,
+          { folderId: created.folder.id, name: created.folder.name, reused: created.reused },
+        );
+      } catch (error) {
+        if (error instanceof DocumentFolderLimitError) {
+          return toolResult('Folder count limit reached (50).', { error: 'limit' }, true);
+        }
+        throw error;
+      }
+    },
+  };
+
+  const moveToFolder: AgentTool<typeof MoveToFolderParams, unknown> = {
+    name: 'move_to_folder',
+    label: 'Move stage to folder',
+    description: 'File an owner stage into an owner folder. Repeating the same move is safe.',
+    parameters: MoveToFolderParams,
+    async execute(_id, params: Static<typeof MoveToFolderParams>, signal) {
+      if (signal?.aborted) throw new Error('aborted');
+      const doc = await deps.store.loadDocument(params.stageId);
+      if (signal?.aborted) throw new Error('aborted');
+      if (!doc) return notYoursResult(`Stage "${params.stageId}"`);
+      const moved = await deps.store.moveDocumentToFolder(params.stageId, params.folderId);
+      if (signal?.aborted) throw new Error('aborted');
+      if (!moved) {
+        return toolResult(
+          'The folder was not found, or does not belong to this session user.',
+          { refused: true },
+          true,
+        );
+      }
+      deps.onLibraryChanged?.({
+        change: 'stage_moved',
+        stageId: params.stageId,
+        folderId: params.folderId,
+      });
+      return toolResult(`Stage "${doc.stage.name}" is now in folder ${params.folderId}.`, {
+        stageId: params.stageId,
+        folderId: params.folderId,
+      });
+    },
+  };
+
+  const renameStage: AgentTool<typeof RenameStageParams, unknown> = {
+    name: 'rename_stage',
+    label: 'Rename stage',
+    description: 'Rename an owner stage and optionally replace its description.',
+    parameters: RenameStageParams,
+    executionMode: 'sequential',
+    async execute(_id, params: Static<typeof RenameStageParams>, signal) {
+      if (signal?.aborted) throw new Error('aborted');
+      const name = params.name?.trim() ?? '';
+      const validation = validateFolderName(name);
+      if (!validation.ok) {
+        return toolResult(
+          validation.kind === 'empty'
+            ? 'rename_stage needs a non-empty name.'
+            : 'Stage name is too long (display width > 40).',
+          { error: validation.kind === 'empty' ? 'empty-name' : 'name-too-long' },
+          true,
+        );
+      }
+      const doc = await deps.store.loadDocument(params.stageId);
+      if (signal?.aborted) throw new Error('aborted');
+      if (!doc) return notYoursResult(`Stage "${params.stageId}"`);
+      const description = params.description?.trim();
+      const renamed = {
+        ...doc.stage,
+        name,
+        updatedAt: Date.now(),
+        ...(description ? { description } : {}),
+      };
+      await deps.store.saveDocument({ ...doc, stage: renamed });
+      if (signal?.aborted) throw new Error('aborted');
+      deps.onCheckpoint?.({
+        tool: 'rename_stage',
+        stageId: params.stageId,
+        detail: `renamed to "${name}"`,
+        courseTitle: name,
+      });
+      deps.onLibraryChanged?.({ change: 'stage_renamed', stageId: params.stageId, title: name });
+      return toolResult(`Renamed stage "${doc.stage.name}" to "${name}".`, {
+        stageId: params.stageId,
+        title: name,
+        ...(description ? { description } : {}),
+      });
+    },
+  };
+
+  const listFolderStages: AgentTool<typeof ListFolderStagesParams, unknown> = {
+    name: 'list_folder_stages',
+    label: 'List stages',
+    description: 'List owner stages and their folders, or stages in one owner folder.',
+    parameters: ListFolderStagesParams,
+    async execute(_id, params: Static<typeof ListFolderStagesParams>, signal) {
+      if (signal?.aborted) throw new Error('aborted');
+      if (params.folderId) {
+        const folders = await deps.store.listFolders();
+        if (signal?.aborted) throw new Error('aborted');
+        if (!folders.some((folder) => folder.id === params.folderId)) {
+          return toolResult(
+            'The folder was not found, or does not belong to this session user.',
+            { refused: true },
+            true,
+          );
+        }
+      }
+      const courses = await deps.store.listDocuments(params.folderId);
+      if (signal?.aborted) throw new Error('aborted');
+      if (courses.length === 0) return toolResult('No stages found.', { courses: [], count: 0 });
+      const details = courses.map((course) => ({
+        stageId: course.id,
+        title: course.name,
+        ...(course.folderId ? { folderId: course.folderId } : {}),
+        updatedAt: course.updatedAt,
+        pageCount: course.sceneCount,
+      }));
+      const lines = details
+        .map(
+          (course) =>
+            `- "${course.title}" (${course.stageId}, ${course.pageCount} page(s)${course.folderId ? `, folder ${course.folderId}` : ''})`,
+        )
+        .join('\n');
+      return toolResult(`Stages:\n${lines}`, { courses: details, count: details.length });
     },
   };
 
@@ -245,24 +479,37 @@ export function buildCurriculumTools(deps: CurriculumToolDeps): AgentTool<never,
     },
   };
 
-  return [createStage, readStageOutline] as unknown as AgentTool<never, never>[];
+  return [
+    createStage,
+    createFolder,
+    moveToFolder,
+    renameStage,
+    listFolderStages,
+    readStageOutline,
+  ] as unknown as AgentTool<never, never>[];
 }
 
 export const CURRICULUM_ALLOWLIST: ReadonlySet<string> = new Set([
   'create_stage',
+  'create_folder',
+  'move_to_folder',
+  'rename_stage',
+  'list_folder_stages',
   'read_stage_outline',
 ]);
 
 /**
  * Prompt block teaching the multi-stage workflow (appended to the system
- * prompt). Folder guidance (create_folder / move_to_folder / list_folder_stages
- * / rename_stage) lands with the folder slice.
+ * prompt).
  */
 export const CURRICULUM_TOOLS_PROMPT = [
-  'Multi-stage series: to build a series in one session, call `create_stage`',
-  'once per unit/day. `create_stage` returns a stageId; pass that',
+  'Multi-stage series: create the series folder with `create_folder`, then call',
+  '`create_stage` once per unit/day and pass the folderId in the same call.',
+  '`create_stage` returns a stageId; pass that',
   'stageId explicitly to every later stage tool. There is no active/current stage.',
   'Use different stageIds to work on several stages in parallel.',
+  '`list_folder_stages` lists stages and folder membership; `move_to_folder`',
+  're-files a stage; `rename_stage` changes its classroom title.',
   "`read_stage_outline` reads a stage's page list (not content) so you can",
   'chain a series (e.g. day 2 builds on what day 1 covered).',
 ].join(' ');

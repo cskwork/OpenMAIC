@@ -105,6 +105,41 @@ export interface DocumentSummary {
   createdAt: number;
   updatedAt: number;
   sceneCount: number;
+  /** Owner-scoped folder membership. Omitted when the document is unfiled. */
+  folderId?: string;
+}
+
+/** A durable owner-scoped folder, including folders that currently have no documents. */
+export interface DocumentFolder {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Creating a folder would exceed the owner-scoped folder limit. */
+export class DocumentFolderLimitError extends Error {
+  override readonly name = 'DocumentFolderLimitError';
+
+  constructor(readonly limit: number) {
+    super(`@openmaic/storage: document folder limit reached (${limit})`);
+  }
+}
+
+/**
+ * Owner-scoped folder organization layered beside document storage. These
+ * methods are intentionally available only on a bound server store: callers
+ * choose the trusted owner with `forOwner`, never with method parameters.
+ */
+export interface DocumentFolderStore {
+  createFolder(
+    folderId: string,
+    name: string,
+    limit?: number,
+  ): Promise<{ folder: DocumentFolder; reused: boolean }>;
+  listFolders(): Promise<DocumentFolder[]>;
+  moveDocumentToFolder(stageId: string, folderId: string): Promise<boolean>;
+  listDocuments(folderId?: string): Promise<DocumentSummary[]>;
 }
 
 /**

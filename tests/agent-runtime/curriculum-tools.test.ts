@@ -1,6 +1,6 @@
 /**
- * Multi-stage curriculum tools in this slice: create_stage and
- * read_stage_outline (folders / rename / list land with the folder slice).
+ * Multi-stage curriculum tools: stages, durable folders, renaming, listing,
+ * and cross-stage outline reads.
  *
  * Pins:
  *  - create_stage is idempotent by construction: the SAME call id replays onto
@@ -16,7 +16,9 @@
  *  - read_stage_outline renders the outline/scene UNION view (planned pages
  *    while generation is incomplete, pure scenes once complete).
  */
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PGlite } from '@electric-sql/pglite';
+import { PgDocumentStore, ensureDocumentSchema } from '@openmaic/storage/document/pg';
 
 import {
   buildCurriculumTools,
@@ -35,6 +37,11 @@ interface ToolResultShape {
 
 function makeStore(initial: CourseDocument | null = null): CourseStore {
   let doc = initial;
+  const folders = new Map<
+    string,
+    { id: string; name: string; createdAt: number; updatedAt: number }
+  >();
+  let folderId: string | undefined;
   const store = {
     async loadDocument() {
       return doc;
@@ -49,6 +56,37 @@ function makeStore(initial: CourseDocument | null = null): CourseStore {
       scenes.sort((a, b) => a.order - b.order);
       doc = { ...doc, scenes };
     },
+    async createFolder(id: string, name: string, limit = 50) {
+      const existing = [...folders.values()].find(
+        (folder) => folder.name.toLowerCase() === name.toLowerCase(),
+      );
+      if (existing) return { folder: existing, reused: true };
+      if (folders.size >= limit) throw new Error('folder limit');
+      const folder = { id, name, createdAt: 1, updatedAt: 1 };
+      folders.set(id, folder);
+      return { folder, reused: false };
+    },
+    async listFolders() {
+      return [...folders.values()];
+    },
+    async moveDocumentToFolder(_stageId: string, targetFolderId: string) {
+      if (!doc || !folders.has(targetFolderId)) return false;
+      folderId = targetFolderId;
+      return true;
+    },
+    async listDocuments(targetFolderId?: string) {
+      if (!doc || (targetFolderId !== undefined && folderId !== targetFolderId)) return [];
+      return [
+        {
+          id: doc.stage.id,
+          name: doc.stage.name,
+          createdAt: doc.stage.createdAt,
+          updatedAt: doc.stage.updatedAt,
+          sceneCount: doc.scenes.length,
+          ...(folderId ? { folderId } : {}),
+        },
+      ];
+    },
   };
   return store as unknown as CourseStore;
 }
@@ -60,6 +98,11 @@ function makeStore(initial: CourseDocument | null = null): CourseStore {
  */
 function makeKeyedStore(): CourseStore & { docs: Map<string, CourseDocument> } {
   const docs = new Map<string, CourseDocument>();
+  const folders = new Map<
+    string,
+    { id: string; name: string; createdAt: number; updatedAt: number }
+  >();
+  const memberships = new Map<string, string>();
   const store = {
     docs,
     async loadDocument(stageId: string) {
@@ -75,6 +118,35 @@ function makeKeyedStore(): CourseStore & { docs: Map<string, CourseDocument> } {
       scenes.push(scene);
       scenes.sort((a, b) => a.order - b.order);
       docs.set(stageId, { ...doc, scenes });
+    },
+    async createFolder(id: string, name: string) {
+      const existing = [...folders.values()].find(
+        (folder) => folder.name.toLowerCase() === name.toLowerCase(),
+      );
+      if (existing) return { folder: existing, reused: true };
+      const folder = { id, name, createdAt: 1, updatedAt: 1 };
+      folders.set(id, folder);
+      return { folder, reused: false };
+    },
+    async listFolders() {
+      return [...folders.values()];
+    },
+    async moveDocumentToFolder(stageId: string, folderId: string) {
+      if (!docs.has(stageId) || !folders.has(folderId)) return false;
+      memberships.set(stageId, folderId);
+      return true;
+    },
+    async listDocuments(folderId?: string) {
+      return [...docs.values()]
+        .filter((doc) => folderId === undefined || memberships.get(doc.stage.id) === folderId)
+        .map((doc) => ({
+          id: doc.stage.id,
+          name: doc.stage.name,
+          createdAt: doc.stage.createdAt,
+          updatedAt: doc.stage.updatedAt,
+          sceneCount: doc.scenes.length,
+          ...(memberships.get(doc.stage.id) ? { folderId: memberships.get(doc.stage.id) } : {}),
+        }));
     },
   };
   return store as unknown as CourseStore & { docs: Map<string, CourseDocument> };
@@ -259,6 +331,155 @@ describe('create_stage', () => {
     const result = await runTool(deps, 'create_stage', { title: 'Day 1' });
     expect(result.isError).toBe(true);
     expect(result.details?.refused).toBe(true);
+  });
+});
+
+describe('folder organization and rename tools', () => {
+  it('creates an empty folder, creates a stage in it, renames it, moves it, and lists it', async () => {
+    const store = makeKeyedStore();
+    const deps = makeDeps({ store });
+    const firstFolder = await runTool(deps, 'create_folder', { name: 'Week One' });
+    const firstFolderId = firstFolder.details?.folderId as string;
+
+    const empty = await runTool(deps, 'list_folder_stages', { folderId: firstFolderId });
+    expect(empty.details).toEqual({ courses: [], count: 0 });
+
+    const created = await runTool(deps, 'create_stage', {
+      title: 'Day 1',
+      folderId: firstFolderId,
+    });
+    const stageId = created.details?.stageId as string;
+    expect(created.details).toMatchObject({ folderId: firstFolderId, archived: true });
+
+    const renamed = await runTool(deps, 'rename_stage', { stageId, name: 'Day 1 revised' });
+    expect(renamed.details).toMatchObject({ stageId, title: 'Day 1 revised' });
+
+    const secondFolder = await runTool(deps, 'create_folder', { name: 'Week Two' });
+    const secondFolderId = secondFolder.details?.folderId as string;
+    const moved = await runTool(deps, 'move_to_folder', { stageId, folderId: secondFolderId });
+    expect(moved.details).toEqual({ stageId, folderId: secondFolderId });
+
+    const listed = await runTool(deps, 'list_folder_stages', { folderId: secondFolderId });
+    expect(listed.details?.courses).toEqual([
+      expect.objectContaining({ stageId, title: 'Day 1 revised', folderId: secondFolderId }),
+    ]);
+  });
+
+  it('reuses folders by case-insensitive name and move_to_folder is idempotent', async () => {
+    const store = makeKeyedStore();
+    const deps = makeDeps({ store });
+    const first = await runTool(deps, 'create_folder', { name: 'Series' });
+    const repeated = await runTool(deps, 'create_folder', { name: 'series' });
+    expect(repeated.details).toMatchObject({ folderId: first.details?.folderId, reused: true });
+
+    const created = await runTool(deps, 'create_stage', { title: 'Course' });
+    const args = { stageId: created.details?.stageId, folderId: first.details?.folderId };
+    expect((await runTool(deps, 'move_to_folder', args)).isError).toBeUndefined();
+    expect((await runTool(deps, 'move_to_folder', args)).isError).toBeUndefined();
+  });
+
+  it('validates folder names and stage names with the shared display-width rule', async () => {
+    const deps = makeDeps();
+    await expect(runTool(deps, 'create_folder', { name: '   ' })).resolves.toMatchObject({
+      isError: true,
+      details: { error: 'empty' },
+    });
+    await expect(runTool(deps, 'create_folder', { name: 'a'.repeat(41) })).resolves.toMatchObject({
+      isError: true,
+      details: { error: 'tooLong' },
+    });
+    await expect(
+      runTool(deps, 'rename_stage', { stageId: 'stage-b', name: 'a'.repeat(41) }),
+    ).resolves.toMatchObject({ isError: true, details: { error: 'name-too-long' } });
+  });
+
+  it('marks rename_stage sequential', () => {
+    const rename = buildCurriculumTools(makeDeps()).find((tool) => tool.name === 'rename_stage');
+    expect(rename?.executionMode).toBe('sequential');
+  });
+});
+
+describe('folder tool cross-owner isolation through the bound PostgreSQL store', () => {
+  let db: PGlite;
+
+  beforeEach(async () => {
+    db = new PGlite();
+    await db.waitReady;
+    await ensureDocumentSchema(db);
+  });
+
+  afterEach(async () => {
+    await db.close();
+  });
+
+  function ownerTools(ownerId: string, sessionId: string) {
+    const store = new PgDocumentStore(db, {
+      withTransaction: (body) => db.transaction((tx) => body(tx)),
+    }).forOwner(ownerId) as unknown as CourseStore;
+    return { store, tools: buildCurriculumTools({ store, ownerId, sessionId }) };
+  }
+
+  async function execute(
+    tools: ReturnType<typeof buildCurriculumTools>,
+    name: string,
+    callId: string,
+    params: Record<string, unknown>,
+  ): Promise<ToolResultShape> {
+    const tool = tools.find((candidate) => candidate.name === name);
+    if (!tool) throw new Error(`${name} not registered`);
+    return (await tool.execute(callId, params as never)) as ToolResultShape;
+  }
+
+  it('keeps create, create-with-folder, move, rename, and list owner-scoped', async () => {
+    const alice = ownerTools('anon:alice', 'session-alice');
+    const bob = ownerTools('anon:bob', 'session-bob');
+    const aliceFolder = await execute(alice.tools, 'create_folder', 'folder-a', { name: 'Alice' });
+    const bobFolder = await execute(bob.tools, 'create_folder', 'folder-b', { name: 'Bob' });
+    const aliceFolderId = aliceFolder.details?.folderId as string;
+    const bobFolderId = bobFolder.details?.folderId as string;
+
+    expect(await alice.store.listFolders()).toEqual([
+      expect.objectContaining({ id: aliceFolderId, name: 'Alice' }),
+    ]);
+    expect(await bob.store.listFolders()).toEqual([
+      expect.objectContaining({ id: bobFolderId, name: 'Bob' }),
+    ]);
+
+    const aliceStage = await execute(alice.tools, 'create_stage', 'stage-a', {
+      title: 'Alice stage',
+      folderId: aliceFolderId,
+    });
+    const aliceStageId = aliceStage.details?.stageId as string;
+    const refusedCreate = await execute(bob.tools, 'create_stage', 'stage-b', {
+      title: 'Bob stage',
+      folderId: aliceFolderId,
+    });
+    expect(refusedCreate).toMatchObject({ isError: true, details: { refused: true } });
+
+    const foreignStageMove = await execute(bob.tools, 'move_to_folder', 'move-1', {
+      stageId: aliceStageId,
+      folderId: bobFolderId,
+    });
+    expect(foreignStageMove).toMatchObject({ isError: true, details: { refused: true } });
+
+    const foreignFolderMove = await execute(alice.tools, 'move_to_folder', 'move-2', {
+      stageId: aliceStageId,
+      folderId: bobFolderId,
+    });
+    expect(foreignFolderMove).toMatchObject({ isError: true, details: { refused: true } });
+
+    const foreignRename = await execute(bob.tools, 'rename_stage', 'rename-1', {
+      stageId: aliceStageId,
+      name: 'Stolen',
+    });
+    expect(foreignRename).toMatchObject({ isError: true, details: { refused: true } });
+
+    const foreignFolderList = await execute(bob.tools, 'list_folder_stages', 'list-1', {
+      folderId: aliceFolderId,
+    });
+    expect(foreignFolderList).toMatchObject({ isError: true, details: { refused: true } });
+    const bobList = await execute(bob.tools, 'list_folder_stages', 'list-2', {});
+    expect(bobList.details).toEqual({ courses: [], count: 0 });
   });
 });
 
@@ -517,25 +738,38 @@ describe('read_stage_outline', () => {
 });
 
 describe('curriculum allowlist', () => {
-  it('registers exactly the two tools of this slice and no folder tools yet', () => {
-    for (const name of ['create_stage', 'read_stage_outline']) {
+  it('registers the complete curriculum toolset', () => {
+    for (const name of [
+      'create_stage',
+      'create_folder',
+      'move_to_folder',
+      'rename_stage',
+      'list_folder_stages',
+      'read_stage_outline',
+    ]) {
       expect(CURRICULUM_ALLOWLIST).toContain(name);
     }
-    expect(CURRICULUM_ALLOWLIST.size).toBe(2);
-    for (const name of ['create_folder', 'move_to_folder', 'rename_stage', 'list_folder_stages']) {
-      expect(CURRICULUM_ALLOWLIST).not.toContain(name);
-    }
+    expect(CURRICULUM_ALLOWLIST.size).toBe(6);
   });
 
-  it('exposes both tools from the toolset', () => {
+  it('exposes all tools from the toolset', () => {
     const tools = buildCurriculumTools(makeDeps());
-    expect(tools.map((t) => t.name)).toEqual(['create_stage', 'read_stage_outline']);
+    expect(tools.map((t) => t.name)).toEqual([
+      'create_stage',
+      'create_folder',
+      'move_to_folder',
+      'rename_stage',
+      'list_folder_stages',
+      'read_stage_outline',
+    ]);
   });
 
-  it('prompt block teaches explicit stage ids and outline chaining without folder tools', () => {
+  it('prompt block teaches explicit stage ids, folders, renaming, and outline chaining', () => {
     expect(CURRICULUM_TOOLS_PROMPT).toContain('`create_stage`');
     expect(CURRICULUM_TOOLS_PROMPT).toContain('`read_stage_outline`');
-    expect(CURRICULUM_TOOLS_PROMPT).not.toContain('create_folder');
-    expect(CURRICULUM_TOOLS_PROMPT).not.toContain('list_folder_stages');
+    expect(CURRICULUM_TOOLS_PROMPT).toContain('`create_folder`');
+    expect(CURRICULUM_TOOLS_PROMPT).toContain('`list_folder_stages`');
+    expect(CURRICULUM_TOOLS_PROMPT).toContain('`move_to_folder`');
+    expect(CURRICULUM_TOOLS_PROMPT).toContain('`rename_stage`');
   });
 });

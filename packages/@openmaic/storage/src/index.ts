@@ -83,11 +83,17 @@ export type {
   DocumentStore,
   MaicDocument,
   DocumentSummary,
+  DocumentFolder,
+  DocumentFolderStore,
   SceneLike,
   SceneValidator,
   StageValidator,
 } from './document/types.js';
-export { DocumentNotFoundError, DocumentVersionError } from './document/types.js';
+export {
+  DocumentFolderLimitError,
+  DocumentNotFoundError,
+  DocumentVersionError,
+} from './document/types.js';
 export { BrowserDocumentStore, type BrowserDocumentStoreOptions } from './document/browser.js';
 export {
   HttpDocumentStore,

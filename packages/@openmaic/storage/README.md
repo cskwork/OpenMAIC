@@ -92,6 +92,11 @@ a browser.
   historical client-owned partition (`owner_id IS NULL`). Server features bind
   the same complete contract to a trusted identity with `store.forOwner(ownerId)`;
   owned stages are invisible and immutable across owner boundaries.
+- **Owner-scoped folders.** An owner-bound `PgDocumentStore` also implements
+  `DocumentFolderStore`: folders are durable entities, so empty folders are
+  representable, while `folder_id` membership on stage rows makes filtered
+  document listings indexed and keeps folder names independent from documents.
+  Folder APIs take no owner parameter; the bound store is the trust boundary.
 - **Generic over scene type.** `DocumentStore<TScene>` defaults to the DSL
   `Scene` (universal `slide` / `quiz`). An app that widens `Scene` with its own
   kinds (`interactive` / `pbl`, content the DSL does not own) parameterizes the

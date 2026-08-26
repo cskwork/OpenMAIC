@@ -1,8 +1,11 @@
 /**
  * The stage read/patch toolset — the agent's document-level DSL surface.
  *
- * This layer combines the generic stage DSL with page generation, playback,
- * deck structure, media promotion, and preview tools for the background runner.
+ * This layer combines the generic stage DSL (`read_stage`, `patch_stage`,
+ * `grep_stage` from `./dsl-tools`) with page generation, playback, deck
+ * structure, media promotion, and preview tools, plus the stage-level CRUD
+ * they need (`create_stage`, folder organization, `rename_stage`, and
+ * `read_stage_outline` from `./curriculum-tools`) for the background runner.
  *
  * What this layer owns:
  *
@@ -26,7 +29,7 @@
  *    `buildRunnerCoursePrompt` (runner-contract.ts).
  */
 import type { AgentTool } from '@earendil-works/pi-agent-core';
-import type { DocumentStore, MaicDocument } from '@openmaic/storage';
+import type { DocumentFolderStore, DocumentStore, MaicDocument } from '@openmaic/storage';
 import type { Stage } from '@openmaic/dsl';
 
 import type { Scene } from '@/lib/types/stage';
@@ -40,7 +43,7 @@ import { buildScenePreviewTools, RENDER_SCENE_PREVIEW_TOOL_NAME } from './scene-
 import type { SceneTtsInput, SceneTtsSummary } from './scene-tts';
 
 export type CourseDocument = MaicDocument<Scene, Stage>;
-export type CourseStore = DocumentStore<Scene, Stage>;
+export type CourseStore = DocumentStore<Scene, Stage> & DocumentFolderStore;
 
 /** Progress metadata emitted on the durable `checkpoint` channel after a write. */
 export interface CheckpointInfo {
@@ -75,9 +78,8 @@ export interface CourseToolDeps {
  *
  * Derived from the shared `STAGE_WRITER_TOOL_NAMES` (the same list that arms
  * client-side write ownership) so the scheduler and the workbench can never
- * disagree about who writes. `rename_stage` is excluded here only because it
- * belongs to the curriculum toolset and never runs through this toolset's
- * scheduler.
+ * disagree about who writes. `rename_stage` is scheduled in the curriculum
+ * toolset, so it is excluded from this course-tool subset.
  */
 export const DOCUMENT_WRITING_TOOLS: ReadonlySet<string> = new Set<string>(
   [...STAGE_WRITER_TOOL_NAMES].filter((name) => name !== 'rename_stage'),
@@ -145,7 +147,7 @@ export function buildCourseAllowlist(): ReadonlySet<string> {
 }
 
 export const DSL_TOOLS_PROMPT = [
-  'Some installed skills and older transcripts were written for earlier tool names. Translate on sight: read_scene → read_stage (path=/scenes/<order|id>); edit_slide / edit_quiz / edit_widget / edit_actions / edit_pbl → patch_stage (same JSON-pointer ops, target the scene); read_course → read_stage; patch_course → patch_stage; grep_course → grep_stage. Never call the legacy names.',
+  'Some installed skills and older transcripts were written for earlier tool names. Translate on sight: read_scene → read_stage (path=/scenes/<order|id>); edit_slide / edit_quiz / edit_widget / edit_actions / edit_pbl → patch_stage (same JSON-pointer ops, target the scene); read_course → read_stage; patch_course → patch_stage; grep_course → grep_stage; generate_outline → (plan in conversation, then create_stage + one generate_scene per page with an explicit brief); generate_roster → set_roster. Never call the legacy names.',
   'The generic DSL tools replace read_scene and the per-type edit tools.',
   'Every read_stage, patch_stage and grep_stage call requires an explicit stageId obtained from create_stage.',
   'Example: read_stage {"stageId":"stage-...","path":"/scenes/1","detail":"source"}. Use paths "", /outline, /scenes/<1-based order|sceneId>, and /scenes/<...>/actions.',
@@ -196,6 +198,10 @@ interface CoursePromptBlocks {
    * with nothing to read).
    */
   materials?: string;
+  /** Roster guidance (list_voices / set_roster; always registered). */
+  roster?: string;
+  /** Voice-cloning guidance (clip_audio / register_voice; always registered). */
+  voice?: string;
 }
 
 /**
@@ -212,5 +218,7 @@ export function courseSystemPrompt(blocks: CoursePromptBlocks): string {
   if (blocks.fetch) parts.push('', blocks.fetch);
   if (blocks.untrustedContent) parts.push('', blocks.untrustedContent);
   if (blocks.materials) parts.push('', blocks.materials);
+  if (blocks.roster) parts.push('', blocks.roster);
+  if (blocks.voice) parts.push('', blocks.voice);
   return parts.join('\n');
 }

@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { STAGE_WRITER_TOOL_NAMES, isStageWriterTool } from '@/lib/agent-runtime/stage-writer-tools';
 import { DOCUMENT_WRITING_TOOLS } from '@/lib/server/agent-runtime/course-tools';
 import { DSL_COURSE_WRITE_TOOLS } from '@/lib/server/agent-runtime/dsl-tools';
+import {
+  buildCurriculumTools,
+  type CurriculumToolDeps,
+} from '@/lib/server/agent-runtime/curriculum-tools';
 
 /**
  * The stage-writer registry is the single source of truth for "which agent
@@ -50,6 +54,14 @@ describe('stage writer registry is the single source (R6-P1-1)', () => {
       expect(isStageWriterTool(name)).toBe(true);
     }
     expect(isStageWriterTool('rename_stage')).toBe(true);
+  });
+
+  it('marks the curriculum writer rename_stage sequential', () => {
+    const rename = buildCurriculumTools({} as CurriculumToolDeps).find(
+      (tool) => tool.name === 'rename_stage',
+    );
+    expect(isStageWriterTool('rename_stage')).toBe(true);
+    expect(rename?.executionMode).toBe('sequential');
   });
 
   it('reader tools are NOT writers — ownership must never arm on them', () => {
