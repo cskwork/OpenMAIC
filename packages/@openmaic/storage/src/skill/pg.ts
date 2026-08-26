@@ -232,6 +232,37 @@ export class PgUserSkillStore implements UserSkillStore {
     const id = this.createId();
     try {
       const rows = await this.transactionHook(async (tx) => {
+        // Serialize creates per owner. The quota check below is a
+        // read-then-write pair: under READ COMMITTED, two concurrent creates at
+        // 49 rows would BOTH count 49 and both insert, overshooting the
+        // contract. The advisory lock makes the check-and-insert one critical
+        // section per owner (a hashtext collision only serializes two unrelated
+        // owners, which is harmless).
+        await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1::text))`, [ownerId]);
+        // Same-name idempotency BEFORE the quota check, so an at-least-once
+        // retry of a create that committed as the owner's 50th row still
+        // returns its durable receipt instead of a confusing quota error.
+        const existing = (
+          await tx.query<UserSkillRow>(
+            `SELECT * FROM ${this.table}
+              WHERE owner_id = $1 AND name = $2 AND deleted_at IS NULL
+              LIMIT 1`,
+            [ownerId, value.name],
+          )
+        ).rows[0];
+        if (existing) {
+          if (
+            existing.title === value.title &&
+            existing.description === value.description &&
+            existing.content === value.content
+          ) {
+            return [mapRow(existing)];
+          }
+          throw new UserSkillError(
+            `You already have a Skill named /${value.name}; it will not be overwritten.`,
+            'duplicate',
+          );
+        }
         const [{ used }] = (
           await tx.query<{ used: string }>(
             `SELECT count(*)::text AS used FROM ${this.table}
@@ -257,6 +288,9 @@ export class PgUserSkillStore implements UserSkillStore {
       return rows[0]!;
     } catch (error) {
       if (error instanceof UserSkillError) throw error;
+      // Backstop for a row that appeared between the same-name check and the
+      // INSERT through a path that does not take the advisory lock (manual
+      // provisioning, a different store instance without the lock).
       if (isUniqueViolation(error)) {
         const existing = await this.findByRef(ownerId, value.name);
         if (

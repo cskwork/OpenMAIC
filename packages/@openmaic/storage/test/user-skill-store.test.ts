@@ -123,6 +123,40 @@ describe('PgUserSkillStore with PGlite', () => {
     expect((caught as UserSkillError).code).toBe('quota');
   });
 
+  test('serializes the quota check-and-insert with a per-owner advisory lock', async () => {
+    const statements: string[] = [];
+    const recording: PgUserSkillStoreOptions = {
+      withTransaction: (body) =>
+        db.transaction(async (tx) => {
+          const proxy: Queryable = {
+            query: async (sql: string, params?: unknown[]) => {
+              statements.push(sql);
+              return tx.query(sql, params);
+            },
+          };
+          return body(proxy);
+        }),
+    };
+    const recordingStore = new PgUserSkillStore(db, recording);
+    await recordingStore.create(OWNER, input('my-locked'));
+    expect(statements.some((sql) => sql.includes('pg_advisory_xact_lock'))).toBe(true);
+  });
+
+  test('an at-least-once retry still returns its receipt at the exact quota boundary', async () => {
+    for (let index = 0; index < USER_SKILL_LIMIT - 1; index += 1) {
+      await store.create(OWNER, input(`my-skill-${index}`));
+    }
+    // The 50th row lands via this create...
+    const fiftieth = await store.create(OWNER, input('my-last-slot'));
+    await expect(store.list(OWNER)).resolves.toHaveLength(USER_SKILL_LIMIT);
+    // ...and an identical redelivery of that same create must NOT surface as a
+    // quota error: the same-name idempotency check runs before the count check.
+    await expect(store.create(OWNER, input('my-last-slot'))).resolves.toMatchObject({
+      id: fiftieth.id,
+    });
+    await expect(store.list(OWNER)).resolves.toHaveLength(USER_SKILL_LIMIT);
+  });
+
   test('rejects invalid input before any write', async () => {
     for (const bad of [
       { ...input('my-method'), name: 'not-my-prefixed' },
