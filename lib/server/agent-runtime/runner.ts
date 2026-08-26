@@ -35,7 +35,6 @@ import {
   CURRICULUM_ALLOWLIST,
   CURRICULUM_TOOLS_PROMPT,
 } from './curriculum-tools';
-import { DSL_COURSE_TOOL_NAMES } from './dsl-tools';
 import {
   buildFetchUrlTool,
   fetchPromptBlock,
@@ -314,7 +313,7 @@ export function composeFollowUpText(message: FollowUpMessage): string {
       return `"${material.originalName ?? id}" (${mime}, ${material.bytes ?? 0} bytes)`;
     })
     .join(', ');
-  return `${message.text}\n\n[The user attached session material: ${list}. It is registered with this session; reading support will be provided in a later delivery.]`;
+  return `${message.text}\n\n[The user attached session material: ${list}. It is registered with this session; use use_material_media when it contains embeddable image, video, or audio bytes.]`;
 }
 
 export function planRunStart(input: {
@@ -749,6 +748,7 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       store: ownerScopedStore,
       onCheckpoint: (info) => emit(LIFECYCLE.checkpoint, info),
       sessionId: id,
+      abortSignal: abort.signal,
     });
     const curriculumTools = buildCurriculumTools({
       store: ownerScopedStore,
@@ -811,7 +811,7 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
         ...SKILL_EDIT_TOOL_NAMES,
         ...(skillReadTool ? ['read'] : []),
         ...MATERIAL_TOOL_NAMES,
-        ...DSL_COURSE_TOOL_NAMES,
+        ...dslTools.map((tool) => tool.name),
         ...CURRICULUM_ALLOWLIST,
       ]),
       ...(plan.kind === 'start' ? {} : { history: modelMessages }),
