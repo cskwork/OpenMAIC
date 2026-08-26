@@ -27,6 +27,7 @@ import {
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
 
 import { getAgentSessionStore } from './store';
+import { isPptxMaterial } from './pptx-mime';
 import type { ExtractedWebPage } from './fetch-url';
 
 interface AgentSessionMaterialStoreState {
@@ -336,5 +337,10 @@ export function sessionMaterialsPromptBlock(materials: AgentSessionMaterial[]): 
     'Material workflow: call `list_materials` to inspect the session materials and discover `mat_` ids; call `read_material` on a `mat_` id to read its text in pages (continue with the returned `nextOffset`); call `search_material` to locate case-insensitive literal text across the readable materials.',
     'To reuse session image, video, or audio bytes in a page, call `use_material_media` and use the returned stable `src`.',
     'A `web` material was already fetched and extracted; read it directly with `read_material` and page through offsets.',
+    ...(materials.some((material) => isPptxMaterial({ originalName: material.title }))
+      ? [
+          'A registered .pptx can be imported INTO a stage as appended pages with `import_pptx` (layout-preserving: original slides become pages; the stage keeps its own title). Use that instead of an AI rewrite when the user wants the PowerPoint\u2019s own pages.',
+        ]
+      : []),
   ].join('\n');
 }
