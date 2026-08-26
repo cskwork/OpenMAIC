@@ -5,6 +5,10 @@ import { buildMaterialMediaTool } from '@/lib/server/agent-runtime/material-medi
 import { buildScenePreviewTools } from '@/lib/server/agent-runtime/scene-preview';
 import type { CourseStore } from '@/lib/server/agent-runtime/course-tools';
 
+function textOf(result: unknown): string {
+  return (result as { content: Array<{ text: string }> }).content[0]!.text;
+}
+
 describe('generation media tools', () => {
   it('promotes session-scoped media bytes through the asset registry', async () => {
     const resolve = vi.fn(async () => ({
@@ -60,6 +64,8 @@ describe('generation media tools', () => {
     } as unknown as CourseStore;
     const [owned] = buildScenePreviewTools({
       store: ownedStore,
+      stageAccess: async () => ({ kind: 'owned' as const }),
+      ownerId: 'user:u1',
       renderService: { url: 'http://render.test' },
       fetchPreview: fetchPreview as typeof fetch,
     });
@@ -72,6 +78,8 @@ describe('generation media tools', () => {
     const foreignStore = { loadDocument: vi.fn(async () => null) } as unknown as CourseStore;
     const [foreign] = buildScenePreviewTools({
       store: foreignStore,
+      stageAccess: async () => ({ kind: 'foreign' as const }),
+      ownerId: 'user:u1',
       renderService: { url: 'http://render.test' },
       fetchPreview: fetchPreview as typeof fetch,
     });
@@ -80,6 +88,9 @@ describe('generation media tools', () => {
       sceneId: 'scene-a',
     } as never);
     expect(refused).toMatchObject({ isError: true });
+    expect(textOf(refused)).toContain('course not found or not owned');
+    // The owner probe refuses BEFORE the store is touched: the foreign call
+    // added no render request beyond the successful owned call above.
     expect(fetchPreview).toHaveBeenCalledTimes(1);
   });
 
@@ -87,6 +98,8 @@ describe('generation media tools', () => {
     expect(
       buildScenePreviewTools({
         store: {} as CourseStore,
+        stageAccess: async () => ({ kind: 'owned' as const }),
+        ownerId: 'user:u1',
         renderService: { error: 'not_configured' },
       }),
     ).toEqual([]);

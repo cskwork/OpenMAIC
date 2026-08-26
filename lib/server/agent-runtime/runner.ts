@@ -24,11 +24,16 @@ import { resolveAgentDriverModel } from './agent-driver-model';
 import { buildAskUserTool } from './ask-user';
 import { agentRuntimeConfig as config } from './config';
 import { buildCreateSkillTool } from './create-skill';
-import { buildDslCourseToolset, type CourseStore } from './course-tools';
+import {
+  buildDslCourseToolset,
+  withOwnerStageAuthorization,
+  type CourseStore,
+} from './course-tools';
 import {
   buildCurriculumTools,
   CURRICULUM_ALLOWLIST,
   CURRICULUM_TOOLS_PROMPT,
+  probeStageAccess,
 } from './curriculum-tools';
 import {
   buildFetchUrlTool,
@@ -56,6 +61,7 @@ import {
   listSkills,
 } from './skills';
 import { registerSessionUrls } from './session-urls';
+import { buildScenePreviewTools } from './scene-preview';
 import {
   AgentSessionEntryStorage,
   loadSessionEntryHistory,
@@ -742,11 +748,21 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
     // `getAgentSessionStore` above already guards on DATABASE_URL, so the
     // provider can only be reached with a configured connection string.
     const ownerScopedStore = (await getOwnerScopedDocumentStore(meta.ownerId)) as CourseStore;
+    // The owner probe is the tool layer's legality boundary: every course call
+    // declares its stageId, and stageAccess resolves that stage against the
+    // session owner (owned / foreign / missing / tombstoned) before the tool
+    // touches the store. One probe factory is threaded into the course+DSL
+    // toolset, the curriculum toolset, and the scene-preview tool (reference
+    // semantics: three call sites, one probe).
+    const stageAccess = (stageId: string) => probeStageAccess(meta.ownerId, stageId);
     // The stage read/patch toolset and the stage-level CRUD it needs. All of
-    // them write through `ownerScopedStore`; patch_stage is marked sequential
-    // by the shared STAGE_WRITER_TOOL_NAMES registry (course-tools.ts).
+    // them write through `ownerScopedStore`; every stageId-bearing tool is
+    // owner-gated by `withOwnerStageAuthorization`, and patch_stage is marked
+    // sequential by the shared STAGE_WRITER_TOOL_NAMES registry
+    // (course-tools.ts).
     const dslTools = buildDslCourseToolset({
       store: ownerScopedStore,
+      stageAccess,
       onCheckpoint: (info) => emit(LIFECYCLE.checkpoint, info),
       sessionId: id,
       abortSignal: abort.signal,
@@ -755,9 +771,20 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       store: ownerScopedStore,
       ownerId: meta.ownerId,
       sessionId: id,
+      stageAccess,
       onStageLink: (course) => emit(LIFECYCLE.stageLink, course),
       onLibraryChanged: (change) => emit(LIFECYCLE.libraryChanged, change),
       onCheckpoint: (info) => emit(LIFECYCLE.checkpoint, info),
+    });
+    // Scene preview is registered beside the course toolset with its own
+    // owner probe (reference semantics) — it is not wrapped by the generic
+    // stage authorization of the course toolset, and it refuses a foreign
+    // stage with its own message shape. It contributes nothing when the
+    // render service is not configured.
+    const scenePreviewTools = buildScenePreviewTools({
+      store: ownerScopedStore,
+      stageAccess,
+      ownerId: meta.ownerId,
     });
     // Session-scoped material tools and the materials prompt block are wired
     // from durable session identity on every start and resume (reference
@@ -771,12 +798,18 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
     // voice stays bindable within the session that registered it (in-session
     // loop by design, no persistence).
     const sessionRegisteredVoices: RegisteredVoiceInfo[] = [];
-    const rosterTools = buildRosterTools({
-      store: ownerScopedStore,
-      onCheckpoint: (info) => emit(LIFECYCLE.checkpoint, info),
-      sessionId: id,
-      registeredVoices: sessionRegisteredVoices,
-    });
+    // set_roster names a stage, so the roster toolset gets the same
+    // fail-closed owner gate as the course/DSL toolset (the reference wraps
+    // the merged course toolset, of which set_roster is a member).
+    const rosterTools = withOwnerStageAuthorization(
+      buildRosterTools({
+        store: ownerScopedStore,
+        onCheckpoint: (info) => emit(LIFECYCLE.checkpoint, info),
+        sessionId: id,
+        registeredVoices: sessionRegisteredVoices,
+      }),
+      { stageAccess },
+    );
     // register_voice is capability-registered: the tool exists exactly when
     // this deployment has a working voice-registration backend (a served,
     // keyed provider whose adapter reports supportsRegistration). An
@@ -811,6 +844,7 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       [buildFetchUrlTool({ sessionId: id })],
       dslTools,
       curriculumTools,
+      scenePreviewTools,
       materialTools,
       rosterTools,
       voiceCloneTools,
@@ -839,6 +873,7 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
         ...(skillReadTool ? ['read'] : []),
         ...MATERIAL_TOOL_NAMES,
         ...dslTools.map((tool) => tool.name),
+        ...scenePreviewTools.map((tool) => tool.name),
         ...CURRICULUM_ALLOWLIST,
         ...ROSTER_TOOL_NAMES,
         // register_voice is registered only when the deployment has a voice

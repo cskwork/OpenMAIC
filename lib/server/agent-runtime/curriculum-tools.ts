@@ -4,16 +4,19 @@
  * per unit/day), organize them into folders, rename them, and read cross-stage
  * outlines for chaining.
  *
- * Every mutation and library listing is scoped to the run's owner. Direct
- * reads remain capability-by-id, matching shared course links. Every execute
- * takes pi's 3rd `signal` argument and re-checks it at each IO boundary.
+ * Every tool is scoped to the session's owner — a foreign stage/folder is
+ * refused fail-closed (never confirming another tenant's id), and every
+ * execute takes pi's 3rd `signal` argument and re-checks it at each IO
+ * boundary.
  */
 import { Type, type Static } from 'typebox';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { DocumentFolderLimitError } from '@openmaic/storage';
+import type { Queryable } from '@openmaic/storage/document/pg';
 import type { StageLinkLifecycleData } from '@/lib/agent-runtime/lifecycle';
 
 import type { AppDocumentOutline } from '@/lib/document-store/persistence-types';
+import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
 import type { CourseDocument, CourseStore } from './course-tools';
 import { folderIdForCall, stageIdForCall } from './course-stage';
 import { mergeStageOutline } from './course-outline-union';
@@ -21,14 +24,64 @@ import { FOLDER_COUNT_LIMIT, validateFolderName } from '@/lib/utils/folder-name-
 
 export { stageIdForCall } from './course-stage';
 
+// ── Owner-scoped stage probes ─────────────────────────────────────────────────
+
+/**
+ * What one stage is to the session owner. Fail-closed: a foreign course and a
+ * missing one are told apart here, but every refusal maps to the same
+ * "not yours / not found" tool error — the tool text never echoes which.
+ */
+export type StageAccess =
+  | { kind: 'owned'; stage: { stageId: string; name: string } }
+  | { kind: 'missing' | 'foreign' | 'tombstoned' };
+
+interface StageProbeRow extends Record<string, unknown> {
+  owner_id: string;
+  deleted_at: Date | string | null;
+  name: string;
+}
+
+/**
+ * Probe one stage's existence + ownership + tombstone for the session owner.
+ *
+ * The ownership boundary is `stage_meta` (the same table the owner-bound
+ * document store gates its transactions on): a row claims the stage for its
+ * owner, `deleted_at` tombstones it, and the join with `document_stages`
+ * yields the display name an owned probe returns. The queryable defaults to
+ * the server persistence provider's pool — the runner resolves one per run.
+ */
+export async function probeStageAccess(
+  ownerId: string,
+  stageId: string,
+  queryable?: Queryable,
+): Promise<StageAccess> {
+  const db = (queryable ??
+    (await getServerPersistenceProvider(process.env.DATABASE_URL ?? '')).pool) as Queryable;
+  const rows = await db.query<StageProbeRow>(
+    `SELECT meta.owner_id, meta.deleted_at, stages.name
+       FROM stage_meta AS meta
+       JOIN document_stages AS stages ON stages.id = meta.stage_id
+      WHERE meta.stage_id = $1
+      LIMIT 1`,
+    [stageId],
+  );
+  const row = rows.rows[0];
+  if (!row) return { kind: 'missing' };
+  if (row.owner_id !== ownerId) return { kind: 'foreign' };
+  if (row.deleted_at !== null) return { kind: 'tombstoned' };
+  return { kind: 'owned', stage: { stageId, name: row.name } };
+}
+
 // ── Tool deps ─────────────────────────────────────────────────────────────────
 
 export interface CurriculumToolDeps {
   /** The owner-bound document store of the run's session owner. */
   store: CourseStore;
-  /** The session owner; every stage access is scoped to it by the store. */
+  /** The session owner; every stage access is scoped to it. */
   ownerId: string;
   sessionId: string;
+  /** Probe one stage for the owner (existence + ownership + tombstone). */
+  stageAccess: (stageId: string) => Promise<StageAccess>;
   /** Fired whenever a tool produces or returns a classroom link. */
   onStageLink?: (course: StageLinkLifecycleData) => void;
   /**
@@ -122,9 +175,9 @@ function toolResult(text: string, details: Record<string, unknown>, isError = fa
 
 /**
  * The single refusal every owner-scoped tool maps a non-owned stage to. The
- * tool text never echoes whether the stage is foreign or missing — a stranger
- * probing another tenant's id must get the same answer they would have got
- * while it was alive.
+ * tool text never echoes whether the stage is foreign, tombstoned, or missing
+ * — a stranger probing another tenant's id gets the same answer they would
+ * have got while it was alive.
  */
 function notYoursResult(subject: string) {
   return toolResult(
@@ -148,12 +201,15 @@ export function buildCurriculumTools(deps: CurriculumToolDeps): AgentTool<never,
         return toolResult('create_stage needs a non-empty title.', { error: 'empty-title' }, true);
       }
       const folderId = params.folderId?.trim() || undefined;
+      // Fail loud BEFORE any write: a folderId that is not one of the owner's
+      // folders refuses the whole call — never silently mint a stage into
+      // "ungrouped" because the folderId was wrong.
       if (folderId) {
         const folders = await deps.store.listFolders();
         if (signal?.aborted) throw new Error('aborted');
         if (!folders.some((folder) => folder.id === folderId)) {
           return toolResult(
-            'The folder was not found, or does not belong to this session user.',
+            'The folder was not found, or does not belong to this session user. Create it with create_folder first, or omit folderId to create an ungrouped stage.',
             { refused: true, error: 'unknown-folder' },
             true,
           );
@@ -187,7 +243,7 @@ export function buildCurriculumTools(deps: CurriculumToolDeps): AgentTool<never,
           if (signal?.aborted) throw new Error('aborted');
           if (!moved) {
             return toolResult(
-              'The folder was not found, or does not belong to this session user.',
+              'The folder was not found, or does not belong to this session user; the existing stage could not be filed into it. Use move_to_folder once the folder exists.',
               { refused: true, error: 'unknown-folder' },
               true,
             );
@@ -248,7 +304,7 @@ export function buildCurriculumTools(deps: CurriculumToolDeps): AgentTool<never,
         if (signal?.aborted) throw new Error('aborted');
         if (!moved) {
           return toolResult(
-            `Stage "${title}" was created but could not be filed because the folder no longer exists.`,
+            `The folder was not found, or does not belong to this session user. Stage "${title}" was created but NOT filed — it currently sits ungrouped. Recreate the folder, then move_to_folder it.`,
             { stageId, title, url: `/classroom/${stageId}`, archived: false },
             true,
           );
@@ -325,9 +381,9 @@ export function buildCurriculumTools(deps: CurriculumToolDeps): AgentTool<never,
     parameters: MoveToFolderParams,
     async execute(_id, params: Static<typeof MoveToFolderParams>, signal) {
       if (signal?.aborted) throw new Error('aborted');
-      const doc = await deps.store.loadDocument(params.stageId);
+      const access = await deps.stageAccess(params.stageId);
       if (signal?.aborted) throw new Error('aborted');
-      if (!doc) return notYoursResult(`Stage "${params.stageId}"`);
+      if (access.kind !== 'owned') return notYoursResult(`Stage "${params.stageId}"`);
       const moved = await deps.store.moveDocumentToFolder(params.stageId, params.folderId);
       if (signal?.aborted) throw new Error('aborted');
       if (!moved) {
@@ -342,7 +398,7 @@ export function buildCurriculumTools(deps: CurriculumToolDeps): AgentTool<never,
         stageId: params.stageId,
         folderId: params.folderId,
       });
-      return toolResult(`Stage "${doc.stage.name}" is now in folder ${params.folderId}.`, {
+      return toolResult(`Stage "${access.stage.name}" is now in folder ${params.folderId}.`, {
         stageId: params.stageId,
         folderId: params.folderId,
       });
@@ -368,9 +424,18 @@ export function buildCurriculumTools(deps: CurriculumToolDeps): AgentTool<never,
           true,
         );
       }
+      const access = await deps.stageAccess(params.stageId);
+      if (signal?.aborted) throw new Error('aborted');
+      if (access.kind !== 'owned') return notYoursResult(`Stage "${params.stageId}"`);
       const doc = await deps.store.loadDocument(params.stageId);
       if (signal?.aborted) throw new Error('aborted');
-      if (!doc) return notYoursResult(`Stage "${params.stageId}"`);
+      if (!doc) {
+        return toolResult(
+          'Course document not found; it may have been deleted.',
+          { refused: true },
+          true,
+        );
+      }
       const description = params.description?.trim();
       const renamed = {
         ...doc.stage,
@@ -387,11 +452,14 @@ export function buildCurriculumTools(deps: CurriculumToolDeps): AgentTool<never,
         courseTitle: name,
       });
       deps.onLibraryChanged?.({ change: 'stage_renamed', stageId: params.stageId, title: name });
-      return toolResult(`Renamed stage "${doc.stage.name}" to "${name}".`, {
-        stageId: params.stageId,
-        title: name,
-        ...(description ? { description } : {}),
-      });
+      return toolResult(
+        `Renamed stage "${access.stage.name}" to "${name}".${description ? ' Description updated.' : ''}`,
+        {
+          stageId: params.stageId,
+          title: name,
+          ...(description ? { description } : {}),
+        },
+      );
     },
   };
 
@@ -437,13 +505,22 @@ export function buildCurriculumTools(deps: CurriculumToolDeps): AgentTool<never,
     name: 'read_stage_outline',
     label: 'Read stage outline',
     description:
-      'Read the OUTLINE of a stage whose id is available to this session (title + page list with order/title/type — not page content). Use to chain stages in a series: see what a previous day covered before planning the next.',
+      'Read the OUTLINE of any stage this session user owns (title + page list with order/title/type — not page content). Use to chain stages in a series: see what a previous day covered before planning the next.',
     parameters: ReadStageOutlineParams,
     async execute(_id, params: Static<typeof ReadStageOutlineParams>, signal) {
       if (signal?.aborted) throw new Error('aborted');
+      const access = await deps.stageAccess(params.stageId);
+      if (signal?.aborted) throw new Error('aborted');
+      if (access.kind !== 'owned') return notYoursResult(`Stage "${params.stageId}"`);
       const doc = await deps.store.loadDocument(params.stageId);
       if (signal?.aborted) throw new Error('aborted');
-      if (!doc) return notYoursResult(`Stage "${params.stageId}"`);
+      if (!doc) {
+        return toolResult(
+          'Course document not found; it may have been deleted.',
+          { refused: true },
+          true,
+        );
+      }
       const snapshot = doc.outline as AppDocumentOutline | undefined;
       const planned = snapshot && Array.isArray(snapshot.outlines) ? snapshot.outlines : [];
       const scenes = doc.scenes ?? [];
