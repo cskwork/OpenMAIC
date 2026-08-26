@@ -272,9 +272,13 @@ describe('skills runner registration', () => {
       'list_materials',
       'read_material',
       'search_material',
+      'list_voices',
+      'set_roster',
+      'clip_audio',
     ]);
     expect([...(options.allowedToolNames ?? [])].sort()).toEqual([
       'ask_user',
+      'clip_audio',
       'create_skill',
       'create_stage',
       'duplicate_scene',
@@ -286,6 +290,7 @@ describe('skills runner registration', () => {
       'grep_stage',
       'list_materials',
       'list_scenes',
+      'list_voices',
       'patch_skill',
       'patch_stage',
       'read',
@@ -294,6 +299,7 @@ describe('skills runner registration', () => {
       'read_stage',
       'read_stage_outline',
       'search_material',
+      'set_roster',
       'use_material_media',
     ]);
     expect(options.systemPrompt).toContain('<available_skills>');

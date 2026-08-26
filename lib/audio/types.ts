@@ -116,6 +116,22 @@ export interface TTSProviderConfig {
   requiresApiKey: boolean;
   defaultBaseUrl?: string;
   icon?: string;
+  /**
+   * Declared exclusion from the agent-facing voice catalog. A provider flagged
+   * here (e.g. a paid showcase whose presets must never be offered to the
+   * agent) is dropped from `list_voices` / `set_roster` binding validation
+   * even when it is served and keyed — an explicit mechanism, not "no env so
+   * absent". Session-registered clones of the provider remain bindable when a
+   * registration adapter is configured (see the agent catalog assembly).
+   */
+  excludeFromAgentVoiceCatalog?: boolean;
+  /**
+   * True when the provider has NO deployment default voice: its only
+   * synthesizable voices are the ones registered at runtime. Such a provider's
+   * registered voices stay in the catalog regardless of clone-synthesis
+   * capability, because they are the only voices that provider can produce.
+   */
+  requiresRegisteredVoice?: boolean;
   /** Available models. Empty array means provider has no model concept (e.g. Azure, Browser Native). */
   models: Array<{ id: string; name: string }>;
   /** Default model ID used when user hasn't selected one. Empty string if no models. */
