@@ -6,6 +6,9 @@ const mocks = vi.hoisted(() => ({
   createSession: vi.fn(),
   listSessionsByOwner: vi.fn(),
   resolveRequestOwnerId: vi.fn(),
+  listSkills: vi.fn(),
+  findSkill: vi.fn(),
+  inferSkillIdFromPrompt: vi.fn(),
 }));
 
 vi.mock('@/lib/config/feature-flags', () => ({
@@ -14,6 +17,15 @@ vi.mock('@/lib/config/feature-flags', () => ({
 vi.mock('@/lib/server/agent-runtime/owner', () => ({
   resolveRequestOwnerId: mocks.resolveRequestOwnerId,
 }));
+// The route reads skills off the explicit `skill` param AND the prompt; pin the
+// lookup to a fixed installed set so no user-skill store or skill directory is
+// touched. `findSkill` is the route's (and the runner's) id-or-name lookup.
+vi.mock('@/lib/server/agent-runtime/skills', () => ({
+  listSkills: mocks.listSkills,
+  findSkill: mocks.findSkill,
+  inferSkillIdFromPrompt: mocks.inferSkillIdFromPrompt,
+}));
+
 vi.mock('@/lib/server/agent-runtime/store', () => ({
   getAgentSessionStore: async () => ({
     createSession: mocks.createSession,
@@ -43,6 +55,15 @@ beforeEach(() => {
       return 'anon:test';
     },
   );
+  const installed = [
+    { id: 'custom-skill', name: 'custom-skill' },
+    { id: 'usk_1', name: 'my-demo' },
+  ];
+  mocks.listSkills.mockResolvedValue(installed);
+  mocks.findSkill.mockImplementation(async (ref: string) => {
+    return installed.find((s) => s.id === ref || s.name === ref) ?? null;
+  });
+  mocks.inferSkillIdFromPrompt.mockResolvedValue(undefined);
   mocks.createSession.mockResolvedValue({
     id: 'session-1',
     ownerId: 'anon:test',
@@ -68,6 +89,26 @@ describe('agent session collection route', () => {
         origin: 'http://localhost',
       }),
     );
+  });
+
+  it('accepts a skill by its user-visible name and freezes the durable id, like the runner', async () => {
+    // The runner's `findSkill` matches id OR name (a user skill's natural
+    // handle is `my-*`), so a `?skill=my-demo` launch link must not 400.
+    const response = await post({ prompt: 'Build a course', skill: 'my-demo' });
+
+    expect(response.status).toBe(202);
+    expect(mocks.findSkill).toHaveBeenCalledWith('my-demo', 'anon:test');
+    expect(mocks.createSession).toHaveBeenCalledWith(expect.objectContaining({ skillId: 'usk_1' }));
+  });
+
+  it('rejects an explicit skill that matches neither id nor name', async () => {
+    const response = await post({ prompt: 'Build a course', skill: 'my-unknown' });
+
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body).toMatchObject({ success: false, errorCode: 'INVALID_REQUEST' });
+    expect(body.error).toContain('unknown skill "my-unknown"');
+    expect(mocks.createSession).not.toHaveBeenCalled();
   });
 
   it('requires a prompt for a new session', async () => {

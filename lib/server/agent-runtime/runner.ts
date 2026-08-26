@@ -23,8 +23,17 @@ import { createLogger } from '@/lib/logger';
 import { resolveAgentDriverModel } from './agent-driver-model';
 import { buildAskUserTool } from './ask-user';
 import { agentRuntimeConfig as config } from './config';
+import { buildCreateSkillTool } from './create-skill';
 import { assembleRunnerTools } from './runner-contract';
+import { buildSkillEditTools, SKILL_EDIT_TOOL_NAMES } from './skill-edit-tools';
 import { buildWebSearchTool, resolveWebSearchCapability, searchPromptBlock } from './web-search';
+import { buildSkillPreload, preloadUserMessage } from './skill-preload';
+import {
+  availableSkillsPromptBlock,
+  createNativeSkillReadTool,
+  findSkill,
+  listSkills,
+} from './skills';
 import { registerSessionUrls } from './session-urls';
 import {
   AgentSessionEntryStorage,
@@ -49,9 +58,11 @@ const MESSAGE_UPDATE_MIN_INTERVAL_MS = 150;
 export const MINIMAL_AGENT_TOOL_NAMES = new Set(['ask_user']);
 
 /**
- * Shared prompt lines for every registered toolset. The ask_user-only claim is
- * conditional: it is true only while web_search is not registered, so it lives
- * in `AGENT_RUNTIME_SYSTEM_PROMPT` (the unregistered form) rather than here.
+ * Shared prompt lines for every registered toolset.
+ *
+ * The ask_user-only claim no longer exists as a runner form: the skill tools
+ * (create_skill / read_skill / patch_skill) are registered unconditionally on
+ * every run, so "your only available tool is ask_user" is never true.
  */
 const AGENT_RUNTIME_SYSTEM_PROMPT_LINES = [
   'You are a capable assistant working in a durable background session.',
@@ -70,7 +81,12 @@ const AGENT_RUNTIME_SYSTEM_PROMPT_LINES = [
   "Reply in the user's language unless the user requests another language.",
 ];
 
-/** Product-neutral prompt for the ask_user-only runtime slice. */
+/**
+ * Product-neutral prompt for the minimal ask_user-only runtime slice.
+ *
+ * Retained for callers that build a deliberately minimal agent; the background
+ * runner no longer uses it because the skill tools are always registered.
+ */
 export const AGENT_RUNTIME_SYSTEM_PROMPT = [
   ...AGENT_RUNTIME_SYSTEM_PROMPT_LINES.slice(0, 5),
   'Your only available tool is ask_user.',
@@ -79,12 +95,17 @@ export const AGENT_RUNTIME_SYSTEM_PROMPT = [
 
 /**
  * System prompt for a run with the given registered toolset. When web_search is
- * registered the ask_user-only claim is dropped (it would be false) and the
- * capability prompt block is appended in its place.
+ * registered the web-search capability block is appended; when skills are
+ * installed, pi's standard `<available_skills>` discovery block is appended too.
  */
-export function buildRunnerSystemPrompt(webSearchRegistered: boolean): string {
-  if (!webSearchRegistered) return AGENT_RUNTIME_SYSTEM_PROMPT;
-  return [...AGENT_RUNTIME_SYSTEM_PROMPT_LINES, searchPromptBlock()].join('\n');
+export function buildRunnerSystemPrompt(
+  webSearchRegistered: boolean,
+  availableSkills?: string,
+): string {
+  const base = webSearchRegistered
+    ? [...AGENT_RUNTIME_SYSTEM_PROMPT_LINES, searchPromptBlock()].join('\n')
+    : AGENT_RUNTIME_SYSTEM_PROMPT_LINES.join('\n');
+  return availableSkills ? `${base}\n\n${availableSkills}` : base;
 }
 
 function isLeaseLostError(error: unknown): boolean {
@@ -631,6 +652,28 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       ]),
     ];
 
+    // ── Skills ─────────────────────────────────────────────────────────────────
+    // The installed set (builtins + this owner's user-authored skills) is loaded
+    // once per run. An explicit API selection (the session's frozen `skillId`)
+    // is validated here rather than at claim time; an unavailable skill is a
+    // hard error. Automatic activation lives in the transcript: a successful pi
+    // `read` of SKILL.md. An explicit selection stays authoritative for this
+    // session rather than being silently replaced by a later model read.
+    const installedSkills = await listSkills(meta.ownerId);
+    const requestedSkill = await findSkill(meta.skillId, meta.ownerId);
+    if (meta.skillId && !requestedSkill) {
+      throw new Error(`session skill "${meta.skillId}" is unavailable for its owner`);
+    }
+    // NOTE: the reference runtime keeps an `activeSkill` pointer (an explicit
+    // API selection, else the last successfully-read SKILL.md, else what the
+    // turn NAMED via `preloadConstraintTarget`) that feeds the course toolset's
+    // `getActiveSkill` and the deferred `checkScenesAgainstSkill`. Both belong
+    // to the course-toolset slice; the preload below already delivers every
+    // chosen skill as a durable `read`, which is what activation is made of.
+    const skillReadTool = installedSkills.length
+      ? createNativeSkillReadTool(installedSkills, () => undefined)
+      : null;
+
     const loggedMessages = await store.listUserMessages(id);
     const historyUsers = recovery.cursorMessages.filter((message) => message.role === 'user');
     const cursor = loggedMessageCursor({
@@ -708,15 +751,40 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
           ),
         ]
       : [];
-    const tools = assembleRunnerTools([askUserTool], webSearchTools);
+    const tools = assembleRunnerTools(
+      [askUserTool],
+      webSearchTools,
+      // ownerId is captured from the claimed durable session. It is deliberately
+      // absent from the model-visible parameters, so the model cannot forge a
+      // target owner.
+      [buildCreateSkillTool(meta.ownerId)],
+      // read_skill / patch_skill close the loop create_skill opens. Registered
+      // unconditionally rather than gated on "the user already has Skills": a
+      // Skill created earlier IN THIS RUN is not in `installedSkills` (loaded
+      // once at start), and a tool that appears only on the next run would be a
+      // capability the model cannot discover when it needs it.
+      buildSkillEditTools(meta.ownerId),
+      // The native `read` tool is restricted to installed skill resources; it is
+      // present exactly when skills exist. Discovery and invocation stay pi-native.
+      skillReadTool ? [skillReadTool] : [],
+    );
     const askUserLatch = createAskUserTerminateLatch();
     let toolCalls = 0;
     const agent = buildAgent({
       streamFn,
-      systemPrompt: buildRunnerSystemPrompt(search !== null),
+      systemPrompt: buildRunnerSystemPrompt(
+        search !== null,
+        availableSkillsPromptBlock(installedSkills),
+      ),
       model: driver.piModel,
       tools,
-      allowedToolNames: new Set([...MINIMAL_AGENT_TOOL_NAMES, ...(search ? ['web_search'] : [])]),
+      allowedToolNames: new Set([
+        ...MINIMAL_AGENT_TOOL_NAMES,
+        ...(search ? ['web_search'] : []),
+        'create_skill',
+        ...SKILL_EDIT_TOOL_NAMES,
+        ...(skillReadTool ? ['read'] : []),
+      ]),
       ...(plan.kind === 'start' ? {} : { history: modelMessages }),
       afterToolCall: (toolContext) => {
         toolCalls += 1;
@@ -831,12 +899,95 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
 
     try {
       if (plannedStart.kind === 'prompt') {
+        // A follow-up-driven prompt is already in the event log; here it
+        // enters the transcript. The bump keeps the 500ms poll from
+        // re-steering that same message before the transcript folds it
+        // (only relevant when the prompt came from `pending`).
         if (plan.kind !== 'start' || pending.length > 0) {
           steeredThisAttempt = followUpsDelivered + 1;
         }
-        await agent.prompt(plannedStart.text);
+        // ── Forced skill loading ─────────────────────────────────────────────
+        //
+        // A skill the user chose must be LOADED, not merely hinted at, and ONE
+        // path does it for every turn: the skill arrives as a `read` that
+        // already happened (see skill-preload.ts for the message shape, the
+        // caps, and why nothing here is a `user` message).
+        //
+        // `forced` is the session's own frozen `skillId`, on the FIRST run
+        // only. It is not redundant with the text: a `?skill=` launch link sets
+        // `skillId` from the URL, and its prompt text contains no handle at
+        // all. On later runs the skill is already in the transcript, so the
+        // transcript dedupe (not a special case) keeps it to one load.
+        const preload = await buildSkillPreload({
+          text: plannedStart.text,
+          skills: installedSkills,
+          transcript: modelMessages,
+          ...(plan.kind === 'start' && requestedSkill ? { forced: [requestedSkill] } : {}),
+          model: {
+            api: driver.piModel.api,
+            provider: driver.piModel.provider,
+            id: driver.piModel.id,
+          },
+          onSkipped: (skill, reason) =>
+            emit(LIFECYCLE.trace, {
+              message: `skill "${skill.id}" not preloaded (${reason}); its location is named in the prompt instead`,
+            }),
+        });
+        if (preload.messages.length === 0) {
+          await agent.prompt(preload.text);
+        } else {
+          await agent.prompt([preloadUserMessage(preload.text), ...preload.messages]);
+        }
       } else {
-        await agent.continue();
+        // ── Resume repair ─────────────────────────────────────────────────────
+        //
+        // Reaching here means `plan.kind === 'continue'`: a previous run was
+        // cut off mid-turn. The synthesized load is THREE separately fenced
+        // appends on one ordered chain, so a failure truncates it at some
+        // prefix — and every prefix short of the tool result leaves a turn
+        // whose skill body never arrived. Worse than absent: an unanswered
+        // read is materialized as "This tool call was interrupted", which
+        // tells the model the read FAILED, so it has a reason not to retry.
+        //
+        // So the resume asks the turn's own question again and answers it with
+        // the SAME builder. That is what makes this one mechanism rather than
+        // a patch per prefix: the transcript dedupe is the idempotence judge,
+        // so a load that did land makes this a no-op, and a load that did not
+        // is delivered exactly as it would have been.
+        //
+        // The intent comes from the DURABLE record — the `user_message` row
+        // this turn was delivered from, or the session's own prompt for a
+        // first run — never from the compaction view: native compaction may
+        // summarize the user frame away while keeping the assistant/tool
+        // suffix. The compaction view answers the other question ("is the
+        // body in the model's context now"), which is what the dedupe reads.
+        //
+        // Delivery carries NO user message — the follow-up cursor is the count
+        // of `user` messages in the transcript, and moving it would mark a
+        // real user message delivered and drop it.
+        const resumedTurnText =
+          followUpsDelivered > 0
+            ? (loggedMessages[followUpsDelivered - 1]?.text ?? meta.prompt)
+            : meta.prompt;
+        const repair = await buildSkillPreload({
+          text: resumedTurnText,
+          skills: installedSkills,
+          transcript: modelMessages,
+          model: {
+            api: driver.piModel.api,
+            provider: driver.piModel.provider,
+            id: driver.piModel.id,
+          },
+          onSkipped: (skill, reason) =>
+            emit(LIFECYCLE.trace, {
+              message: `skill "${skill.id}" not reloaded on resume (${reason}); its location is named in the transcript instead`,
+            }),
+        });
+        if (repair.messages.length > 0) {
+          await agent.prompt(repair.messages);
+        } else {
+          await agent.continue();
+        }
       }
 
       // Capture messages that arrive while the loop winds down. Pi is already
@@ -995,7 +1146,8 @@ export function startAgentRunner(): AgentRunnerHandle {
       `maxConcurrent=${config.maxConcurrent}, maxAttempts=${config.maxAttempts})`,
   );
   log.info(
-    'agent runner toolset: ask_user always; web_search when a web-search backend is configured',
+    'agent runner toolset: ask_user always; web_search when a web-search backend is configured; ' +
+      'create_skill/read_skill/patch_skill and the skill-scoped read when skills are installed',
   );
 
   return {

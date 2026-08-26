@@ -41,6 +41,21 @@ vi.mock('@/lib/server/agent-runtime/agent-driver-model', () => ({
   }),
 }));
 
+// Skills are orthogonal to the behaviour under test; pin the runner to a
+// deployment with NO installed skills so no user-skill store is touched.
+vi.mock('@/lib/server/agent-runtime/skills', async (importActual) => {
+  const actual = await importActual<typeof import('@/lib/server/agent-runtime/skills')>();
+  return {
+    ...actual,
+    listSkills: vi.fn(async () => []),
+    findSkill: vi.fn(async () => null),
+  };
+});
+vi.mock('@/lib/server/agent-runtime/user-skills', async (importActual) => {
+  const actual = await importActual<typeof import('@/lib/server/agent-runtime/user-skills')>();
+  return { ...actual, listUserSkills: vi.fn(async () => []) };
+});
+
 import { runSession } from '@/lib/server/agent-runtime/runner';
 
 describe('runSession durable event ordering', () => {

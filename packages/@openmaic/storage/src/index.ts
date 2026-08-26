@@ -161,3 +161,33 @@ export {
 // Re-export the DSL-owned asset contract for convenience, so consumers can get
 // the interface and a backend from one import without reaching into the DSL.
 export type { AssetRef, AssetMeta, BinaryBlob, StorageProvider } from '@openmaic/dsl';
+
+export {
+  USER_SKILL_EDITABLE_PATHS,
+  USER_SKILL_LIMIT,
+  USER_SKILL_CONTENT_MAX_BYTES,
+  USER_SKILL_NAME_PATTERN,
+  UserSkillError,
+  applyOpsOnce,
+  applyUserSkillPatchOps,
+  hasUnpairedSurrogate,
+  normalizeUserSkillFields,
+  validateUserSkillFields,
+  validateUserSkillInput,
+  type AppliedUserSkillOp,
+  type UserSkillEditablePath,
+  type UserSkillErrorCode,
+  type UserSkillFields,
+  type UserSkillPatchOpInput,
+  type UserSkillPatchOutcome,
+  type UserSkillRecord,
+  type UserSkillStore,
+} from './skill/types.js';
+export {
+  DEFAULT_USER_SKILL_TABLE_NAMES,
+  PgUserSkillStore,
+  USER_SKILL_PG_SCHEMA,
+  ensureUserSkillSchema,
+  type PgUserSkillStoreOptions,
+  type UserSkillTableNames,
+} from './skill/pg.js';

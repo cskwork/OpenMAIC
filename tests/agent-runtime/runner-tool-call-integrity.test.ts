@@ -60,6 +60,21 @@ vi.mock('@/lib/agent/runtime/build-agent', () => ({
   buildAgent: mocks.buildAgent,
 }));
 
+// Skills are orthogonal to the behaviour under test; pin the runner to a
+// deployment with NO installed skills so no user-skill store is touched.
+vi.mock('@/lib/server/agent-runtime/skills', async (importActual) => {
+  const actual = await importActual<typeof import('@/lib/server/agent-runtime/skills')>();
+  return {
+    ...actual,
+    listSkills: vi.fn(async () => []),
+    findSkill: vi.fn(async () => null),
+  };
+});
+vi.mock('@/lib/server/agent-runtime/user-skills', async (importActual) => {
+  const actual = await importActual<typeof import('@/lib/server/agent-runtime/user-skills')>();
+  return { ...actual, listUserSkills: vi.fn(async () => []) };
+});
+
 import { runSession } from '@/lib/server/agent-runtime/runner';
 
 const SESSION_ID = 'session-1';
@@ -211,7 +226,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.resolveAgentDriverModel.mockResolvedValue({
     connection: { model: undefined, thinkingConfig: undefined },
-    piModel: undefined,
+    piModel: { api: 'openai-completions', provider: 'openai', id: 'driver-model' },
     wireMaxOutputTokens: undefined,
     reservedOutputTokens: 8192,
   });

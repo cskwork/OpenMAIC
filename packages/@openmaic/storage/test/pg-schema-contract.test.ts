@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { AGENT_SESSION_PG_SCHEMA, ensureAgentSessionSchema } from '../src/agent-session/pg.js';
 import { DOCUMENT_PG_SCHEMA, ensureDocumentSchema } from '../src/document/pg.js';
 import { RUNTIME_PG_SCHEMA, ensureSchema } from '../src/runtime/pg.js';
+import { USER_SKILL_PG_SCHEMA, ensureUserSkillSchema } from '../src/skill/pg.js';
 import type { Queryable } from '../src/runtime/pg.js';
 
 /**
@@ -190,6 +191,34 @@ CREATE INDEX IF NOT EXISTS agent_session_urls_session_created_idx
   ON agent_session_urls (session_id, created_at);
 `;
 
+const EXPECTED_USER_SKILL_PG_SCHEMA = `
+CREATE TABLE IF NOT EXISTS agent_user_skill (
+  id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL,
+  content TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at TIMESTAMPTZ,
+  CONSTRAINT agent_user_skill_version_check CHECK (version = 1),
+  CONSTRAINT agent_user_skill_name_check
+    CHECK (name ~ '^my-[a-z0-9]+(?:-[a-z0-9]+)*$' AND length(name) <= 64),
+  CONSTRAINT agent_user_skill_title_check CHECK (length(title) BETWEEN 1 AND 80),
+  CONSTRAINT agent_user_skill_description_check
+    CHECK (length(description) BETWEEN 1 AND 500 AND description !~ '[\r\n]'),
+  CONSTRAINT agent_user_skill_content_check CHECK (octet_length(content) BETWEEN 1 AND 65536)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS agent_user_skill_owner_name_unique
+  ON agent_user_skill (owner_id, name) WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_agent_user_skill_owner
+  ON agent_user_skill (owner_id, created_at) WHERE deleted_at IS NULL;
+`;
+
 /** Records the statements an ensure function actually issues. */
 function recordingQueryable(): { statements: string[]; queryable: Queryable } {
   const statements: string[] = [];
@@ -230,6 +259,12 @@ const schemas = [
     expected: EXPECTED_AGENT_SESSION_PG_SCHEMA,
     ensure: ensureAgentSessionSchema,
   },
+  {
+    name: 'USER_SKILL_PG_SCHEMA',
+    actual: USER_SKILL_PG_SCHEMA,
+    expected: EXPECTED_USER_SKILL_PG_SCHEMA,
+    ensure: ensureUserSkillSchema,
+  },
 ];
 
 describe.each(schemas)('$name is a pinned contract', ({ name, actual, expected, ensure }) => {
@@ -268,7 +303,7 @@ describe.each(schemas)('$name is a pinned contract', ({ name, actual, expected, 
     expect(statements.length).toBeGreaterThan(0);
     for (const statement of statements) {
       expect(
-        /^CREATE (TABLE|INDEX) IF NOT EXISTS /.test(statement),
+        /^CREATE (TABLE|INDEX|UNIQUE INDEX) IF NOT EXISTS /.test(statement),
         `${name} statement is not an IF NOT EXISTS create: ${statement}`,
       ).toBe(true);
     }

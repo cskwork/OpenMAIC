@@ -76,6 +76,23 @@ vi.mock('@/lib/server/agent-runtime/web-search', async (importActual) => {
   };
 });
 
+// Skills are orthogonal to web_search registration. Pin the runner to a
+// deployment with NO installed skills (the skill tools themselves are still
+// registered unconditionally) so the web_search-specific toolset and prompt
+// assertions below stay focused.
+vi.mock('@/lib/server/agent-runtime/skills', async (importActual) => {
+  const actual = await importActual<typeof import('@/lib/server/agent-runtime/skills')>();
+  return {
+    ...actual,
+    listSkills: vi.fn(async () => []),
+    findSkill: vi.fn(async () => null),
+  };
+});
+vi.mock('@/lib/server/agent-runtime/user-skills', async (importActual) => {
+  const actual = await importActual<typeof import('@/lib/server/agent-runtime/user-skills')>();
+  return { ...actual, listUserSkills: vi.fn(async () => []) };
+});
+
 import { runSession } from '@/lib/server/agent-runtime/runner';
 
 const SESSION_ID = 'session-1';
@@ -173,7 +190,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.resolveAgentDriverModel.mockResolvedValue({
     connection: { model: undefined, thinkingConfig: undefined },
-    piModel: undefined,
+    piModel: { api: 'openai-completions', provider: 'openai', id: 'driver-model' },
     wireMaxOutputTokens: undefined,
     reservedOutputTokens: 8192,
   });
@@ -215,25 +232,47 @@ describe('web_search runner registration', () => {
 
     const options = await runToBuildAgent();
 
-    expect(options.tools.map((tool) => tool.name)).toEqual(['ask_user', 'web_search']);
-    expect([...(options.allowedToolNames ?? [])].sort()).toEqual(['ask_user', 'web_search']);
+    expect(options.tools.map((tool) => tool.name)).toEqual([
+      'ask_user',
+      'web_search',
+      'create_skill',
+      'read_skill',
+      'patch_skill',
+    ]);
+    expect([...(options.allowedToolNames ?? [])].sort()).toEqual([
+      'ask_user',
+      'create_skill',
+      'patch_skill',
+      'read_skill',
+      'web_search',
+    ]);
     expect(options.systemPrompt).toContain('## Web search');
     expect(options.systemPrompt).toContain('web_search');
-    // The capability is registered: the ask_user-only claim would be false.
+    // The skill tools are always registered, so the ask_user-only claim is
+    // never true in the runner prompt.
     expect(options.systemPrompt).not.toContain('Your only available tool is ask_user');
   });
 
-  it('registers ask_user only and no web-search prompt when nothing is configured', async () => {
+  it('registers ask_user and the skill tools, but no web-search prompt, when nothing is configured', async () => {
     mocks.resolveWebSearchCapability.mockReturnValue(null);
 
     const options = await runToBuildAgent();
 
-    expect(options.tools.map((tool) => tool.name)).toEqual(['ask_user']);
-    expect([...(options.allowedToolNames ?? [])]).toEqual(['ask_user']);
+    expect(options.tools.map((tool) => tool.name)).toEqual([
+      'ask_user',
+      'create_skill',
+      'read_skill',
+      'patch_skill',
+    ]);
+    expect([...(options.allowedToolNames ?? [])].sort()).toEqual([
+      'ask_user',
+      'create_skill',
+      'patch_skill',
+      'read_skill',
+    ]);
     expect(options.systemPrompt).not.toContain('web_search');
     expect(options.systemPrompt).not.toContain('## Web search');
-    // In this state the ask_user-only claim is accurate and stays in place.
-    expect(options.systemPrompt).toContain('Your only available tool is ask_user');
+    expect(options.systemPrompt).not.toContain('Your only available tool is ask_user');
   });
 
   it('wires web_search result URLs to the session URL trust gate', async () => {
