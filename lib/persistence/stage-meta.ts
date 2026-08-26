@@ -5,6 +5,10 @@ export interface StageMetaRow {
   stageId: string;
   ownerId: string;
   isPublic: boolean;
+  /** Epoch millis when the owner published the course; null while private. */
+  publishedAt: number | null;
+  /** Server-side mirror of the document outline's generation-complete flag. */
+  generationComplete: boolean;
   deletedAt: Date | null;
 }
 
@@ -12,6 +16,8 @@ interface RawStageMetaRow extends Record<string, unknown> {
   stage_id: string;
   owner_id: string;
   is_public: boolean;
+  published_at: number | string | null;
+  generation_complete: boolean;
   deleted_at: Date | string | null;
 }
 
@@ -23,10 +29,25 @@ CREATE TABLE IF NOT EXISTS stage_meta (
   deleted_at TIMESTAMPTZ
 );
 
+ALTER TABLE stage_meta
+  ADD COLUMN IF NOT EXISTS published_at DOUBLE PRECISION;
+
+ALTER TABLE stage_meta
+  ADD COLUMN IF NOT EXISTS generation_complete BOOLEAN NOT NULL DEFAULT false;
+
 CREATE INDEX IF NOT EXISTS stage_meta_owner_idx ON stage_meta (owner_id, stage_id);
 
 CREATE INDEX IF NOT EXISTS stage_meta_public_live_idx
   ON stage_meta (stage_id) WHERE is_public AND deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS stage_bookmarks (
+  owner_id TEXT NOT NULL,
+  stage_id TEXT NOT NULL,
+  created_at DOUBLE PRECISION NOT NULL,
+  PRIMARY KEY (owner_id, stage_id)
+);
+
+CREATE INDEX IF NOT EXISTS stage_bookmarks_stage_idx ON stage_bookmarks (stage_id);
 
 INSERT INTO stage_meta (stage_id, owner_id)
 SELECT id, owner_id
@@ -47,15 +68,25 @@ export async function readStageMeta(
   stageId: string,
 ): Promise<StageMetaRow | null> {
   const result = await queryable.query<RawStageMetaRow>(
-    'SELECT stage_id, owner_id, is_public, deleted_at FROM stage_meta WHERE stage_id = $1',
+    `SELECT stage_id, owner_id, is_public, published_at, generation_complete, deleted_at
+       FROM stage_meta
+      WHERE stage_id = $1`,
     [stageId],
   );
   const row = result.rows[0];
   if (!row) return null;
+  const publishedAt = row.published_at;
   return {
     stageId: row.stage_id,
     ownerId: row.owner_id,
     isPublic: row.is_public === true,
+    publishedAt:
+      publishedAt === null
+        ? null
+        : typeof publishedAt === 'number'
+          ? publishedAt
+          : Number(publishedAt),
+    generationComplete: row.generation_complete === true,
     deletedAt:
       row.deleted_at === null
         ? null
@@ -108,4 +139,60 @@ export async function tombstoneStageMeta(queryable: Queryable, stageId: string):
       WHERE stage_id = $1 AND deleted_at IS NULL`,
     [stageId],
   );
+}
+
+/** Monotonically mark a live course's server-side generation-complete flag. */
+export async function markStageGenerationComplete(
+  queryable: Queryable,
+  stageId: string,
+): Promise<boolean> {
+  const result = await queryable.query<{ stage_id: string } & Record<string, unknown>>(
+    `UPDATE stage_meta
+        SET generation_complete = true
+      WHERE stage_id = $1 AND deleted_at IS NULL
+      RETURNING stage_id`,
+    [stageId],
+  );
+  return result.rows.length === 1;
+}
+
+/** Publish (isPublic=true, publishedAt set) or unpublish (isPublic=false, publishedAt cleared). */
+export async function setStagePublished(
+  queryable: Queryable,
+  stageId: string,
+  isPublic: boolean,
+  publishedAt: number | null,
+): Promise<void> {
+  await queryable.query(
+    `UPDATE stage_meta
+        SET is_public = $2, published_at = $3
+      WHERE stage_id = $1 AND deleted_at IS NULL`,
+    [stageId, isPublic, publishedAt],
+  );
+}
+
+/** Idempotent bookmark insert ("My Courses" collection). */
+export async function addStageBookmark(
+  queryable: Queryable,
+  ownerId: string,
+  stageId: string,
+): Promise<void> {
+  await queryable.query(
+    `INSERT INTO stage_bookmarks (owner_id, stage_id, created_at)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (owner_id, stage_id) DO NOTHING`,
+    [ownerId, stageId, Date.now()],
+  );
+}
+
+export async function hasStageBookmark(
+  queryable: Queryable,
+  ownerId: string,
+  stageId: string,
+): Promise<boolean> {
+  const result = await queryable.query<{ stage_id: string } & Record<string, unknown>>(
+    'SELECT stage_id FROM stage_bookmarks WHERE owner_id = $1 AND stage_id = $2 LIMIT 1',
+    [ownerId, stageId],
+  );
+  return result.rows.length === 1;
 }

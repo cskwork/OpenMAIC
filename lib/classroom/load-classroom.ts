@@ -13,6 +13,7 @@ import {
   useStageStore,
   type StageSceneLoadToken,
 } from '@/lib/store/stage';
+import { resolveStageFallbackAccess } from '@/lib/classroom/stage-ownership-signal';
 import type { MediaFileRecord } from '@/lib/utils/database';
 import { unmarkStageDeleted } from '@/lib/utils/deleted-stages';
 import type { GeneratedAgentConfig, Scene, Stage } from '@/lib/types/stage';
@@ -399,6 +400,11 @@ export function applyClassroomStageAndScenes(
   // and persists normally.
   unmarkStageDeleted(stage.id);
   const nextScenes = [...scenes];
+  // A server fallback is a fresh classroom boundary. Never inherit access or
+  // producer state from whichever course previously occupied the singleton
+  // store; these defaults match an ordinary cold load (the stage-meta sidecar
+  // probe corrects them when it answers).
+  const access = resolveStageFallbackAccess(stage.id);
   useStageStore.setState((state) => ({
     stage,
     scenes: nextScenes,
@@ -406,6 +412,9 @@ export function applyClassroomStageAndScenes(
     chats: options.chats ?? [],
     chatSnapshot: options.chatSnapshot ?? { sessions: [], restoreMarker: null },
     generationComplete: false,
+    isOwner: access.isOwner,
+    isBookmarked: access.isBookmarked,
+    readOnly: !(access.isOwner || access.isBookmarked),
     generationEpoch: state.generationEpoch + 1,
     mode: 'playback',
   }));
