@@ -237,10 +237,12 @@ describe('skills runner registration', () => {
       'read_skill',
       'patch_skill',
       'read',
+      'fetch_url',
     ]);
     expect([...(options.allowedToolNames ?? [])].sort()).toEqual([
       'ask_user',
       'create_skill',
+      'fetch_url',
       'patch_skill',
       'read',
       'read_skill',

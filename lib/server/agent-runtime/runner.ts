@@ -24,6 +24,11 @@ import { resolveAgentDriverModel } from './agent-driver-model';
 import { buildAskUserTool } from './ask-user';
 import { agentRuntimeConfig as config } from './config';
 import { buildCreateSkillTool } from './create-skill';
+import {
+  buildFetchUrlTool,
+  fetchPromptBlock,
+  untrustedContentPolicyPromptBlock,
+} from './fetch-url';
 import { assembleRunnerTools } from './runner-contract';
 import { buildSkillEditTools, SKILL_EDIT_TOOL_NAMES } from './skill-edit-tools';
 import { buildWebSearchTool, resolveWebSearchCapability, searchPromptBlock } from './web-search';
@@ -96,7 +101,10 @@ export const AGENT_RUNTIME_SYSTEM_PROMPT = [
 /**
  * System prompt for a run with the given registered toolset. When web_search is
  * registered the web-search capability block is appended; when skills are
- * installed, pi's standard `<available_skills>` discovery block is appended too.
+ * installed, pi's standard `<available_skills>` discovery block is appended
+ * too. The untrusted-content policy and fetch_url guidance are always present,
+ * because `fetch_url` is always registered (reference semantics: the material
+ * tools are unconditional, only web_search is capability-gated).
  */
 export function buildRunnerSystemPrompt(
   webSearchRegistered: boolean,
@@ -105,7 +113,8 @@ export function buildRunnerSystemPrompt(
   const base = webSearchRegistered
     ? [...AGENT_RUNTIME_SYSTEM_PROMPT_LINES, searchPromptBlock()].join('\n')
     : AGENT_RUNTIME_SYSTEM_PROMPT_LINES.join('\n');
-  return availableSkills ? `${base}\n\n${availableSkills}` : base;
+  const withFetch = [base, fetchPromptBlock(), untrustedContentPolicyPromptBlock()].join('\n\n');
+  return availableSkills ? `${withFetch}\n\n${availableSkills}` : withFetch;
 }
 
 function isLeaseLostError(error: unknown): boolean {
@@ -767,6 +776,12 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       // The native `read` tool is restricted to installed skill resources; it is
       // present exactly when skills exist. Discovery and invocation stay pi-native.
       skillReadTool ? [skillReadTool] : [],
+      // fetch_url is registered unconditionally (reference semantics: the
+      // material tools are always registered alongside the capability-gated
+      // web_search). The URL trust gate — not registration — is what keeps a
+      // fetch inside the session's observed origins, and it is the tool's core
+      // security property.
+      [buildFetchUrlTool({ sessionId: id })],
     );
     const askUserLatch = createAskUserTerminateLatch();
     let toolCalls = 0;
@@ -784,6 +799,7 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
         'create_skill',
         ...SKILL_EDIT_TOOL_NAMES,
         ...(skillReadTool ? ['read'] : []),
+        'fetch_url',
       ]),
       ...(plan.kind === 'start' ? {} : { history: modelMessages }),
       afterToolCall: (toolContext) => {
@@ -1147,7 +1163,8 @@ export function startAgentRunner(): AgentRunnerHandle {
   );
   log.info(
     'agent runner toolset: ask_user always; web_search when a web-search backend is configured; ' +
-      'create_skill/read_skill/patch_skill and the skill-scoped read when skills are installed',
+      'create_skill/read_skill/patch_skill and the skill-scoped read when skills are installed; ' +
+      'fetch_url always (URL trust gate enforced per call)',
   );
 
   return {
