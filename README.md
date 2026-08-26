@@ -187,6 +187,12 @@ ASR_FUNASR_BASE_URL=http://localhost:8000/v1
 
 Use `funasr-server --device cpu --model sensevoice` for a CPU-only setup. See the [FunASR deployment guide](https://github.com/modelscope/FunASR#deploy) for production options.
 
+### Optional: Local Audio and Video Extraction
+
+OpenMAIC can extract timestamped transcripts and prepared video keyframes locally. Install the system `ffmpeg` package so both `ffmpeg` and `ffprobe` are executable on `PATH`, then configure one server ASR provider (for example FunASR, Lemonade, or OpenAI) using the variables above. The application resolves the executables at extraction time; ffmpeg is not an npm dependency and is not required to start or use OpenMAIC.
+
+If the executables are unavailable, the local extractor is skipped. A configured AliDocMind provider remains available as the cloud extraction path. When neither local ffmpeg extraction nor AliDocMind is available, audio/video materials are marked failed with an actionable setup message instead of hanging or completing with an empty transcript.
+
 OpenAI quick example:
 
 ```env

@@ -26,6 +26,13 @@ function numericStatus(error: unknown): number | undefined {
 /** Retry only errors carrying a concrete transient transport/runtime signal. */
 export function isTransientExtractionError(error: unknown): boolean {
   if (error instanceof MaterialExtractionError) return error.retryable;
+  if (
+    error &&
+    typeof error === 'object' &&
+    typeof (error as { retryable?: unknown }).retryable === 'boolean'
+  ) {
+    return (error as { retryable: boolean }).retryable;
+  }
   const status = numericStatus(error);
   if (status !== undefined) {
     if (status >= 500 && status <= 599) return true;
