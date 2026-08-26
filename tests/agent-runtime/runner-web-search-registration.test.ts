@@ -14,7 +14,7 @@
  */
 import type { AgentEvent, AgentMessage } from '@earendil-works/pi-agent-core';
 import { InMemorySessionRepo, Session } from '@earendil-works/pi-agent-core';
-import type { ClaimedAgentSession } from '@openmaic/storage';
+import type { AgentSessionMaterial, ClaimedAgentSession } from '@openmaic/storage';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   resolveWebSearchCapability: vi.fn(),
   searchWeb: vi.fn(),
   formatSearchResultsAsContext: vi.fn(),
+  listSessionMaterials: vi.fn(async (): Promise<AgentSessionMaterial[]> => []),
 }));
 
 vi.mock('node:crypto', async (importActual) => {
@@ -37,6 +38,15 @@ vi.mock('node:crypto', async (importActual) => {
 vi.mock('@/lib/server/agent-runtime/store', () => ({
   getAgentSessionStore: mocks.getAgentSessionStore,
 }));
+
+// The runner lists the session's materials to build the materials prompt
+// block. The mock defaults to no materials; individual tests override it to
+// observe the prompt block. The real tool builders stay loaded.
+vi.mock('@/lib/server/agent-runtime/session-materials', async (importActual) => {
+  const actual =
+    await importActual<typeof import('@/lib/server/agent-runtime/session-materials')>();
+  return { ...actual, listSessionMaterials: mocks.listSessionMaterials };
+});
 
 vi.mock('@/lib/web-search', () => ({
   searchWeb: mocks.searchWeb,
@@ -188,6 +198,7 @@ interface BuildAgentOptions {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.listSessionMaterials.mockResolvedValue([]);
   mocks.resolveAgentDriverModel.mockResolvedValue({
     connection: { model: undefined, thinkingConfig: undefined },
     piModel: { api: 'openai-completions', provider: 'openai', id: 'driver-model' },
@@ -239,19 +250,25 @@ describe('web_search runner registration', () => {
       'read_skill',
       'patch_skill',
       'fetch_url',
+      'list_materials',
+      'read_material',
+      'search_material',
     ]);
     expect([...(options.allowedToolNames ?? [])].sort()).toEqual([
       'ask_user',
       'create_skill',
       'fetch_url',
+      'list_materials',
       'patch_skill',
+      'read_material',
       'read_skill',
+      'search_material',
       'web_search',
     ]);
     expect(options.systemPrompt).toContain('## Web search');
     expect(options.systemPrompt).toContain('web_search');
-    // fetch_url is always registered, so its guidance and the untrusted
-    // content policy are always in the prompt (reference semantics).
+    // The material tools are always registered, so their guidance and the
+    // untrusted content policy are always in the prompt (reference semantics).
     expect(options.systemPrompt).toContain('## untrusted_content_policy');
     expect(options.systemPrompt).toContain('## Fetch URL');
     // The skill tools are always registered, so the ask_user-only claim is
@@ -270,18 +287,24 @@ describe('web_search runner registration', () => {
       'read_skill',
       'patch_skill',
       'fetch_url',
+      'list_materials',
+      'read_material',
+      'search_material',
     ]);
     expect([...(options.allowedToolNames ?? [])].sort()).toEqual([
       'ask_user',
       'create_skill',
       'fetch_url',
+      'list_materials',
       'patch_skill',
+      'read_material',
       'read_skill',
+      'search_material',
     ]);
     expect(options.systemPrompt).not.toContain('web_search');
     expect(options.systemPrompt).not.toContain('## Web search');
-    // The always-registered fetch_url keeps its prompt blocks regardless of
-    // the web-search capability.
+    // The always-registered material tools keep their prompt blocks regardless
+    // of the web-search capability.
     expect(options.systemPrompt).toContain('## untrusted_content_policy');
     expect(options.systemPrompt).toContain('## Fetch URL');
     expect(options.systemPrompt).not.toContain('Your only available tool is ask_user');
@@ -329,5 +352,40 @@ describe('web_search runner registration', () => {
       ['https://a.example/'],
       'web_search',
     );
+  });
+
+  it('lists the session materials in the system prompt so the model knows what it can read', async () => {
+    mocks.resolveWebSearchCapability.mockReturnValue(null);
+    mocks.listSessionMaterials.mockResolvedValue([
+      {
+        id: 'mat_web1',
+        sessionId: SESSION_ID,
+        kind: 'web',
+        title: 'Example article',
+        sourceUrl: 'https://example.com/a',
+        textAssetId: 'ast_1',
+        rawAssetId: null,
+        textChars: 1200,
+        createdAt: new Date(0).toISOString(),
+      },
+    ]);
+
+    const options = await runToBuildAgent();
+
+    expect(mocks.listSessionMaterials).toHaveBeenCalledWith(SESSION_ID);
+    expect(options.systemPrompt).toContain('## Registered session materials');
+    expect(options.systemPrompt).toContain('Example article');
+    expect(options.systemPrompt).toContain('list_materials');
+    expect(options.systemPrompt).toContain('read_material');
+    expect(options.systemPrompt).toContain('search_material');
+  });
+
+  it('omits the materials block when the session has no materials', async () => {
+    mocks.resolveWebSearchCapability.mockReturnValue(null);
+    mocks.listSessionMaterials.mockResolvedValue([]);
+
+    const options = await runToBuildAgent();
+
+    expect(options.systemPrompt).not.toContain('## Registered session materials');
   });
 });
