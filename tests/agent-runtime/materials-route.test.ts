@@ -42,6 +42,8 @@ function material(overrides: Partial<AgentSessionMaterial> = {}): AgentSessionMa
     textAssetId: 'asset-1',
     rawAssetId: null,
     textChars: 42,
+    derivedFrom: null,
+    extraction: { status: 'done', attempts: 0 },
     createdAt: '2025-01-01T00:00:00.000Z',
     ...overrides,
   };
@@ -73,6 +75,7 @@ describe('GET /api/materials', () => {
           title: 'Example',
           sourceUrl: 'https://example.com/doc',
           textChars: 42,
+          extraction: { status: 'done', attempts: 0 },
           createdAt: '2025-01-01T00:00:00.000Z',
         },
       ],

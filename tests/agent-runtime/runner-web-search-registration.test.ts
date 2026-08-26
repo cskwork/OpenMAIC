@@ -279,6 +279,8 @@ describe('web_search runner registration', () => {
       'list_materials',
       'read_material',
       'search_material',
+      'extract_material',
+      'wait_for_materials',
       'list_voices',
       'set_roster',
       'clip_audio',
@@ -291,6 +293,7 @@ describe('web_search runner registration', () => {
       'create_stage',
       'duplicate_scene',
       'edit_deck',
+      'extract_material',
       'fetch_url',
       'generate_actions',
       'generate_scene',
@@ -311,6 +314,7 @@ describe('web_search runner registration', () => {
       'search_material',
       'set_roster',
       'use_material_media',
+      'wait_for_materials',
       'web_search',
     ]);
     expect(options.systemPrompt).toContain('## Web search');
@@ -354,6 +358,8 @@ describe('web_search runner registration', () => {
       'list_materials',
       'read_material',
       'search_material',
+      'extract_material',
+      'wait_for_materials',
       'list_voices',
       'set_roster',
       'clip_audio',
@@ -366,6 +372,7 @@ describe('web_search runner registration', () => {
       'create_stage',
       'duplicate_scene',
       'edit_deck',
+      'extract_material',
       'fetch_url',
       'generate_actions',
       'generate_scene',
@@ -386,6 +393,7 @@ describe('web_search runner registration', () => {
       'search_material',
       'set_roster',
       'use_material_media',
+      'wait_for_materials',
     ]);
     expect(options.systemPrompt).not.toContain('web_search');
     expect(options.systemPrompt).not.toContain('## Web search');
@@ -452,6 +460,8 @@ describe('web_search runner registration', () => {
         textAssetId: 'ast_1',
         rawAssetId: null,
         textChars: 1200,
+        derivedFrom: null,
+        extraction: { status: 'done', attempts: 0 },
         createdAt: new Date(0).toISOString(),
       },
     ]);

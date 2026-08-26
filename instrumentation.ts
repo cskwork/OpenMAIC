@@ -29,6 +29,9 @@ export async function register(): Promise<void> {
   validateServerConfig();
 
   let runner: import('@/lib/server/agent-runtime/runner').AgentRunnerHandle | undefined;
+  let extractionRunner:
+    | import('@/lib/server/material-extraction/runner').MaterialExtractionRunnerHandle
+    | undefined;
   try {
     const { isAgentRuntimeConfigured } = await import('@/lib/config/feature-flags');
     if (isAgentRuntimeConfigured()) {
@@ -36,6 +39,8 @@ export async function register(): Promise<void> {
       // retained behind the store's lazy promise and never blocks register().
       const runtime = await import('@/lib/server/agent-runtime/runner');
       runner = runtime.startAgentRunner();
+      const extraction = await import('@/lib/server/material-extraction/runner');
+      extractionRunner = extraction.startMaterialExtractionRunner();
     }
   } catch (error) {
     console.error('[instrumentation] Agent runtime startup failed', error);
@@ -46,6 +51,11 @@ export async function register(): Promise<void> {
     shutdownPromise ??= (async () => {
       // Park sessions before any pool they use is closed. This preserves the
       // last durable entry-tree checkpoint for immediate takeover.
+      try {
+        await extractionRunner?.stop();
+      } catch (error) {
+        console.error('[instrumentation] Material extraction runner drain failed', error);
+      }
       try {
         await runner?.stop();
       } catch (error) {
