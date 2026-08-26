@@ -1,9 +1,16 @@
-import type { DocumentStore } from '@openmaic/storage';
+import type { DocumentStore, StageFreshnessManifestStore } from '@openmaic/storage';
 
 import { withPlainJsonDocumentWrites } from '@/lib/document-store/plain-json-store';
 import type { AppStage } from '@/lib/document-store/persistence-types';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
 import type { AppScene } from '@/lib/types/stage';
+
+/**
+ * The owner-bound document store for one HTTP request, plus the
+ * trigger-maintained freshness manifest read the PG backend provides.
+ */
+export type OwnerScopedDocumentStore = DocumentStore<AppScene, AppStage> &
+  StageFreshnessManifestStore;
 
 /**
  * The owner-bound document store for one HTTP request.
@@ -19,9 +26,9 @@ import type { AppScene } from '@/lib/types/stage';
  */
 export async function getOwnerScopedDocumentStore(
   ownerId: string,
-): Promise<DocumentStore<AppScene, AppStage>> {
+): Promise<OwnerScopedDocumentStore> {
   const { documentStore } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
   return withPlainJsonDocumentWrites(
-    documentStore.forOwner(ownerId) as unknown as DocumentStore<AppScene, AppStage>,
+    documentStore.forOwner(ownerId) as unknown as OwnerScopedDocumentStore,
   );
 }
