@@ -1,7 +1,7 @@
 import type { AssetStore } from '@openmaic/storage';
 
 import { DEFAULT_TTS_MODELS, DEFAULT_TTS_VOICES, TTS_PROVIDERS } from '@/lib/audio/constants';
-import { generateTTS } from '@/lib/audio/tts-providers';
+import { generateTTS, TTSRequestTimeoutError } from '@/lib/audio/tts-providers';
 import type { TTSProviderId } from '@/lib/audio/types';
 import { BROWSER_NATIVE_TTS_PROVIDER_ID } from '@/lib/audio/provider-enablement';
 import type { SpeechAction } from '@/lib/types/action';
@@ -95,6 +95,7 @@ export async function synthesizeSceneNarration(
           baseUrl: resolveTTSBaseUrl(providerId),
           voice,
           speed: speech.speed,
+          signal: input.signal,
         },
         speech.text,
       );
@@ -107,6 +108,10 @@ export async function synthesizeSceneNarration(
       generated += 1;
     } catch (error) {
       if (input.signal?.aborted) throw error;
+      // A hung provider must fail the tool call with the retryable timeout
+      // error instead of degrading into a per-action failure: the remaining
+      // actions would hit the same hung upstream and the session would wedge.
+      if (error instanceof TTSRequestTimeoutError) throw error;
       failed.push(action.id);
     }
   }
