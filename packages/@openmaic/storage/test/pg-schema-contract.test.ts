@@ -4,6 +4,10 @@ import { AGENT_SESSION_PG_SCHEMA, ensureAgentSessionSchema } from '../src/agent-
 import { DOCUMENT_PG_SCHEMA, ensureDocumentSchema } from '../src/document/pg.js';
 import { RUNTIME_PG_SCHEMA, ensureSchema } from '../src/runtime/pg.js';
 import { USER_SKILL_PG_SCHEMA, ensureUserSkillSchema } from '../src/skill/pg.js';
+import {
+  AGENT_SESSION_MATERIAL_PG_SCHEMA,
+  ensureAgentSessionMaterialSchema,
+} from '../src/material/pg.js';
 import type { Queryable } from '../src/runtime/pg.js';
 
 /**
@@ -219,6 +223,26 @@ CREATE INDEX IF NOT EXISTS idx_agent_user_skill_owner
   ON agent_user_skill (owner_id, created_at) WHERE deleted_at IS NULL;
 `;
 
+const EXPECTED_AGENT_SESSION_MATERIAL_PG_SCHEMA = `
+CREATE TABLE IF NOT EXISTS agent_session_materials (
+  id            TEXT PRIMARY KEY,
+  session_id    TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+  kind          TEXT NOT NULL,
+  title         TEXT,
+  source_url    TEXT,
+  text_asset_id TEXT,
+  raw_asset_id  TEXT,
+  text_chars    INTEGER NOT NULL DEFAULT 0,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT agent_session_materials_kind_known CHECK (kind IN
+    ('source','extraction','transcript','audio-track','image','web')),
+  CONSTRAINT agent_session_materials_text_chars_nonnegative CHECK (text_chars >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS agent_session_materials_session_created_idx
+  ON agent_session_materials (session_id, created_at);
+`;
+
 /** Records the statements an ensure function actually issues. */
 function recordingQueryable(): { statements: string[]; queryable: Queryable } {
   const statements: string[] = [];
@@ -264,6 +288,12 @@ const schemas = [
     actual: USER_SKILL_PG_SCHEMA,
     expected: EXPECTED_USER_SKILL_PG_SCHEMA,
     ensure: ensureUserSkillSchema,
+  },
+  {
+    name: 'AGENT_SESSION_MATERIAL_PG_SCHEMA',
+    actual: AGENT_SESSION_MATERIAL_PG_SCHEMA,
+    expected: EXPECTED_AGENT_SESSION_MATERIAL_PG_SCHEMA,
+    ensure: ensureAgentSessionMaterialSchema,
   },
 ];
 

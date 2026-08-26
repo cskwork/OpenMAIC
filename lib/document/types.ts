@@ -20,6 +20,8 @@ export interface DocumentExtractorConfig {
   accessKeySecret?: string;
   /** Allow AliDocMind to use server env credentials (trusted context only). */
   allowEnvFallback?: boolean;
+  /** Skip image extraction when the caller needs text only. */
+  textOnly?: boolean;
 }
 
 export interface DocumentExtractorInput {

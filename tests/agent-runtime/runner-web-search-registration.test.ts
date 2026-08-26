@@ -238,16 +238,22 @@ describe('web_search runner registration', () => {
       'create_skill',
       'read_skill',
       'patch_skill',
+      'fetch_url',
     ]);
     expect([...(options.allowedToolNames ?? [])].sort()).toEqual([
       'ask_user',
       'create_skill',
+      'fetch_url',
       'patch_skill',
       'read_skill',
       'web_search',
     ]);
     expect(options.systemPrompt).toContain('## Web search');
     expect(options.systemPrompt).toContain('web_search');
+    // fetch_url is always registered, so its guidance and the untrusted
+    // content policy are always in the prompt (reference semantics).
+    expect(options.systemPrompt).toContain('## untrusted_content_policy');
+    expect(options.systemPrompt).toContain('## Fetch URL');
     // The skill tools are always registered, so the ask_user-only claim is
     // never true in the runner prompt.
     expect(options.systemPrompt).not.toContain('Your only available tool is ask_user');
@@ -263,15 +269,21 @@ describe('web_search runner registration', () => {
       'create_skill',
       'read_skill',
       'patch_skill',
+      'fetch_url',
     ]);
     expect([...(options.allowedToolNames ?? [])].sort()).toEqual([
       'ask_user',
       'create_skill',
+      'fetch_url',
       'patch_skill',
       'read_skill',
     ]);
     expect(options.systemPrompt).not.toContain('web_search');
     expect(options.systemPrompt).not.toContain('## Web search');
+    // The always-registered fetch_url keeps its prompt blocks regardless of
+    // the web-search capability.
+    expect(options.systemPrompt).toContain('## untrusted_content_policy');
+    expect(options.systemPrompt).toContain('## Fetch URL');
     expect(options.systemPrompt).not.toContain('Your only available tool is ask_user');
   });
 

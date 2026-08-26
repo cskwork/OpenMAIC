@@ -1,0 +1,188 @@
+/**
+ * Session-materials host adapter tests — persistence round-trip.
+ *
+ * Drives the real `fetch_url` tool end-to-end over a PGlite-backed host: the
+ * real session store registers the observed URL, the real trust gate admits
+ * it, an injected fetch produces a page, and `createWebMaterial` persists the
+ * markdown through the real asset registry (PgAssetStore + PgAssetByteStore)
+ * and records the returned asset id on the material row — the neutral
+ * counterpart of the reference's `ossKey` linkage. The round-trip is verified
+ * by resolving the recorded asset id back to the exact bytes.
+ */
+import { PGlite } from '@electric-sql/pglite';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { PgAssetStore, ensureAssetSchema } from '@openmaic/storage/asset/pg';
+import { PgAssetByteStore } from '@openmaic/storage/asset/pg-bytes';
+import { ensureAgentSessionSchema, PgAgentSessionStore } from '@openmaic/storage/agent-session/pg';
+import { toAssetId } from '@openmaic/storage';
+import type { Queryable } from '@openmaic/storage/asset/pg';
+
+const mocks = vi.hoisted(() => ({
+  getAgentSessionStore: vi.fn(),
+  getServerPersistenceProvider: vi.fn(),
+}));
+
+vi.mock('@/lib/server/agent-runtime/store', () => ({
+  getAgentSessionStore: mocks.getAgentSessionStore,
+}));
+
+vi.mock('@/lib/persistence/server-provider', () => ({
+  getServerPersistenceProvider: mocks.getServerPersistenceProvider,
+}));
+
+import {
+  createWebMaterial,
+  getSessionMaterial,
+  listSessionMaterials,
+} from '@/lib/server/agent-runtime/session-materials';
+import { buildFetchUrlTool } from '@/lib/server/agent-runtime/fetch-url';
+import { registerSessionUrls } from '@/lib/server/agent-runtime/session-urls';
+
+let dbCounter = 0;
+
+async function makeHost() {
+  const db = new PGlite();
+  await db.waitReady;
+  await ensureAgentSessionSchema(db);
+  await ensureAssetSchema(db);
+  const assetStore = new PgAssetStore(db, {
+    withTransaction: (body) => db.transaction((tx: Queryable) => body(tx)),
+    byteStore: new PgAssetByteStore(db),
+  });
+  const sessionStore = new PgAgentSessionStore(db, {
+    withTransaction: (body) => db.transaction((tx: Queryable) => body(tx)),
+  });
+  dbCounter += 1;
+  const connectionString = `postgres://roundtrip-${dbCounter}`;
+  mocks.getAgentSessionStore.mockResolvedValue(sessionStore);
+  mocks.getServerPersistenceProvider.mockResolvedValue({ pool: db, assetStore });
+  vi.stubEnv('DATABASE_URL', connectionString);
+  return { db, assetStore, sessionStore };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.unstubAllEnvs();
+});
+
+describe('session materials persistence', () => {
+  it('persists a fetched page as a web material linking the asset id, and reads it back', async () => {
+    const { assetStore, sessionStore } = await makeHost();
+    await sessionStore.createSession({ id: 'session-1', ownerId: 'owner-a', prompt: 'p' });
+    // The trust gate admits only session-observed origins.
+    await registerSessionUrls('session-1', ['https://example.com/article'], 'user');
+
+    const markdown = '# 甲'.repeat(400);
+    const fetchUrl = vi.fn().mockResolvedValue({
+      sourceUrl: 'https://example.com/article',
+      finalUrl: 'https://example.com/article',
+      title: '示例文章',
+      markdown,
+      fetchedAt: '2026-08-16T08:00:00.000Z',
+      contentType: 'text/html',
+      truncated: false,
+      downloadedBytes: Buffer.byteLength(markdown),
+    });
+    const fetch = buildFetchUrlTool({ sessionId: 'session-1', fetchUrl });
+
+    const result = await fetch.execute(
+      'call_1',
+      { url: 'https://example.com/article' } as never,
+      undefined,
+    );
+
+    // The tool returned the material id; the row and the bytes are durable.
+    const trusted = (result.details as { trusted: { materialId: string } }).trusted;
+    expect(trusted.materialId).toMatch(/^mat_/);
+    const material = await getSessionMaterial('session-1', trusted.materialId);
+    expect(material).toMatchObject({
+      id: trusted.materialId,
+      sessionId: 'session-1',
+      kind: 'web',
+      title: '示例文章',
+      sourceUrl: 'https://example.com/article',
+      textChars: markdown.length,
+    });
+    expect(material?.textAssetId).toMatch(/^ast_/);
+
+    // The recorded asset id resolves to the exact stored bytes (hash-addressed
+    // registry linkage, the neutral counterpart of the reference ossKey).
+    const resolved = await assetStore.resolve(
+      { key: `session-materials:session-1` },
+      toAssetId(material!.textAssetId!),
+    );
+    expect(Buffer.from(resolved!.bytes).toString('utf8')).toBe(markdown);
+    expect(resolved!.mime).toBe('text/markdown');
+
+    // The session listing shows the new material newest-first.
+    const listed = await listSessionMaterials('session-1');
+    expect(listed.map((row) => row.id)).toEqual([trusted.materialId]);
+  });
+
+  it('refuses to persist when the trust gate refuses the URL', async () => {
+    const { sessionStore } = await makeHost();
+    await sessionStore.createSession({ id: 'session-1', ownerId: 'owner-a', prompt: 'p' });
+
+    const fetchUrl = vi.fn();
+    const fetch = buildFetchUrlTool({ sessionId: 'session-1', fetchUrl });
+
+    const result = await fetch.execute(
+      'call_1',
+      { url: 'https://invented.example/' } as never,
+      undefined,
+    );
+
+    expect(result).toMatchObject({ details: { trusted: { status: 'url_not_in_session' } } });
+    expect(fetchUrl).not.toHaveBeenCalled();
+    expect(await listSessionMaterials('session-1')).toEqual([]);
+  });
+
+  it('removes the stored asset when the material row cannot be created', async () => {
+    const { db } = await makeHost();
+    // No session exists, so the material INSERT fails its FK — the adapter
+    // must not leak the asset it just stored.
+    const page = {
+      sourceUrl: 'https://example.com/article',
+      finalUrl: 'https://example.com/article',
+      title: 'x',
+      markdown: 'content',
+      fetchedAt: '2026-08-16T08:00:00.000Z',
+      contentType: 'text/html',
+      truncated: false,
+      downloadedBytes: 7,
+    };
+
+    await expect(createWebMaterial('session-missing', page)).rejects.toMatchObject({
+      name: 'AgentSessionMaterialError',
+      code: 'session_missing',
+    });
+    // No material row and no orphaned asset entry for the failed session.
+    const entries = await db.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM asset_entries WHERE principal = $1`,
+      ['session-materials:session-missing'],
+    );
+    expect(entries.rows[0]!.n).toBe('0');
+  });
+
+  it('delegates reads through the session-scoped store', async () => {
+    const { sessionStore } = await makeHost();
+    await sessionStore.createSession({ id: 'session-1', ownerId: 'owner-a', prompt: 'p' });
+    await createWebMaterial('session-1', {
+      sourceUrl: 'https://example.com/a',
+      finalUrl: 'https://example.com/a',
+      title: 'a',
+      markdown: 'body',
+      fetchedAt: '2026-08-16T08:00:00.000Z',
+      contentType: 'text/html',
+      truncated: false,
+      downloadedBytes: 4,
+    });
+
+    const rows = await listSessionMaterials('session-1');
+    expect(rows).toHaveLength(1);
+    expect(await getSessionMaterial('session-1', rows[0]!.id)).not.toBeNull();
+    // A material from another session reads as absent.
+    expect(await getSessionMaterial('session-other', rows[0]!.id)).toBeNull();
+  });
+});

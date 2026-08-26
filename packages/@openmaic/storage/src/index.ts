@@ -191,3 +191,23 @@ export {
   type PgUserSkillStoreOptions,
   type UserSkillTableNames,
 } from './skill/pg.js';
+
+export {
+  AGENT_SESSION_MATERIAL_KINDS,
+  AgentSessionMaterialError,
+  createMaterialId,
+  isAgentSessionMaterialKind,
+  type AgentSessionMaterial,
+  type AgentSessionMaterialKind,
+  type AgentSessionMaterialStore,
+  type CreateAgentSessionMaterialInput,
+  type ListAgentSessionMaterialsOptions,
+} from './material/types.js';
+export {
+  AGENT_SESSION_MATERIAL_PG_SCHEMA,
+  DEFAULT_AGENT_SESSION_MATERIAL_TABLE_NAMES,
+  PgAgentSessionMaterialStore,
+  ensureAgentSessionMaterialSchema,
+  type AgentSessionMaterialTableNames,
+  type PgAgentSessionMaterialStoreOptions,
+} from './material/pg.js';
