@@ -3,7 +3,7 @@
  *
  * The backend imports no database driver; a host supplies a direct queryable,
  * exactly like the runtime / agent-session / skill backends. The row's bytes
- * live in the package's asset registry (hash-addressed byte store) and this
+ * reside in the package's asset registry (hash-addressed byte store) and this
  * backend only persists the metadata row that records the returned asset ids.
  *
  * The DDL is pinned (see `pg-schema-contract.test.ts` in the package tests):
@@ -205,7 +205,9 @@ export class PgAgentSessionMaterialStore implements AgentSessionMaterialStore {
         `INSERT INTO ${this.table}
            (id, session_id, kind, title, source_url, text_asset_id, raw_asset_id,
             text_chars, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
+         FROM agent_sessions AS session
+         WHERE session.id = $2 AND session.deleted_at IS NULL
          RETURNING *`,
         [
           id,
@@ -219,7 +221,13 @@ export class PgAgentSessionMaterialStore implements AgentSessionMaterialStore {
           createdAt,
         ],
       );
-      return mapRow(rows[0]!);
+      if (!rows[0]) {
+        throw new AgentSessionMaterialError(
+          'session_missing',
+          `session ${JSON.stringify(sessionId)} does not exist`,
+        );
+      }
+      return mapRow(rows[0]);
     } catch (error) {
       if (isForeignKeyViolation(error)) {
         throw new AgentSessionMaterialError(
@@ -243,18 +251,19 @@ export class PgAgentSessionMaterialStore implements AgentSessionMaterialStore {
       params.push(options.before);
       cursorSql = `
         AND (
-          created_at < (SELECT created_at FROM ${this.table} WHERE id = $2 AND session_id = $1)
+          material.created_at < (SELECT created_at FROM ${this.table} WHERE id = $2 AND session_id = $1)
           OR (
-            created_at = (SELECT created_at FROM ${this.table} WHERE id = $2 AND session_id = $1)
-            AND id < $2
+            material.created_at = (SELECT created_at FROM ${this.table} WHERE id = $2 AND session_id = $1)
+            AND material.id < $2
           )
         )`;
     }
     params.push(limit);
     const result = await this.queryable.query<MaterialRow>(
-      `SELECT * FROM ${this.table}
-        WHERE session_id = $1${cursorSql}
-        ORDER BY created_at DESC, id DESC
+      `SELECT material.* FROM ${this.table} AS material
+        INNER JOIN agent_sessions AS session ON session.id = material.session_id
+        WHERE material.session_id = $1 AND session.deleted_at IS NULL${cursorSql}
+        ORDER BY material.created_at DESC, material.id DESC
         LIMIT $${params.length}`,
       params,
     );
@@ -263,8 +272,9 @@ export class PgAgentSessionMaterialStore implements AgentSessionMaterialStore {
 
   async getMaterial(sessionId: string, materialId: string): Promise<AgentSessionMaterial | null> {
     const result = await this.queryable.query<MaterialRow>(
-      `SELECT * FROM ${this.table}
-        WHERE id = $1 AND session_id = $2
+      `SELECT material.* FROM ${this.table} AS material
+        INNER JOIN agent_sessions AS session ON session.id = material.session_id
+        WHERE material.id = $1 AND material.session_id = $2 AND session.deleted_at IS NULL
         LIMIT 1`,
       [materialId, sessionId],
     );

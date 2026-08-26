@@ -93,7 +93,10 @@ describe('fetch_url tool', () => {
       undefined,
     );
 
-    expect(fetchUrl).toHaveBeenCalledWith('https://example.com/article', { signal: undefined });
+    expect(fetchUrl).toHaveBeenCalledWith(
+      'https://example.com/article',
+      expect.objectContaining({ signal: undefined, isUrlAllowed: expect.any(Function) }),
+    );
     expect(saveWebMaterial).toHaveBeenCalledWith('ses_1', fetched);
     expect(result.details).toMatchObject({
       trusted: {
@@ -196,5 +199,47 @@ describe('fetch_url tool', () => {
     await expect(
       fetch.execute('call_1', { url: 'https://example.com/article' } as never, undefined),
     ).rejects.toThrow('network down');
+  });
+
+  it('rechecks the reported final URL and never persists an untrusted redirect result', async () => {
+    const isUrlAllowed = vi.fn(async (_sessionId: string, url: string) =>
+      url.startsWith('https://trusted.example/'),
+    );
+    const saveWebMaterial = vi.fn();
+    const fetch = tool({
+      isUrlAllowed,
+      fetchUrl: vi.fn().mockResolvedValue(
+        page({
+          sourceUrl: 'https://trusted.example/start',
+          finalUrl: 'https://untrusted.example/landing',
+        }),
+      ),
+      saveWebMaterial,
+    });
+
+    const result = await fetch.execute(
+      'call_1',
+      { url: 'https://trusted.example/start' } as never,
+      undefined,
+    );
+
+    expect(result).toMatchObject({ details: { trusted: { status: 'url_not_in_session' } } });
+    expect(saveWebMaterial).not.toHaveBeenCalled();
+  });
+
+  it('bounds an attacker-controlled page title in the model-visible result', async () => {
+    const fetch = tool({
+      isUrlAllowed: vi.fn().mockResolvedValue(true),
+      fetchUrl: vi.fn().mockResolvedValue(page({ title: 'T'.repeat(10_000) })),
+      saveWebMaterial: vi.fn().mockResolvedValue({ id: 'mat_title' }),
+    });
+
+    const result = await fetch.execute(
+      'call_1',
+      { url: 'https://example.com/article' } as never,
+      undefined,
+    );
+
+    expect((result.details as { untrusted: { title: string } }).untrusted.title).toHaveLength(180);
   });
 });

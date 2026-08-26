@@ -3,7 +3,7 @@
  *
  * A material is the session-visible metadata row for one persisted piece of
  * content (today: a `web` page fetched by the host's `fetch_url` tool). The
- * bytes never live on this row — they are stored through the package's
+ * bytes are not kept on this row — they are stored through the package's
  * hash-addressed asset registry/byte store and the row records the returned
  * asset ids (`textAssetId` for the extracted markdown, `rawAssetId` for the
  * optional raw download), exactly like the reference product's `ossKey`

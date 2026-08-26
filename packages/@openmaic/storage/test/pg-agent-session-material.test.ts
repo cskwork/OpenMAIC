@@ -76,6 +76,25 @@ describe('PgAgentSessionMaterialStore with PGlite', () => {
     expect(await store.listMaterials('session-1')).toEqual([]);
   });
 
+  test('fails closed for soft-deleted sessions on create, list, and read', async () => {
+    const sessionStore = new PgAgentSessionStore(db, {
+      withTransaction: (body) => db.transaction((tx: Queryable) => body(tx)),
+    });
+    await sessionStore.createSession({ id: 'session-1', ownerId: 'owner-a', prompt: 'p' });
+    const material = await store.createMaterial('session-1', {
+      kind: 'web',
+      sourceUrl: 'https://example.com/',
+    });
+
+    await sessionStore.softDeleteSession('session-1', 'owner-a');
+
+    await expect(store.getMaterial('session-1', material.id)).resolves.toBeNull();
+    await expect(store.listMaterials('session-1')).resolves.toEqual([]);
+    await expect(store.createMaterial('session-1', { kind: 'web' })).rejects.toMatchObject({
+      code: 'session_missing',
+    });
+  });
+
   test('honours the table-name override for the material table', async () => {
     const overrideDb = new PGlite();
     await overrideDb.waitReady;

@@ -1,9 +1,9 @@
 /**
  * Session-scoped web materials — host adapter.
  *
- * The durable row lives in the package's `agent_session_materials` table
+ * The durable row is stored in the package's `agent_session_materials` table
  * (create/list/read paging over `PgAgentSessionMaterialStore`, lazy-bound like
- * `store.ts` / `user-skill-store.ts`). The bytes never live on the row: the
+ * `store.ts` / `user-skill-store.ts`). The bytes are not kept on the row: the
  * extracted markdown is stored through the host's hash-addressed asset
  * registry/byte store and the row records the returned asset id — the neutral
  * counterpart of the reference's `ossKey` linkage. `fetch_url` is this
@@ -80,8 +80,9 @@ function materialPrincipal(sessionId: string): AssetPrincipal {
  * Persist a fetched web page as a session material: the extracted markdown
  * goes into the asset registry, the material row records the returned asset
  * id plus the fetch's provenance (title / source URL / text character count).
- * A material-row failure removes the just-stored asset again so the fetch
- * cannot leak orphaned bytes (reference byte-store cleanup semantics).
+ * A confirmed material-row failure removes the just-stored asset. Ambiguous
+ * database outcomes are verified before cleanup so a committed row never has
+ * its asset removed underneath it.
  */
 export async function createWebMaterial(
   sessionId: string,
@@ -93,13 +94,15 @@ export async function createWebMaterial(
   const id = createMaterialId();
   const body = Buffer.from(page.markdown, 'utf8');
   const principal = materialPrincipal(sessionId);
+  // Initialize the row store before writing bytes, narrowing the non-atomic
+  // asset/metadata handoff to the two business writes themselves.
+  const store = await getAgentSessionMaterialStore();
   const textAssetId = await provider.assetStore.put(
     principal,
     new Blob([body], { type: 'text/markdown' }),
     { contentType: 'text/markdown' },
   );
   try {
-    const store = await getAgentSessionMaterialStore();
     return await store.createMaterial(sessionId, {
       id,
       kind: 'web',
@@ -109,7 +112,16 @@ export async function createWebMaterial(
       textChars: page.markdown.length,
     });
   } catch (error) {
-    await provider.assetStore.remove(principal, textAssetId).catch(() => undefined);
+    // A database connection can fail after PostgreSQL committed the INSERT.
+    // Verify absence before compensating; otherwise cleanup could delete the
+    // asset underneath a durable material row. If verification itself fails,
+    // preserve the asset and let orphan reconciliation handle it rather than
+    // risk creating a dangling row.
+    const committed = await store.getMaterial(sessionId, id).catch(() => undefined);
+    if (committed) return committed;
+    if (committed === null) {
+      await provider.assetStore.remove(principal, textAssetId).catch(() => undefined);
+    }
     throw error;
   }
 }

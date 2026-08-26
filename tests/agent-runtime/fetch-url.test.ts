@@ -6,13 +6,14 @@
  * spellings, unsafe DNS answer sets, userinfo/nonstandard ports, redirect
  * revalidation), together with the bounded download, the anti-bot marker
  * check, the HTML→markdown golden case, the PDF provider chain, and abort
- * handling. The tool-level trust-gate refusal and persistence round-trip live
+ * handling. The tool-level trust-gate refusal and persistence round-trip are
  * in fetch-url-tool.test.ts.
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { PDFDocument } from 'pdf-lib';
 
 import { getDocumentExtractorProvider, type DocumentArtifact } from '@/lib/document';
 import {
@@ -37,6 +38,12 @@ function pdfArtifact(providerId: string, text: string): DocumentArtifact {
     blocks: [{ id: 'block-1', type: 'markdown', text }],
     assets: [],
   };
+}
+
+async function pdfBytes(pageCount = 1): Promise<Buffer> {
+  const pdf = await PDFDocument.create();
+  for (let page = 0; page < pageCount; page += 1) pdf.addPage();
+  return Buffer.from(await pdf.save());
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -83,6 +90,26 @@ describe('fetch_url network and extraction', () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
+  it('checks every redirect target with the supplied session trust gate before fetching it', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(null, {
+        status: 302,
+        headers: { location: 'https://untrusted.example/landing' },
+      }),
+    );
+    const isUrlAllowed = vi.fn().mockResolvedValue(false);
+
+    await expect(
+      fetchAndExtractUrl('https://trusted.example/start', {
+        fetchImpl,
+        dispatcher,
+        isUrlAllowed,
+      }),
+    ).rejects.toMatchObject({ reason: 'blocked' });
+    expect(isUrlAllowed).toHaveBeenCalledWith('https://untrusted.example/landing');
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
   it('streams only to the byte limit and marks the material truncated', async () => {
     const body = '正文'.repeat(300);
     const fetchImpl = vi.fn().mockResolvedValue(
@@ -102,6 +129,27 @@ describe('fetch_url network and extraction', () => {
     expect(result.truncated).toBe(true);
     expect(result.downloadedBytes).toBe(300);
     expect(Buffer.byteLength(result.markdown)).toBeLessThanOrEqual(300);
+  });
+
+  it('enforces an absolute body deadline against slow-drip responses', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      async pull(stream) {
+        stream.enqueue(new TextEncoder().encode('x'));
+        await new Promise((resolve) => setTimeout(resolve, 8));
+      },
+    });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(new Response(body, { headers: { 'content-type': 'text/plain' } }));
+
+    await expect(
+      fetchAndExtractUrl('https://example.com/slow-drip', {
+        fetchImpl,
+        dispatcher,
+        bodyTimeoutMs: 20,
+        minChars: 1,
+      }),
+    ).rejects.toMatchObject({ reason: 'network', message: /Timed out/ });
   });
 
   it('fails loudly when an anti-bot marker is returned with HTTP 200', async () => {
@@ -128,7 +176,7 @@ describe('fetch_url network and extraction', () => {
       .mockResolvedValue(pdfArtifact('mineru', 'MinerU 正文'.repeat(50)));
     const unpdfExtract = vi.spyOn(unpdf, 'extract');
     const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(Buffer.from('%PDF fixture'), {
+      new Response((await pdfBytes()) as unknown as BodyInit, {
         headers: { 'content-type': 'application/pdf' },
       }),
     );
@@ -153,7 +201,7 @@ describe('fetch_url network and extraction', () => {
       .spyOn(unpdf, 'extract')
       .mockResolvedValue(pdfArtifact('unpdf', 'unpdf 正文'.repeat(50)));
     const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(Buffer.from('%PDF fixture'), {
+      new Response((await pdfBytes()) as unknown as BodyInit, {
         headers: { 'content-type': 'application/pdf' },
       }),
     );
@@ -166,8 +214,55 @@ describe('fetch_url network and extraction', () => {
 
     expect(result.markdown).toContain('unpdf 正文');
     expect(unpdfExtract).toHaveBeenCalledWith(
-      expect.objectContaining({ config: expect.objectContaining({ providerId: 'unpdf' }) }),
+      expect.objectContaining({
+        config: expect.objectContaining({ providerId: 'unpdf', textOnly: true }),
+      }),
     );
+  });
+
+  it('limits untrusted PDFs to 50 pages before extraction', async () => {
+    vi.spyOn(providerConfig, 'getServerPDFProviders').mockReturnValue({});
+    const input = await pdfBytes(51);
+    const unpdf = getDocumentExtractorProvider('unpdf')!;
+    const unpdfExtract = vi.spyOn(unpdf, 'extract').mockImplementation(async ({ buffer }) => {
+      const prepared = await PDFDocument.load(buffer);
+      expect(prepared.getPageCount()).toBe(50);
+      return pdfArtifact('unpdf', 'bounded PDF text'.repeat(30));
+    });
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(input as unknown as BodyInit, {
+        headers: { 'content-type': 'application/pdf' },
+      }),
+    );
+
+    const result = await fetchAndExtractUrl('https://example.com/large.pdf', {
+      fetchImpl,
+      dispatcher,
+      minChars: 20,
+    });
+
+    expect(result.truncated).toBe(true);
+    expect(unpdfExtract).toHaveBeenCalledOnce();
+  });
+
+  it('caps extracted PDF text independently of the download size', async () => {
+    vi.spyOn(providerConfig, 'getServerPDFProviders').mockReturnValue({});
+    const unpdf = getDocumentExtractorProvider('unpdf')!;
+    vi.spyOn(unpdf, 'extract').mockResolvedValue(pdfArtifact('unpdf', 'x'.repeat(1_200_000)));
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response((await pdfBytes()) as unknown as BodyInit, {
+        headers: { 'content-type': 'application/pdf' },
+      }),
+    );
+
+    const result = await fetchAndExtractUrl('https://example.com/text-bomb.pdf', {
+      fetchImpl,
+      dispatcher,
+      minChars: 20,
+    });
+
+    expect(result.markdown).toHaveLength(1_000_000);
+    expect(result.truncated).toBe(true);
   });
 
   it('extracts a sub-500-character Chinese article because charThreshold is 200', () => {

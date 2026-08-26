@@ -20,7 +20,7 @@
  * untrusted}` result with the material id and a bounded first-page preview.
  *
  * STRIPPED vs the reference: `runBilledCall`/`logDocCall` (billing) and the
- * live extraction wrapper — the PDF path calls `provider.extract` directly.
+ * managed extraction wrapper — the PDF path calls `provider.extract` directly.
  */
 import { lookup as dnsLookup, type LookupAddress } from 'node:dns';
 
@@ -65,6 +65,8 @@ const MAX_REDIRECTS = 5;
 const CONNECT_TIMEOUT_MS = 5_000;
 const HEADERS_TIMEOUT_MS = 10_000;
 const BODY_TIMEOUT_MS = 30_000;
+const MAX_PDF_PAGES = 50;
+const MAX_PDF_EXTRACTED_CHARS = 1_000_000;
 const DEFAULT_BLOCKED_MARKERS = [
   '你似乎来到了没有知识存在的荒原',
   '环境异常',
@@ -74,6 +76,7 @@ const DEFAULT_BLOCKED_MARKERS = [
   'captcha',
 ];
 const FETCH_PREVIEW_CHARS = 2_000;
+const FETCH_TITLE_CHARS = 180;
 
 export type FetchUrlFailure = 'blocked' | 'empty' | 'unsupported_content_type' | 'network';
 
@@ -108,6 +111,13 @@ export interface FetchUrlOptions {
   minChars?: number;
   blockedMarkers?: string[];
   now?: () => Date;
+  /** Test seam for the absolute body-read deadline. */
+  bodyTimeoutMs?: number;
+  /**
+   * Optional session trust-gate callback. The tool supplies this so every
+   * redirect target is authorized before a connection to that target starts.
+   */
+  isUrlAllowed?: (url: string) => Promise<boolean>;
   /**
    * Per-run cancellation. Passed to the undici request and raced against the
    * body read, so a session abort stops a large download within a read chunk
@@ -198,6 +208,7 @@ async function readWithTruncation(
   response: Response,
   maxBytes: number,
   signal?: AbortSignal,
+  timeoutMs = BODY_TIMEOUT_MS,
 ): Promise<{ bytes: Buffer; truncated: boolean }> {
   if (!response.body) throw new FetchUrlError('network', 'Fetch response has no body');
   const declared = Number(response.headers.get('content-length'));
@@ -205,13 +216,20 @@ async function readWithTruncation(
   const reader = response.body.getReader();
   const chunks: Buffer[] = [];
   let total = 0;
+  // This is an absolute body deadline, not an idle timeout that a malicious
+  // peer can extend forever by dripping one byte before every reset.
+  const deadline = Date.now() + timeoutMs;
   try {
     for (;;) {
+      const remainingTime = deadline - Date.now();
+      if (remainingTime <= 0) {
+        throw new FetchUrlError('network', 'Timed out while reading response body');
+      }
       let timer: ReturnType<typeof setTimeout> | undefined;
       const timeout = new Promise<never>((_resolve, reject) => {
         timer = setTimeout(
           () => reject(new FetchUrlError('network', 'Timed out while reading response body')),
-          BODY_TIMEOUT_MS,
+          remainingTime,
         );
         timer.unref?.();
       });
@@ -245,6 +263,9 @@ async function readWithTruncation(
         }
       }
     }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
   } finally {
     reader.releaseLock();
   }
@@ -289,9 +310,8 @@ export function extractHtmlToMarkdown(
  * `documentProviderCandidates('application/pdf')` but over the TARGET's own
  * lib/document extract registry: server-configured managed providers first
  * (mineru → mineru-cloud → alidocmind), then the unconditional local `unpdf`
- * fallback. The reference's `cogevol_maas_pdf` gateway has no neutral
- * counterpart here and is omitted; billing (`runBilledCall`/`logDocCall`) is
- * not part of this path — `provider.extract` is called directly.
+ * fallback. Product-specific gateways and accounting wrappers are omitted;
+ * `provider.extract` is called directly.
  */
 function pdfExtractionCandidates(): Array<{
   provider: DocumentExtractorProvider;
@@ -314,6 +334,9 @@ function pdfExtractionCandidates(): Array<{
           apiKey: resolvePDFApiKey(id) || undefined,
           baseUrl: resolvePDFBaseUrl(id),
           allowEnvFallback: true,
+          // fetch_url persists and returns text only. Avoid materializing
+          // attacker-controlled PDF rasters in the application process.
+          textOnly: true,
         },
       };
     })
@@ -321,7 +344,9 @@ function pdfExtractionCandidates(): Array<{
     .filter((candidate) => candidate.provider.supportedMimeTypes.includes('application/pdf'));
 }
 
-async function extractPdfToMarkdown(bytes: Buffer): Promise<{ title: string; markdown: string }> {
+async function extractPdfToMarkdown(
+  bytes: Buffer,
+): Promise<{ title: string; markdown: string; truncated: boolean }> {
   const failures: string[] = [];
   for (const { provider, config } of pdfExtractionCandidates()) {
     try {
@@ -332,15 +357,30 @@ async function extractPdfToMarkdown(bytes: Buffer): Promise<{ title: string; mar
         mimeType: 'application/pdf',
         config,
       });
+      const chunks: string[] = [];
+      let chars = 0;
+      let truncated = false;
+      for (const block of artifact.blocks) {
+        if (block.type !== 'text' && block.type !== 'markdown') continue;
+        const text = block.text?.trim();
+        if (!text) continue;
+        const separator = chunks.length > 0 ? '\n\n' : '';
+        const remaining = MAX_PDF_EXTRACTED_CHARS - chars - separator.length;
+        if (remaining <= 0) {
+          truncated = true;
+          break;
+        }
+        chunks.push(`${separator}${text.slice(0, remaining)}`);
+        chars += separator.length + Math.min(text.length, remaining);
+        if (text.length > remaining) {
+          truncated = true;
+          break;
+        }
+      }
       return {
         title: artifact.metadata.fileName ?? '',
-        markdown: cleanMarkdown(
-          artifact.blocks
-            .filter((block) => block.type === 'text' || block.type === 'markdown')
-            .map((block) => block.text?.trim())
-            .filter((text): text is string => !!text)
-            .join('\n\n'),
-        ),
+        markdown: cleanMarkdown(chunks.join('')),
+        truncated,
       };
     } catch (error) {
       failures.push(`${provider.id}: ${error instanceof Error ? error.message : String(error)}`);
@@ -351,6 +391,21 @@ async function extractPdfToMarkdown(bytes: Buffer): Promise<{ title: string; mar
       ? `PDF extraction failed: ${failures.join('; ')}`
       : 'No configured PDF extractor is available',
   );
+}
+
+/** Bound page fan-out before any configured PDF extractor sees the document. */
+async function truncatePdfPages(bytes: Buffer): Promise<{ bytes: Buffer; truncated: boolean }> {
+  const { PDFDocument } = await import('pdf-lib');
+  const source = await PDFDocument.load(bytes, { ignoreEncryption: true });
+  const pages = source.getPageCount();
+  if (pages <= MAX_PDF_PAGES) return { bytes, truncated: false };
+  const target = await PDFDocument.create();
+  const copied = await target.copyPages(
+    source,
+    Array.from({ length: MAX_PDF_PAGES }, (_, index) => index),
+  );
+  for (const page of copied) target.addPage(page);
+  return { bytes: Buffer.from(await target.save()), truncated: true };
 }
 
 function contentThreshold(): number {
@@ -396,6 +451,7 @@ export async function fetchAndExtractUrl(
   const dispatcher = options.dispatcher ?? ownedAgent!;
   const fetchImpl = options.fetchImpl ?? (undiciFetch as unknown as FetchImplementation);
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+  const bodyTimeoutMs = options.bodyTimeoutMs ?? BODY_TIMEOUT_MS;
   let current = source;
   let headers: Record<string, string> = { accept: [...ALLOWED_CONTENT_TYPES].join(', ') };
   try {
@@ -411,7 +467,7 @@ export async function fetchAndExtractUrl(
         headers,
         dispatcher,
         headersTimeout: HEADERS_TIMEOUT_MS,
-        bodyTimeout: BODY_TIMEOUT_MS,
+        bodyTimeout: bodyTimeoutMs,
         ...(options.signal ? { signal: options.signal } : {}),
       } as UndiciRequestInit & { headersTimeout: number; bodyTimeout: number });
       if (response.status >= 300 && response.status < 400) {
@@ -421,11 +477,17 @@ export async function fetchAndExtractUrl(
         const location = response.headers.get('location');
         if (!location) throw new FetchUrlError('network', 'Redirect response has no Location');
         const next = normalizeUrlForStrictFetch(new URL(location, current).href);
+        await response.body?.cancel().catch(() => undefined);
+        if (options.isUrlAllowed && !(await options.isUrlAllowed(next.href))) {
+          throw new FetchUrlError(
+            'blocked',
+            'Redirect target is not allowed by the session URL trust gate',
+          );
+        }
         if (next.origin !== current.origin) {
           const { authorization: _authorization, cookie: _cookie, ...safeHeaders } = headers;
           headers = safeHeaders;
         }
-        await response.body?.cancel().catch(() => undefined);
         current = next;
         continue;
       }
@@ -441,7 +503,12 @@ export async function fetchAndExtractUrl(
           `Unsupported content type: ${contentType || '(missing)'}`,
         );
       }
-      const downloaded = await readWithTruncation(response, maxBytes, options.signal);
+      const downloaded = await readWithTruncation(
+        response,
+        maxBytes,
+        options.signal,
+        bodyTimeoutMs,
+      );
       const markers = options.blockedMarkers ?? antiBotMarkers();
       if (contentType !== 'application/pdf') {
         const blocked = matchingBlockedMarker(downloaded.bytes.toString('utf8'), markers);
@@ -452,11 +519,13 @@ export async function fetchAndExtractUrl(
           );
         }
       }
-      let extracted: { title: string; markdown: string };
+      let extracted: { title: string; markdown: string; truncated?: boolean };
       if (contentType === 'text/html' || contentType === 'application/xhtml+xml') {
         extracted = extractHtmlToMarkdown(downloaded.bytes.toString('utf8'), current.href);
       } else if (contentType === 'application/pdf') {
-        extracted = await extractPdfToMarkdown(downloaded.bytes);
+        const prepared = await truncatePdfPages(downloaded.bytes);
+        extracted = await extractPdfToMarkdown(prepared.bytes);
+        downloaded.truncated ||= prepared.truncated || extracted.truncated === true;
       } else {
         extracted = { title: '', markdown: cleanMarkdown(downloaded.bytes.toString('utf8')) };
       }
@@ -568,7 +637,25 @@ export function buildFetchUrlTool(deps: FetchUrlToolDependencies): AgentTool<nev
         };
       }
       throwIfAborted(signal);
-      const page = await fetchUrl(params.url, { signal });
+      const page = await fetchUrl(params.url, {
+        signal,
+        isUrlAllowed: (url) => urlAllowed(deps.sessionId, url),
+      });
+      throwIfAborted(signal);
+      // Defense in depth for injected transports and future fetch engines:
+      // never persist or return content unless the URL actually reported as
+      // final is still within a session-observed origin.
+      if (!(await urlAllowed(deps.sessionId, page.finalUrl))) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: 'URL is not allowed: the fetched page redirected to an origin that was not previously seen in this session.',
+            },
+          ],
+          details: { trusted: { status: 'url_not_in_session' as const } },
+        };
+      }
       throwIfAborted(signal);
       const record = await saveWebMaterial(deps.sessionId, page);
       throwIfAborted(signal);
@@ -582,7 +669,11 @@ export function buildFetchUrlTool(deps: FetchUrlToolDependencies): AgentTool<nev
         truncated: page.truncated,
         ...(nextOffset !== undefined ? { nextOffset } : {}),
       };
-      const untrusted = { url: page.finalUrl, title: page.title, content: preview };
+      const untrusted = {
+        url: page.finalUrl,
+        title: page.title.slice(0, FETCH_TITLE_CHARS),
+        content: preview,
+      };
       const structured = { trusted, untrusted };
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(structured, null, 2) }],
