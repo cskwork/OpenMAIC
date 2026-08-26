@@ -157,6 +157,13 @@ export interface TTSModelConfig {
   speed?: number;
   format?: string;
   providerOptions?: Record<string, unknown>;
+  /**
+   * Cancel the provider request(s) when this signal aborts. The agent runtime
+   * threads the session cancel signal here so an in-flight synthesis fetch is
+   * aborted within seconds of a cancel, instead of wedging the session until a
+   * restart repairs it.
+   */
+  signal?: AbortSignal;
 }
 
 // ============================================================================
