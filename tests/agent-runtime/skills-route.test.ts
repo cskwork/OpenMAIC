@@ -5,9 +5,11 @@ const mocks = vi.hoisted(() => ({
   withRequestOwnerId: vi.fn(),
   listSkills: vi.fn(),
   isAgentRuntimeEnabled: vi.fn(() => true),
+  isAgentRuntimeConfigured: vi.fn(() => true),
 }));
 vi.mock('@/lib/config/feature-flags', () => ({
   isAgentRuntimeEnabled: mocks.isAgentRuntimeEnabled,
+  isAgentRuntimeConfigured: mocks.isAgentRuntimeEnabled,
 }));
 vi.mock('@/lib/server/agent-runtime/with-owner', () => ({
   withRequestOwnerId: mocks.withRequestOwnerId,

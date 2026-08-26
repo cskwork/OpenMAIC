@@ -3,7 +3,10 @@ import { NextRequest } from 'next/server';
 
 const mocks = vi.hoisted(() => ({ getSession: vi.fn() }));
 
-vi.mock('@/lib/config/feature-flags', () => ({ isAgentRuntimeEnabled: () => true }));
+vi.mock('@/lib/config/feature-flags', () => ({
+  isAgentRuntimeEnabled: () => true,
+  isAgentRuntimeConfigured: () => true,
+}));
 vi.mock('@/lib/server/agent-runtime/owner', () => ({
   resolveRequestOwnerId: () => 'owner-1',
 }));
