@@ -268,14 +268,19 @@ describe('web_search runner registration', () => {
       'list_materials',
       'read_material',
       'search_material',
+      'list_voices',
+      'set_roster',
+      'clip_audio',
     ]);
     expect([...(options.allowedToolNames ?? [])].sort()).toEqual([
       'ask_user',
+      'clip_audio',
       'create_skill',
       'create_stage',
       'fetch_url',
       'grep_stage',
       'list_materials',
+      'list_voices',
       'patch_skill',
       'patch_stage',
       'read_material',
@@ -283,6 +288,7 @@ describe('web_search runner registration', () => {
       'read_stage',
       'read_stage_outline',
       'search_material',
+      'set_roster',
       'web_search',
     ]);
     expect(options.systemPrompt).toContain('## Web search');
@@ -315,14 +321,19 @@ describe('web_search runner registration', () => {
       'list_materials',
       'read_material',
       'search_material',
+      'list_voices',
+      'set_roster',
+      'clip_audio',
     ]);
     expect([...(options.allowedToolNames ?? [])].sort()).toEqual([
       'ask_user',
+      'clip_audio',
       'create_skill',
       'create_stage',
       'fetch_url',
       'grep_stage',
       'list_materials',
+      'list_voices',
       'patch_skill',
       'patch_stage',
       'read_material',
@@ -330,6 +341,7 @@ describe('web_search runner registration', () => {
       'read_stage',
       'read_stage_outline',
       'search_material',
+      'set_roster',
     ]);
     expect(options.systemPrompt).not.toContain('web_search');
     expect(options.systemPrompt).not.toContain('## Web search');
