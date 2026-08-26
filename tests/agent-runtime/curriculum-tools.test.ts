@@ -9,8 +9,7 @@
  *    mint is refused fail-closed;
  *  - create_stage mints the document skeleton through the store with
  *    server-job producer semantics;
- *  - every tool is OWNER-scoped: through the owner-bound store a foreign or
- *    missing stage reads as absent and is refused (never confirmed);
+ *  - mutations and listings are owner-scoped while reads are capability-by-id;
  *  - every execute takes pi's 3rd `signal` argument and re-checks it at each
  *    IO boundary: a pre-aborted signal throws before any work;
  *  - read_stage_outline renders the outline/scene UNION view (planned pages
@@ -499,9 +498,7 @@ describe('read_stage_outline', () => {
     });
   });
 
-  it('refuses a stage the owner does not own (owner-bound store reads it as absent)', async () => {
-    // Through the owner-scoped store a foreign or missing stage loads as null,
-    // so the tool refuses fail-closed without ever confirming the id.
+  it('refuses a stage id that does not resolve to a document', async () => {
     const deps = makeDeps({ store: makeStore(null) });
     const result = await runTool(deps, 'read_stage_outline', { stageId: 'stage-x' });
     expect(result.isError).toBe(true);

@@ -208,14 +208,18 @@ describe('PgDocumentStore Postgres behavior', () => {
     }
   });
 
-  test('owner scopes isolate the full contract and cannot claim an existing stage id', async () => {
+  test('owner scopes filter lists and writes while reads remain capability-by-id', async () => {
     const alice = store.forOwner('anon:alice');
     const bob = store.forOwner('anon:bob');
     await alice.saveDocument(makeDocument('alice-stage'));
     await bob.saveDocument(makeDocument('bob-stage'));
 
-    await expect(alice.loadDocument('bob-stage')).resolves.toBeNull();
-    await expect(bob.getScene('alice-stage', 'scene-a')).resolves.toBeNull();
+    await expect(alice.loadDocument('bob-stage')).resolves.toMatchObject({
+      stage: { id: 'bob-stage' },
+    });
+    await expect(bob.getScene('alice-stage', 'scene-a')).resolves.toMatchObject({
+      stageId: 'alice-stage',
+    });
     await expect(alice.listDocuments()).resolves.toEqual([
       expect.objectContaining({ id: 'alice-stage' }),
     ]);
@@ -255,7 +259,9 @@ describe('PgDocumentStore Postgres behavior', () => {
         ).rows,
       ),
     ).toBe(beforeRows);
-    await expect(store.loadDocument('agent-stage')).resolves.toBeNull();
+    await expect(store.loadDocument('agent-stage')).resolves.toMatchObject({
+      stage: { id: 'agent-stage' },
+    });
   });
 
   test('requires a transaction hook at construction time', () => {

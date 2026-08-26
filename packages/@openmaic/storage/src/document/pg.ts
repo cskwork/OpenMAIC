@@ -48,10 +48,7 @@ export interface PgDocumentStoreOptions {
   validateScene?: SceneValidator;
   /** Stage write-boundary validator. Defaults to the DSL validateStage. */
   validateStage?: StageValidator;
-  /**
-   * Restrict every read and write to this owner. Omit this for the historical
-   * client-owned partition, whose rows have a null `owner_id`.
-   */
+  /** Restrict writes, listings, and folders to this owner. Reads remain id-capable. */
   ownerId?: string;
 }
 
@@ -253,7 +250,7 @@ export class PgDocumentStore<TScene extends SceneLike = Scene, TStage extends St
     this.options = options;
   }
 
-  /** Bind the complete document contract to one trusted owner identity. */
+  /** Bind document writes, listings, and folders to one trusted owner identity. */
   forOwner(ownerId: string): PgDocumentStore<TScene, TStage> {
     return new PgDocumentStore(this.queryable, { ...this.options, ownerId });
   }
@@ -293,8 +290,8 @@ export class PgDocumentStore<TScene extends SceneLike = Scene, TStage extends St
     const result = await queryable.query<StoredJsonRow>(
       `SELECT data
          FROM document_stages
-        WHERE id = $1 AND ${this.scopePredicate('', 2)}${suffix}`,
-      this.scopeParams(stageId),
+        WHERE id = $1${suffix}`,
+      [stageId],
     );
     const storedRow = result.rows[0];
     if (!storedRow) return undefined;

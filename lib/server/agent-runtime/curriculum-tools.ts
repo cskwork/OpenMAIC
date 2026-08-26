@@ -4,11 +4,9 @@
  * per unit/day), organize them into folders, rename them, and read cross-stage
  * outlines for chaining.
  *
- * Every tool is scoped to the run's owner: the store handed to these tools is
- * the owner-bound `PgDocumentStore` (`documentStore.forOwner(ownerId)`), so a
- * foreign stage is indistinguishable from a missing one — fail-closed, never
- * confirming another tenant's id. Every execute takes pi's 3rd `signal`
- * argument and re-checks it at each IO boundary.
+ * Every mutation and library listing is scoped to the run's owner. Direct
+ * reads remain capability-by-id, matching shared course links. Every execute
+ * takes pi's 3rd `signal` argument and re-checks it at each IO boundary.
  */
 import { Type, type Static } from 'typebox';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
@@ -165,10 +163,8 @@ export function buildCurriculumTools(deps: CurriculumToolDeps): AgentTool<never,
       // after a crash between the save and the result checkpoint) derives the
       // SAME stage id, so the retry lands on the stage the original already
       // minted instead of casting a second orphan course. The store is
-      // owner-bound, so `loadDocument` only ever returns a stage this owner
-      // owns — a foreign document at the same id reads as absent and the
-      // `saveDocument` below refuses it (the owner scope is enforced inside
-      // the write transaction).
+      // owner-bound. A foreign document at the same id is readable, but its
+      // producer marker cannot match this session and the write gate refuses it.
       const stageId = stageIdForCall(deps.sessionId, callId);
       const existing = await deps.store.loadDocument(stageId);
       if (signal?.aborted) throw new Error('aborted');
@@ -441,13 +437,10 @@ export function buildCurriculumTools(deps: CurriculumToolDeps): AgentTool<never,
     name: 'read_stage_outline',
     label: 'Read stage outline',
     description:
-      'Read the OUTLINE of any stage this session user owns (title + page list with order/title/type — not page content). Use to chain stages in a series: see what a previous day covered before planning the next.',
+      'Read the OUTLINE of a stage whose id is available to this session (title + page list with order/title/type — not page content). Use to chain stages in a series: see what a previous day covered before planning the next.',
     parameters: ReadStageOutlineParams,
     async execute(_id, params: Static<typeof ReadStageOutlineParams>, signal) {
       if (signal?.aborted) throw new Error('aborted');
-      // The owner-bound store is the fail-closed probe: a foreign or missing
-      // stage reads as absent, so the refusal below never confirms another
-      // tenant's id.
       const doc = await deps.store.loadDocument(params.stageId);
       if (signal?.aborted) throw new Error('aborted');
       if (!doc) return notYoursResult(`Stage "${params.stageId}"`);

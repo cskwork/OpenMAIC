@@ -10,9 +10,8 @@
  * What this layer owns:
  *
  *  - **Owner-scoped writes.** Every tool receives ONE store bound to the run's
- *    session owner (`pgDocuments.forOwner(ownerId)` in `runner.ts`). The owner
- *    never appears in a model-visible parameter; a stage owned by another
- *    owner reads as missing and cannot be written.
+ *    session owner. The owner never appears in a model-visible parameter;
+ *    stages are readable by id, while foreign writes are refused.
  *  - **Sequential scheduling for document writers.** `patch_stage` loads the
  *    whole document, applies its change in memory and writes the scene back.
  *    The agent routinely emits several writers as PARALLEL tool calls in one

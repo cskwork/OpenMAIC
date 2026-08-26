@@ -1,12 +1,9 @@
 /**
  * Shared in-memory DocumentStore facade for the stage route tests.
  *
- * The routes reach the store through `getOwnerScopedDocumentStore`, which
- * binds the provider's document store to the request owner with `forOwner`.
- * Route tests mock `@/lib/persistence/server-provider` to return THIS facade,
- * already scoped to one owner: seeding it with a document is "a document this
- * owner owns", and an id absent from it reads as missing — the same
- * no-existence-oracle the real owner-bound store produces for a foreign id.
+ * Route tests inject this facade at `getOwnerScopedDocumentStore`. It already
+ * represents one owner: seeding it with a document means that owner may mutate
+ * it, and an absent id is missing.
  */
 import type { DocumentStore, MaicDocument } from '@openmaic/storage';
 

@@ -19,11 +19,6 @@ import { buildAgent } from '@/lib/agent/runtime/build-agent';
 import { createCallLlmStreamFn } from '@/lib/agent/runtime/stream-fn';
 import { HOST_AGENT_LIFECYCLE as LIFECYCLE } from '@/lib/agent-runtime/lifecycle';
 import { createLogger } from '@/lib/logger';
-import { withPlainJsonDocumentWrites } from '@/lib/document-store/plain-json-store';
-import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
-import type { AppScene } from '@/lib/types/stage';
-import type { AppStage } from '@/lib/document-store/persistence-types';
-import type { DocumentStore } from '@openmaic/storage';
 
 import { resolveAgentDriverModel } from './agent-driver-model';
 import { buildAskUserTool } from './ask-user';
@@ -74,6 +69,7 @@ import {
   type PendingToolCall,
 } from './tool-call-integrity';
 import { getAgentSessionStore } from './store';
+import { getOwnerScopedDocumentStore } from './owner-scoped-documents';
 
 const log = createLogger('AgentRunner');
 const WORKER_ID = `${randomUUID().slice(0, 8)}:${process.pid}`;
@@ -737,18 +733,15 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
         ]
       : [];
     // The owner-bound document store: ONE store per run, bound to the claimed
-    // session's owner (`forOwner`), shared by every stage tool. The owner id is
+    // session's owner, shared by every stage tool. The owner id is
     // deliberately absent from every model-visible parameter — the model cannot
-    // forge a target owner, and a stage owned by another owner reads as missing
-    // and cannot be written. `withPlainJsonDocumentWrites` strips
+    // forge a target owner. Reads are capability-by-id and foreign writes are
+    // refused. `withPlainJsonDocumentWrites` strips
     // undefined-valued members at the write boundary so a JSON pointer `set`
     // that carries them never persists a JSON-null key (reference semantics).
     // `getAgentSessionStore` above already guards on DATABASE_URL, so the
     // provider can only be reached with a configured connection string.
-    const { documentStore } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
-    const ownerScopedStore = withPlainJsonDocumentWrites(
-      documentStore.forOwner(meta.ownerId) as unknown as DocumentStore<AppScene, AppStage>,
-    ) as CourseStore;
+    const ownerScopedStore = (await getOwnerScopedDocumentStore(meta.ownerId)) as CourseStore;
     // The stage read/patch toolset and the stage-level CRUD it needs. All of
     // them write through `ownerScopedStore`; patch_stage is marked sequential
     // by the shared STAGE_WRITER_TOOL_NAMES registry (course-tools.ts).

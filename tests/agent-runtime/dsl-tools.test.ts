@@ -1259,11 +1259,8 @@ describe('grep_stage source scope searches the bounded projection (R6-P2-6)', ()
 /**
  * Cross-owner isolation through the run's OWNER-BOUND store.
  *
- * The runner binds ONE store per run: `documentStore.forOwner(ownerId)`, the
- * same seam the storage package contracts. These tests drive the real
- * `PgDocumentStore` owner scope over PGlite through the actual tool entry
- * points, so "a stage owned by another owner is not readable or patchable"
- * is asserted against the SQL scope predicate, not a hand-written fake.
+ * These tests drive the package's capability-read and owner-write contract
+ * over PGlite through the actual tool entry points.
  */
 describe('cross-owner isolation (owner-scoped store)', () => {
   let db: PGlite;
@@ -1308,7 +1305,7 @@ describe('cross-owner isolation (owner-scoped store)', () => {
     await db.close();
   });
 
-  it('a stage owned by another owner is not readable or patchable through the run store', async () => {
+  it('a foreign stage is readable by id but not patchable through the run store', async () => {
     const alice = toolsFor('anon:alice', 'session-alice');
     const bob = toolsFor('anon:bob', 'session-bob');
 
@@ -1319,14 +1316,15 @@ describe('cross-owner isolation (owner-scoped store)', () => {
     expect(created.isError).toBeUndefined();
     const stageId = created.details.stageId;
 
-    // Bob's read_stage on Alice's stage: fail-closed "not found or not
-    // accessible" — never a confirmation that the id exists.
+    // Holding the id grants read access.
     const foreignRead = (await bob.readStage.execute('read-1', {
       stageId,
       path: '/scenes/1',
     } as never)) as { isError?: boolean; content: { text: string }[] };
-    expect(foreignRead.isError).toBe(true);
-    expect(foreignRead.content[0]!.text).toContain('not accessible');
+    expect(foreignRead.isError).toBeUndefined();
+    expect(JSON.parse(foreignRead.content[0]!.text)).toMatchObject({
+      scene: { stageId },
+    });
 
     // Bob's patch_stage on Alice's stage: refused, nothing persisted.
     const foreignPatch = (await bob.patchStage.execute('patch-1', {
@@ -1346,11 +1344,12 @@ describe('cross-owner isolation (owner-scoped store)', () => {
     expect(JSON.parse(ownRead.content[0]!.text)).toMatchObject({
       stage: { id: stageId, name: 'Alice stage' },
     });
-    // Bob's store can never list Alice's stage.
-    await expect(bob.store.loadDocument(stageId)).resolves.toBeNull();
+    await expect(bob.store.loadDocument(stageId)).resolves.toMatchObject({
+      stage: { id: stageId },
+    });
   });
 
-  it('an owner can read and patch only what its own store sees, after another owner wrote it', async () => {
+  it('each owner list contains only that owner’s stage', async () => {
     const alice = toolsFor('anon:alice', 'session-alice');
     const bob = toolsFor('anon:bob', 'session-bob');
 
@@ -1367,7 +1366,7 @@ describe('cross-owner isolation (owner-scoped store)', () => {
     expect(bobCreated.isError).toBeUndefined();
     expect(bobCreated.details.stageId).not.toBe(stageId);
 
-    // Each owner reads exactly their own document.
+    // Direct reads resolve by id; library listings remain owner-filtered.
     const bobList = await bob.store.loadDocument(bobCreated.details.stageId);
     expect(bobList?.stage.name).toBe('Bob stage');
     expect(bobList?.stage.id).not.toBe(stageId);
