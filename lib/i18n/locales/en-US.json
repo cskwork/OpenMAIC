@@ -1807,6 +1807,24 @@
     "alidocmindAccessKeyId": "AccessKey ID",
     "alidocmindAccessKeySecret": "AccessKey Secret"
   },
+  "workspace": {
+    "untitledCourse": "Untitled course",
+    "sceneCount": "{{count}} pages",
+    "sceneCount_one": "{{count}} page",
+    "sceneCount_other": "{{count}} pages",
+    "courseLinkHint": "Open {{name}} in the right pane",
+    "courseLinkMore": "{{count}} more classroom(s)",
+    "courseMention": {
+      "title": "Reference a classroom for this message",
+      "empty": "No classroom matches",
+      "alreadyNamed": "Already referenced",
+      "remove": "Remove {{name}}",
+      "pillHint": "This message references {{name}}",
+      "notAccepted": "The classroom you referenced did not take effect while the server is deploying. Please resend shortly.",
+      "reference": "Reference {{name}}",
+      "capped": "Showing the first {{count}} — keep typing to narrow it down"
+    }
+  },
   "profile": {
     "title": "Profile",
     "defaultNickname": "Learner",
@@ -1857,24 +1875,6 @@
     "placeholder": "Access code",
     "error": "Invalid access code. Please try again."
   },
-  "workspace": {
-    "untitledCourse": "Untitled course",
-    "sceneCount": "{{count}} pages",
-    "sceneCount_one": "{{count}} page",
-    "sceneCount_other": "{{count}} pages",
-    "courseLinkHint": "Open {{name}} in the right pane",
-    "courseLinkMore": "{{count}} more classroom(s)",
-    "courseMention": {
-      "title": "Reference a classroom for this message",
-      "empty": "No classroom matches",
-      "alreadyNamed": "Already referenced",
-      "remove": "Remove {{name}}",
-      "pillHint": "This message references {{name}}",
-      "notAccepted": "The classroom you referenced did not take effect while the server is deploying. Please resend shortly.",
-      "reference": "Reference {{name}}",
-      "capped": "Showing the first {{count}} — keep typing to narrow it down"
-    }
-  },
   "proMode": {
     "attach": "Attach material",
     "mentionCourse": "Reference a classroom",
@@ -1887,5 +1887,16 @@
     "skillsLoadFailed": "Skills failed to load. Click to retry",
     "retrySkills": "Retry",
     "noSkillMatch": "No Skills match “{{query}}”"
+  },
+  "workbench": {
+    "tool": {
+      "label": {
+        "extractMaterial": null,
+        "waitMaterials": null
+      },
+      "error": {
+        "materialExtraction": null
+      }
+    }
   }
 }
