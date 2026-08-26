@@ -39,7 +39,7 @@ describe('when the caret is in a slash query', () => {
   /**
    * THE BUG. The old rule asked the WHOLE DRAFT two questions — does it start with
    * `/`, and does it contain whitespace — so one handle already in the box made
-   * every later `/` inert: `写 /stage` opened nothing, and neither did a second
+   * every later `/` inert: `write /stage` opened nothing, and neither did a second
    * handle after the first.
    */
   it('follows the caret, so a second handle triggers like the first', () => {
@@ -74,7 +74,7 @@ describe('writing a handle into the draft', () => {
   const atEnd = (draft: string, name: string) => insertSkillHandle(draft, name, draft.length);
 
   it('replaces the half-typed query it was picked from', () => {
-    // Otherwise `/课` would stay in the sentence in front of the real handle.
+    // Otherwise the half-typed query would stay in the sentence in front of the real handle.
     expect(atEnd('/课', 'stage-design')).toEqual({
       draft: '/stage-design ',
       caret: '/stage-design '.length,

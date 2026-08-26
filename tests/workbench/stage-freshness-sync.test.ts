@@ -364,48 +364,48 @@ describe('AC1: 另一个会话改这门课 → 画布收敛（判据在画布拿
     await mount();
     const source = MockEventSource.instances[0]!;
 
-    // 初始同步：manifest + 整档读，画布拿到 3 个场景。
+    // Initial sync: manifest + full document read; the canvas holds 3 scenes.
     expect(mocks.stageState.scenes).toHaveLength(3);
     expect(mocks.loadCount).toBe(1);
 
-    // 「另一个会话」写入 scene-2：manifest rev 变化 + 触发器发出的帧。
+    // Another session wrote scene-2: the manifest rev changed and the trigger emitted a frame.
     bumpSceneRev('scene-2');
     await act(async () => source.emitFreshness());
 
-    // 判据：画布实际拿到的 scene-2 数据是新版本。
+    // Criterion: the scene-2 the canvas actually holds is the new version.
     const canvasScene2 = mocks.stageState.scenes.find((s) => s.id === 'scene-2');
     expect(canvasScene2).toMatchObject({ title: 'scene-2 v2' });
     expect(
       (canvasScene2!.content as { canvas: { elements: { prompt: string }[] } }).canvas.elements[0]
         .prompt,
     ).toBe('p-scene-2-2');
-    // 未变化的场景引用保持稳定（稳定引用轴）。
+    // Unchanged scenes keep their object identity (the stable-reference axis).
     const s1 = mocks.stageState.scenes.find((s) => s.id === 'scene-1');
     const s3 = mocks.stageState.scenes.find((s) => s.id === 'scene-3');
     expect(s1).toMatchObject({ title: 'scene-1 v1' });
     expect(s3).toMatchObject({ title: 'scene-3 v1' });
-    // 全程没有第二次整档读——只重取了变化场景。
+    // No second full read anywhere — only the changed scene was re-fetched.
     expect(mocks.loadCount).toBe(1);
   });
 
   it('FAULT INJECTION: freshness 帧不重取整档——只有该场景的批量请求发生（AC2 判据：ids 与体量）', async () => {
     await mount();
     const source = MockEventSource.instances[0]!;
-    // 一次运行里连续 5 次单场景写入。
+    // Five consecutive single-scene writes in one run.
     for (let i = 0; i < 5; i += 1) {
       bumpSceneRev('scene-2');
       await act(async () => source.emitFreshness());
     }
-    // 每次只重取 scene-2 一个 id。
+    // Each pass re-fetches exactly the one id, scene-2.
     expect(mocks.batchCalls).toHaveLength(5);
     for (const ids of mocks.batchCalls) {
       expect(ids).toEqual(['scene-2']);
     }
-    // 体量：单场景批量（14.5kB 量级）而非整档（100kB 量级）。
+    // Volume: a single-scene batch (~14.5kB) rather than the whole document (~100kB).
     const perBatch = mocks.batchBytes / mocks.batchCalls.length;
     expect(mocks.batchBytes).toBeLessThan(50_000);
     expect(perBatch).toBeLessThan(20_000);
-    // 稳态请求数（改后）：mount 1 次整档读 + N 次 manifest + N 次单场景批量。
+    // Steady-state request count (after the fix): 1 full read at mount + N manifests + N single-scene batches.
     expect(mocks.loadCount).toBe(1);
     expect(mocks.manifestFetchCount).toBe(1 + 5);
     expect(mocks.batchCalls.length).toBe(5);
@@ -469,7 +469,7 @@ describe('AC3: 新增/删除场景都能正确反映', () => {
     await mount();
     const source = MockEventSource.instances[0]!;
 
-    // 新增 scene-4 + 删除 scene-1。
+    // scene-4 added, scene-1 removed.
     mocks.sceneContent['scene-4'] = sceneData('scene-4', 1, 3);
     manifestWith({
       rev: 3,
@@ -483,9 +483,9 @@ describe('AC3: 新增/删除场景都能正确反映', () => {
 
     const ids = mocks.stageState.scenes.map((s) => s.id as string);
     expect(ids).toEqual(['scene-2', 'scene-3', 'scene-4']);
-    // 新增的场景只请求新增 id 本身（deleted 由本地 diff 处理，不请求）。
+    // The added scene is fetched by its own id only (removals are handled by the local diff, not fetched).
     expect(mocks.batchCalls.at(-1)).toEqual(['scene-4']);
-    // 画布上的 scene-4 是真实数据。
+    // The scene-4 on the canvas is real data.
     expect(mocks.stageState.scenes.find((s) => s.id === 'scene-4')).toMatchObject({
       title: 'scene-4 v1',
     });
@@ -498,17 +498,17 @@ describe('AC4: freshness 流断开 → 兜底周期内仍收敛（绝对时间�
     await mount();
     const source = MockEventSource.instances[0]!;
 
-    // 流断开：之后的写入没有任何帧会到达。
+    // The stream is down: no frame for any later write will arrive.
     await act(async () => source.error());
 
-    // 外部写入（另一个会话）改一个场景——流断了，画布不知道。
+    // An external write (another session) changes a scene — the stream is down, so the canvas cannot know.
     bumpSceneRev('scene-1');
     expect(mocks.stageState.scenes.find((s) => s.id === 'scene-1')).toMatchObject({
       title: 'scene-1 v1',
     });
 
-    // 兜底周期（30s±20% → ≤36s）：断言绝对上界 45s，写死、不导入实现常量。
-    // 若实现把兜底改到 45s 之外，这里的「已收敛」会红。
+    // Fallback period (30s ±20% → ≤36s): assert an absolute cap of 45s, hard-coded, not imported from the implementation.
+    // If the implementation moved the fallback beyond 45s, this "converged" assertion would fail.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(45_000);
     });
@@ -524,19 +524,19 @@ describe('AC5: tab focus / 重连各触发一次 manifest 拉取', () => {
     await mount();
     const source = MockEventSource.instances[0]!;
 
-    // 初始同步后：manifest 已拉 1 次（mount 的初值），流未打开。
+    // After the initial sync: 1 manifest fetch (mount's baseline), stream not open yet.
     const afterMount = mocks.manifestFetchCount;
 
-    // tab focus → 恰好一次 manifest 拉取。
+    // Tab focus → exactly one manifest fetch.
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
     await act(async () => {
       document.dispatchEvent(new Event('visibilitychange'));
     });
     expect(mocks.manifestFetchCount).toBe(afterMount + 1);
 
-    // 断线 + 重连 → 恰好一次 manifest 拉取。
+    // Drop + reconnect → exactly one manifest fetch.
     await act(async () => source.error());
-    expect(mocks.manifestFetchCount).toBe(afterMount + 1); // error 本身不拉
+    expect(mocks.manifestFetchCount).toBe(afterMount + 1); // the error itself does not fetch
     await act(async () => source.open());
     expect(mocks.manifestFetchCount).toBe(afterMount + 2);
   });
@@ -546,14 +546,14 @@ describe('编辑态保护已移除（#1961 决策变更 2026-08-23）：agent �
   it('编辑中的 scene-2 被 agent 改动 → 场景被直接替换（不再保护、不再标 stale）', async () => {
     await mount();
     const source = MockEventSource.instances[0]!;
-    // 用户正在编辑 scene-2（画布处于编辑态）。
+    // The user is editing scene-2 (the canvas is in edit state).
     mocks.stageState.currentSceneId = 'scene-2';
     mocks.stageState.mode = 'edit';
 
     bumpSceneRev('scene-2');
     await act(async () => source.emitFreshness());
 
-    // 判据（最终效果）：画布直接拿到 agent 的新版本——读向保护已按用户决定移除。
+    // Criterion (effect): the canvas gets the agent's new version directly — read-side protection was removed by the product decision.
     expect(mocks.stageState.scenes.find((s) => s.id === 'scene-2')).toMatchObject({
       title: 'scene-2 v2',
     });
@@ -564,12 +564,12 @@ describe('编辑态保护已移除（#1961 决策变更 2026-08-23）：agent �
     const source = MockEventSource.instances[0]!;
     mocks.stageState.currentSceneId = 'scene-2';
     mocks.stageState.mode = 'playback';
-    mocks.workbenchState.panelOpen = false; // 全屏学习：view 模式
+    mocks.workbenchState.panelOpen = false; // full-screen learning: view mode
 
     bumpSceneRev('scene-2');
     await act(async () => source.emitFreshness());
 
-    // view 模式自由刷新：直接替换。
+    // View mode refreshes freely: direct replacement.
     expect(mocks.stageState.scenes.find((s) => s.id === 'scene-2')).toMatchObject({
       title: 'scene-2 v2',
     });
@@ -582,7 +582,7 @@ describe('稳态请求数与稳定引用', () => {
     const source = MockEventSource.instances[0]!;
     const scenesRef = mocks.stageState.scenes;
 
-    // manifest 完全没变 → diff 为空 → 不 setState。
+    // Manifest unchanged → empty diff → no setState.
     await act(async () => source.emitFreshness());
     expect(mocks.stageState.scenes).toBe(scenesRef);
     expect(mocks.batchCalls).toHaveLength(0);
@@ -597,8 +597,8 @@ describe('稳态请求数与稳定引用', () => {
     await act(async () => source.emitFreshness());
 
     const after = mocks.stageState.scenes;
-    expect(after).not.toBe(before); // 有变化 → 新数组
-    // 未变化的场景是同一个对象引用（稳定引用：只有 scene-2 换新）。
+    expect(after).not.toBe(before); // changed → new array
+    // Unchanged scenes keep the same object identity (stable references: only scene-2 is new).
     expect(after.find((s) => s.id === 'scene-1')).toBe(before.find((s) => s.id === 'scene-1'));
     expect(after.find((s) => s.id === 'scene-3')).toBe(before.find((s) => s.id === 'scene-3'));
     expect(after.find((s) => s.id === 'scene-2')).not.toBe(before.find((s) => s.id === 'scene-2'));
@@ -624,11 +624,12 @@ describe('显式委托的冷启动路径（bootstrapDocument）', () => {
     vi.useFakeTimers();
     mocks.manifestUnavailable = true;
     await mount({ bootstrapDocument: true });
-    // 第一次同步失败：画布还是空的，但进入了重试预算（显式日志 + 定时重试），
-    // 而不是旧 `if (!doc) continue;` 的静默吞掉。
+    // The first sync fails: the canvas stays empty but the retry budget engages
+    // (explicit log + timed retry), instead of the old `if (!doc) continue;`
+    // silently swallowing it.
     expect(mocks.stageState.scenes).toHaveLength(0);
 
-    // 课程出现了：manifest 可用，重试收敛。
+    // The course now exists: the manifest is available and the retry converges.
     mocks.manifestUnavailable = false;
     mocks.loadDocument.mockImplementation(async () => {
       mocks.loadCount += 1;
@@ -638,7 +639,7 @@ describe('显式委托的冷启动路径（bootstrapDocument）', () => {
         outline: { outlines: [], generationComplete: false },
       };
     });
-    // 重试预算 3s 后触发（写死绝对上界，不导入常量）。
+    // The retry budget fires after 3s (hard-coded absolute bound, not imported).
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3_100);
     });
@@ -646,20 +647,20 @@ describe('显式委托的冷启动路径（bootstrapDocument）', () => {
   });
 
   it('classroom load 负责填充（bootstrapDocument=false）→ 首帧后零化基线验证一次，此后窄重取', async () => {
-    // 模拟 classroom load 已把 store 填好（非 agent 写课程路径）。
+    // Simulate the classroom load having filled the store (the non-agent course-write path).
     mocks.stageState.stage = { id: 'stage-a' };
     mocks.stageState.scenes = SCENE_IDS.map((id) => mocks.sceneContent[id]);
     await mount({ bootstrapDocument: false });
     const source = MockEventSource.instances[0]!;
 
-    // 首帧：store 已 warm → 记录零化基线，验证一次（全量批量）。
+    // First frame: store is warm → record a zeroed baseline, verify once (full batch).
     await act(async () => source.emitFreshness());
     expect(mocks.batchCalls).toHaveLength(1);
     expect(mocks.batchCalls[0]!.slice().sort()).toEqual([...SCENE_IDS].sort());
-    // 验证不动课堂 load 填好的内容。
+    // The verification must not disturb what the classroom load filled.
     expect(mocks.stageState.scenes).toHaveLength(3);
 
-    // 此后单场景写入只重取该场景。
+    // Later single-scene writes re-fetch only that scene.
     bumpSceneRev('scene-1');
     await act(async () => source.emitFreshness());
     expect(mocks.batchCalls.at(-1)).toEqual(['scene-1']);
@@ -671,7 +672,7 @@ describe('显式委托的冷启动路径（bootstrapDocument）', () => {
 
 describe('stage 切换的栅栏', () => {
   it('切换 stage 时旧 stage 的在途响应不会落进新 store', async () => {
-    // 旧 stage 的整档读挂起。
+    // The old stage's full document read hangs.
     let resolveOld!: (value: unknown) => void;
     mocks.loadDocument.mockImplementation((stageId: string) =>
       stageId === 'stage-a' ? new Promise((r) => (resolveOld = r)) : Promise.resolve(null),
@@ -679,7 +680,7 @@ describe('stage 切换的栅栏', () => {
     await mount({ stageId: 'stage-a', bootstrapDocument: true });
     const before = mocks.stageState.scenes.length;
 
-    // 切到 stage-b：旧响应到达时不得写 store。
+    // Switch to stage-b: the old response must not write the store when it arrives.
     await act(async () =>
       root?.render(createElement(Harness, { stageId: 'stage-b', bootstrapDocument: true })),
     );
@@ -699,26 +700,29 @@ describe('stage 切换的栅栏', () => {
 describe('D3-F1: >200 场景的课程不再触发批量 400（分块 + 全败中止）', () => {
   it('250 场景：批量分块 ≤200/请求；收敛后写基线是真实 rev，不是零化 0', async () => {
     const ids = seedManyScenes(250);
-    // classroom load 填好 store（warm）→ 首 pass 记零化基线，下一 pass 全量验证。
+    // Classroom load fills the store (warm) → first pass records a zeroed baseline, the next pass verifies everything.
     mocks.stageState.stage = { id: 'stage-a' };
     mocks.stageState.scenes = ids.map((id) => mocks.sceneContent[id]!);
     await mount({ bootstrapDocument: false });
     const source = MockEventSource.instances[0]!;
 
-    // 触发第二 pass：全量 diff → 分块重取（250 个 id 必须切成 ≤200 的块）。
+    // Trigger the second pass: full diff → chunked re-fetch (250 ids must split into ≤200-id chunks).
     await act(async () => source.emitFreshness());
 
-    // 判据一（机制）：任何一次批量请求都不超过 200 个 id（字面量，不导入
-    // 实现常量）；mock 端点对超上限请求回 400（与生产一致），所以若分块
-    // 回退成单请求，本判据会让 pass 全败、后面的基线判据变红。
+    // Criterion 1 (mechanism): no batch request exceeds 200 ids (a literal,
+    // not an imported implementation constant); the mock endpoint answers 400
+    // to over-cap requests (matching production), so if chunking reverted to a
+    // single request this criterion fails the pass and the baseline criterion
+    // below goes red.
     expect(mocks.batchCalls.length).toBeGreaterThan(1);
     for (const idsInCall of mocks.batchCalls) {
       expect(idsInCall.length).toBeLessThanOrEqual(200);
     }
-    // 判据二（最终效果）：画布数据齐全（250 个场景都在）。
+    // Criterion 2 (effect): the canvas holds all 250 scenes.
     expect(mocks.stageState.scenes).toHaveLength(250);
-    // 判据三（最终效果 · 基线没有被写成 0）：写基线里每个场景是真实 rev 1，
-    // 而不是零化基线的 0——否则此后每次保存都会被永久 veto。
+    // Criterion 3 (effect · the baseline was not written as 0): every scene in
+    // the write baseline carries its real rev 1, not the zeroed baseline's 0 —
+    // otherwise every later save would be vetoed forever.
     const recorded = mocks.stageState.serverManifestByStage['stage-a'] as {
       rev: number;
       scenes: { id: string; rev: number }[];
@@ -735,16 +739,17 @@ describe('D3-F1: >200 场景的课程不再触发批量 400（分块 + 全败中
     await mount({ bootstrapDocument: false });
     const source = MockEventSource.instances[0]!;
 
-    // 批量端点 500（所有块都失败）→ 第二 pass 必须中止。
+    // The batch endpoint returns 500 (every chunk fails) → the second pass must abort.
     mocks.batchUnavailable = true;
     await act(async () => source.emitFreshness());
     expect(mocks.batchCalls.length).toBeGreaterThan(0);
-    // 判据（最终效果）：serverManifestByStage 仍未被记录——中止 pass 不得
-    // 推进 renderedManifest / recordWriteBaseline（回滚守卫：若中止被移除，
-    // 这里会记录一个 scene rev 全 0 的零化基线，本断言变红）。
+    // Criterion (effect): serverManifestByStage is still unset — an aborted
+    // pass must not advance renderedManifest / recordWriteBaseline (rollback
+    // guard: if the abort were removed, this would record a zeroed baseline of
+    // scene rev 0 and this assertion would go red).
     expect(mocks.stageState.serverManifestByStage['stage-a']).toBeUndefined();
 
-    // 端点恢复 → 下一 pass 收敛，写基线是真实 rev。
+    // The endpoint recovers → the next pass converges and the write baseline holds real revs.
     mocks.batchUnavailable = false;
     await act(async () => source.emitFreshness());
     const recorded = mocks.stageState.serverManifestByStage['stage-a'] as {
@@ -757,9 +762,10 @@ describe('D3-F1: >200 场景的课程不再触发批量 400（分块 + 全败中
 
 describe('D3-F4: 在途 pass 不得挡掉新 stage 的 sync，也不得清掉新 stage 的兜底时钟', () => {
   it('旧 pass 的迟到 finally 不得清掉新 stage 的兜底时钟（断流后兜底仍收敛）', async () => {
-    // 判据落在最终效果（画布收敛）：A 的 pass 在途 → 切到 B → B 收敛并排定
-    // 兜底 → A 的迟到响应到达（其 finally 若不清除 in-flight 槽或清掉 B 的
-    // 兜底时钟，B 就永远停在旧内容上）。
+    // The criterion is the final effect (canvas convergence): A's pass is in
+    // flight → switch to B → B converges and schedules its fallback → A's late
+    // response arrives (if its finally cleared the in-flight slot or B's
+    // fallback clock, B would stay on stale content forever).
     vi.useFakeTimers();
     let resolveA!: (value: unknown) => void;
     mocks.loadDocument.mockImplementation((stageId: string) => {
@@ -774,13 +780,13 @@ describe('D3-F4: 在途 pass 不得挡掉新 stage 的 sync，也不得清掉新
     await mount({ stageId: 'stage-a', bootstrapDocument: true });
     expect(mocks.loadDocument).toHaveBeenCalledWith('stage-a');
 
-    // 切到 stage-b：B 的 mount sync 立即跑并完成（fallback 时钟已排定）。
+    // Switch to stage-b: B's mount sync runs immediately and completes (its fallback clock is scheduled).
     await act(async () =>
       root?.render(createElement(Harness, { stageId: 'stage-b', bootstrapDocument: true })),
     );
     expect(mocks.stageState.stage?.id).toBe('stage-b');
 
-    // A 的迟到响应到达：其 finally 不得清掉 B 的 fallback 时钟。
+    // A's late response arrives: its finally must not clear B's fallback clock.
     await act(async () => {
       resolveA({
         stage: { id: 'stage-a' },
@@ -790,14 +796,15 @@ describe('D3-F4: 在途 pass 不得挡掉新 stage 的 sync，也不得清掉新
       await Promise.resolve();
     });
 
-    // B 的流断开：之后的写入没有任何帧会到达，只能靠 fallback。
+    // B's stream drops: no frame for later writes will arrive; only the fallback can converge.
     const sourceB = MockEventSource.instances[1]!;
     await act(async () => sourceB.error());
     bumpSceneRev('scene-2');
 
-    // 兜底周期（30s±20% → ≤36s）：绝对上界 45s 内必须收敛。若 A 的迟到
-    // finally 清掉了 B 的兜底时钟（旧实现的单一 in-flight 槽 + 无守卫的
-    // scheduleFallback），此处永远停在 'scene-2 v1'，断言变红。
+    // Fallback period (30s ±20% → ≤36s): must converge within an absolute cap
+    // of 45s. If A's late finally cleared B's fallback clock (the old
+    // implementation's single in-flight slot + unguarded scheduleFallback),
+    // this would stay on 'scene-2 v1' forever and the assertion goes red.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(45_000);
     });
@@ -817,8 +824,9 @@ describe('被放弃的并发渲染不得写 store（原 course-sync-race.test.ts
     expect(mocks.loadDocument).toHaveBeenCalledWith('stage-a');
     const before = mocks.stageState.scenes.length;
 
-    // 一个被放弃的并发渲染：transition 里渲染一个抛 never-resolving 的
-    // Harness。React 放弃该渲染——它的 effect 不会 commit，不得触碰 store。
+    // An abandoned concurrent render: inside a transition, render a Harness
+    // that throws a never-resolving load. React abandons the render — its
+    // effect never commits, so it must not touch the store.
     const observed = new Promise<void>((resolve) => {
       abandonedRenderObserved = resolve;
     });
@@ -834,7 +842,7 @@ describe('被放弃的并发渲染不得写 store（原 course-sync-race.test.ts
     });
     await observed;
 
-    // 已提交的 stage-a pass 照常落地自己的内容。
+    // The committed stage-a pass lands its own content as usual.
     await act(async () => {
       resolveA({
         stage: { id: 'stage-a' },
@@ -846,9 +854,9 @@ describe('被放弃的并发渲染不得写 store（原 course-sync-race.test.ts
       });
       await Promise.resolve();
     });
-    // 判据（最终效果）：store 只有已提交 pass 写入的内容，被放弃的渲染
-    // （'stage-never-commits'）没有留下任何痕迹——它没有触发第二次读、
-    // 没有改 stage、没有写场景。
+    // Criterion (effect): the store holds only what the committed pass wrote —
+    // the abandoned render ('stage-never-commits') left no trace: no second
+    // read, no stage change, no scenes written.
     expect(mocks.loadDocument).toHaveBeenCalledTimes(1);
     expect(mocks.stageState.stage?.id).toBe('stage-a');
     expect(mocks.stageState.scenes.length).toBe(before + 2);

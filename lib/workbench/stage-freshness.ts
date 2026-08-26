@@ -157,13 +157,13 @@ async function fetchSceneChunk(stageId: string, ids: readonly string[]): Promise
 
 /**
  * Merge fetched scenes into the current scene list with a STABLE array
- * reference — the third of the three standard features ("稳定引用"): a pass
+ * reference — the third of the three standard features (stable references): a pass
  * that changes nothing returns the SAME array object, so React consumers that
  * memoize on `scenes` do not re-render a deck the agent did not touch.
  *
  * Removed ids are dropped; fetched scenes replace by id; the result is sorted
  * by `order` exactly like the full document read. There is no edit-state
- * protection anymore (#1961 决策变更 2026-08-23): the agent's fresh version
+ * protection anymore (#1961 decision change 2026-08-23): the agent's fresh version
  * replaces the local scene outright — the user's typed data is guarded on the
  * WRITE side instead (a veto retains the dirt and retries; see
  * `lib/store/stage.ts`), not by freezing the read side.

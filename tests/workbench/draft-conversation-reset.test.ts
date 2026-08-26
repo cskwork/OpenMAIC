@@ -1,7 +1,7 @@
 /**
  * Entering a DRAFT conversation resets the store completely.
  *
- * Pressing 新建对话 while the previous session is still generating drops
+ * Pressing new-chat while the previous session is still generating drops
  * `?session=` from the URL, and the shell answers by detaching the store. That
  * transition has now leaked run state THREE TIMES, always the same shape: one
  * field survived, some piece of chrome branched on it, and the fix cleared that
@@ -10,11 +10,11 @@
  *   1. `replaying` stayed true → the middle column sat on a catch-up spinner
  *      that nothing could ever turn off (no session, so the hook that clears it
  *      never runs).
- *   2. the pane header read the same flag → 连接中 with a live spinner beside an
+ *   2. the pane header read the same flag → connecting with a live spinner beside an
  *      empty composer.
  *   3. `status` stayed at the initial `connecting`, which `isRunLive` counts as a
- *      LIVE RUN → the composer showed the red STOP square and the 「可以插话，
- *      回车发送」 placeholder, and the idle empty state was suppressed, so the
+ *      LIVE RUN → the composer showed the red STOP square and the interrupt
+ *      placeholder, and the idle empty state was suppressed, so the
  *      transcript area was simply blank.
  *
  * Three rounds of clearing one field is the wrong shape of fix, so the reset is
@@ -223,7 +223,7 @@ describe('entering a draft conversation while the previous run is live', () => {
   });
 
   it('does not touch the classroom: the pane is keyed on the URL, not on the fold', () => {
-    // `?course=` is untouched by 新建对话 and the pane's own props are derived from
+    // `?course=` is untouched by new-chat and the pane's own props are derived from
     // it plus "is any session writing this course", never from the attached fold —
     // so a reset cannot remount the classroom or clear its whiteboard history.
     // Pane visibility comes directly from the shell's host context; no attached

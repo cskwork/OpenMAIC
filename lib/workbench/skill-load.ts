@@ -4,7 +4,7 @@
  * Loading a skill is a `read` of that skill's `SKILL.md`. Two places need to
  * recognise it and they must not drift: the fold, which draws the card from the
  * durable message frames (`lib/workbench/session-store`), and the presentation
- * layer, which labels it 加载 skill and groups the cards
+ * layer, which labels it "load skill" and groups the cards
  * (`components/workbench/chat/tool-presentation`).
  *
  * It lives in its own module rather than in the presentation layer because the

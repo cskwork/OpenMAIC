@@ -268,7 +268,7 @@ export function useWorkbenchStream(sessionId: string | null): void {
  *   - a user-triggered manual reload of a protected scene (LWW #6).
  *
  * The stream is a PURE optimization: if it never connects, the fallback still
- * converges, just on the fallback clock. This is the "推送求延迟、拉取求正确"
+ * converges, just on the fallback clock. This is the "push for latency, pull for correctness"
  * principle the session list already follows.
  *
  * BASELINE (why the first pass is special): the sync diffs against "the
@@ -299,7 +299,7 @@ export function useWorkbenchStream(sessionId: string | null): void {
  * nothing changed, so a deck the agent did not touch does not re-render every
  * consumer that memoizes on `scenes`.
  *
- * EDIT-STATE PROTECTION (REMOVED, #1961 决策变更 2026-08-23): the read path no
+ * EDIT-STATE PROTECTION (REMOVED, #1961 decision change 2026-08-23): the read path no
  * longer freezes the page being edited — an agent refresh replaces it
  * outright. The user's typed data is guarded on the WRITE side instead: a
  * save veto retains the pending dirt and retries once the baseline converges
@@ -562,7 +562,7 @@ export function useStageFreshnessSync(
       };
       // The write-side baseline mirrors the rendered manifest: every applied
       // scene carries its fresh rev (no edit-state protection anymore, so no
-      // scene keeps an old rev here — #1961 决策变更).
+      // scene keeps an old rev here — #1961 decision change).
       recordWriteBaseline(renderedManifest.current);
     };
 

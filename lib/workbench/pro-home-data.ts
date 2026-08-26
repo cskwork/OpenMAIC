@@ -31,7 +31,7 @@ export type ProHomeSessionStatus = ProHomeSessionItem['status'];
  *
  * Neither `connecting` nor `idle` is a durable session status: the first is a
  * client-only bootstrap state, the second is "the store holds no session at all".
- * Ignoring both prevents a session switch — or pressing 新建对话, which detaches —
+ * Ignoring both prevents a session switch — or a new-chat press, which detaches —
  * from erasing a real queued or running indication before the meta/event replay
  * catches up.
  */

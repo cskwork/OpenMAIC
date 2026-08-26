@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 /**
- * The client-side skill registry's display rule: display name + 英文 id,
+ * The client-side skill registry's display rule: display name + the English id,
  * everywhere, with the id never dropped. A built-in skill's name comes from the
  * locale copy map (`workbench.skill.title.<handle>`); a user Skill's comes from
  * the registry, because its author named it.

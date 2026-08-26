@@ -1,6 +1,6 @@
 /**
  * Element references — the slide elements a user hands the agent alongside a
- * message ("这几个元素，把标题改短一点").
+ * message (e.g. "these elements — make the title shorter").
  *
  * The wire shape is deliberately self-describing. `elementId` is the handle the
  * agent's edit tools address, but an id alone is worthless in a transcript and
@@ -126,7 +126,7 @@ function stripTags(html: string): string {
 /**
  * The element's visible text, per type. `elementLabel` in the timeline's
  * cue-meta only ever looked at `content`, which is why a shape, a table, a code
- * block and a formula all degraded to their bare type name ("形状", "表格") with
+ * block and a formula all degraded to their bare type name ("shape", "table") with
  * no way to tell two of them apart in a chip.
  */
 export function elementSnapshotText(element: SlideElementLike): string {

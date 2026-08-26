@@ -1,6 +1,6 @@
 /**
  * Course references — the classrooms a user names for the agent alongside a
- * message ("@光的折射 把第三页换个例子").
+ * message (e.g. "@course-name, swap the example on page 3").
  *
  * This exists because the workspace's two content columns are INDEPENDENT: a
  * course can be open on the right while the conversation in the middle is about

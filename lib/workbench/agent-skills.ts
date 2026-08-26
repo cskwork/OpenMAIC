@@ -166,7 +166,7 @@ export function skillTitle(
 }
 
 /**
- * One line naming a skill: 「课堂设计 /stage-design」.
+ * One line naming a skill: `<title> /<id>`.
  *
  * For surfaces that have a single text slot (the timeline's skill row). Menus
  * that can afford two spans render the title and the `/id` themselves, with

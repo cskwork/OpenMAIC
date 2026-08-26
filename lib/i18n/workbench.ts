@@ -71,8 +71,8 @@ export const workbenchEn = {
     inFormBelow: 'Answer it in the form below',
     /**
      * How several picked labels become one message. It ends up in the user's own
-     * bubble, so it follows the language of the surface: 「A、B」 in Chinese,
-     * "A, B" everywhere else.
+     * bubble, so it follows the language of the surface: a CJK enumeration
+     * comma in Chinese, "A, B" everywhere else.
      */
     multiAnswerSeparator: ', ',
   },

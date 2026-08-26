@@ -154,8 +154,8 @@ export function segmentSkillHandles(
  * Write `/skill-name` into the draft AT THE CARET.
  *
  * Two entry points, one rule. From the `/` menu the caret sits in the query being
- * typed, so the handle REPLACES that token — otherwise picking 课堂设计 after
- * typing `/课` would leave the half-typed query in the sentence. From the `+` menu
+ * typed, so the handle REPLACES that token — otherwise the half-typed
+ * multi-byte query would be left in the sentence. From the `+` menu
  * there is no query, so the handle opens a slot exactly where the caret is; it used
  * to be appended to the end of the draft, which put it somewhere the user was not
  * looking as soon as they had written a sentence.

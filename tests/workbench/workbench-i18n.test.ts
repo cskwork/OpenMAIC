@@ -152,11 +152,11 @@ describe('built-in skill names', () => {
  * The workbench surface, swept: every user-visible string reaches the screen
  * through a copy key, so no file under these trees may hold a CJK string
  * literal or JSX text node. Comments are exempt (this walks the AST, not the
- * source), which is why the design notes can still quote 「切换课堂」.
+ * source), which is why the design notes can still quote a Chinese UI label.
  *
  * The range deliberately includes CJK punctuation (U+3000–U+303F) and fullwidth
- * forms (U+FF00–U+FFEF): 「、」 as a list separator and 「：」 as a sentence
- * joiner are as locale-bound as the words around them, and an earlier version of
+ * forms (U+FF00–U+FFEF): the CJK enumeration comma and the CJK sentence joiner
+ * are as locale-bound as the words around them, and an earlier version of
  * this check that only looked at U+3400–U+9FFF let two of them ship.
  */
 describe('workbench hardcoded-copy contract', () => {

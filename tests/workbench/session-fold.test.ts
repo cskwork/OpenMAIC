@@ -715,7 +715,7 @@ describe('the session-level freshness gates are gone (#1960 Part 2)', () => {
  * `agent_end` AND NOT `turn_end` is the whole point of this block. pi's `turn` is
  * one assistant message plus its tool calls, so an answer that writes ten pages
  * is ten turns against ONE classroom — flushing per turn ended that answer with
- * ten identical cards, which is not what "一轮" meant. An exchange is one question
+ * ten identical cards, which is not what "one round" meant. An exchange is one question
  * and its answer: `agent_start` … `agent_end`.
  *
  * What counts as an appearance (and why a reader tool does not) lives in
@@ -1388,7 +1388,7 @@ describe('replay idempotency', () => {
 
 describe('materials', () => {
   it('folds extraction frames without surfacing them in the chat', () => {
-    // Screenshot feedback: the 「正在抽取材料…」 lines were debug texture, so
+    // Screenshot feedback: the "extracting materials" lines were debug texture, so
     // extraction progress/completion frames produce NO visible chat row — the
     // agent's own reply carries what the materials produced. The frame still
     // consumes its seq, so a replay never re-serves it.
@@ -1446,7 +1446,7 @@ describe('session_resumed with repairedToolCalls', () => {
     expect(dead).toMatchObject({ toolState: 'failed' });
     expect(dead?.toolResultText).toContain('重启');
     expect(dead?.toolEndedAt).toBeDefined();
-    // The dead generate_scene no longer owns the "正在写第 N 页" marker.
+    // The dead generate_scene no longer owns the "writing page N" marker.
     expect(state.generatingOrder).toBeNull();
     // A call the resume did NOT repair is untouched.
     const other = state.chat.find((n) => n.toolCallId === 'still-open');
@@ -1516,7 +1516,7 @@ describe('session_end cancelled settles the tools left in flight', () => {
       expect(card?.toolResultText).toContain('已被停止');
       expect(card?.toolEndedAt).toBeDefined();
     }
-    // The cancelled generate_scene no longer owns the "正在写第 N 页" marker.
+    // The cancelled generate_scene no longer owns the "writing page N" marker.
     expect(state.generatingOrder).toBeNull();
     // The caption still closes the run, and stays last.
     const rows = contentOf(state);
@@ -1987,7 +1987,7 @@ describe('thinking bar timing', () => {
     );
     // The runner's durable hand-over marker lands WHILE text is still
     // streaming: the clock stops here, not at message_end, so there is no
-    // "思考中" window lingering over tokens that are already visible.
+    // thinking window lingering over tokens that are already visible.
     state = foldEvent(state, ev('thinking_end', {}, 2600));
     const bar = state.chat.find((n) => n.kind === 'thinking');
     expect(bar).toMatchObject({ streaming: false, startedAt: 1000, endedAt: 2600 });

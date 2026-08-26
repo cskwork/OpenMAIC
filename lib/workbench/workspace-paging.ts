@@ -3,12 +3,12 @@
  *
  * The rail used to cap a list in two states: seven rows, or all of them. That
  * is fine for a folder holding nine courses and wrong for the real account,
- * where "show more" read 「展示更多 124」 and one click dropped 124 rows into a
+ * where "show more" read "show more (124)" and one click dropped 124 rows into a
  * 240px rail — a control whose only outcome is to destroy the list it belongs
  * to. This module replaces that cap (`truncateList`, now gone).
  *
  * So revealing is paged instead: each press appends one fixed page, the label
- * promises exactly what the press will do, and one press of 收起 returns the
+ * promises exactly what the press will do, and one press of collapse returns the
  * list to its first page. The state a caller has to keep is a single integer
  * per list — how many extra pages are open — which survives the list changing
  * underneath it (search, a new course, a drag) because everything here clamps.
@@ -22,10 +22,10 @@
  * Ten, and the history of this number is the history of the rail's shape. The
  * old two-state cap showed seven before an all-or-nothing dump. v10 cut it to
  * five, not because five is a good glimpse but because three section heads —
- * 对话, 课程, 收藏 — had to fit on screen at once, and a boundary you scroll to
+ * conversations, courses and saved courses — had to fit on screen at once, and a boundary you scroll to
  * find is a boundary you do not have.
  *
- * v13 retires that compromise: 对话 and 课程 are tabs over one body and 收藏 is
+ * v13 retires that compromise: conversations and courses are tabs over one body and saved courses is
  * a drawer at the foot, so there is exactly ONE list on screen and it owns the
  * rail's height. Ten course rows at 44px is ~440px — a real window on a 900px
  * screen with the drawer closed, and still one press from more, which is the
@@ -47,7 +47,7 @@ export interface PagedList<T> {
    * promises rows that do not exist.
    */
   readonly nextCount: number;
-  /** Whether a 收起 control belongs beside it: only once a page is open. */
+  /** Whether a collapse control belongs beside it: only once a page is open. */
   readonly canCollapse: boolean;
 }
 
@@ -86,7 +86,7 @@ export function pageList<T>(
     hiddenCount,
     nextCount: Math.min(pageSize, hiddenCount),
     // A press that revealed nothing (the list was already short) must not leave
-    // a 收起 behind that would appear to do something.
+    // a collapse control behind that would appear to do something.
     canCollapse: openPages > 0 && shown > initial,
   };
 }

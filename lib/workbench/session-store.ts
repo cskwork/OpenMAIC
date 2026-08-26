@@ -59,7 +59,7 @@ export type ChatNodeKind =
    */
   | 'course'
   /**
-   * The LLM-gap indicator ("思考中…"): open while the agent's next call is in
+   * The LLM-gap indicator (the thinking row): open while the agent's next call is in
    * flight with nothing on screen yet, removed the moment the first content
    * arrives. Produced and closed ONLY by the event stream (replay-safe); it
    * never survives its gap.
@@ -129,8 +129,8 @@ export interface ChatNode {
    * string, a config assertion, a gateway status). It is NEVER part of the
    * sentence — the notice shows a human summary and keeps this behind a
    * disclosure. Concatenating it into `text` is what made a failed run read
-   * like a console line (「本轮构建失败：MODEL_ROUTES must explicitly …。可以再
-   * 说一句让它重试」), and made two failures with the same cause impossible to
+   * like a console line (the failure text and its retry hint welded into one
+   * run-on sentence), and made two failures with the same cause impossible to
    * recognise as the same fact.
    */
   detail?: string;
@@ -142,7 +142,7 @@ export interface ChatNode {
   hint?: string;
   /** Product-owned hint resolved at render time. */
   hintCopyKey?: WorkbenchCopyKey;
-  /** Thinking bars only: wall-clock bounds for the "已思考 Ns" summary. */
+  /** Thinking bars only: wall-clock bounds for the "thought for Ns" summary. */
   startedAt?: number;
   endedAt?: number;
   /** Tool cards only. */
@@ -150,8 +150,9 @@ export interface ChatNode {
   toolName?: string;
   /**
    * The call's arguments as the STRUCTURE the agent sent, not a truncated JSON
-   * snippet of it. Keeping the object lets the presentation layer say
-   * 「生成第 3 页」 and still show the exact wire format, pretty-printed, when
+   * snippet of it. Keeping the object lets the presentation layer render the
+   * localized "generating page N" label and still show the exact wire format,
+   * pretty-printed, when
    * the card is opened.
    */
   toolArgs?: Record<string, unknown>;
@@ -222,7 +223,7 @@ export interface BuiltPage {
  * create one. It is not a run state and the fold never produces it (`attach()`
  * moves straight to `connecting`), and it exists because "there is no run" had no
  * honest value before. The initial status was `connecting`, so every surface that
- * asks "is a run in flight" — the composer's STOP button, its 「可以插话」
+ * asks "is a run in flight" — the composer's STOP button, its interrupt
  * placeholder, the suppressed idle empty state — said yes about a conversation
  * that did not exist. All of them test a WHITELIST of the live statuses, so this
  * value needs no special case anywhere: it is simply on none of those lists.
@@ -371,7 +372,7 @@ export interface WorkbenchFold {
   /**
    * A steered user message is owed an answer but the current step is still
    * active. Kept for fold compatibility; waiting itself only mounts before
-   * the turn has any part (OpenPBL: 首字之前).
+   * the turn has any part (OpenPBL: before its first character).
    */
   waitingArmed: boolean;
   /**
@@ -477,11 +478,11 @@ export interface WorkbenchEvent {
  *
  * WHY IT IS A FUNCTION AND WHY IT IS TOTAL. This bug arrived three times, and
  * every time the same shape: entering a draft conversation (the user pressed
- * 新建对话 while the previous session was still generating) left ONE run-derived
+ * new-chat while the previous session was still generating) left ONE run-derived
  * field behind, the UI branched on it, and the fix cleared that one field. First
  * `replaying`, which parked the middle column on a catch-up spinner nothing could
  * turn off. Then `status`, whose `connecting` initial value made
- * `isRunLive` — and therefore the STOP button, the 「可以插话」 placeholder and the
+ * `isRunLive` — and therefore the STOP button, the interrupt placeholder and the
  * suppressed empty state — read a nonexistent conversation as a live run. There
  * are twenty-nine such fields, and a hand-written reset per transition is
  * twenty-nine chances to miss one.
@@ -942,7 +943,7 @@ export function foldEvent(state: WorkbenchFold, event: WorkbenchEvent): Workbenc
       // worker id the runner also puts on this event is a scheduler fact; it
       // stays in the event log, which is where it belongs. "The build started"
       // is not information either — the user pressed send two seconds ago, and
-      // the header already says 排队中 / 正在生成第 N 页.
+      // the header already says queued / generating page N.
       //
       // The one exception is the classrooms the creating message named: those
       // are part of what the user said, so the first bubble carries the same
@@ -1051,7 +1052,7 @@ export function foldEvent(state: WorkbenchFold, event: WorkbenchEvent): Workbenc
       // a new run; the bubble alone carries it (the header says the rest).
       const steer = data.delivery === 'steer';
       // Two shapes exist in the durable log: structured {path, originalName}
-      // and the first PR4 build's string form `materials/x.pdf（讲义.pdf）`.
+      // and the first PR4 build's string form `materials/x.pdf (display name)`.
       const attachments = Array.isArray(data.materials)
         ? (data.materials as unknown[]).map((m) => {
             if (typeof m === 'string') {
@@ -1133,7 +1134,7 @@ export function foldEvent(state: WorkbenchFold, event: WorkbenchEvent): Workbenc
     }
     case 'material_extraction': {
       // Extraction progress used to be injected as visible system lines
-      // （「正在抽取材料…」「材料抽取完成…」）; screenshot feedback is that
+      // ("extracting materials" / "materials extracted" progress lines); screenshot feedback is that
       // this is debug texture, not product copy — the agent's own reply
       // carries what the materials produced. Folded to nothing: the frame
       // still consumes its seq (lastEventId advances) so a replay never
@@ -1552,7 +1553,7 @@ export function foldEvent(state: WorkbenchFold, event: WorkbenchEvent): Workbenc
       // The answer is over, so there is no gap to indicate. Content arriving
       // normally closes the indicator before this, and `session_end` closes it
       // after — but an exchange that produced only tool calls and then ended
-      // reaches neither, and left 「思考中…」 on screen until the run settled.
+      // reaches neither, and left the thinking indicator on screen until the run settled.
       // (These two lines lived in a SECOND `case 'agent_end'` further down the
       // same switch, which a switch can never reach.)
       closeWaiting(next);
@@ -1565,7 +1566,7 @@ export function foldEvent(state: WorkbenchFold, event: WorkbenchEvent): Workbenc
       // write — so the fold counts the write and the shell refetches the
       // authoritative list (`useGeneratedCourseDiscoverySync`). Nothing else in
       // the chat reacts: a library write is not a conversation event, and a
-      // system line saying 「建好文件夹了」 is the agent's own sentence to write.
+      // system line announcing a created folder is the agent's own sentence to write.
       next.libraryRevision = state.libraryRevision + 1;
       // v1 transcripts recorded a minted stage ONLY here (`change:
       // 'stage_created'` — there was no `stage_link` yet), and the created-tab
@@ -1794,7 +1795,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
    * ONE assignment, the whole state, because there is exactly one such state:
    * "detached" and "a draft conversation that does not exist yet" are the same
    * thing (the shell calls this the moment `?session=` leaves the URL, which is
-   * what 新建对话 does), and every field of a finished-or-still-running previous
+   * what a new-chat press does), and every field of a finished-or-still-running previous
    * session has to be gone. A partial reset here is the bug that arrived three
    * times — see `createInitialSessionState`.
    */

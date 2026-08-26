@@ -102,17 +102,18 @@ describe('fetchScenesByIds — 分块不超过服务端批量上限', () => {
     const fetchMock = stubFetch(async (url) => {
       const chunk = new URL(url, 'http://localhost').searchParams.get('ids')!.split(',');
       requested.push(chunk);
-      // 与生产端点一致：超上限回 400——若分块被回退成单请求，这里会 400。
+      // Matches the production endpoint: a chunk over the cap returns 400 — if
+      // chunking ever fell back to a single request, this mock would 400.
       if (chunk.length > 200) return { ok: false, status: 400 };
       return okJson({ scenes: chunk.map((id) => byId.get(id)).filter(Boolean) });
     });
 
     const scenes = await fetchScenesByIds('stage-a', ids);
 
-    // 判据一（机制）：分块请求，任何一块不超过 200 个 id。
+    // Criterion 1 (mechanism): chunked requests — no chunk exceeds 200 ids.
     expect(requested.length).toBe(2);
     for (const chunk of requested) expect(chunk.length).toBeLessThanOrEqual(200);
-    // 判据二（最终效果）：结果合并完整、顺序按服务端返回。
+    // Criterion 2 (effect): the results merge completely, in server order.
     expect(scenes.map((s) => s.id)).toEqual(ids);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -123,13 +124,13 @@ describe('fetchScenesByIds — 分块不超过服务端批量上限', () => {
     stubFetch(async (url) => {
       call += 1;
       const chunk = new URL(url, 'http://localhost').searchParams.get('ids')!.split(',');
-      if (call === 2) return { ok: false, status: 500 }; // 第二块瞬时失败
+      if (call === 2) return { ok: false, status: 500 }; // second chunk transient failure
       return okJson({ scenes: chunk.map((id) => byId.get(id)).filter(Boolean) });
     });
 
     const scenes = await fetchScenesByIds('stage-a', ids);
 
-    expect(scenes).toHaveLength(200); // 只有第一块的场景
+    expect(scenes).toHaveLength(200); // only the first chunk's scenes
     expect(scenes.map((s) => s.id)).toEqual(ids.slice(0, 200));
   });
 

@@ -3,7 +3,7 @@
 /**
  * The gap indicator at the end of an exchange.
  *
- * 「思考中…」 is the LLM-gap row: opened when the next call is in flight with
+ * The thinking indicator is the LLM-gap row: opened when the next call is in flight with
  * nothing on screen yet, and removed the moment content arrives. Two paths used
  * to close it — content arriving, and the run settling (`session_end`) — and an
  * exchange that produced only tool calls and then ended reached NEITHER, so the

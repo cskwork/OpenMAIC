@@ -1,7 +1,7 @@
 /**
- * The skill button's seed（P1 修复的行为锁定）：无论光标在何处，播种后
- * `slashQuery(draft, caret)` 必须非空——菜单一定会打开，且重复点击不会
- * 堆叠第二个 `/`。
+ * The skill button's seed (P1 fix, behaviour locked): wherever the caret
+ * sits, `slashQuery(draft, caret)` must be non-empty after seeding — the menu
+ * is guaranteed to open, and repeat clicks never stack a second `/`.
  */
 import { describe, expect, it } from 'vitest';
 
