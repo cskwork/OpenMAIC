@@ -24,13 +24,15 @@ import type { Scene, Stage } from '@openmaic/dsl';
 import { reassembleDocument, splitDocument, type OutlineRow, type StageRow } from './adapter.js';
 import type {
   DocumentStore,
+  DocumentFolder,
+  DocumentFolderStore,
   DocumentSummary,
   MaicDocument,
   SceneLike,
   SceneValidator,
   StageValidator,
 } from './types.js';
-import { DocumentNotFoundError, DocumentVersionError } from './types.js';
+import { DocumentFolderLimitError, DocumentNotFoundError, DocumentVersionError } from './types.js';
 import { assertJsonValue, isLosslessJsonString } from '../runtime/json-value.js';
 import type { Queryable, WithTransaction } from '../runtime/pg.js';
 
@@ -55,6 +57,17 @@ export interface PgDocumentStoreOptions {
 
 /** Idempotent schema for the PostgreSQL document backend. */
 export const DOCUMENT_PG_SCHEMA = `
+CREATE TABLE IF NOT EXISTS document_folders (
+  owner_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  normalized_name TEXT NOT NULL,
+  created_at DOUBLE PRECISION NOT NULL,
+  updated_at DOUBLE PRECISION NOT NULL,
+  PRIMARY KEY (owner_id, id),
+  UNIQUE (owner_id, normalized_name)
+);
+
 CREATE TABLE IF NOT EXISTS document_stages (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -64,14 +77,22 @@ CREATE TABLE IF NOT EXISTS document_stages (
   created_at DOUBLE PRECISION NOT NULL,
   updated_at DOUBLE PRECISION NOT NULL,
   owner_id TEXT,
+  folder_id TEXT,
   data JSONB NOT NULL
 );
 
 ALTER TABLE document_stages
   ADD COLUMN IF NOT EXISTS owner_id TEXT;
 
+ALTER TABLE document_stages
+  ADD COLUMN IF NOT EXISTS folder_id TEXT;
+
 CREATE INDEX IF NOT EXISTS document_stages_owner_idx
   ON document_stages (owner_id, id) WHERE owner_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS document_stages_owner_folder_idx
+  ON document_stages (owner_id, folder_id, id)
+  WHERE owner_id IS NOT NULL AND folder_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS document_scenes (
   stage_id TEXT NOT NULL REFERENCES document_stages(id) ON DELETE CASCADE,
@@ -119,6 +140,14 @@ interface SummaryRow extends Record<string, unknown> {
   created_at: number | string;
   updated_at: number | string;
   scene_count: number | string;
+  folder_id: string | null;
+}
+
+interface FolderRow extends Record<string, unknown> {
+  id: string;
+  name: string;
+  created_at: number | string;
+  updated_at: number | string;
 }
 
 function assertValid(
@@ -195,10 +224,9 @@ function isPgQueryableKey(value: string): boolean {
   return isLosslessJsonString(value);
 }
 
-export class PgDocumentStore<
-  TScene extends SceneLike = Scene,
-  TStage extends Stage = Stage,
-> implements DocumentStore<TScene, TStage> {
+export class PgDocumentStore<TScene extends SceneLike = Scene, TStage extends Stage = Stage>
+  implements DocumentStore<TScene, TStage>, DocumentFolderStore
+{
   private readonly queryable: Queryable;
   private readonly transactionHook: WithTransaction;
   private readonly validateScene: SceneValidator;
@@ -247,6 +275,13 @@ export class PgDocumentStore<
 
   private async transaction<T>(body: (queryable: Queryable) => Promise<T>): Promise<T> {
     return this.transactionHook(body);
+  }
+
+  private requireOwner(operation: string): string {
+    if (this.ownerId === null) {
+      throw new Error(`@openmaic/storage: ${operation} requires an owner-bound document store`);
+    }
+    return this.ownerId;
   }
 
   private async loadStage(
@@ -461,7 +496,103 @@ export class PgDocumentStore<
     return migrateDocument(reassembleDocument(rows.stageRow, rows.sceneRows, rows.outlineRow));
   }
 
-  async listDocuments(): Promise<DocumentSummary[]> {
+  async createFolder(
+    folderId: string,
+    name: string,
+    limit = 50,
+  ): Promise<{ folder: DocumentFolder; reused: boolean }> {
+    const ownerId = this.requireOwner('createFolder');
+    if (!isPgQueryableKey(folderId) || !isPgQueryableKey(name)) {
+      throw new Error('@openmaic/storage: folder id and name must be lossless JSON text');
+    }
+    const normalizedName = name.toLocaleLowerCase('en-US');
+    return this.transaction(async (queryable) => {
+      const existing = await queryable.query<FolderRow>(
+        `SELECT id, name, created_at, updated_at
+           FROM document_folders
+          WHERE owner_id = $1 AND normalized_name = $2
+          LIMIT 1`,
+        [ownerId, normalizedName],
+      );
+      if (existing.rows[0]) {
+        const row = existing.rows[0];
+        return {
+          folder: {
+            id: row.id,
+            name: row.name,
+            createdAt: Number(row.created_at),
+            updatedAt: Number(row.updated_at),
+          },
+          reused: true,
+        };
+      }
+      const count = await queryable.query<{ count: number | string }>(
+        'SELECT COUNT(*)::text AS count FROM document_folders WHERE owner_id = $1',
+        [ownerId],
+      );
+      if (Number(count.rows[0]?.count ?? 0) >= limit) throw new DocumentFolderLimitError(limit);
+      const now = Date.now();
+      const inserted = await queryable.query<FolderRow>(
+        `INSERT INTO document_folders
+           (owner_id, id, name, normalized_name, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $5)
+         ON CONFLICT (owner_id, normalized_name) DO UPDATE
+           SET normalized_name = EXCLUDED.normalized_name
+         RETURNING id, name, created_at, updated_at`,
+        [ownerId, folderId, name, normalizedName, now],
+      );
+      const row = inserted.rows[0]!;
+      return {
+        folder: {
+          id: row.id,
+          name: row.name,
+          createdAt: Number(row.created_at),
+          updatedAt: Number(row.updated_at),
+        },
+        reused: row.id !== folderId,
+      };
+    });
+  }
+
+  async listFolders(): Promise<DocumentFolder[]> {
+    const ownerId = this.requireOwner('listFolders');
+    const result = await this.queryable.query<FolderRow>(
+      `SELECT id, name, created_at, updated_at
+         FROM document_folders
+        WHERE owner_id = $1
+        ORDER BY created_at ASC, id ASC`,
+      [ownerId],
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+    }));
+  }
+
+  async moveDocumentToFolder(stageId: string, folderId: string): Promise<boolean> {
+    const ownerId = this.requireOwner('moveDocumentToFolder');
+    if (!isPgQueryableKey(stageId) || !isPgQueryableKey(folderId)) return false;
+    const result = await this.queryable.query<{ id: string }>(
+      `UPDATE document_stages AS stages
+          SET folder_id = $2
+        WHERE stages.id = $1
+          AND stages.owner_id = $3
+          AND EXISTS (
+            SELECT 1
+              FROM document_folders AS folders
+             WHERE folders.owner_id = $3 AND folders.id = $2
+          )
+      RETURNING stages.id`,
+      [stageId, folderId, ownerId],
+    );
+    return result.rows.length === 1;
+  }
+
+  async listDocuments(folderId?: string): Promise<DocumentSummary[]> {
+    if (folderId !== undefined && (!isPgQueryableKey(folderId) || this.ownerId === null)) return [];
+    const folderFilter = folderId === undefined ? '' : ` AND stages.folder_id = $2`;
     const result = await this.queryable.query<SummaryRow>(
       `SELECT stages.id,
               stages.name,
@@ -470,13 +601,14 @@ export class PgDocumentStore<
               stages.task_engine_mode,
               stages.created_at,
               stages.updated_at,
+              stages.folder_id,
               COUNT(scenes.id)::text AS scene_count
          FROM document_stages AS stages
          LEFT JOIN document_scenes AS scenes ON scenes.stage_id = stages.id
-        WHERE ${this.scopePredicate('stages')}
+        WHERE ${this.scopePredicate('stages')}${folderFilter}
         GROUP BY stages.id
         ORDER BY stages.id ASC`,
-      this.scopeParams(),
+      folderId === undefined ? this.scopeParams() : [this.ownerId, folderId],
     );
     return result.rows.map((row) => ({
       id: row.id,
@@ -487,6 +619,7 @@ export class PgDocumentStore<
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at),
       sceneCount: Number(row.scene_count),
+      ...(row.folder_id === null ? {} : { folderId: row.folder_id }),
     }));
   }
 

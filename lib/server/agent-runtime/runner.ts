@@ -739,9 +739,9 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
     // `getAgentSessionStore` above already guards on DATABASE_URL, so the
     // provider can only be reached with a configured connection string.
     const { documentStore } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
-    const ownerScopedStore: CourseStore = withPlainJsonDocumentWrites(
+    const ownerScopedStore = withPlainJsonDocumentWrites(
       documentStore.forOwner(meta.ownerId) as unknown as DocumentStore<AppScene, AppStage>,
-    );
+    ) as CourseStore;
     // The stage read/patch toolset and the stage-level CRUD it needs. All of
     // them write through `ownerScopedStore`; patch_stage is marked sequential
     // by the shared STAGE_WRITER_TOOL_NAMES registry (course-tools.ts).
@@ -756,6 +756,7 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       sessionId: id,
       onStageLink: (course) => emit(LIFECYCLE.stageLink, course),
       onLibraryChanged: (change) => emit(LIFECYCLE.libraryChanged, change),
+      onCheckpoint: (info) => emit(LIFECYCLE.checkpoint, info),
     });
     // Session-scoped material tools and the materials prompt block are wired
     // from durable session identity on every start and resume (reference

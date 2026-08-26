@@ -3,9 +3,9 @@
  *
  * This slice wires the three generic stage tools (`read_stage`, `patch_stage`,
  * `grep_stage` from `./dsl-tools`) and the stage-level CRUD they need
- * (`create_stage`, `read_stage_outline` from `./curriculum-tools`) into the
- * background runner. Generation, media, page-list and folder tools belong to
- * later slices and are deliberately NOT registered here.
+ * (`create_stage`, folder organization, `rename_stage`, and
+ * `read_stage_outline` from `./curriculum-tools`) into the background runner.
+ * Generation, media, and page-list tools belong to later slices.
  *
  * What this layer owns:
  *
@@ -29,7 +29,7 @@
  *    `buildRunnerCoursePrompt` (runner-contract.ts).
  */
 import type { AgentTool } from '@earendil-works/pi-agent-core';
-import type { DocumentStore, MaicDocument } from '@openmaic/storage';
+import type { DocumentFolderStore, DocumentStore, MaicDocument } from '@openmaic/storage';
 import type { Stage } from '@openmaic/dsl';
 
 import type { Scene } from '@/lib/types/stage';
@@ -38,7 +38,7 @@ import { buildDslCourseTools, DSL_COURSE_TOOL_NAMES } from './dsl-tools';
 import { CURRICULUM_ALLOWLIST } from './curriculum-tools';
 
 export type CourseDocument = MaicDocument<Scene, Stage>;
-export type CourseStore = DocumentStore<Scene, Stage>;
+export type CourseStore = DocumentStore<Scene, Stage> & DocumentFolderStore;
 
 /** Progress metadata emitted on the durable `checkpoint` channel after a write. */
 export interface CheckpointInfo {
@@ -69,9 +69,8 @@ export interface CourseToolDeps {
  *
  * Derived from the shared `STAGE_WRITER_TOOL_NAMES` (the same list that arms
  * client-side write ownership) so the scheduler and the workbench can never
- * disagree about who writes. `rename_stage` is excluded here only because it
- * belongs to the curriculum toolset and never runs through this toolset's
- * scheduler.
+ * disagree about who writes. `rename_stage` is scheduled in the curriculum
+ * toolset, so it is excluded from this course-tool subset.
  */
 export const DOCUMENT_WRITING_TOOLS: ReadonlySet<string> = new Set<string>(
   [...STAGE_WRITER_TOOL_NAMES].filter((name) => name !== 'rename_stage'),

@@ -261,6 +261,10 @@ describe('skills runner registration', () => {
       'patch_stage',
       'grep_stage',
       'create_stage',
+      'create_folder',
+      'move_to_folder',
+      'rename_stage',
+      'list_folder_stages',
       'read_stage_outline',
       'list_materials',
       'read_material',
@@ -268,11 +272,14 @@ describe('skills runner registration', () => {
     ]);
     expect([...(options.allowedToolNames ?? [])].sort()).toEqual([
       'ask_user',
+      'create_folder',
       'create_skill',
       'create_stage',
       'fetch_url',
       'grep_stage',
+      'list_folder_stages',
       'list_materials',
+      'move_to_folder',
       'patch_skill',
       'patch_stage',
       'read',
@@ -280,6 +287,7 @@ describe('skills runner registration', () => {
       'read_skill',
       'read_stage',
       'read_stage_outline',
+      'rename_stage',
       'search_material',
     ]);
     expect(options.systemPrompt).toContain('<available_skills>');
