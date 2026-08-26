@@ -15,3 +15,11 @@ export function stageIdForCall(sessionId: string, callId: string): string {
   const digest = createHash('sha256').update(`${sessionId}:${callId}`, 'utf-8').digest('base64url');
   return `stage-${digest.slice(0, 10)}`;
 }
+
+/** Deterministic folder id for one replayable create_folder call. */
+export function folderIdForCall(sessionId: string, callId: string): string {
+  const digest = createHash('sha256')
+    .update(`folder:${sessionId}:${callId}`, 'utf-8')
+    .digest('base64url');
+  return `folder-${digest.slice(0, 10)}`;
+}

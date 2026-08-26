@@ -1272,7 +1272,9 @@ describe('cross-owner isolation (owner-scoped store)', () => {
     const pg = new PgDocumentStore(db, {
       withTransaction: (body) => db.transaction((tx) => body(tx)),
     }).forOwner(ownerId);
-    return withPlainJsonDocumentWrites(pg as unknown as DocumentStore<AppScene, AppStage>);
+    return withPlainJsonDocumentWrites(
+      pg as unknown as DocumentStore<AppScene, AppStage>,
+    ) as CourseStore;
   }
 
   function toolsFor(ownerId: string, sessionId: string) {

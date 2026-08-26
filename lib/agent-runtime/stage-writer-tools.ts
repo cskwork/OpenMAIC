@@ -10,9 +10,9 @@
  *    stageId in its args) — and deliberately NOT for reader tools:
  *    ownership's side effect is dropping the user's own pending edits, so a
  *    `read_stage` must never take it;
- *  - `rename_stage` is a writer for ownership purposes even though it is not
- *    part of the course toolset's sequential scheduling (it rewrites stage
- *    identity, not scene content, and runs from the curriculum toolset).
+ *  - `rename_stage` is a writer for ownership purposes and is marked
+ *    sequential in the curriculum toolset (it rewrites stage identity, not
+ *    scene content, so it does not run through the course toolset scheduler).
  *
  * This module is shared between server and client code: keep it free of any
  * server-only imports.

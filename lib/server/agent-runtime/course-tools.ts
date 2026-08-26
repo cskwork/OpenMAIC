@@ -1,8 +1,11 @@
 /**
  * The stage read/patch toolset — the agent's document-level DSL surface.
  *
- * This layer combines the generic stage DSL with page generation, playback,
- * deck structure, media promotion, and preview tools for the background runner.
+ * This layer combines the generic stage DSL (`read_stage`, `patch_stage`,
+ * `grep_stage` from `./dsl-tools`) with page generation, playback, deck
+ * structure, media promotion, and preview tools, plus the stage-level CRUD
+ * they need (`create_stage`, folder organization, `rename_stage`, and
+ * `read_stage_outline` from `./curriculum-tools`) for the background runner.
  *
  * What this layer owns:
  *
@@ -26,7 +29,7 @@
  *    `buildRunnerCoursePrompt` (runner-contract.ts).
  */
 import type { AgentTool } from '@earendil-works/pi-agent-core';
-import type { DocumentStore, MaicDocument } from '@openmaic/storage';
+import type { DocumentFolderStore, DocumentStore, MaicDocument } from '@openmaic/storage';
 import type { Stage } from '@openmaic/dsl';
 
 import type { Scene } from '@/lib/types/stage';
@@ -40,7 +43,7 @@ import { buildScenePreviewTools, RENDER_SCENE_PREVIEW_TOOL_NAME } from './scene-
 import type { SceneTtsInput, SceneTtsSummary } from './scene-tts';
 
 export type CourseDocument = MaicDocument<Scene, Stage>;
-export type CourseStore = DocumentStore<Scene, Stage>;
+export type CourseStore = DocumentStore<Scene, Stage> & DocumentFolderStore;
 
 /** Progress metadata emitted on the durable `checkpoint` channel after a write. */
 export interface CheckpointInfo {
@@ -75,9 +78,8 @@ export interface CourseToolDeps {
  *
  * Derived from the shared `STAGE_WRITER_TOOL_NAMES` (the same list that arms
  * client-side write ownership) so the scheduler and the workbench can never
- * disagree about who writes. `rename_stage` is excluded here only because it
- * belongs to the curriculum toolset and never runs through this toolset's
- * scheduler.
+ * disagree about who writes. `rename_stage` is scheduled in the curriculum
+ * toolset, so it is excluded from this course-tool subset.
  */
 export const DOCUMENT_WRITING_TOOLS: ReadonlySet<string> = new Set<string>(
   [...STAGE_WRITER_TOOL_NAMES].filter((name) => name !== 'rename_stage'),
