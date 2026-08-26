@@ -4,7 +4,7 @@ import { NextRequest } from 'next/server';
 import type { AgentSessionMaterial } from '@openmaic/storage';
 
 const mocks = vi.hoisted(() => ({
-  runtimeEnabled: true,
+  runtimeConfigured: true,
   resolveRequestOwnerId: vi.fn(),
   resolveOwnedSession: vi.fn(),
   listSessionMaterials: vi.fn(),
@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@/lib/config/feature-flags', () => ({
-  isAgentRuntimeEnabled: () => mocks.runtimeEnabled,
+  isAgentRuntimeConfigured: () => mocks.runtimeConfigured,
 }));
 vi.mock('@/lib/server/agent-runtime/owner', () => ({
   resolveRequestOwnerId: mocks.resolveRequestOwnerId,
@@ -49,7 +49,7 @@ function material(overrides: Partial<AgentSessionMaterial> = {}): AgentSessionMa
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.runtimeEnabled = true;
+  mocks.runtimeConfigured = true;
   mocks.resolveRequestOwnerId.mockReturnValue('owner-1');
   mocks.resolveOwnedSession.mockResolvedValue({ id: SESSION_ID, ownerId: 'owner-1' });
   mocks.listSessionMaterials.mockResolvedValue([material()]);
@@ -118,8 +118,8 @@ describe('GET /api/materials', () => {
     expect(mocks.listSessionMaterials).not.toHaveBeenCalled();
   });
 
-  it('answers 404 when the agent runtime is disabled', async () => {
-    mocks.runtimeEnabled = false;
+  it('answers 404 when the agent runtime is not configured', async () => {
+    mocks.runtimeConfigured = false;
     const response = await GET(
       new NextRequest(`http://localhost/api/materials?sessionId=${SESSION_ID}`),
     );
@@ -232,8 +232,8 @@ describe('POST /api/materials', () => {
     await expect(response.json()).resolves.toMatchObject({ errorCode: 'INTERNAL_ERROR' });
   });
 
-  it('answers 404 when the agent runtime is disabled', async () => {
-    mocks.runtimeEnabled = false;
+  it('answers 404 when the agent runtime is not configured', async () => {
+    mocks.runtimeConfigured = false;
     const response = await POST(
       new NextRequest(`http://localhost/api/materials?sessionId=${SESSION_ID}`, {
         method: 'POST',

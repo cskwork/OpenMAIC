@@ -6,13 +6,13 @@ import type { AppScene } from '@/lib/types/stage';
 import { createFakeDocumentStore } from './_fake-document-store';
 
 const mocks = vi.hoisted(() => ({
-  runtimeEnabled: true,
+  runtimeConfigured: true,
   resolveRequestOwnerId: vi.fn(),
   fakeStore: null as ReturnType<typeof createFakeDocumentStore> | null,
 }));
 
 vi.mock('@/lib/config/feature-flags', () => ({
-  isAgentRuntimeEnabled: () => mocks.runtimeEnabled,
+  isAgentRuntimeConfigured: () => mocks.runtimeConfigured,
 }));
 vi.mock('@/lib/server/agent-runtime/owner', () => ({
   resolveRequestOwnerId: mocks.resolveRequestOwnerId,
@@ -48,7 +48,7 @@ function makeDocument(
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.runtimeEnabled = true;
+  mocks.runtimeConfigured = true;
   mocks.resolveRequestOwnerId.mockReturnValue('owner-1');
   mocks.fakeStore = createFakeDocumentStore();
 });
@@ -81,8 +81,8 @@ describe('GET /api/stages', () => {
     expect(mocks.resolveRequestOwnerId).toHaveBeenCalledOnce();
   });
 
-  it('answers 404 when the agent runtime is disabled', async () => {
-    mocks.runtimeEnabled = false;
+  it('answers 404 when the agent runtime is not configured', async () => {
+    mocks.runtimeConfigured = false;
     const response = await GET(new NextRequest('http://localhost/api/stages'));
     expect(response.status).toBe(404);
     expect(mocks.resolveRequestOwnerId).not.toHaveBeenCalled();
@@ -205,8 +205,8 @@ describe('POST /api/stages', () => {
     expect(mocks.resolveRequestOwnerId).not.toHaveBeenCalled();
   });
 
-  it('answers 404 when the agent runtime is disabled', async () => {
-    mocks.runtimeEnabled = false;
+  it('answers 404 when the agent runtime is not configured', async () => {
+    mocks.runtimeConfigured = false;
     const response = await POST(
       new NextRequest('http://localhost/api/stages', {
         method: 'POST',
