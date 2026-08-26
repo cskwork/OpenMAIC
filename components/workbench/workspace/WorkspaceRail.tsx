@@ -12,21 +12,22 @@
  * rather than a route change to a different shell.
  *
  * Shape, deliberately:
- *  - TWO TABS over one body — 对话 and 课程, a segmented control of two equal
- *    halves — and, under 课程 only, a DRAWER pinned at the foot for 收藏. The
- *    three used to be stacked peer sections, which meant three heads, three
- *    counts and three resting windows competing for one column; only one of the
- *    three is ever the thing you came for. Tabs make the active list own the
- *    rail's height (`workspace-paging` re-tuned with it), and the drawer keeps
- *    收藏 one press away without spending a section on work you did not make.
- *    It is scoped to 课程 because it is a drawer full of COURSES: at the foot of
- *    the chat list it was a shelf of the wrong kind of thing;
- *  - the 课程 tab is ONE TREE, and only FOLDERS are containers in it. A course
- *    that is in no folder is a row at the tree's top level, under the folders —
- *    not a member of a 未分组 group, which was a head, a count and a twisty
- *    around the absence of filing, and which let one press fold away the bulk
- *    of the list. There is still exactly one unbounded list in the rail, and
- *    therefore one pager;
+ *  - TWO TABS over one body — chat and courses, a segmented control of two
+ *    equal halves — and, under the courses tab only, a DRAWER pinned at the
+ *    foot for saved courses. The three used to be stacked peer sections, which
+ *    meant three heads, three counts and three resting windows competing for
+ *    one column; only one of the three is ever the thing you came for. Tabs
+ *    make the active list own the rail's height (`workspace-paging` re-tuned
+ *    with it), and the drawer keeps saved courses one press away without
+ *    spending a section on work you did not make. It is scoped to the courses
+ *    tab because it is a drawer full of COURSES: at the foot of the chat list
+ *    it was a shelf of the wrong kind of thing;
+ *  - the courses tab is ONE TREE, and only FOLDERS are containers in it. A
+ *    course that is in no folder is a row at the tree's top level, under the
+ *    folders — not a member of an "unfiled" group, which was a head, a count
+ *    and a twisty around the absence of filing, and which let one press fold
+ *    away the bulk of the list. There is still exactly one unbounded list in
+ *    the rail, and therefore one pager;
  *  - course and chat rows are both compact, single-line entries. A course keeps
  *    the stronger name treatment and states its page count at the far edge,
  *    matching the folder/count rhythm above it; run state belongs to the chat
@@ -42,13 +43,13 @@
  *  - rows are draggable: courses and sessions reorder against a hairline
  *    insertion line, a course dropped on a folder row is filed into it, a
  *    course dropped on the BLANK GROUND at the tree's foot is moved back out to
- *    the top level (Finder's own gesture — the tree lost its 未分组 row, and
- *    with it the only place a filed course could be dropped to unfile it), and
- *    the resulting sequence is decided entirely by `workspace-order` — this
+ *    the top level (Finder's own gesture — the tree lost its "unfiled" row,
+ *    and with it the only place a filed course could be dropped to unfile it),
+ *    and the resulting sequence is decided entirely by `workspace-order` — this
  *    file only wires the events;
- *  - every row you authored carries the same hover-revealed ⋯: 重命名 edits the
- *    name IN PLACE (the row becomes an input; Enter commits, Escape leaves it
- *    alone) and 删除 asks first. Folders and courses answer to different
+ *  - every row you authored carries the same hover-revealed ⋯: rename edits
+ *    the name IN PLACE (the row becomes an input; Enter commits, Escape leaves
+ *    it alone) and delete asks first. Folders and courses answer to different
  *    endpoints — `PATCH /api/folders/:id` and `PATCH /api/stages/:id` — but not
  *    to different interactions.
  *
@@ -407,9 +408,9 @@ export function WorkspaceRail({
   }, []);
 
   /**
-   * 收藏, at the foot. Collapsed on arrival and not remembered: it holds work
-   * you did not make, so it opens when you go looking for it and closes again
-   * with the session. Its own state, not a section's.
+   * Saved courses, at the foot. Collapsed on arrival and not remembered: it
+   * holds work you did not make, so it opens when you go looking for it and
+   * closes again with the session. Its own state, not a section's.
    */
   const [savedOpen, setSavedOpen] = useState(false);
 
@@ -450,13 +451,13 @@ export function WorkspaceRail({
   // Sorted once, ordered, then SPLIT BY OWNERSHIP, then filtered, then grouped.
   //
   // The split moved to the front of the pipeline in v10, and that is the whole
-  // structural change: 收藏 used to be a subhead at the bottom of 课程, so a
-  // course you made and a course you bookmarked shared one container, one
-  // search box and one count — and a saved course filed into one of your
-  // folders disappeared inside it. Ownership decides what a row can DO, so it
-  // decides which section a row is in. Folders now hold your work only; every
-  // saved course is in 收藏, filed or not, with its folder named on its meta
-  // line so filing still has a visible consequence.
+  // structural change: saved courses used to be a subhead at the bottom of the
+  // courses list, so a course you made and a course you bookmarked shared one
+  // container, one search box and one count — and a saved course filed into one
+  // of your folders disappeared inside it. Ownership decides what a row can DO,
+  // so it decides which section a row is in. Folders now hold your work only;
+  // every saved course is in the saved section, filed or not, with its folder
+  // named on its meta line so filing still has a visible consequence.
   const sortedCourses = useMemo(() => newestFirst(courses.classrooms), [courses.classrooms]);
   const orderedCourses = useMemo(
     () => applyCustomOrder(sortedCourses, courseOrder),
@@ -633,9 +634,9 @@ export function WorkspaceRail({
    */
   const expandInto = (destination: RailTab | 'saved') => {
     if (destination === 'saved') {
-      // The drawer lives under 课程 now, so reaching it from the strip has to
-      // land on that tab too — otherwise this opens a drawer on a tab that does
-      // not render one.
+      // The drawer lives under the courses tab now, so reaching it from the
+      // strip has to land on that tab too — otherwise this opens a drawer on a
+      // tab that does not render one.
       selectTab('courses');
       setSavedOpen(true);
     } else selectTab(destination);
@@ -644,8 +645,8 @@ export function WorkspaceRail({
 
   /**
    * What a collapsed glyph says it will do — BOTH halves of it. Naming only the
-   * destination ("对话") hid the fact that the press also reopens the rail, which
-   * is the one thing a reader of a 60px strip needs to be told.
+   * destination ("chat") hid the fact that the press also reopens the rail,
+   * which is the one thing a reader of a 60px strip needs to be told.
    */
   const expandLabel = (section: string) => t('workspace.expandNavInto', { section });
 
@@ -706,8 +707,8 @@ export function WorkspaceRail({
           >
             <BookOpen className="size-4" aria-hidden="true" />
           </button>
-          {/* The icon strip IS the list of destinations, so 收藏 keeps its
-              glyph here even though it is a drawer rather than a section —
+          {/* The icon strip IS the list of destinations, so saved courses keep
+              their glyph here even though it is a drawer rather than a section —
               this is the mark that opens it. */}
           <button
             type="button"
@@ -783,7 +784,7 @@ export function WorkspaceRail({
         trailing={
           // Saved rows get none: the drawer stays read-only. Authored rows keep
           // rename and one quiet destructive entry; filing is the tree's drag
-          // interaction, so it is not repeated behind a nested “移动” path.
+          // interaction, so it is not repeated behind a nested "move" path.
           inSaved ? undefined : (
             <WorkspaceRowMenu
               testId={`pro-nav-course-more-${course.id}`}
@@ -935,14 +936,15 @@ export function WorkspaceRail({
         </button>
       </div>
 
-      {/* ── Two tabs, one body, a drawer under 课程 ───────────────────────
-          对话 and 课程 are both yours and both maintained, so they are two
+      {/* ── Two tabs, one body, a drawer under the courses tab ────────────
+          Chat and courses are both yours and both maintained, so they are two
           VIEWS OF ONE REGION rather than two stacked lists dividing one
           column between them — at rest the old shape gave each of them five
-          rows and spent the difference on heads. 收藏 is neither: it is work
-          you kept but did not make, so it is not a third tab. It is shut at
-          the foot OF THE 课程 TAB, stating the only two facts that decide
-          whether you want it open — how many, and whose. */}
+          rows and spent the difference on heads. Saved courses are neither:
+          they are work you kept but did not make, so they are not a third
+          tab. The section is shut at the foot OF THE COURSES TAB, stating
+          the only two facts that decide whether you want it open — how many,
+          and whose. */}
       <RailTabs
         active={tab}
         onSelect={selectTab}
@@ -962,10 +964,11 @@ export function WorkspaceRail({
           one ALWAYS-VISIBLE icon+input row heading the tab content, filtering
           whichever list is on screen. Each tab keeps its own query (the two
           sections' hooks are untouched), so a search typed on one tab stays
-          put while the other is visited. On 课程 the row also carries
-          新建文件夹 as an icon button grouped with the input: the prototype
-          hangs it at the tree's foot, where in this rail it read as a row the
-          tree contained; in the header row it reads as an action on the whole
+          put while the other is visited. On the courses tab the row also
+          carries a new-folder button as an icon button grouped with the input:
+          the prototype hangs it at the tree's foot, where in this rail it read
+          as a row the tree contained; in the header row it reads as an action
+          on the whole
           list, which is what it is. */}
       <div className="flex shrink-0 items-center gap-1.5 px-3 pb-2 pt-2.5">
         <div className="ws-find min-w-0 flex-1">
@@ -1191,7 +1194,7 @@ export function WorkspaceRail({
 
                 {/* Courses that are in no folder are not a group: they are
                     ROWS, flat at the tree's top level, under the folders. The
-                    tree used to wrap them in a 未分组 container — a head, a
+                    tree used to wrap them in an "unfiled" container — a head, a
                     count and a twisty around "everything that has no head" —
                     which made the common case (an account with a few folders
                     and a hundred loose courses) pay a collapsible section for
@@ -1215,10 +1218,11 @@ export function WorkspaceRail({
         )}
         {/* The tree's blank ground, as a destination — Finder's own gesture.
             Filing is a drop onto a folder row; UNFILING needs somewhere to drop
-            too, and the row that used to serve (未分组) is gone. So the empty
-            space below the tree takes the drop: it is armed only while a course
-            is in flight, it says what it will do, and it lights up whole when
-            the pointer is actually over it. It is pinned to the panel's foot
+            too, and the row that used to serve ("unfiled") is gone. So the
+            empty space below the tree takes the drop: it is armed only while a
+            course is in flight, it says what it will do, and it lights up whole
+            when the pointer is actually over it. It is pinned to the panel's
+            foot
             (see `.ws-ground-drop`) because a tree this deep would otherwise put
             it out of reach exactly when it is needed.
 
@@ -1236,11 +1240,12 @@ export function WorkspaceRail({
         ) : null}
       </div>
 
-      {/* 收藏 belongs to the 课程 tab, and only to it: it is a drawer full of
-          COURSES, so under 对话 it was a shelf of the wrong kind of thing at the
-          foot of a list of chats. Rendered as a flex child of the rail column
-          rather than inside the tabpanel's scroller, so it still borrows height
-          from the list above instead of scrolling away with it. */}
+      {/* Saved courses belong to the courses tab, and only to it: it is a
+          drawer full of COURSES, so under the chat tab it was a shelf of the
+          wrong kind of thing at the foot of a list of chats. Rendered as a
+          flex child of the rail column rather than inside the tabpanel's
+          scroller, so it still borrows height from the list above instead of
+          scrolling away with it. */}
       {tab === 'courses' ? (
         <SavedDrawer
           open={savedOpen}
@@ -1311,8 +1316,9 @@ interface ListSearch {
  * each tab keeps its own query, so switching tabs does not carry a search
  * across to a population it was never typed against.
  *
- * Collapse used to live here too. It does not any more — 对话 and 课程 are
- * collapsed by choosing the OTHER tab, and 收藏 by shutting its drawer.
+ * Collapse used to live here too. It does not any more — the chat and course
+ * lists are collapsed by choosing the OTHER tab, and saved courses by shutting
+ * their drawer.
  */
 function useListSearch(): ListSearch {
   const [query, setQuery] = useState('');
@@ -1697,8 +1703,8 @@ function RailList({
 /**
  * The drawer's own filter, on its own row above the rows it narrows. The two
  * tabbed lists are filtered by the findrow under the tab strip instead; this
- * collapsible field survives only in the 收藏 head, where a filter that was
- * always on would cost the shut drawer its one-line promise.
+ * collapsible field survives only in the saved-courses head, where a filter
+ * that was always on would cost the shut drawer its one-line promise.
  */
 function RailSearchField({
   id,
@@ -1741,11 +1747,12 @@ function RailSearchField({
 /**
  * The control that opens it.
  *
- * A 22px glyph in the drawer's own head for 收藏 — the only collapsible filter
- * left, since the two tabbed lists are filtered by the always-visible findrow
- * under the tab strip. It never becomes one shared "search" with no stated
- * subject — the rail holds three populations, and a filter that does not say
- * which one it narrows is a lie. The label names the list every time.
+ * A 22px glyph in the drawer's own head for saved courses — the only
+ * collapsible filter left, since the two tabbed lists are filtered by the
+ * always-visible findrow under the tab strip. It never becomes one shared
+ * "search" with no stated subject — the rail holds three populations, and a
+ * filter that does not say which one it narrows is a lie. The label names the
+ * list every time.
  */
 function RailSearchToggle({
   id,
@@ -1795,7 +1802,7 @@ export interface RailTabSpec {
 }
 
 /**
- * 对话 | 课程, over one body — a SEGMENTED CONTROL of two equal halves.
+ * Chat | courses, over one body — a SEGMENTED CONTROL of two equal halves.
  *
  * It used to be an underline strip sized to its own labels and parked at the
  * left, on the reasoning that a filled segment reads as a mode while tabs read
@@ -1807,7 +1814,7 @@ export interface RailTabSpec {
  * eye lands on under the compose button.
  *
  * The truncation the old shape was avoiding is real and is paid for in TYPE,
- * not in width: 「COURSES」 as a 10px uppercase label with 0.145em of tracking
+ * not in width: "COURSES" as a 10px uppercase label with 0.145em of tracking
  * does not fit in half of a 200px rail, so the label drops the case transform
  * and the tracking (see `.ws-navtab-label`). Same two words, a third narrower,
  * and still legible at the narrowest rail.
@@ -1817,7 +1824,7 @@ export interface RailTabSpec {
  * other one is not part of that choice — the totals said nothing you could act
  * on and were the loudest numerals in the rail. No glyph either, for the same
  * reason: a two-word text label does not need one. Run state is likewise not
- * summarized here; it stays on the chat row inside 对话.
+ * summarized here; it stays on the chat row inside the chat list.
  */
 function RailTabs({
   tabs,
@@ -1881,22 +1888,22 @@ function RailTabs({
   );
 }
 
-/* ── 收藏, at the foot of the 课程 tab ────────────────────────────────── */
+/* ── Saved courses, at the foot of the courses tab ────────────────────── */
 
 /**
  * A drawer rather than a third tab, and rather than the peer section it was.
  *
- * 收藏 is not a third kind of your work — it is other people's, read-only, and
- * the one thing you do with it is open it. Making it a tab would put it on the
- * same footing as the two lists you actually maintain; leaving it a section
- * cost the two of them a third of the rail's height for a list of eight. So it
- * is pinned at the foot, shut, stating the two facts that decide whether you
- * want it at all — how many, and whose.
+ * Saved courses are not a third kind of your work — they are other people's,
+ * read-only, and the one thing you do with them is open the drawer. Making it
+ * a tab would put it on the same footing as the two lists you actually
+ * maintain; leaving it a section cost the two of them a third of the rail's
+ * height for a list of eight. So it is pinned at the foot, shut, stating the
+ * two facts that decide whether you want it at all — how many, and whose.
  *
- * It is mounted by the 课程 tab ONLY. What is in here is courses, so at the
- * foot of the chat list it was a shelf of the wrong kind of thing — and the
- * saved courses it holds cannot be filed into the tree above it either, which
- * is exactly why they are down here instead of in it.
+ * It is mounted by the courses tab ONLY. What is in here is courses, so at
+ * the foot of the chat list it was a shelf of the wrong kind of thing — and
+ * the saved courses it holds cannot be filed into the tree above it either,
+ * which is exactly why they are down here instead of in it.
  *
  * Open, it takes height from the tab body above it (both are flex children of
  * one column, and this one is capped) rather than floating over it: a panel
@@ -1998,9 +2005,10 @@ function RailEmpty({ label }: { readonly label: string }) {
  * A list that reveals itself one page at a time.
  *
  * The arithmetic — how many rows are visible, how many the next press adds,
- * whether a 收起 belongs beside it — is `workspace-paging`'s; this only renders
- * it. Page counts are owned by the caller and keyed by `id`, so every paged
- * list in the rail shares one map instead of inventing its own state.
+ * whether a collapse control belongs beside it — is `workspace-paging`'s; this
+ * only renders it. Page counts are owned by the caller and keyed by `id`, so
+ * every paged list in the rail shares one map instead of inventing its own
+ * state.
  *
  * It composes with the two things around it because it touches neither:
  *  - SEARCH filters the array before it arrives here, and the caller resets
@@ -2042,7 +2050,7 @@ function PagedRows<T>({
           className="ws-more flex h-7 w-full items-center px-2 text-left text-[12px]"
         >
           {/* The count is what THIS press adds, not what the list is hiding:
-              the old label offered 「展示更多 124」 and meant it. */}
+              the old label offered "show more (124)" and meant it. */}
           {t('workspace.showMore', { count: nextCount })}
         </button>
       ) : null}
@@ -2063,9 +2071,9 @@ function PagedRows<T>({
 /**
  * The ⋯ shared by folder rows, authored course rows and chat rows.
  *
- * One menu shape for every maintainable row in the rail: 重命名 first (it is the
- * one you press on purpose), then the destructive entry. The delete answers in
- * one of two places — in the menu, as a second press on the same item, or
+ * One menu shape for every maintainable row in the rail: rename first (it is
+ * the one you press on purpose), then the destructive entry. The delete answers
+ * in one of two places — in the menu, as a second press on the same item, or
  * elsewhere entirely (`deleteAsksElsewhere`) when the consequence needs a
  * sentence, as a folder's does.
  */

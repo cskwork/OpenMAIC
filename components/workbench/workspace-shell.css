@@ -710,7 +710,7 @@
 }
 
 /* ── The tab switch ──────────────────────────────────────────────────────
-   对话 | 课程, over one body — a SEGMENTED CONTROL of two equal halves.
+   Chat | courses, over one body — a SEGMENTED CONTROL of two equal halves.
 
    It used to be an underline strip sized to its labels and parked at the left,
    because a filled segment "reads as a mode" while tabs read as views. Two
@@ -795,7 +795,7 @@
 /* Sentence case at 11px, no tracking — NOT the rail's 10px uppercase section
    label. That label was built for a full-width heading with the whole rail to
    spread over; inside half of a 200px track, 0.145em of tracking on seven
-   uppercase characters is the difference between 「Courses」 and 「COU…」.
+   uppercase characters is the difference between "Courses" and "COU…".
    It stays a label by size and by ink, not by case. */
 .ws-navtab-label {
   font-size: 11px;
@@ -846,8 +846,8 @@
   color: var(--ws-ink-mute);
 }
 
-/* The header row's icon button — 新建文件夹 on the 课程 tab. The find
-   input's own height, so the two read as one control group. */
+/* The header row's icon button — the new-folder button on the courses tab. The
+   find input's own height, so the two read as one control group. */
 .ws-find-icon {
   display: inline-flex;
   align-items: center;
@@ -951,7 +951,7 @@
   line-height: 14px;
 }
 
-/* ── 收藏, at the foot ───────────────────────────────────────────────────
+/* ── Saved courses, at the foot ───────────────────────────────────────────
    The ownership boundary survives the move from section to drawer, and it is
    still the rail's sharpest cut: everything above the rule you made, the
    drawer below it you merely kept. Shut, it is one head; open, it takes its
@@ -1145,11 +1145,12 @@
   box-shadow: 0 0 0 3px var(--ws-accent-wash);
 }
 
-/* 展示更多 / 收起 — a plain line of quiet text belonging to the list it extends,
-   NOT a control with a glyph on it. It used to carry a chevron, which made a
-   pager row look like a third kind of disclosure in a tree that already has
-   one, and put its label in a column of its own. It reserves the rail's leading
-   slot instead, so the label starts exactly where the names above it do. */
+/* Show-more / collapse — a plain line of quiet text belonging to the list it
+   extends, NOT a control with a glyph on it. It used to carry a chevron, which
+   made a pager row look like a third kind of disclosure in a tree that already
+   has one, and put its label in a column of its own. It reserves the rail's
+   leading slot instead, so the label starts exactly where the names above it
+   do. */
 .ws-more {
   color: var(--ws-ink-mute);
   font-weight: 500;

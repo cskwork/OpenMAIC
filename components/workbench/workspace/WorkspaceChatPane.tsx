@@ -91,8 +91,8 @@ export function WorkspaceChatPane({
    * `idle` is the store holding no session at all: a draft conversation, and the
    * frame between this pane mounting on a `?session=` deep link and `attach()`.
    * Neither has a run, so the header shows no status rather than guessing one —
-   * it used to take the initial `connecting` and say 连接中 beside a composer that
-   * was simply waiting to be typed into.
+   * it used to take the initial `connecting` and show a connecting label beside
+   * a composer that was simply waiting to be typed into.
    */
   const presentation = status === 'idle' ? null : presentWorkspaceSession(status);
   const [renaming, setRenaming] = useState(false);
@@ -124,9 +124,10 @@ export function WorkspaceChatPane({
     >
       <header className="ws-pane-head flex shrink-0 items-center gap-2 px-3">
         {/* A conversation that does not exist yet has no run to report. It used to
-            take the initial `connecting` status and show 连接中 with a live spinner
-            beside a composer that was simply waiting to be typed into — which is
-            what made the empty state look like a hang. No session, no status. */}
+            take the initial `connecting` status and show a connecting label with a
+            live spinner beside a composer that was simply waiting to be typed
+            into — which is what made the empty state look like a hang. No
+            session, no status. */}
         {draftConversation || !presentation ? null : presentation.tone === 'live' ? (
           <LoaderCircle aria-hidden="true" className="ws-spin-live" />
         ) : (

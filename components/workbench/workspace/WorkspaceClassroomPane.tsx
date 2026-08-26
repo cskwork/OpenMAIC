@@ -13,8 +13,8 @@
  * Read-only. A course saved from Discover is not yours to edit: the classroom
  * already refuses (`isOwner` gates the Pro switch and the auto-edit entry, and
  * the server would refuse the write anyway), so this header only NAMES that
- * state. 开始学习 stays — learning (playing back) a saved course is a
- * perfectly legitimate thing to do with one.
+ * state. The start-learning button stays — learning (playing back) a saved
+ * course is a perfectly legitimate thing to do with one.
  */
 
 import { Eye, Play } from 'lucide-react';

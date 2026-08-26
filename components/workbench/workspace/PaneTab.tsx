@@ -6,8 +6,8 @@
  * A pane that collapses to nothing is a pane the user has to guess is still
  * there, so every collapse leaves a 30px strip carrying the pane's name set
  * vertically. It is the whole affordance: one button, one label, no menu — and
- * no icon: the strip already spells out "对话" / "课堂", and a glyph above the
- * word it duplicates is the kind of decoration this pass removes.
+ * no icon: the strip already spells out "chat" / "course", and a glyph above
+ * the word it duplicates is the kind of decoration this pass removes.
  */
 
 import { cn } from '@/lib/utils/cn';

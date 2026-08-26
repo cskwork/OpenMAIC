@@ -225,7 +225,7 @@ function WorkspaceShellController({ initialPanes }: { readonly initialPanes: Wor
 
      It still does NOT hunt for "the session that owns this course": the two
      columns are independent, and an agent is pointed at a classroom by being
-     told (`@课堂`), not by a stage id matching.
+     told (an `@course` mention), not by a stage id matching.
      See `lib/workbench/course-chat-bootstrap.ts`.
 
      The classroom keeps rendering throughout. Its own load and the manifest

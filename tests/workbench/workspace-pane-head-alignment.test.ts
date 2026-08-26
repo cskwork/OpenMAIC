@@ -2,13 +2,13 @@
  * The two pane headers are one row across the seam.
  *
  * The conversation's header (title + status word + ◀) and the classroom's
- * (tab strip + 开始学习 + ▶) are different objects, and while each carried its
- * own `height` they drifted: 44px against 42px, which shows up as a bottom
- * hairline that visibly steps at the seam and two fold chevrons that are not on
- * one baseline. The fix is structural — a single height token, declared once,
- * consumed by the class both headers share — so this checks the STRUCTURE
- * rather than re-stating the pixel value (a test that repeated the number would
- * be a second place to update, i.e. the bug again).
+ * (tab strip + start-learning + ▶) are different objects, and while each
+ * carried its own `height` they drifted: 44px against 42px, which shows up as
+ * a bottom hairline that visibly steps at the seam and two fold chevrons that
+ * are not on one baseline. The fix is structural — a single height token,
+ * declared once, consumed by the class both headers share — so this checks the
+ * STRUCTURE rather than re-stating the pixel value (a test that repeated the
+ * number would be a second place to update, i.e. the bug again).
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
