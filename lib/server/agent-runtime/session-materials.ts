@@ -74,7 +74,7 @@ export function getAgentSessionMaterialStore(): Promise<PgAgentSessionMaterialSt
 }
 
 /** Each session's material bytes form their own asset-registry partition. */
-function materialPrincipal(sessionId: string): AssetPrincipal {
+export function materialPrincipal(sessionId: string): AssetPrincipal {
   return { key: `session-materials:${sessionId}` };
 }
 
@@ -168,11 +168,67 @@ export async function resolveSessionMaterialText(
 }
 
 /**
+ * Persist raw bytes (e.g. an uploaded audio/video source or a derived clip)
+ * into the session's material asset partition and return the allocated asset
+ * id, for the material row's `rawAssetId` slot.
+ */
+export async function storeSessionMaterialRawAsset(
+  sessionId: string,
+  bytes: Buffer,
+  mime: string,
+): Promise<string> {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error('Agent runtime requires DATABASE_URL');
+  const provider = await getServerPersistenceProvider(connectionString);
+  // Copy into a fresh ArrayBuffer-backed view: BlobPart requires an
+  // ArrayBuffer-backed typed array, and a caller-supplied Buffer may be backed
+  // by a pool or SharedArrayBuffer.
+  return provider.assetStore.put(
+    materialPrincipal(sessionId),
+    new Blob([new Uint8Array(bytes)], { type: mime }),
+    { contentType: mime },
+  );
+}
+
+/**
+ * Resolve a material row's raw bytes (audio/video source or derived clip) to
+ * their bytes plus recorded media type, or `null` when the asset is absent.
+ * Scoped to the session's own partition like `resolveSessionMaterialText`.
+ */
+export async function resolveSessionMaterialRawAsset(
+  sessionId: string,
+  rawAssetId: string,
+): Promise<{ bytes: Buffer; mime: string } | null> {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error('Agent runtime requires DATABASE_URL');
+  const provider = await getServerPersistenceProvider(connectionString);
+  const resolved = await provider.assetStore.resolve(
+    materialPrincipal(sessionId),
+    toAssetId(rawAssetId),
+  );
+  if (!resolved) return null;
+  return { bytes: Buffer.from(resolved.bytes), mime: resolved.mime };
+}
+
+/**
+ * Remove a raw asset from the session's material partition (compensation for a
+ * failed material-row write). A no-op for foreign/absent ids.
+ */
+export async function removeSessionMaterialRawAsset(
+  sessionId: string,
+  rawAssetId: string,
+): Promise<void> {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error('Agent runtime requires DATABASE_URL');
+  const provider = await getServerPersistenceProvider(connectionString);
+  await provider.assetStore.remove(materialPrincipal(sessionId), toAssetId(rawAssetId));
+}
+
+/**
  * Safe metadata and typed-tool guidance for materials bound to one session.
  * Material contents stay in the asset registry and are available only through
  * the session-scoped material tools, never through this block. Ported from the
- * reference's session-materials prompt block, minus the tools this slice does
- * not register (extract/wait/use-media).
+ * reference's session-materials prompt block, minus extraction queue tools.
  */
 export function sessionMaterialsPromptBlock(materials: AgentSessionMaterial[]): string {
   if (materials.length === 0) return '';
@@ -187,6 +243,7 @@ export function sessionMaterialsPromptBlock(materials: AgentSessionMaterial[]): 
     ),
     '',
     'Material workflow: call `list_materials` to inspect the session materials and discover `mat_` ids; call `read_material` on a `mat_` id to read its text in pages (continue with the returned `nextOffset`); call `search_material` to locate case-insensitive literal text across the readable materials.',
+    'To reuse session image, video, or audio bytes in a page, call `use_material_media` and use the returned stable `src`.',
     'A `web` material was already fetched and extracted; read it directly with `read_material` and page through offsets.',
   ].join('\n');
 }

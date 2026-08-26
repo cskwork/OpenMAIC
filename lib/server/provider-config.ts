@@ -640,6 +640,17 @@ export function getServerTTSProviders(): Record<string, { disabled?: boolean }> 
   return result;
 }
 
+/**
+ * TTS providers this deployment actually serves: present in server config and
+ * not force-disabled. Browser-native voices are excluded (no static voice list
+ * and no server-side synthesis without a configured backend).
+ */
+export function enabledServerTTSProviderIds(): string[] {
+  return Object.entries(getServerTTSProviders())
+    .filter(([id, info]) => id !== 'browser-native-tts' && !info.disabled)
+    .map(([id]) => id);
+}
+
 export function resolveTTSApiKey(providerId: string, clientKey?: string): string {
   return resolveSectionApiKey('tts', providerId, clientKey);
 }

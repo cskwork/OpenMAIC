@@ -125,5 +125,24 @@ export function runAgentSessionUrlContract(
         true,
       );
     });
+
+    test('revokes URL authority when a session is soft-deleted', async () => {
+      const store = makeStore();
+      await store.createSession({ id: 'session-1', ownerId: 'owner-a', prompt: 'p' });
+      await store.registerSessionUrls('session-1', ['https://example.com/a'], 'user');
+      await store.softDeleteSession('session-1', 'owner-a');
+
+      await expect(store.isSessionUrlAllowed('session-1', 'https://example.com/b')).resolves.toBe(
+        false,
+      );
+      await store.registerSessionUrls(
+        'session-1',
+        ['https://after-delete.example/a'],
+        'web_search',
+      );
+      await expect(
+        store.isSessionUrlAllowed('session-1', 'https://after-delete.example/b'),
+      ).resolves.toBe(false);
+    });
   });
 }

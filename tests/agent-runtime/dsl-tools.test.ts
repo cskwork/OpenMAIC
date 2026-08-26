@@ -1149,7 +1149,7 @@ describe('DSL course-tool wiring', () => {
     onCheckpoint: () => undefined,
   });
 
-  it('always registers DSL tools, excludes every legacy editor, and serializes patch_stage', () => {
+  it('registers generation and DSL tools while excluding legacy editors', () => {
     const current = state();
     const tools = buildDslCourseToolset(deps(current.store));
     const names = tools.map((item) => item.name);
@@ -1163,14 +1163,23 @@ describe('DSL course-tool wiring', () => {
       expect(buildCourseAllowlist()).toContain(name);
     }
     for (const name of [
+      'generate_scene',
+      'list_scenes',
+      'generate_actions',
+      'duplicate_scene',
+      'generate_tts',
+      'edit_deck',
+    ]) {
+      expect(names).toContain(name);
+      expect(buildCourseAllowlist()).toContain(name);
+    }
+    for (const name of [
       'read_scene',
       'edit_slide',
       'edit_quiz',
       'edit_widget',
       'edit_actions',
       'edit_pbl',
-      'edit_deck',
-      'generate_scene',
       'set_roster',
     ]) {
       expect(names).not.toContain(name);
@@ -1179,7 +1188,19 @@ describe('DSL course-tool wiring', () => {
     expect(tool(tools, 'patch_stage')).toMatchObject({ executionMode: 'sequential' });
     expect(tool(tools, 'read_stage')).not.toHaveProperty('executionMode');
     expect(tool(tools, 'grep_stage')).not.toHaveProperty('executionMode');
-    expect(new Set(names)).toEqual(new Set(['read_stage', 'patch_stage', 'grep_stage']));
+    expect(new Set(names)).toEqual(
+      new Set([
+        'generate_scene',
+        'list_scenes',
+        'generate_actions',
+        'duplicate_scene',
+        'generate_tts',
+        'edit_deck',
+        'read_stage',
+        'patch_stage',
+        'grep_stage',
+      ]),
+    );
   });
 
   it('injects generic DSL compatibility guidance into every runner prompt', () => {

@@ -939,7 +939,10 @@ export class PgAgentSessionStore
       .join(', ');
     await target.query(
       `INSERT INTO ${this.table('urls')} (session_id, url, source)
-       VALUES ${valueRows}
+       SELECT observed.session_id, observed.url, observed.source
+         FROM (VALUES ${valueRows}) AS observed(session_id, url, source)
+         JOIN ${this.table('sessions')} AS sessions
+           ON sessions.id = observed.session_id AND sessions.deleted_at IS NULL
        ON CONFLICT (session_id, url) DO NOTHING`,
       [sessionId, ...urls.flatMap((url) => [url, source])],
     );
@@ -957,7 +960,11 @@ export class PgAgentSessionStore
     if (!url) return false;
     const candidateOrigin = new URL(url).origin;
     const result = await this.queryable.query<{ url: string }>(
-      `SELECT url FROM ${this.table('urls')} WHERE session_id = $1`,
+      `SELECT urls.url
+         FROM ${this.table('urls')} AS urls
+         JOIN ${this.table('sessions')} AS sessions
+           ON sessions.id = urls.session_id AND sessions.deleted_at IS NULL
+        WHERE urls.session_id = $1`,
       [sessionId],
     );
     return result.rows.some((row) => urlOrigin(row.url) === candidateOrigin);

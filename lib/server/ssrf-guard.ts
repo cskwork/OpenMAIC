@@ -42,7 +42,11 @@ export function assertSafeIp(value: string): void {
     address = (address as ipaddr.IPv6).toIPv4Address();
   }
   const canonical = address.toString().toLowerCase();
-  if (CLOUD_METADATA_ADDRESSES.has(canonical) || address.range() !== 'unicast') {
+  if (
+    CLOUD_METADATA_ADDRESSES.has(canonical) ||
+    isPrivateIP(canonical) ||
+    address.range() !== 'unicast'
+  ) {
     throw new UnsafeNetworkTargetError('Local/private/reserved network URLs are not allowed');
   }
 }
