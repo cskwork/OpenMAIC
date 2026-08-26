@@ -7,8 +7,10 @@
  * the generic fallback. The retired `finish` tool is not shown.
  *
  * (Port note: the table is reconciled against THIS runtime's tool registry, not
- * the reference's — voice-clone, PPT-import, video/image, personal-history,
- * roster and folder tools are not registered upstream and have no rows.)
+ * the reference's — voice-clone, PPT-import, video/image and personal-history
+ * tools are not registered upstream and have no rows. The folder and rename
+ * stage tools arrived on the integration base after this slice was written and
+ * gained their rows with the folder-organisation tools.)
  *
  * ## The rule
  *
@@ -51,6 +53,9 @@ import {
   BookOpen,
   Copy,
   FileSearch,
+  FolderInput,
+  FolderPlus,
+  FolderTree,
   Globe,
   Image as ImageIcon,
   Layers,
@@ -725,9 +730,58 @@ export function presentTool(
       };
     }
 
-    // ── The series layer: other stages ───────────────────────────────────────
-    // The upstream runtime has no folder tools, so only the two stage tools
-    // that exist here get rows.
+    // ── The series layer: folders and other stages ────────────────────────────
+    case 'create_folder':
+      return {
+        icon: FolderPlus,
+        label: t('workbench.tool.label.createFolder'),
+        subject: str(d.name) ?? str(args.name),
+        chips,
+        ...(failed
+          ? { errorText: errorLine(t('workbench.tool.error.createFolder'), node.toolResultText) }
+          : {}),
+      };
+
+    case 'move_to_folder':
+      // Both arguments are ids and the result names the course only in prose,
+      // which this file does not parse — so this row is the verb alone (see
+      // `stageTitle`).
+      return {
+        icon: FolderInput,
+        label: t('workbench.tool.label.moveToFolder'),
+        chips,
+        ...(failed
+          ? { errorText: errorLine(t('workbench.tool.error.moveToFolder'), node.toolResultText) }
+          : {}),
+      };
+
+    case 'list_folder_stages': {
+      const count = num(d.count) ?? (Array.isArray(d.courses) ? d.courses.length : undefined);
+      if (count !== undefined) {
+        chips.push({ label: t('workbench.tool.chip.courses', { count }), tone: 'accent' });
+      }
+      return {
+        icon: FolderTree,
+        label: t('workbench.tool.label.listFolderCourses'),
+        // No argument means the whole library; with a folder id the scope is
+        // one folder, whose name this call never learns.
+        subject: t(
+          str(args.folderId)
+            ? 'workbench.tool.chip.folderCourses'
+            : 'workbench.tool.chip.allCourses',
+        ),
+        chips,
+        ...(failed
+          ? {
+              errorText: errorLine(
+                t('workbench.tool.error.listFolderCourses'),
+                node.toolResultText,
+              ),
+            }
+          : {}),
+      };
+    }
+
     case 'create_stage':
       if (d.reused) chips.push({ label: t('workbench.tool.chip.reusedCourse') });
       if (str(d.folderId)) chips.push({ label: t('workbench.tool.chip.movedToFolder') });
@@ -738,6 +792,20 @@ export function presentTool(
         chips,
         ...(failed
           ? { errorText: errorLine(t('workbench.tool.error.createStage'), node.toolResultText) }
+          : {}),
+      };
+
+    case 'rename_stage':
+      // The subject is the NEW name (the result names it in `details.title`;
+      // while running, the argument carries it as `name`) — the id it acted on
+      // is the opaque stage-xxx the reader never chose.
+      return {
+        icon: Pencil,
+        label: t('workbench.tool.label.renameStage'),
+        subject: str(d.title) ?? str(args.name),
+        chips,
+        ...(failed
+          ? { errorText: errorLine(t('workbench.tool.error.renameStage'), node.toolResultText) }
           : {}),
       };
 
