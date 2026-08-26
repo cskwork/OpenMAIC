@@ -142,6 +142,21 @@ class OwnerBoundDocumentStore<TScene extends SceneLike, TStage extends Stage>
   moveDocumentToFolder(stageId: string, folderId: string): Promise<boolean> {
     return this.inner.moveDocumentToFolder(stageId, folderId);
   }
+
+  renameFolder(id: string, name: string): Promise<DocumentFolder | null> {
+    return this.inner.renameFolder(id, name);
+  }
+
+  deleteFolder(
+    id: string,
+    mode: 'ungroup' | 'remove',
+  ): Promise<{ removedStageIds: string[] } | null> {
+    return this.inner.deleteFolder(id, mode);
+  }
+
+  setStageFolder(stageId: string, folderId: string | null): Promise<boolean> {
+    return this.inner.setStageFolder(stageId, folderId);
+  }
 }
 
 export function createOwnerBoundDocumentStore<

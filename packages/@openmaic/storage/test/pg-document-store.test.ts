@@ -144,6 +144,99 @@ describe('owner-scoped document folders', () => {
       DocumentFolderLimitError,
     );
   });
+
+  test('assigns ascending orders on create and lists by order', async () => {
+    const first = await alice.createFolder('folder-a', 'First');
+    const second = await alice.createFolder('folder-b', 'Second');
+    await bob.createFolder('folder-x', 'Bob first');
+
+    expect(first.folder.order).toBe(0);
+    expect(second.folder.order).toBe(1);
+    // Each owner's orders are independent.
+    await expect(bob.listFolders()).resolves.toEqual([
+      expect.objectContaining({ id: 'folder-x', order: 0 }),
+    ]);
+    const listed = await alice.listFolders();
+    expect(listed.map((folder) => folder.order)).toEqual([0, 1]);
+    expect(listed.map((folder) => folder.name)).toEqual(['First', 'Second']);
+  });
+
+  test('renames an owned folder and returns null for a missing one', async () => {
+    await alice.createFolder('folder-a', 'Series');
+
+    const renamed = await alice.renameFolder('folder-a', 'Semester');
+    expect(renamed).toMatchObject({ id: 'folder-a', name: 'Semester' });
+    await expect(alice.listFolders()).resolves.toEqual([
+      expect.objectContaining({ id: 'folder-a', name: 'Semester' }),
+    ]);
+    await expect(alice.renameFolder('missing', 'X')).resolves.toBeNull();
+  });
+
+  test('rename to a case-insensitive duplicate name violates the unique constraint', async () => {
+    await alice.createFolder('folder-a', 'Series');
+    await alice.createFolder('folder-b', 'Semester');
+
+    await expect(alice.renameFolder('folder-b', 'SERIES')).rejects.toMatchObject({ code: '23505' });
+    // The original name is untouched after the refused rename.
+    await expect(alice.listFolders()).resolves.toEqual([
+      expect.objectContaining({ id: 'folder-a', name: 'Series' }),
+      expect.objectContaining({ id: 'folder-b', name: 'Semester' }),
+    ]);
+  });
+
+  test("deleteFolder 'ungroup' drops the folder and keeps its documents unfiled", async () => {
+    await alice.createFolder('folder-a', 'Series');
+    await alice.saveDocument(makeDocument('alice-stage'));
+    await alice.moveDocumentToFolder('alice-stage', 'folder-a');
+
+    await expect(alice.deleteFolder('folder-a', 'ungroup')).resolves.toEqual({
+      removedStageIds: [],
+    });
+    await expect(alice.listFolders()).resolves.toEqual([]);
+    await expect(alice.listDocuments()).resolves.toEqual([
+      expect.objectContaining({ id: 'alice-stage' }),
+    ]);
+    await expect(alice.listDocuments('folder-a')).resolves.toEqual([]);
+    await expect(alice.deleteFolder('folder-a', 'ungroup')).resolves.toBeNull();
+  });
+
+  test("deleteFolder 'remove' returns the captured member ids for the caller's cascade", async () => {
+    await alice.createFolder('folder-a', 'Series');
+    await alice.saveDocument(makeDocument('alice-stage-1'));
+    await alice.saveDocument(makeDocument('alice-stage-2'));
+    await alice.moveDocumentToFolder('alice-stage-1', 'folder-a');
+    await alice.moveDocumentToFolder('alice-stage-2', 'folder-a');
+
+    await expect(alice.deleteFolder('folder-a', 'remove')).resolves.toEqual({
+      removedStageIds: ['alice-stage-1', 'alice-stage-2'],
+    });
+    await expect(alice.listFolders()).resolves.toEqual([]);
+    // The documents themselves survive; only their folder pointers are cleared.
+    await expect(alice.listDocuments()).resolves.toEqual([
+      expect.objectContaining({ id: 'alice-stage-1' }),
+      expect.objectContaining({ id: 'alice-stage-2' }),
+    ]);
+    await expect(alice.deleteFolder('folder-a', 'remove')).resolves.toBeNull();
+  });
+
+  test('setStageFolder files, un-files idempotently, and refuses foreign folders', async () => {
+    await alice.createFolder('folder-a', 'Series');
+    await bob.createFolder('folder-a', 'Bob series');
+    await alice.saveDocument(makeDocument('alice-stage'));
+
+    await expect(alice.setStageFolder('alice-stage', 'folder-a')).resolves.toBe(true);
+    await expect(alice.setStageFolder('alice-stage', 'folder-a')).resolves.toBe(true);
+    await expect(alice.listDocuments('folder-a')).resolves.toEqual([
+      expect.objectContaining({ id: 'alice-stage', folderId: 'folder-a' }),
+    ]);
+    // Un-filing is idempotent and never refuses, even for an absent stage.
+    await expect(alice.setStageFolder('alice-stage', null)).resolves.toBe(true);
+    await expect(alice.setStageFolder('alice-stage', null)).resolves.toBe(true);
+    await expect(alice.listDocuments('folder-a')).resolves.toEqual([]);
+    // A folder that exists but belongs to somebody else refuses the write.
+    await expect(alice.setStageFolder('alice-stage', 'folder-a')).resolves.toBe(true);
+    await expect(bob.setStageFolder('alice-stage', 'folder-a')).resolves.toBe(false);
+  });
 });
 
 describe('PgDocumentStore Postgres behavior', () => {
