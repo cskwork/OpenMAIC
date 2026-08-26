@@ -19,12 +19,15 @@ import {
   createMaterialId,
   toAssetId,
   type AgentSessionMaterial,
+  type AgentSessionMeta,
   type AssetPrincipal,
   type ListAgentSessionMaterialsOptions,
 } from '@openmaic/storage';
 
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
 
+import { getAgentSessionStore } from './store';
+import { isPptxMaterial } from './pptx-mime';
 import type { ExtractedWebPage } from './fetch-url';
 
 interface AgentSessionMaterialStoreState {
@@ -74,7 +77,7 @@ export function getAgentSessionMaterialStore(): Promise<PgAgentSessionMaterialSt
 }
 
 /** Each session's material bytes form their own asset-registry partition. */
-function materialPrincipal(sessionId: string): AssetPrincipal {
+export function materialPrincipal(sessionId: string): AssetPrincipal {
   return { key: `session-materials:${sessionId}` };
 }
 
@@ -128,6 +131,96 @@ export async function createWebMaterial(
   }
 }
 
+/** A user-uploaded source file, persisted through the same seams as a fetch. */
+export interface CreateSourceMaterialInput {
+  /** Display name of the uploaded file (the `x-material-filename` header). */
+  filename: string;
+  /** Canonical MIME type of the uploaded bytes. */
+  mimeType: string;
+  /** The uploaded bytes. */
+  bytes: Buffer;
+}
+
+/**
+ * Persist a user-uploaded file as a session material: the raw bytes go into
+ * the asset registry under the session's own partition and the material row
+ * records the returned asset id (`rawAssetId`), mirroring
+ * {@link createWebMaterial}'s asset/metadata handoff. The kind is `source`,
+ * the same vocabulary the reference uses for uploads: source records carry no
+ * readable text by design (the agent reads extraction or image derivatives
+ * instead), so `textChars` stays 0 and only `rawAssetId` is recorded. A
+ * confirmed material-row failure removes the just-stored asset; ambiguous
+ * database outcomes are verified before cleanup, exactly like the web path.
+ */
+export async function createSourceMaterial(
+  sessionId: string,
+  input: CreateSourceMaterialInput,
+): Promise<AgentSessionMaterial> {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error('Agent runtime requires DATABASE_URL');
+  const provider = await getServerPersistenceProvider(connectionString);
+  const id = createMaterialId();
+  const body = Buffer.from(input.bytes);
+  const principal = materialPrincipal(sessionId);
+  const store = await getAgentSessionMaterialStore();
+  const assetId = await provider.assetStore.put(
+    principal,
+    new Blob([body], { type: input.mimeType }),
+    { contentType: input.mimeType },
+  );
+  try {
+    return await store.createMaterial(sessionId, {
+      id,
+      kind: 'source',
+      title: input.filename,
+      rawAssetId: assetId,
+      textChars: 0,
+    });
+  } catch (error) {
+    // Same ambiguous-commit discipline as createWebMaterial: only remove the
+    // asset when the row is confirmed absent.
+    const committed = await store.getMaterial(sessionId, id).catch(() => undefined);
+    if (committed) return committed;
+    if (committed === null) {
+      await provider.assetStore.remove(principal, assetId).catch(() => undefined);
+    }
+    throw error;
+  }
+}
+
+/**
+ * The HTTP-visible projection of one material row — the same shape the
+ * `list_materials` agent tool exposes. Asset ids stay off the wire: the
+ * registry handles are internal to the host seam, and nothing downstream of
+ * the store should depend on them.
+ */
+export function publicMaterialView(record: AgentSessionMaterial): Record<string, unknown> {
+  return {
+    materialId: record.id,
+    kind: record.kind,
+    ...(record.title ? { title: record.title } : {}),
+    ...(record.sourceUrl ? { sourceUrl: record.sourceUrl } : {}),
+    textChars: record.textChars,
+    extraction: record.extraction,
+    createdAt: record.createdAt,
+  };
+}
+
+/**
+ * Resolve a session the owner may reach, or `null` — the materials routes'
+ * ownership gate. Materials are session-scoped, so an HTTP client must name
+ * the session it means; the session's own owner row is the authorization, and
+ * a foreign or missing session answers the same `null` (no existence oracle).
+ */
+export async function resolveOwnedSession(
+  sessionId: string,
+  ownerId: string,
+): Promise<AgentSessionMeta | null> {
+  const store = await getAgentSessionStore();
+  const session = await store.getSession(sessionId);
+  return session && session.ownerId === ownerId ? session : null;
+}
+
 /** Newest-first session material listing with keyset paging. */
 export async function listSessionMaterials(
   sessionId: string,
@@ -168,10 +261,66 @@ export async function resolveSessionMaterialText(
 }
 
 /**
+ * Persist raw bytes (e.g. an uploaded audio/video source or a derived clip)
+ * into the session's material asset partition and return the allocated asset
+ * id, for the material row's `rawAssetId` slot.
+ */
+export async function storeSessionMaterialRawAsset(
+  sessionId: string,
+  bytes: Buffer,
+  mime: string,
+): Promise<string> {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error('Agent runtime requires DATABASE_URL');
+  const provider = await getServerPersistenceProvider(connectionString);
+  // Copy into a fresh ArrayBuffer-backed view: BlobPart requires an
+  // ArrayBuffer-backed typed array, and a caller-supplied Buffer may be backed
+  // by a pool or SharedArrayBuffer.
+  return provider.assetStore.put(
+    materialPrincipal(sessionId),
+    new Blob([new Uint8Array(bytes)], { type: mime }),
+    { contentType: mime },
+  );
+}
+
+/**
+ * Resolve a material row's raw bytes (audio/video source or derived clip) to
+ * their bytes plus recorded media type, or `null` when the asset is absent.
+ * Scoped to the session's own partition like `resolveSessionMaterialText`.
+ */
+export async function resolveSessionMaterialRawAsset(
+  sessionId: string,
+  rawAssetId: string,
+): Promise<{ bytes: Buffer; mime: string } | null> {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error('Agent runtime requires DATABASE_URL');
+  const provider = await getServerPersistenceProvider(connectionString);
+  const resolved = await provider.assetStore.resolve(
+    materialPrincipal(sessionId),
+    toAssetId(rawAssetId),
+  );
+  if (!resolved) return null;
+  return { bytes: Buffer.from(resolved.bytes), mime: resolved.mime };
+}
+
+/**
+ * Remove a raw asset from the session's material partition (compensation for a
+ * failed material-row write). A no-op for foreign/absent ids.
+ */
+export async function removeSessionMaterialRawAsset(
+  sessionId: string,
+  rawAssetId: string,
+): Promise<void> {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error('Agent runtime requires DATABASE_URL');
+  const provider = await getServerPersistenceProvider(connectionString);
+  await provider.assetStore.remove(materialPrincipal(sessionId), toAssetId(rawAssetId));
+}
+
+/**
  * Safe metadata and typed-tool guidance for materials bound to one session.
  * Material contents stay in the asset registry and are available only through
- * the session-scoped material tools, never through this block. Ported from the
- * reference's session-materials prompt block, minus extraction queue tools.
+ * the session-scoped material tools, never through this block.
  */
 export function sessionMaterialsPromptBlock(materials: AgentSessionMaterial[]): string {
   if (materials.length === 0) return '';
@@ -185,8 +334,13 @@ export function sessionMaterialsPromptBlock(materials: AgentSessionMaterial[]): 
         `- "${material.title ?? material.id}" (${material.kind}, ${material.textChars} characters)`,
     ),
     '',
-    'Material workflow: call `list_materials` to inspect the session materials and discover `mat_` ids; call `read_material` on a `mat_` id to read its text in pages (continue with the returned `nextOffset`); call `search_material` to locate case-insensitive literal text across the readable materials.',
+    'Material workflow: call `list_materials` to inspect the session materials and discover `mat_` ids; call `extract_material` on an uploaded source, then `wait_for_materials`; call `read_material` on the resulting extraction `mat_` id to read its text in pages (continue with the returned `nextOffset`); call `search_material` to locate case-insensitive literal text across the readable materials.',
     'To reuse session image, video, or audio bytes in a page, call `use_material_media` and use the returned stable `src`.',
     'A `web` material was already fetched and extracted; read it directly with `read_material` and page through offsets.',
+    ...(materials.some((material) => isPptxMaterial({ originalName: material.title }))
+      ? [
+          'A registered .pptx can be imported INTO a stage as appended pages with `import_pptx` (layout-preserving: original slides become pages; the stage keeps its own title). Use that instead of an AI rewrite when the user wants the PowerPoint\u2019s own pages.',
+        ]
+      : []),
   ].join('\n');
 }

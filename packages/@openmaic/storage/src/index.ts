@@ -83,11 +83,17 @@ export type {
   DocumentStore,
   MaicDocument,
   DocumentSummary,
+  DocumentFolder,
+  DocumentFolderStore,
   SceneLike,
   SceneValidator,
   StageValidator,
 } from './document/types.js';
-export { DocumentNotFoundError, DocumentVersionError } from './document/types.js';
+export {
+  DocumentFolderLimitError,
+  DocumentNotFoundError,
+  DocumentVersionError,
+} from './document/types.js';
 export { BrowserDocumentStore, type BrowserDocumentStoreOptions } from './document/browser.js';
 export {
   HttpDocumentStore,
@@ -197,11 +203,20 @@ export {
   AgentSessionMaterialError,
   createMaterialId,
   isAgentSessionMaterialKind,
+  MATERIAL_EXTRACTION_STATUSES,
+  MAX_MATERIAL_EXTRACTION_RETRIES,
   type AgentSessionMaterial,
   type AgentSessionMaterialKind,
   type AgentSessionMaterialStore,
   type CreateAgentSessionMaterialInput,
   type ListAgentSessionMaterialsOptions,
+  type MaterialExtractionStatus,
+  type MaterialExtractionState,
+  type MaterialExtractionStats,
+  type ClaimedMaterialExtraction,
+  type ClaimMaterialExtractionOptions,
+  type CompleteMaterialExtractionInput,
+  type MaterialExtractionFailureSettlement,
 } from './material/types.js';
 export {
   AGENT_SESSION_MATERIAL_PG_SCHEMA,

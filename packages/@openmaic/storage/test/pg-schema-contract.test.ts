@@ -37,6 +37,17 @@ import type { Queryable } from '../src/runtime/pg.js';
  */
 
 const EXPECTED_DOCUMENT_PG_SCHEMA = `
+CREATE TABLE IF NOT EXISTS document_folders (
+  owner_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  normalized_name TEXT NOT NULL,
+  created_at DOUBLE PRECISION NOT NULL,
+  updated_at DOUBLE PRECISION NOT NULL,
+  PRIMARY KEY (owner_id, id),
+  UNIQUE (owner_id, normalized_name)
+);
+
 CREATE TABLE IF NOT EXISTS document_stages (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -46,14 +57,22 @@ CREATE TABLE IF NOT EXISTS document_stages (
   created_at DOUBLE PRECISION NOT NULL,
   updated_at DOUBLE PRECISION NOT NULL,
   owner_id TEXT,
+  folder_id TEXT,
   data JSONB NOT NULL
 );
 
 ALTER TABLE document_stages
   ADD COLUMN IF NOT EXISTS owner_id TEXT;
 
+ALTER TABLE document_stages
+  ADD COLUMN IF NOT EXISTS folder_id TEXT;
+
 CREATE INDEX IF NOT EXISTS document_stages_owner_idx
   ON document_stages (owner_id, id) WHERE owner_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS document_stages_owner_folder_idx
+  ON document_stages (owner_id, folder_id, id)
+  WHERE owner_id IS NOT NULL AND folder_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS document_scenes (
   stage_id TEXT NOT NULL REFERENCES document_stages(id) ON DELETE CASCADE,
@@ -240,14 +259,30 @@ CREATE TABLE IF NOT EXISTS agent_session_materials (
   text_asset_id TEXT,
   raw_asset_id  TEXT,
   text_chars    INTEGER NOT NULL DEFAULT 0,
+  derived_from  TEXT REFERENCES agent_session_materials(id) ON DELETE CASCADE,
+  extraction_status TEXT NOT NULL DEFAULT 'done',
+  extraction_attempts INTEGER NOT NULL DEFAULT 0,
+  extraction_error TEXT,
+  extraction_stats JSONB,
+  extractor_version TEXT,
+  extraction_lease_worker_id TEXT,
+  extraction_lease_worker_pid INTEGER,
+  extraction_lease_heartbeat_at BIGINT,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT agent_session_materials_kind_known CHECK (kind IN
     ('source','extraction','transcript','audio-track','image','web')),
   CONSTRAINT agent_session_materials_text_chars_nonnegative CHECK (text_chars >= 0)
+  ,CONSTRAINT agent_session_materials_extraction_status_known CHECK (extraction_status IN
+    ('idle','pending','running','done','failed'))
+  ,CONSTRAINT agent_session_materials_extraction_attempts_nonnegative CHECK (extraction_attempts >= 0)
 );
 
 CREATE INDEX IF NOT EXISTS agent_session_materials_session_created_idx
   ON agent_session_materials (session_id, created_at);
+
+CREATE INDEX IF NOT EXISTS agent_session_materials_extraction_queue_idx
+  ON agent_session_materials (created_at)
+  WHERE kind = 'source' AND extraction_status IN ('pending','running');
 `;
 
 /** Records the statements an ensure function actually issues. */

@@ -1,8 +1,11 @@
 /**
  * The stage read/patch toolset — the agent's document-level DSL surface.
  *
- * This layer combines the generic stage DSL with page generation, playback,
- * deck structure, media promotion, and preview tools for the background runner.
+ * This layer combines the generic stage DSL (`read_stage`, `patch_stage`,
+ * `grep_stage` from `./dsl-tools`) with page generation, playback, deck
+ * structure, media promotion, and preview tools, plus the stage-level CRUD
+ * they need (`create_stage`, folder organization, `rename_stage`, and
+ * `read_stage_outline` from `./curriculum-tools`) for the background runner.
  *
  * What this layer owns:
  *
@@ -26,7 +29,7 @@
  *    `buildRunnerCoursePrompt` (runner-contract.ts).
  */
 import type { AgentTool } from '@earendil-works/pi-agent-core';
-import type { DocumentStore, MaicDocument } from '@openmaic/storage';
+import type { DocumentFolderStore, DocumentStore, MaicDocument } from '@openmaic/storage';
 import type { Stage } from '@openmaic/dsl';
 
 import type { Scene } from '@/lib/types/stage';
@@ -37,10 +40,22 @@ import { buildGenerationTools, GENERATION_TOOL_NAMES } from './generation-tools'
 import { buildCourseAudioAndDeckTools, COURSE_AUDIO_DECK_TOOL_NAMES } from './course-edit/tools';
 import { buildMaterialMediaTool, MATERIAL_MEDIA_TOOL_NAME } from './material-media';
 import { buildScenePreviewTools, RENDER_SCENE_PREVIEW_TOOL_NAME } from './scene-preview';
+import { buildImportPptxTool, IMPORT_PPTX_TOOL_NAME, type ImportPptxToolDeps } from './import-pptx';
+import {
+  buildGenerateImageTool,
+  GENERATE_IMAGE_TOOL_NAME,
+  type GenerateImageToolDeps,
+} from './generate-image';
+import {
+  buildGenerateVideoTool,
+  GENERATE_VIDEO_TOOL_NAME,
+  hasConfiguredVideoGeneration,
+  type GenerateVideoToolDeps,
+} from './generate-video';
 import type { SceneTtsInput, SceneTtsSummary } from './scene-tts';
 
 export type CourseDocument = MaicDocument<Scene, Stage>;
-export type CourseStore = DocumentStore<Scene, Stage>;
+export type CourseStore = DocumentStore<Scene, Stage> & DocumentFolderStore;
 
 /** Progress metadata emitted on the durable `checkpoint` channel after a write. */
 export interface CheckpointInfo {
@@ -75,9 +90,8 @@ export interface CourseToolDeps {
  *
  * Derived from the shared `STAGE_WRITER_TOOL_NAMES` (the same list that arms
  * client-side write ownership) so the scheduler and the workbench can never
- * disagree about who writes. `rename_stage` is excluded here only because it
- * belongs to the curriculum toolset and never runs through this toolset's
- * scheduler.
+ * disagree about who writes. `rename_stage` is scheduled in the curriculum
+ * toolset, so it is excluded from this course-tool subset.
  */
 export const DOCUMENT_WRITING_TOOLS: ReadonlySet<string> = new Set<string>(
   [...STAGE_WRITER_TOOL_NAMES].filter((name) => name !== 'rename_stage'),
@@ -119,24 +133,40 @@ export function markDocumentWritersSequential(
 /**
  * The stage read/patch toolset registered on the runner: the three generic DSL
  * tools, with `patch_stage` marked sequential through the shared writer
- * registry.
+ * registry. `import_pptx` and `generate_image` are always part of the course
+ * toolset; `generate_video` is capability-registered and exists exactly when a
+ * video provider is configured, so the model never sees a tool that can only
+ * throw.
  */
-export function buildDslCourseToolset(deps: CourseToolDeps): AgentTool<never, never>[] {
+export function buildDslCourseToolset(
+  deps: CourseToolDeps &
+    Partial<ImportPptxToolDeps> &
+    Partial<GenerateImageToolDeps> &
+    Partial<GenerateVideoToolDeps>,
+): AgentTool<never, never>[] {
   const tools = [
     ...buildGenerationTools(deps),
+    buildImportPptxTool(deps),
+    buildGenerateImageTool(deps),
+    ...(hasConfiguredVideoGeneration(deps) ? [buildGenerateVideoTool(deps)] : []),
     ...buildCourseAudioAndDeckTools(deps),
     ...(deps.sessionId ? [buildMaterialMediaTool({ sessionId: deps.sessionId })] : []),
     ...buildScenePreviewTools({ store: deps.store }),
     ...buildDslCourseTools(deps),
-  ];
+  ] as unknown as AgentTool<never, never>[];
   return markDocumentWritersSequential(tools);
 }
 
 /** The exact registered tool names of this slice's toolset. */
-export function buildCourseAllowlist(): ReadonlySet<string> {
+export function buildCourseAllowlist(
+  videoDeps: Partial<GenerateVideoToolDeps> = {},
+): ReadonlySet<string> {
   return new Set([
     ...DSL_COURSE_TOOL_NAMES,
     ...GENERATION_TOOL_NAMES,
+    IMPORT_PPTX_TOOL_NAME,
+    GENERATE_IMAGE_TOOL_NAME,
+    ...(hasConfiguredVideoGeneration(videoDeps) ? [GENERATE_VIDEO_TOOL_NAME] : []),
     ...COURSE_AUDIO_DECK_TOOL_NAMES,
     MATERIAL_MEDIA_TOOL_NAME,
     RENDER_SCENE_PREVIEW_TOOL_NAME,
@@ -145,7 +175,7 @@ export function buildCourseAllowlist(): ReadonlySet<string> {
 }
 
 export const DSL_TOOLS_PROMPT = [
-  'Some installed skills and older transcripts were written for earlier tool names. Translate on sight: read_scene → read_stage (path=/scenes/<order|id>); edit_slide / edit_quiz / edit_widget / edit_actions / edit_pbl → patch_stage (same JSON-pointer ops, target the scene); read_course → read_stage; patch_course → patch_stage; grep_course → grep_stage. Never call the legacy names.',
+  'Some installed skills and older transcripts were written for earlier tool names. Translate on sight: read_scene → read_stage (path=/scenes/<order|id>); edit_slide / edit_quiz / edit_widget / edit_actions / edit_pbl → patch_stage (same JSON-pointer ops, target the scene); read_course → read_stage; patch_course → patch_stage; grep_course → grep_stage; generate_outline → (plan in conversation, then create_stage + one generate_scene per page with an explicit brief); generate_roster → set_roster. Never call the legacy names.',
   'The generic DSL tools replace read_scene and the per-type edit tools.',
   'Every read_stage, patch_stage and grep_stage call requires an explicit stageId obtained from create_stage.',
   'Example: read_stage {"stageId":"stage-...","path":"/scenes/1","detail":"source"}. Use paths "", /outline, /scenes/<1-based order|sceneId>, and /scenes/<...>/actions.',
@@ -156,6 +186,9 @@ export const DSL_TOOLS_PROMPT = [
   'Start with detail:"tree" to see structure; read source only for the subtree you will edit; for long content, prefer grep_stage over paging with offset.',
   'Use generate_scene once per page: each successful call is a durable checkpoint. Use list_scenes to inspect persisted pages and generate_actions to rebuild playback actions for one page.',
   'Use duplicate_scene to copy a layout, edit_deck for retitle/insert/delete/reorder, and generate_tts after narration edits. Page-list writers keep the saved outline numbering aligned with the real pages.',
+  'To fill an uploaded .pptx into an existing stage as appended pages with its original slides kept, read the `pptx-import` skill first (it carries the import-and-repair sequence) and use `import_pptx` after `create_stage` — never extract_material + generate_scene for a layout-preserving import. The stage keeps its own title; the PPT is content, not the classroom identity.',
+  'When the page needs a new visual rather than an existing URL, call `generate_image` first, then apply its returned `src` with `patch_stage` set or add an image element; generate_image never edits the page.',
+  'When a NEW page needs visuals, obtain every real src first by reusing material or calling generate_image / generate_video, then pass each image src with its description and dimensions in `generate_scene.media` so the content model sees the media while composing the page; media generation tools never edit the page.',
   'Use use_material_media before placing session image, video, or audio bytes into a page. Use render_scene_preview selectively to inspect a persisted page when the render capability is available.',
 ].join(' ');
 
@@ -196,6 +229,10 @@ interface CoursePromptBlocks {
    * with nothing to read).
    */
   materials?: string;
+  /** Roster guidance (list_voices / set_roster; always registered). */
+  roster?: string;
+  /** Voice-cloning guidance (clip_audio / register_voice; always registered). */
+  voice?: string;
 }
 
 /**
@@ -212,5 +249,7 @@ export function courseSystemPrompt(blocks: CoursePromptBlocks): string {
   if (blocks.fetch) parts.push('', blocks.fetch);
   if (blocks.untrustedContent) parts.push('', blocks.untrustedContent);
   if (blocks.materials) parts.push('', blocks.materials);
+  if (blocks.roster) parts.push('', blocks.roster);
+  if (blocks.voice) parts.push('', blocks.voice);
   return parts.join('\n');
 }

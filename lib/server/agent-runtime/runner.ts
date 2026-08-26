@@ -42,6 +42,14 @@ import {
 } from './fetch-url';
 import { assembleRunnerTools, buildRunnerCoursePrompt } from './runner-contract';
 import { buildMaterialTools, MATERIAL_TOOL_NAMES } from './material-tools';
+import { buildRosterTools, ROSTER_TOOL_NAMES, ROSTER_TOOLS_PROMPT } from './roster-tools';
+import {
+  buildVoiceCloneTools,
+  hasConfiguredVoiceRegistrationCapability,
+  VOICE_CLONE_TOOL_NAMES,
+  voiceCloneToolsPrompt,
+} from './voice-clone-tools';
+import type { RegisteredVoiceInfo } from '@/lib/audio/voice-catalog';
 import { buildSkillEditTools, SKILL_EDIT_TOOL_NAMES } from './skill-edit-tools';
 import { buildWebSearchTool, resolveWebSearchCapability, searchPromptBlock } from './web-search';
 import { buildSkillPreload, preloadUserMessage } from './skill-preload';
@@ -738,9 +746,9 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
     // `getAgentSessionStore` above already guards on DATABASE_URL, so the
     // provider can only be reached with a configured connection string.
     const { documentStore } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
-    const ownerScopedStore: CourseStore = withPlainJsonDocumentWrites(
+    const ownerScopedStore = withPlainJsonDocumentWrites(
       documentStore.forOwner(meta.ownerId) as unknown as DocumentStore<AppScene, AppStage>,
-    );
+    ) as CourseStore;
     // The stage read/patch toolset and the stage-level CRUD it needs. All of
     // them write through `ownerScopedStore`; patch_stage is marked sequential
     // by the shared STAGE_WRITER_TOOL_NAMES registry (course-tools.ts).
@@ -756,6 +764,7 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       sessionId: id,
       onStageLink: (course) => emit(LIFECYCLE.stageLink, course),
       onLibraryChanged: (change) => emit(LIFECYCLE.libraryChanged, change),
+      onCheckpoint: (info) => emit(LIFECYCLE.checkpoint, info),
     });
     // Session-scoped material tools and the materials prompt block are wired
     // from durable session identity on every start and resume (reference
@@ -764,6 +773,27 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
     // the tools read through the same session-scoped store on each call.
     const materials = await listSessionMaterials(id);
     const materialTools = buildMaterialTools({ sessionId: id });
+    // Session-scoped registered voices: register_voice appends here, and
+    // list_voices / set_roster (roster-tools) read the same array, so a cloned
+    // voice stays bindable within the session that registered it (in-session
+    // loop by design, no persistence).
+    const sessionRegisteredVoices: RegisteredVoiceInfo[] = [];
+    const rosterTools = buildRosterTools({
+      store: ownerScopedStore,
+      onCheckpoint: (info) => emit(LIFECYCLE.checkpoint, info),
+      sessionId: id,
+      registeredVoices: sessionRegisteredVoices,
+    });
+    // register_voice is capability-registered: the tool exists exactly when
+    // this deployment has a working voice-registration backend (a served,
+    // keyed provider whose adapter reports supportsRegistration). An
+    // unconfigured deployment gets clip_audio but no register_voice, so the
+    // model never sees a tool that can only throw.
+    const voiceCloneTools = buildVoiceCloneTools({
+      sessionId: id,
+      registeredVoices: sessionRegisteredVoices,
+    });
+    const voiceRegistrationEnabled = hasConfiguredVoiceRegistrationCapability();
     const tools = assembleRunnerTools(
       [askUserTool],
       webSearchTools,
@@ -789,6 +819,8 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       dslTools,
       curriculumTools,
       materialTools,
+      rosterTools,
+      voiceCloneTools,
     );
     const askUserLatch = createAskUserTerminateLatch();
     let toolCalls = 0;
@@ -801,6 +833,8 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
         fetch: fetchPromptBlock(),
         untrustedContent: untrustedContentPolicyPromptBlock(),
         ...(materials.length ? { materials: sessionMaterialsPromptBlock(materials) } : {}),
+        roster: ROSTER_TOOLS_PROMPT,
+        voice: voiceCloneToolsPrompt(voiceRegistrationEnabled),
       }),
       model: driver.piModel,
       tools,
@@ -813,6 +847,11 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
         ...MATERIAL_TOOL_NAMES,
         ...dslTools.map((tool) => tool.name),
         ...CURRICULUM_ALLOWLIST,
+        ...ROSTER_TOOL_NAMES,
+        // register_voice is registered only when the deployment has a voice
+        // registration backend, so the allowlist follows: clip_audio is always
+        // available, register_voice only with a backend.
+        ...(voiceRegistrationEnabled ? VOICE_CLONE_TOOL_NAMES : ['clip_audio']),
       ]),
       ...(plan.kind === 'start' ? {} : { history: modelMessages }),
       afterToolCall: (toolContext) => {

@@ -9,6 +9,7 @@ import {
   type Queryable,
 } from '../src/document/pg.js';
 import {
+  DocumentFolderLimitError,
   DocumentNotFoundError,
   DocumentVersionError,
   type DocumentStore,
@@ -77,6 +78,74 @@ describe('owner-scoped PgDocumentStore contract', () => {
   }));
 });
 
+describe('owner-scoped document folders', () => {
+  let db: PGlite;
+  let alice: PgDocumentStore;
+  let bob: PgDocumentStore;
+
+  beforeEach(async () => {
+    db = new PGlite();
+    await db.waitReady;
+    await ensureDocumentSchema(db);
+    const root = new PgDocumentStore(db, transactionOptions(db));
+    alice = root.forOwner('anon:alice');
+    bob = root.forOwner('anon:bob');
+  });
+
+  afterEach(async () => {
+    await db.close();
+  });
+
+  test('represents empty folders and reuses names case-insensitively', async () => {
+    const created = await alice.createFolder('folder-a', 'Series');
+    const reused = await alice.createFolder('folder-other', 'series');
+
+    expect(created).toMatchObject({ reused: false, folder: { id: 'folder-a', name: 'Series' } });
+    expect(reused).toMatchObject({ reused: true, folder: { id: 'folder-a', name: 'Series' } });
+    await expect(alice.listFolders()).resolves.toEqual([
+      expect.objectContaining({ id: 'folder-a', name: 'Series' }),
+    ]);
+    await expect(alice.listDocuments('folder-a')).resolves.toEqual([]);
+  });
+
+  test('moves idempotently and lists membership without changing the document body', async () => {
+    await alice.createFolder('folder-a', 'Series');
+    await alice.saveDocument(makeDocument('alice-stage'));
+    const before = await alice.loadDocument('alice-stage');
+
+    await expect(alice.moveDocumentToFolder('alice-stage', 'folder-a')).resolves.toBe(true);
+    await expect(alice.moveDocumentToFolder('alice-stage', 'folder-a')).resolves.toBe(true);
+    await expect(alice.listDocuments('folder-a')).resolves.toEqual([
+      expect.objectContaining({ id: 'alice-stage', folderId: 'folder-a' }),
+    ]);
+    expect(await alice.loadDocument('alice-stage')).toEqual(before);
+  });
+
+  test('isolates folders and membership in both owner directions', async () => {
+    await alice.createFolder('same-id', 'Alice folder');
+    await bob.createFolder('same-id', 'Bob folder');
+    await alice.saveDocument(makeDocument('alice-stage'));
+    await bob.saveDocument(makeDocument('bob-stage'));
+
+    await expect(alice.listFolders()).resolves.toEqual([
+      expect.objectContaining({ name: 'Alice folder' }),
+    ]);
+    await expect(bob.listFolders()).resolves.toEqual([
+      expect.objectContaining({ name: 'Bob folder' }),
+    ]);
+    await expect(alice.moveDocumentToFolder('bob-stage', 'same-id')).resolves.toBe(false);
+    await expect(bob.moveDocumentToFolder('alice-stage', 'same-id')).resolves.toBe(false);
+    await expect(alice.moveDocumentToFolder('alice-stage', 'missing-folder')).resolves.toBe(false);
+  });
+
+  test('enforces the owner folder count limit', async () => {
+    await alice.createFolder('folder-a', 'One', 1);
+    await expect(alice.createFolder('folder-b', 'Two', 1)).rejects.toBeInstanceOf(
+      DocumentFolderLimitError,
+    );
+  });
+});
+
 describe('PgDocumentStore Postgres behavior', () => {
   let db: PGlite;
   let store: PgDocumentStore;
@@ -100,10 +169,13 @@ describe('PgDocumentStore Postgres behavior', () => {
       `SELECT table_name
          FROM information_schema.tables
         WHERE table_schema = 'public'
-          AND table_name IN ('document_stages', 'document_scenes', 'document_outlines')
+          AND table_name IN (
+            'document_folders', 'document_stages', 'document_scenes', 'document_outlines'
+          )
         ORDER BY table_name`,
     );
     expect(tables.rows.map((row) => row.table_name)).toEqual([
+      'document_folders',
       'document_outlines',
       'document_scenes',
       'document_stages',

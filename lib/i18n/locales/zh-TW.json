@@ -603,6 +603,9 @@
     "common": {
       "cancel": "取消",
       "confirm": "確定"
+    },
+    "elementRef": {
+      "remove": "移除引用 {{label}}"
     }
   },
   "whiteboard": {
@@ -1934,5 +1937,36 @@
       "mid": "做得好，繼續保持！",
       "low": "不錯的開始，回顧一下再試一次。"
     }
+  },
+  "workspace": {
+    "untitledCourse": "未命名课堂",
+    "sceneCount": "{{count}} 页",
+    "sceneCount_one": "{{count}} 页",
+    "sceneCount_other": "{{count}} 页",
+    "courseLinkHint": "在右侧打开《{{name}}》",
+    "courseLinkMore": "还有 {{count}} 节课堂",
+    "courseMention": {
+      "title": "为这条消息引用课堂",
+      "empty": "没有匹配的课堂",
+      "alreadyNamed": "已引用",
+      "remove": "移除{{name}}",
+      "pillHint": "这条消息引用了「{{name}}」",
+      "notAccepted": "引用的课堂未生效，服务端发布中，请稍后重发",
+      "reference": "引用「{{name}}」",
+      "capped": "仅显示前 {{count}} 个，继续输入以缩小范围"
+    }
+  },
+  "proMode": {
+    "attach": "添加材料",
+    "mentionCourse": "引用课堂",
+    "loadSkill": "加载 skill",
+    "skillMenuTitle": "选择课程设计技能",
+    "skillsLoading": "正在加载 skill…",
+    "noSkillsAvailable": "暂无可用 skill",
+    "userSkillsGroup": "我的 Skill",
+    "builtinSkillsGroup": "内置 Skill",
+    "skillsLoadFailed": "Skill 加载失败，点击重试",
+    "retrySkills": "重试",
+    "noSkillMatch": "没有匹配“{{query}}”的 Skill"
   }
 }
