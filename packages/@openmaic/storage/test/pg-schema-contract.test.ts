@@ -259,14 +259,30 @@ CREATE TABLE IF NOT EXISTS agent_session_materials (
   text_asset_id TEXT,
   raw_asset_id  TEXT,
   text_chars    INTEGER NOT NULL DEFAULT 0,
+  derived_from  TEXT REFERENCES agent_session_materials(id) ON DELETE CASCADE,
+  extraction_status TEXT NOT NULL DEFAULT 'done',
+  extraction_attempts INTEGER NOT NULL DEFAULT 0,
+  extraction_error TEXT,
+  extraction_stats JSONB,
+  extractor_version TEXT,
+  extraction_lease_worker_id TEXT,
+  extraction_lease_worker_pid INTEGER,
+  extraction_lease_heartbeat_at BIGINT,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT agent_session_materials_kind_known CHECK (kind IN
     ('source','extraction','transcript','audio-track','image','web')),
   CONSTRAINT agent_session_materials_text_chars_nonnegative CHECK (text_chars >= 0)
+  ,CONSTRAINT agent_session_materials_extraction_status_known CHECK (extraction_status IN
+    ('idle','pending','running','done','failed'))
+  ,CONSTRAINT agent_session_materials_extraction_attempts_nonnegative CHECK (extraction_attempts >= 0)
 );
 
 CREATE INDEX IF NOT EXISTS agent_session_materials_session_created_idx
   ON agent_session_materials (session_id, created_at);
+
+CREATE INDEX IF NOT EXISTS agent_session_materials_extraction_queue_idx
+  ON agent_session_materials (created_at)
+  WHERE kind = 'source' AND extraction_status IN ('pending','running');
 `;
 
 /** Records the statements an ensure function actually issues. */

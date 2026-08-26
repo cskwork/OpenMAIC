@@ -200,6 +200,8 @@ describe('sessionMaterialsPromptBlock', () => {
         textAssetId: 'ast_1',
         rawAssetId: null,
         textChars: 42,
+        derivedFrom: null,
+        extraction: { status: 'done', attempts: 0 },
         createdAt: new Date(0).toISOString(),
       },
     ]);
@@ -211,11 +213,8 @@ describe('sessionMaterialsPromptBlock', () => {
     expect(prompt).toContain('search_material');
     expect(prompt).toContain('literal text');
     expect(prompt).toContain('fetched and extracted');
-    // Only the tools this slice registers are named: the extraction-queue and
-    // media-promotion tools do not exist, so the model must not be told about
-    // them (no claiming access to absent tools).
-    expect(prompt).not.toContain('extract_material');
-    expect(prompt).not.toContain('wait_for_materials');
+    expect(prompt).toContain('extract_material');
+    expect(prompt).toContain('wait_for_materials');
     expect(prompt).toContain('use_material_media');
     expect(prompt).not.toContain('textAssetId');
     expect(prompt).not.toContain('sourceUrl');
