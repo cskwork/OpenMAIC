@@ -11,6 +11,10 @@ import {
   PgAgentSessionMaterialStore,
   ensureAgentSessionMaterialSchema,
 } from '../src/material/pg.js';
+import {
+  acquireAgentSessionPgContractLock,
+  truncateAgentSessionTables,
+} from './pg-agent-session-contract-helpers.js';
 import { runAgentSessionMaterialContract } from './agent-session-material-contract.js';
 
 const contractUrl = process.env.PG_CONTRACT_URL;
@@ -45,22 +49,25 @@ function transactionFor(pool: Pool): WithTransaction {
 
 describe.skipIf(!contractUrl)('PgAgentSessionMaterialStore with PostgreSQL 16', () => {
   let pool: Pool;
+  let releaseContractLock: (() => Promise<void>) | undefined;
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: contractUrl, max: 16 });
+    // Same shared-database lock as the agent-session store suite: these suites
+    // TRUNCATE the same tables, so they must run one at a time.
+    releaseContractLock = await acquireAgentSessionPgContractLock(pool);
     await ensureAgentSessionSchema(pool as Queryable);
     await ensureAgentSessionMaterialSchema(pool as Queryable);
-  });
+  }, 60_000);
 
   beforeEach(async () => {
-    await pool.query(
-      `TRUNCATE agent_session_materials, agent_session_urls, agent_session_entries,
-                agent_session_events, agent_owner_session_events,
-                agent_owner_session_event_counters, agent_sessions`,
-    );
+    // Same order-independent cleanup the agent-session suite uses; CASCADE
+    // empties this suite's own material table through its FK to agent_sessions.
+    await truncateAgentSessionTables(pool as Queryable);
   });
 
   afterAll(async () => {
+    await releaseContractLock?.();
     await pool.end();
   });
 

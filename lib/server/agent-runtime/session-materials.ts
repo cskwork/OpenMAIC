@@ -228,8 +228,7 @@ export async function removeSessionMaterialRawAsset(
  * Safe metadata and typed-tool guidance for materials bound to one session.
  * Material contents stay in the asset registry and are available only through
  * the session-scoped material tools, never through this block. Ported from the
- * reference's session-materials prompt block, minus the tools this slice does
- * not register (extract/wait/use-media).
+ * reference's session-materials prompt block, minus extraction queue tools.
  */
 export function sessionMaterialsPromptBlock(materials: AgentSessionMaterial[]): string {
   if (materials.length === 0) return '';
@@ -244,6 +243,7 @@ export function sessionMaterialsPromptBlock(materials: AgentSessionMaterial[]): 
     ),
     '',
     'Material workflow: call `list_materials` to inspect the session materials and discover `mat_` ids; call `read_material` on a `mat_` id to read its text in pages (continue with the returned `nextOffset`); call `search_material` to locate case-insensitive literal text across the readable materials.',
+    'To reuse session image, video, or audio bytes in a page, call `use_material_media` and use the returned stable `src`.',
     'A `web` material was already fetched and extracted; read it directly with `read_material` and page through offsets.',
   ].join('\n');
 }

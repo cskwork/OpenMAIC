@@ -216,7 +216,7 @@ describe('sessionMaterialsPromptBlock', () => {
     // them (no claiming access to absent tools).
     expect(prompt).not.toContain('extract_material');
     expect(prompt).not.toContain('wait_for_materials');
-    expect(prompt).not.toContain('use_material_media');
+    expect(prompt).toContain('use_material_media');
     expect(prompt).not.toContain('textAssetId');
     expect(prompt).not.toContain('sourceUrl');
   });
