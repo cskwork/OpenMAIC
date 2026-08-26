@@ -39,6 +39,15 @@ export interface AppDocumentOutline {
   producer?: DocumentProducer;
   /** Opaque handle of the producing job, when one owns the course. */
   producerRef?: string;
+  /**
+   * Receipts of completed `import_pptx` calls, keyed by the same
+   * `import_pptx:<key>` string that rides `requirement`. A material whose
+   * receipt names pages still present in the stage is already imported — a
+   * retry reports those pages instead of appending a second copy. The first
+   * write onto a legacy document migrates the legacy `requirement` receipt
+   * here so a later retry of that material stays a report.
+   */
+  pptxImports?: Record<string, { sceneIds: string[]; importedAt: number }>;
   createdAt: number;
   updatedAt: number;
 }

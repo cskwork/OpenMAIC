@@ -15,11 +15,13 @@ import type { SceneOutline } from '@/lib/types/generation';
 import { createLogger } from '@/lib/logger';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useSettingsStore } from '@/lib/store/settings';
+import type { StageManifest } from '@/lib/workbench/stage-freshness';
 import { applyGeneratedAgentsToRegistry } from '@/lib/orchestration/registry/store';
 import { migrateScene } from '@/lib/edit/slide-schema';
 import { preparePBLScenesForDocumentPersistence } from '@/lib/pbl/v2/runtime/document-persistence';
 import { hydratePBLScenesFromRuntime } from '@/lib/pbl/v2/runtime/hydration';
 import type { ChatStorageSnapshot } from '@/lib/utils/chat-storage';
+import type { DocumentProducer } from '@/lib/document-store/persistence-types';
 import type { PendingChange, StaleDroppedSave } from '@/lib/utils/stage-storage';
 import { collectStageAssetRefs } from '@/lib/media/collect-stage-asset-refs';
 import {
@@ -285,11 +287,29 @@ interface StageState {
   // Gates resume-on-mount so an edited finished deck is not regenerated.
   generationComplete: boolean;
 
+  /**
+   * Who produced the current outline ('client' absent / 'server-job'), written
+   * by the workbench stage-freshness sync's delegated initial read. Absent
+   * from the host's original store; the reference carries it so a server-owned
+   * course can be told apart from a client-authored one.
+   */
+  outlineProducer: DocumentProducer | null;
+
   // Transient generation tracking (not persisted)
   generationEpoch: number;
   generationStatus: 'idle' | 'generating' | 'paused' | 'completed' | 'error';
   currentGeneratingOrder: number;
   failedOutlines: SceneOutline[];
+
+  // Workbench canvas-freshness projections (Mono #1960 Part 2 port).
+  // The workbench stage-freshness sync records the manifest this browser has
+  // actually rendered (`serverManifestByStage`) and the store's save paths may
+  // bump `stageSyncRequest` when a refused write must converge the baseline
+  // before the next save is judged. Both are written by
+  // `lib/workbench/use-workbench-session.ts` / future ownership slices; the
+  // upstream host's own save paths do not consume them yet.
+  serverManifestByStage: Record<string, StageManifest>;
+  stageSyncRequest: number;
 
   // Actions
   setStage: (stage: Stage) => void;
@@ -422,10 +442,13 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
   generatingOutlines: [],
   outlines: [],
   generationComplete: false,
+  outlineProducer: null,
   generationEpoch: 0,
   generationStatus: 'idle' as const,
   currentGeneratingOrder: -1,
   failedOutlines: [],
+  serverManifestByStage: {},
+  stageSyncRequest: 0,
 
   // Actions
   setStage: (stage) => {

@@ -5,13 +5,11 @@ import { EditShell } from '@/components/edit/EditShell';
 import { SlideNavRail } from '@/components/edit/SlideNavRail';
 import { ActionsBar } from '@/components/edit/ActionsBar/ActionsBar';
 import { HeaderControls } from '@/components/stage/header-controls';
-import { useAgentRuntime } from '@/lib/agent/client/use-agent-runtime';
 import { isMaicEditorEnabled } from '@/lib/config/feature-flags';
 import { preloadEditor } from '@/lib/edit/preload-editor';
 import { sceneEditorRegistry } from '@/lib/edit/scene-editor-registry';
 import { supportsNarrationTimeline } from './scene-timeline';
 import type { Scene } from '@/lib/types/stage';
-import { RightRailTabs } from '@/components/edit/RightRailTabs';
 
 interface EditChromeRootProps {
   readonly scene: Scene;
@@ -27,7 +25,7 @@ interface EditChromeRootProps {
  * Owned here: `EditShell` (Frame + CommandBar + canvas + overlays),
  * `SlideNavRail` (leftRail slot), the `HeaderControls` trailing
  * (settings pill + Pro Switch) that rides in CommandBar's right slot,
- * and the tabbed `RightRailTabs` (Edit with AI + 角色 roster).
+ * and the bottom `ActionsBar` narration timeline.
  *
  * `scene` is required (non-null). The parent gates mounting on
  * `mode === 'edit' && currentScene` to satisfy this contract.
@@ -60,23 +58,10 @@ export function EditChromeRoot({ scene, isEditable, onToggleEditMode }: EditChro
   // Whether this scene type has a registered canvas editor surface (slide/quiz).
   // Authoring surface is separate from narration timeline availability.
   const authoringEnabled = !!sceneEditorRegistry.resolve(scene.type);
-  // The narration timeline (ActionsBar) is decoupled from the canvas editor surface
-  // (like agentEnabled below): it applies to registered surfaces (slide/quiz) AND
-  // view-only canvases that still carry a spoken script (interactive/pbl).
+  // The narration timeline (ActionsBar) is decoupled from the canvas editor surface:
+  // it applies to registered surfaces (slide/quiz) AND view-only canvases that still
+  // carry a spoken script (interactive/pbl).
   const timelineEnabled = supportsNarrationTimeline(scene.type, authoringEnabled);
-
-  // The AI edit panel is decoupled from the canvas surface: it renders wherever
-  // the agent has an edit capability — slides (regenerate) AND interactive scenes
-  // (edit_interactive_html), even though the interactive canvas itself stays view-only.
-  const agentEnabled = authoringEnabled || scene.type === 'interactive';
-
-  // Keep the runtime owned by Pro mode chrome, not by the scene-capability gated
-  // panel. Unsupported scene switches can hide/disable the composer without
-  // destroying an in-flight run or the messages that still need to settle/save.
-  const agentRuntime = useAgentRuntime({
-    scene: agentEnabled ? { id: scene.id, title: scene.title } : undefined,
-    isSendDisabled: !agentEnabled,
-  });
 
   const headerControls = (
     <HeaderControls
@@ -90,22 +75,6 @@ export function EditChromeRoot({ scene, isEditable, onToggleEditMode }: EditChro
     <EditShell
       scene={scene}
       leftRail={<SlideNavRail />}
-      rightRail={
-        <RightRailTabs
-          scene={{ id: scene.id, title: scene.title, type: scene.type }}
-          runtime={agentRuntime.runtime}
-          clearThread={agentRuntime.clearThread}
-          hasMessages={agentRuntime.hasMessages}
-          canSend={agentEnabled}
-          agentEnabled={agentEnabled}
-          isRunning={agentRuntime.isRunning}
-          sessions={agentRuntime.sessions}
-          activeSessionId={agentRuntime.activeSessionId}
-          switchSession={agentRuntime.switchSession}
-          deleteSessionAndRefresh={agentRuntime.deleteSessionAndRefresh}
-          refreshSessions={agentRuntime.refreshSessions}
-        />
-      }
       bottomRail={timelineEnabled ? <ActionsBar sceneId={scene.id} /> : undefined}
       commandTrailing={headerControls}
     />
