@@ -7,7 +7,7 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
-import { isAgentRuntimeEnabled } from '@/lib/config/feature-flags';
+import { isAgentRuntimeConfigured } from '@/lib/config/feature-flags';
 import { apiError } from '@/lib/server/api-response';
 import { MAX_SESSION_TEXT_LENGTH } from '@/lib/server/agent-runtime/limits';
 import { findSkill, inferSkillIdFromPrompt, listSkills } from '@/lib/server/agent-runtime/skills';
@@ -26,7 +26,7 @@ interface CreateSessionBody {
 }
 
 export async function POST(req: NextRequest) {
-  if (!isAgentRuntimeEnabled()) {
+  if (!isAgentRuntimeConfigured()) {
     return new Response('Not found', { status: 404 });
   }
 
@@ -120,7 +120,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  if (!isAgentRuntimeEnabled()) {
+  if (!isAgentRuntimeConfigured()) {
     return new Response('Not found', { status: 404 });
   }
 

@@ -35,7 +35,7 @@ import type { PersistedAgentSessionEvent } from '@openmaic/storage';
 import type { NextRequest } from 'next/server';
 
 import { HOST_AGENT_LIFECYCLE as LIFECYCLE } from '@/lib/agent-runtime/lifecycle';
-import { isAgentRuntimeEnabled } from '@/lib/config/feature-flags';
+import { isAgentRuntimeConfigured } from '@/lib/config/feature-flags';
 import { resolveRequestOwnerId } from '@/lib/server/agent-runtime/owner';
 import { getAgentSessionStore } from '@/lib/server/agent-runtime/store';
 
@@ -58,7 +58,7 @@ const HEARTBEAT_INTERVAL_MS = 25_000;
 const BACKLOG_PAGE = 500;
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  if (!isAgentRuntimeEnabled()) {
+  if (!isAgentRuntimeConfigured()) {
     return new Response('Not found', { status: 404 });
   }
   const { id } = await params;

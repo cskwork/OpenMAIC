@@ -10,7 +10,7 @@
 import type { PersistedOwnerSessionEvent } from '@openmaic/storage';
 import type { NextRequest } from 'next/server';
 
-import { isAgentRuntimeEnabled } from '@/lib/config/feature-flags';
+import { isAgentRuntimeConfigured } from '@/lib/config/feature-flags';
 import { resolveRequestOwnerId } from '@/lib/server/agent-runtime/owner';
 import { getAgentSessionStore } from '@/lib/server/agent-runtime/store';
 
@@ -36,7 +36,7 @@ function parseLastEventId(value: string | null): bigint {
 }
 
 export async function GET(req: NextRequest) {
-  if (!isAgentRuntimeEnabled()) return new Response('Not found', { status: 404 });
+  if (!isAgentRuntimeConfigured()) return new Response('Not found', { status: 404 });
 
   // Identity belongs to the request, not the URL. EventSource reconnects to
   // this same stable path with the anonymous cookie minted on first attach.

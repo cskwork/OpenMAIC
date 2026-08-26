@@ -11,14 +11,14 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
-import { isAgentRuntimeEnabled } from '@/lib/config/feature-flags';
+import { isAgentRuntimeConfigured } from '@/lib/config/feature-flags';
 import { listSkills } from '@/lib/server/agent-runtime/skills';
 import { withRequestOwnerId } from '@/lib/server/agent-runtime/with-owner';
 
 export const runtime = 'nodejs';
 
 export async function GET(req: NextRequest) {
-  if (!isAgentRuntimeEnabled()) {
+  if (!isAgentRuntimeConfigured()) {
     return new Response('Not found', { status: 404 });
   }
   return withRequestOwnerId(req, async (ownerId, responseHeaders) => {
