@@ -442,7 +442,9 @@ export class PgAgentSessionMaterialStore implements AgentSessionMaterialStore {
     error: string,
     retryable: boolean,
   ): Promise<MaterialExtractionFailureSettlement | null> {
-    const result = await this.queryable.query<MaterialExtractionFailureSettlement & Record<string, unknown>>(
+    const result = await this.queryable.query<
+      MaterialExtractionFailureSettlement & Record<string, unknown>
+    >(
       `UPDATE ${this.table}
           SET extraction_status = CASE
                 WHEN $4 AND extraction_attempts < $5 THEN 'pending' ELSE 'failed' END,
