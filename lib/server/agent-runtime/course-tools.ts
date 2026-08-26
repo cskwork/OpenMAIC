@@ -10,9 +10,8 @@
  * What this layer owns:
  *
  *  - **Owner-scoped writes.** Every tool receives ONE store bound to the run's
- *    session owner (`pgDocuments.forOwner(ownerId)` in `runner.ts`). The owner
- *    never appears in a model-visible parameter; a stage owned by another
- *    owner reads as missing and cannot be written.
+ *    session owner. The owner never appears in a model-visible parameter;
+ *    stages are readable by id, while foreign writes are refused.
  *  - **Sequential scheduling for document writers.** `patch_stage` loads the
  *    whole document, applies its change in memory and writes the scene back.
  *    The agent routinely emits several writers as PARALLEL tool calls in one
@@ -39,7 +38,7 @@ import { CURRICULUM_ALLOWLIST } from './curriculum-tools';
 import { buildGenerationTools, GENERATION_TOOL_NAMES } from './generation-tools';
 import { buildCourseAudioAndDeckTools, COURSE_AUDIO_DECK_TOOL_NAMES } from './course-edit/tools';
 import { buildMaterialMediaTool, MATERIAL_MEDIA_TOOL_NAME } from './material-media';
-import { buildScenePreviewTools, RENDER_SCENE_PREVIEW_TOOL_NAME } from './scene-preview';
+import { RENDER_SCENE_PREVIEW_TOOL_NAME } from './scene-preview';
 import { buildImportPptxTool, IMPORT_PPTX_TOOL_NAME, type ImportPptxToolDeps } from './import-pptx';
 import {
   buildGenerateImageTool,
@@ -73,6 +72,14 @@ export interface CheckpointInfo {
 export interface CourseToolDeps {
   /** The owner-bound document store of the run's session owner. */
   store: CourseStore;
+  /**
+   * Fail-closed owner probe for every model-declared stage target: a stage
+   * that is not owned (foreign, missing, or tombstoned) is refused before the
+   * tool ever touches the store. The refusal never echoes which state it was.
+   */
+  stageAccess: (
+    stageId: string,
+  ) => Promise<{ kind: 'owned' | 'missing' | 'foreign' | 'tombstoned' }>;
   /** Emitted after a successful document write (the durable `checkpoint` event). */
   onCheckpoint: (info: CheckpointInfo) => void;
   /** The session id, recorded on the document as the producer reference. */
@@ -131,12 +138,61 @@ export function markDocumentWritersSequential(
 }
 
 /**
+ * Wrap every tool that names a stage in the fail-closed owner probe.
+ *
+ * This is the single legality boundary of the open-domain stage toolsets: each
+ * tool resolves its target stage ONCE, before any store IO. A probe that is
+ * not `owned` (foreign, missing, or tombstoned) refuses with the same
+ * not-yours message the curriculum toolset uses, and the tool text never
+ * echoes which state it was. Tools without a `stageId` parameter pass through
+ * untouched. The runner applies it to the course/DSL toolset and to the roster
+ * toolset — the reference wraps every stageId-bearing tool of its merged
+ * course toolset the same way.
+ */
+export function withOwnerStageAuthorization(
+  tools: AgentTool<never, never>[],
+  deps: Pick<CourseToolDeps, 'stageAccess'>,
+): AgentTool<never, never>[] {
+  return tools.map((tool) => {
+    const original = tool.execute.bind(tool);
+    return {
+      ...tool,
+      async execute(...args: Parameters<typeof tool.execute>) {
+        const [callId, rawParams, signal, onUpdate] = args;
+        const params = rawParams as unknown as { stageId?: unknown };
+        const stageId = typeof params.stageId === 'string' ? params.stageId.trim() : '';
+        if (stageId) {
+          const access = await deps.stageAccess(stageId);
+          if (signal?.aborted) throw new Error('aborted');
+          if (access.kind !== 'owned') {
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: 'The stage was not found, or does not belong to this session user. Use list_folder_stages to see the stages you can work on.',
+                },
+              ],
+              details: { refused: true, stageId },
+              isError: true,
+            };
+          }
+        }
+        return original(callId, rawParams, signal, onUpdate);
+      },
+    } as unknown as AgentTool<never, never>;
+  });
+}
+
+/**
  * The stage read/patch toolset registered on the runner: the three generic DSL
- * tools, with `patch_stage` marked sequential through the shared writer
- * registry. `import_pptx` and `generate_image` are always part of the course
- * toolset; `generate_video` is capability-registered and exists exactly when a
- * video provider is configured, so the model never sees a tool that can only
- * throw.
+ * tools (with the page generation, deck, and media tools), every one of them
+ * owner-gated by `withOwnerStageAuthorization`, and `patch_stage` marked
+ * sequential through the shared writer registry. `import_pptx` and
+ * `generate_image` are always part of the course toolset; `generate_video` is
+ * capability-registered and exists exactly when a video provider is
+ * configured, so the model never sees a tool that can only throw. Scene
+ * preview is registered separately by the runner with its own probe, so it
+ * never double-gates.
  */
 export function buildDslCourseToolset(
   deps: CourseToolDeps &
@@ -151,10 +207,9 @@ export function buildDslCourseToolset(
     ...(hasConfiguredVideoGeneration(deps) ? [buildGenerateVideoTool(deps)] : []),
     ...buildCourseAudioAndDeckTools(deps),
     ...(deps.sessionId ? [buildMaterialMediaTool({ sessionId: deps.sessionId })] : []),
-    ...buildScenePreviewTools({ store: deps.store }),
     ...buildDslCourseTools(deps),
   ] as unknown as AgentTool<never, never>[];
-  return markDocumentWritersSequential(tools);
+  return markDocumentWritersSequential(withOwnerStageAuthorization(tools, deps));
 }
 
 /** The exact registered tool names of this slice's toolset. */

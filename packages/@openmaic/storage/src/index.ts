@@ -88,6 +88,9 @@ export type {
   SceneLike,
   SceneValidator,
   StageValidator,
+  StageSceneManifest,
+  StageFreshnessManifest,
+  StageFreshnessManifestStore,
 } from './document/types.js';
 export {
   DocumentFolderLimitError,
@@ -106,6 +109,8 @@ export {
   PgDocumentStore,
   DOCUMENT_PG_SCHEMA,
   ensureDocumentSchema,
+  readStageFreshnessManifest,
+  splitSqlStatements,
   type PgDocumentStoreOptions,
 } from './document/pg.js';
 

@@ -16,8 +16,8 @@ vi.mock('@/lib/config/feature-flags', () => ({
 vi.mock('@/lib/server/agent-runtime/owner', () => ({
   resolveRequestOwnerId: mocks.resolveRequestOwnerId,
 }));
-vi.mock('@/lib/persistence/server-provider', () => ({
-  getServerPersistenceProvider: async () => ({ documentStore: mocks.fakeStore!.store }),
+vi.mock('@/lib/server/agent-runtime/owner-scoped-documents', () => ({
+  getOwnerScopedDocumentStore: async () => mocks.fakeStore!.store,
 }));
 
 import { GET, STAGE_FRESHNESS_POLL_INTERVAL_MS } from '@/app/api/stages/[id]/freshness/route';
@@ -57,6 +57,7 @@ beforeEach(() => {
     STAGE_ID,
     makeDocument(STAGE_ID, 'Course', [makeSlideScene('scene-1', STAGE_ID, 1)]),
   );
+  mocks.fakeStore.stageRevs.set(STAGE_ID, FIXED_NOW);
 });
 
 afterEach(() => {
@@ -86,11 +87,9 @@ describe('GET /api/stages/[id]/freshness', () => {
     const reader = response.body!.getReader();
     await readUntilFreshness(reader);
 
-    const document = mocks.fakeStore!.docs.get(STAGE_ID)!;
-    mocks.fakeStore!.docs.set(STAGE_ID, {
-      ...document,
-      stage: { ...document.stage, updatedAt: FIXED_NOW + 1 },
-    });
+    // An external writer (the DB trigger on a manual SQL UPDATE, say) moves
+    // the stage revision; the stream notices on its next poll.
+    mocks.fakeStore!.stageRevs.set(STAGE_ID, FIXED_NOW + 1);
 
     const pending = readUntilFreshness(reader);
     await vi.advanceTimersByTimeAsync(STAGE_FRESHNESS_POLL_INTERVAL_MS);

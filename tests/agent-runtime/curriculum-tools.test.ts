@@ -9,8 +9,7 @@
  *    mint is refused fail-closed;
  *  - create_stage mints the document skeleton through the store with
  *    server-job producer semantics;
- *  - every tool is OWNER-scoped: through the owner-bound store a foreign or
- *    missing stage reads as absent and is refused (never confirmed);
+ *  - mutations and listings are owner-scoped while reads are capability-by-id;
  *  - every execute takes pi's 3rd `signal` argument and re-checks it at each
  *    IO boundary: a pre-aborted signal throws before any work;
  *  - read_stage_outline renders the outline/scene UNION view (planned pages
@@ -18,15 +17,21 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
-import { PgDocumentStore, ensureDocumentSchema } from '@openmaic/storage/document/pg';
+import { ensureDocumentSchema } from '@openmaic/storage/document/pg';
 
 import {
   buildCurriculumTools,
   CURRICULUM_ALLOWLIST,
   CURRICULUM_TOOLS_PROMPT,
+  probeStageAccess,
   type CurriculumToolDeps,
+  type StageAccess,
 } from '@/lib/server/agent-runtime/curriculum-tools';
 import type { CourseDocument, CourseStore } from '@/lib/server/agent-runtime/course-tools';
+import { withPlainJsonDocumentWrites } from '@/lib/document-store/plain-json-store';
+import { createOwnerBoundDocumentStore } from '@/lib/persistence/owner-bound-document-store';
+import { ensureStageMetaSchema } from '@/lib/persistence/stage-meta';
+import { validateAppScene, validateAppStage } from '@/lib/document-store/validators';
 import type { Scene } from '@/lib/types/stage';
 
 interface ToolResultShape {
@@ -170,11 +175,14 @@ function ownedDoc(stageId: string, name: string): CourseDocument {
   };
 }
 
+const OWNED: StageAccess = { kind: 'owned', stage: { stageId: 'stage-b', name: 'Course B' } };
+
 function makeDeps(overrides: Partial<CurriculumToolDeps> = {}): CurriculumToolDeps {
   return {
     store: makeStore(ownedDoc('stage-b', 'Course B')),
     ownerId: 'user:u1',
     sessionId: 'session-1',
+    stageAccess: async () => OWNED,
     ...overrides,
   } as CurriculumToolDeps;
 }
@@ -402,10 +410,26 @@ describe('folder organization and rename tools', () => {
 describe('folder tool cross-owner isolation through the bound PostgreSQL store', () => {
   let db: PGlite;
 
+  class PGlitePool {
+    constructor(readonly database: PGlite) {}
+
+    query(text: string, params?: unknown[]) {
+      return this.database.query(text, params);
+    }
+
+    async connect() {
+      return {
+        query: (text: string, params?: unknown[]) => this.database.query(text, params),
+        release() {},
+      };
+    }
+  }
+
   beforeEach(async () => {
     db = new PGlite();
     await db.waitReady;
     await ensureDocumentSchema(db);
+    await ensureStageMetaSchema(db);
   });
 
   afterEach(async () => {
@@ -413,10 +437,16 @@ describe('folder tool cross-owner isolation through the bound PostgreSQL store',
   });
 
   function ownerTools(ownerId: string, sessionId: string) {
-    const store = new PgDocumentStore(db, {
-      withTransaction: (body) => db.transaction((tx) => body(tx)),
-    }).forOwner(ownerId) as unknown as CourseStore;
-    return { store, tools: buildCurriculumTools({ store, ownerId, sessionId }) };
+    const store = withPlainJsonDocumentWrites(
+      createOwnerBoundDocumentStore({
+        pool: new PGlitePool(db),
+        ownerId,
+        validateScene: validateAppScene,
+        validateStage: validateAppStage,
+      }),
+    ) as unknown as CourseStore;
+    const stageAccess = (stageId: string) => probeStageAccess(ownerId, stageId, db);
+    return { store, tools: buildCurriculumTools({ store, ownerId, sessionId, stageAccess }) };
   }
 
   async function execute(
@@ -499,14 +529,12 @@ describe('read_stage_outline', () => {
     });
   });
 
-  it('refuses a stage the owner does not own (owner-bound store reads it as absent)', async () => {
-    // Through the owner-scoped store a foreign or missing stage loads as null,
-    // so the tool refuses fail-closed without ever confirming the id.
+  it('refuses a stage id that does not resolve to a document', async () => {
     const deps = makeDeps({ store: makeStore(null) });
     const result = await runTool(deps, 'read_stage_outline', { stageId: 'stage-x' });
     expect(result.isError).toBe(true);
     expect(result.details?.refused).toBe(true);
-    expect(result.content[0].text).toContain('does not belong to this session user');
+    expect(result.content[0].text).toContain('Course document not found');
   });
 
   it('falls back to the persisted scene list when there is no outline snapshot', async () => {

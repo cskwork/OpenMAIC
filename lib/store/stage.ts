@@ -288,6 +288,18 @@ interface StageState {
   generationComplete: boolean;
 
   /**
+   * Viewer-facing ownership facts resolved from the stage-meta sidecar (the
+   * reference's classroom access fields). Defaults are the upstream single-user
+   * ones — `isOwner: true`, `readOnly: false` — so a course that was never
+   * probed (no server sidecar row) stays editable exactly as before; the
+   * sidecar probe overrides them when it answers. These are viewer-scoped and
+   * deliberately NOT persisted with the document.
+   */
+  isOwner: boolean;
+  isBookmarked: boolean;
+  readOnly: boolean;
+
+  /**
    * Who produced the current outline ('client' absent / 'server-job'), written
    * by the workbench stage-freshness sync's delegated initial read. Absent
    * from the host's original store; the reference carries it so a server-owned
@@ -328,6 +340,12 @@ interface StageState {
   setGenerationComplete: (complete: boolean) => void;
   /** Mark generation complete iff every outline has a scene and none failed. */
   markGenerationCompleteIfDone: () => void;
+  /**
+   * Apply the stage-meta sidecar's per-viewer facts. `readOnly` follows the
+   * reference's classroom rule: a visitor who neither owns nor bookmarked the
+   * course gets a read-only classroom.
+   */
+  setViewerAccess: (access: { isOwner: boolean; isBookmarked: boolean }) => void;
   setGenerationStatus: (status: 'idle' | 'generating' | 'paused' | 'completed' | 'error') => void;
   setCurrentGeneratingOrder: (order: number) => void;
   bumpGenerationEpoch: () => void;
@@ -443,6 +461,9 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
   outlines: [],
   generationComplete: false,
   outlineProducer: null,
+  isOwner: true,
+  isBookmarked: false,
+  readOnly: false,
   generationEpoch: 0,
   generationStatus: 'idle' as const,
   currentGeneratingOrder: -1,
@@ -742,6 +763,10 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
     const { outlines, scenes, failedOutlines, generationComplete } = get();
     if (generationComplete) return;
     if (isDeckComplete({ outlines, scenes, failedOutlines })) get().setGenerationComplete(true);
+  },
+
+  setViewerAccess: ({ isOwner, isBookmarked }) => {
+    set({ isOwner, isBookmarked, readOnly: !(isOwner || isBookmarked) });
   },
 
   setGenerationStatus: (generationStatus) => set({ generationStatus }),

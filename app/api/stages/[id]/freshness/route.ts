@@ -6,13 +6,13 @@
  * sends the client one frame carrying the current `rev`; the client reacts by
  * pulling the manifest and re-fetching only the scenes that changed.
  *
- * The reference woke this stream from a DB trigger; the upstream storage
- * package exposes no LISTEN/NOTIFY, so this stream POLLS the owner-bound
- * store for the stage's `updatedAt` (the same correctness mechanism as
- * `app/api/agent/owner-events/route.ts`). A frame is emitted when the rev
- * moves; the first frame is sent on connect. `rev` is doc-level (see the
- * manifest route) — the signal is intentionally coarse but honest, and the
- * client's fallback polling still converges independently.
+ * The reference woke this stream from a DB trigger's NOTIFY; the upstream
+ * storage package exposes no LISTEN/NOTIFY, so this stream POLLS the
+ * owner-bound store for the stage's trigger-maintained revision (the same
+ * correctness mechanism as `app/api/agent/owner-events/route.ts`). A frame is
+ * emitted when the rev moves; the first frame is sent on connect. `rev` is the
+ * per-stage monotonic revision the manifest exposes, so a frame that arrives
+ * always reflects the same signal the manifest serves.
  *
  * Degradation is by design: this stream is a pure optimization. A dead or
  * missing stream only costs latency — the client's low-frequency fallback
@@ -54,7 +54,7 @@ export async function GET(req: NextRequest, { params }: Params) {
   // reads a foreign or missing stage as absent, and the 404 carries the
   // owner cookie the same way every response of this family does.
   const store = await getOwnerScopedDocumentStore(ownerId);
-  const initial = await store.loadDocument(stageId);
+  const initial = await store.readFreshnessManifest(stageId);
   if (!initial) return ownerNotFound(responseHeaders);
 
   const encoder = new TextEncoder();
@@ -96,8 +96,8 @@ export async function GET(req: NextRequest, { params }: Params) {
         if (closed) return;
         let rev = 0;
         try {
-          const document = await store.loadDocument(stageId);
-          rev = document ? document.stage.updatedAt : 0;
+          const manifest = await store.readFreshnessManifest(stageId);
+          rev = manifest ? manifest.rev : 0;
         } catch {
           // Fall through to the rev-0 frame.
         }

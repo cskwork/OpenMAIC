@@ -3,7 +3,10 @@
     "you": "Vous",
     "confirm": "Confirmer",
     "cancel": "Annuler",
-    "loading": "Chargement…"
+    "loading": "Chargement…",
+    "errorPrefix": "Erreur : ",
+    "loadingClassroom": "Chargement de la classe…",
+    "retry": "Réessayer"
   },
   "home": {
     "slogan": "L’apprentissage génératif en classe interactive multi-agents",
@@ -967,7 +970,10 @@
     "newFolderInline": "Nouveau dossier",
     "newFolderTitle": "Nouveau dossier",
     "searchResults": "Résultats de recherche",
-    "ungrouped": "Non classés"
+    "ungrouped": "Non classés",
+    "notFound": "Cours introuvable",
+    "notFoundDesc": "Ce cours n’existe pas ou a été supprimé.",
+    "backToHome": "Retour à l’accueil"
   },
   "upload": {
     "pdfSizeLimit": "Accepte les fichiers PDF jusqu’à 50 Mo",
@@ -1807,6 +1813,107 @@
     "alidocmindAccessKeyId": "Identifiant de clé d’accès",
     "alidocmindAccessKeySecret": "Secret de clé d’accès"
   },
+  "workspace": {
+    "untitledCourse": "未命名课堂",
+    "sceneCount": "{{count}} 页",
+    "sceneCount_one": "{{count}} 页",
+    "sceneCount_other": "{{count}} 页",
+    "courseLinkHint": "在右侧打开《{{name}}》",
+    "courseLinkMore": "还有 {{count}} 节课堂",
+    "courseMention": {
+      "title": "为这条消息引用课堂",
+      "empty": "没有匹配的课堂",
+      "alreadyNamed": "已引用",
+      "remove": "移除{{name}}",
+      "pillHint": "这条消息引用了「{{name}}」",
+      "notAccepted": "引用的课堂未生效，服务端发布中，请稍后重发",
+      "reference": "引用「{{name}}」",
+      "capped": "仅显示前 {{count}} 个，继续输入以缩小范围"
+    },
+    "heroTitle": "What will you create today?",
+    "heroSubtitle": "Share an idea and turn it into a learning journey people can step into",
+    "newSession": "New chat",
+    "sections": {
+      "courses": "Courses",
+      "sessions": "Chats",
+      "favorites": "Saved"
+    },
+    "coursesEmpty": "No courses yet",
+    "sessionsEmpty": "No chats yet",
+    "loading": "Loading",
+    "loadFailed": "Couldn't load",
+    "retry": "Retry",
+    "untitledSession": "Untitled chat",
+    "pagePosition": "Page {{index}} of {{total}}",
+    "exitPro": "Exit Pro",
+    "navAria": "Workspace navigation",
+    "homeAria": "Back to home",
+    "currentSession": "Current chat",
+    "startLearning": "Commencer à apprendre",
+    "time": {
+      "justNow": "Just now",
+      "minutesAgo": "{{count}}m ago",
+      "hoursAgo": "{{count}}h ago",
+      "daysAgo": "{{count}}d ago"
+    },
+    "sessionStatus": {
+      "connecting": "Connecting",
+      "queued": "Queued",
+      "running": "Running",
+      "succeeded": "Ready",
+      "failed": "Needs attention",
+      "cancelled": "Stopped"
+    },
+    "backToWorkspace": "Back to workspace",
+    "savedCourse": "Saved course, read-only",
+    "savedNote": "Created by others · read-only",
+    "savedEmpty": "Nothing saved yet",
+    "searchPlaceholder": "Filter by name",
+    "searchAria": "Search {{section}}",
+    "searchEmpty": "No matches",
+    "showMore": "Show {{count}} more",
+    "showLess": "Show less",
+    "utilitiesAria": "Preferences and account",
+    "resizeAria": "Drag to resize the sidebar",
+    "chatPaneAria": "Chat panel",
+    "classroomPaneAria": "Classroom",
+    "collapseNav": "Collapse navigation",
+    "expandNav": "Expand navigation",
+    "expandNavInto": "Expand navigation · {{section}}",
+    "collapseChat": "Collapse conversation",
+    "expandChat": "Conversation",
+    "collapseClassroom": "Collapse classroom",
+    "expandClassroom": "Classroom",
+    "readOnlyBadge": "Read-only",
+    "noCourseTitle": "No course open",
+    "noCourseHint": "Open one from a course link in the conversation, or pick one from the list on the left — the conversation stays put",
+    "resizeChatAria": "Drag to resize the conversation pane",
+    "firstPageLanding": "The first page is landing…",
+    "autoSaving": "Enregistrement automatique…",
+    "autoSaved": "Enregistré",
+    "collapsedTitle": "Both panes are collapsed",
+    "collapsedHint": "Use the tabs on the left to bring the conversation or the classroom back",
+    "moreUtilities": "More",
+    "rowMore": "Plus d’actions pour {{name}}",
+    "folderDeleteHint": "Les cours qu’il contient retournent au niveau supérieur. Rien n’est supprimé.",
+    "dropToUnfile": "Déposez ici pour sortir du dossier",
+    "renameInvalid": "Le nom doit contenir de 1 à 120 caractères",
+    "renameForbidden": "Vous n’avez pas créé ce cours, vous ne pouvez pas le renommer",
+    "renameGone": "Ce cours n’existe plus",
+    "renameSession": "Renommer la conversation",
+    "renameSessionAria": "Renommer la conversation « {{name}} »",
+    "renameSessionFailed": "Échec du renommage, réessayez",
+    "delete": "Supprimer",
+    "confirmDelete": "Confirmer la suppression",
+    "deleting": "Suppression…",
+    "deleteFailed": "Suppression impossible. Réessayez.",
+    "tabsAria": "Chats and courses",
+    "savedDrawerAria": "Saved courses",
+    "courseTabsAria": "Open courses",
+    "courseTabClose": "Close tab: {{name}}",
+    "courseTabRunning": "Generating",
+    "foldersUnavailable": "Les dossiers ne sont pas disponibles dans cette version"
+  },
   "profile": {
     "title": "Profil",
     "defaultNickname": "Apprenant",
@@ -1838,24 +1945,6 @@
     "placeholder": "Code d’accès",
     "error": "Code d’accès invalide. Veuillez réessayer."
   },
-  "workspace": {
-    "untitledCourse": "未命名课堂",
-    "sceneCount": "{{count}} 页",
-    "sceneCount_one": "{{count}} 页",
-    "sceneCount_other": "{{count}} 页",
-    "courseLinkHint": "在右侧打开《{{name}}》",
-    "courseLinkMore": "还有 {{count}} 节课堂",
-    "courseMention": {
-      "title": "为这条消息引用课堂",
-      "empty": "没有匹配的课堂",
-      "alreadyNamed": "已引用",
-      "remove": "移除{{name}}",
-      "pillHint": "这条消息引用了「{{name}}」",
-      "notAccepted": "引用的课堂未生效，服务端发布中，请稍后重发",
-      "reference": "引用「{{name}}」",
-      "capped": "仅显示前 {{count}} 个，继续输入以缩小范围"
-    }
-  },
   "proMode": {
     "attach": "添加材料",
     "mentionCourse": "引用课堂",
@@ -1867,6 +1956,22 @@
     "builtinSkillsGroup": "内置 Skill",
     "skillsLoadFailed": "Skill 加载失败，点击重试",
     "retrySkills": "重试",
-    "noSkillMatch": "没有匹配“{{query}}”的 Skill"
+    "noSkillMatch": "没有匹配“{{query}}”的 Skill",
+    "badgeAria": "Mode Pro",
+    "badgeEnter": "Mode Pro",
+    "badgeExit": "Revenir au mode classique",
+    "launchPlaceholder": "Décrivez l'expérience d'apprentissage que vous souhaitez créer",
+    "launchSend": "Lancer la création"
+  },
+  "workbench": {
+    "tool": {
+      "label": {
+        "extractMaterial": null,
+        "waitMaterials": null
+      },
+      "error": {
+        "materialExtraction": null
+      }
+    }
   }
 }

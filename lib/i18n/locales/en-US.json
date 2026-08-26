@@ -3,7 +3,10 @@
     "you": "You",
     "confirm": "Confirm",
     "cancel": "Cancel",
-    "loading": "Loading..."
+    "loading": "Loading...",
+    "errorPrefix": "Error: ",
+    "loadingClassroom": "Loading classroom...",
+    "retry": "Retry"
   },
   "home": {
     "slogan": "Generative Learning in Multi-Agent Interactive Classroom",
@@ -967,7 +970,10 @@
     "deleteFolderOnly": "Delete folder only",
     "deleteFolderAndCourses": "Delete folder and {{count}} course",
     "deleteFolderAndCourses_other": "Delete folder and {{count}} courses",
-    "deleteFolderConfirmRemove": "This removes the folder and its courses, including chat history."
+    "deleteFolderConfirmRemove": "This removes the folder and its courses, including chat history.",
+    "notFound": "Course not found",
+    "notFoundDesc": "This course does not exist, or it has been deleted.",
+    "backToHome": "Back to home"
   },
   "upload": {
     "pdfSizeLimit": "Supports PDF files up to 50MB",
@@ -1807,6 +1813,107 @@
     "alidocmindAccessKeyId": "AccessKey ID",
     "alidocmindAccessKeySecret": "AccessKey Secret"
   },
+  "workspace": {
+    "untitledCourse": "Untitled course",
+    "sceneCount": "{{count}} pages",
+    "sceneCount_one": "{{count}} page",
+    "sceneCount_other": "{{count}} pages",
+    "courseLinkHint": "Open {{name}} in the right pane",
+    "courseLinkMore": "{{count}} more classroom(s)",
+    "courseMention": {
+      "title": "Reference a classroom for this message",
+      "empty": "No classroom matches",
+      "alreadyNamed": "Already referenced",
+      "remove": "Remove {{name}}",
+      "pillHint": "This message references {{name}}",
+      "notAccepted": "The classroom you referenced did not take effect while the server is deploying. Please resend shortly.",
+      "reference": "Reference {{name}}",
+      "capped": "Showing the first {{count}} — keep typing to narrow it down"
+    },
+    "heroTitle": "What will you create today?",
+    "heroSubtitle": "Share an idea and turn it into a learning journey people can step into",
+    "newSession": "New chat",
+    "sections": {
+      "courses": "Courses",
+      "sessions": "Chats",
+      "favorites": "Saved"
+    },
+    "coursesEmpty": "No courses yet",
+    "sessionsEmpty": "No chats yet",
+    "loading": "Loading",
+    "loadFailed": "Couldn't load",
+    "retry": "Retry",
+    "untitledSession": "Untitled chat",
+    "pagePosition": "Page {{index}} of {{total}}",
+    "exitPro": "Exit Pro",
+    "navAria": "Workspace navigation",
+    "homeAria": "Back to home",
+    "currentSession": "Current chat",
+    "startLearning": "Start learning",
+    "time": {
+      "justNow": "Just now",
+      "minutesAgo": "{{count}}m ago",
+      "hoursAgo": "{{count}}h ago",
+      "daysAgo": "{{count}}d ago"
+    },
+    "sessionStatus": {
+      "connecting": "Connecting",
+      "queued": "Queued",
+      "running": "Running",
+      "succeeded": "Ready",
+      "failed": "Needs attention",
+      "cancelled": "Stopped"
+    },
+    "backToWorkspace": "Back to workspace",
+    "savedCourse": "Saved course, read-only",
+    "savedNote": "Created by others · read-only",
+    "savedEmpty": "Nothing saved yet",
+    "searchPlaceholder": "Filter by name",
+    "searchAria": "Search {{section}}",
+    "searchEmpty": "No matches",
+    "showMore": "Show {{count}} more",
+    "showLess": "Show less",
+    "utilitiesAria": "Preferences and account",
+    "resizeAria": "Drag to resize the sidebar",
+    "chatPaneAria": "Chat panel",
+    "classroomPaneAria": "Classroom",
+    "collapseNav": "Collapse navigation",
+    "expandNav": "Expand navigation",
+    "expandNavInto": "Expand navigation · {{section}}",
+    "collapseChat": "Collapse conversation",
+    "expandChat": "Conversation",
+    "collapseClassroom": "Collapse classroom",
+    "expandClassroom": "Classroom",
+    "readOnlyBadge": "Read-only",
+    "noCourseTitle": "No course open",
+    "noCourseHint": "Open one from a course link in the conversation, or pick one from the list on the left — the conversation stays put",
+    "resizeChatAria": "Drag to resize the conversation pane",
+    "firstPageLanding": "The first page is landing…",
+    "autoSaving": "Auto-saving…",
+    "autoSaved": "Saved",
+    "collapsedTitle": "Both panes are collapsed",
+    "collapsedHint": "Use the tabs on the left to bring the conversation or the classroom back",
+    "moreUtilities": "More",
+    "rowMore": "More actions for {{name}}",
+    "folderDeleteHint": "The courses inside move back to the top level. Nothing is deleted.",
+    "dropToUnfile": "Drop here to move out of the folder",
+    "renameInvalid": "A name must be 1–120 characters",
+    "renameForbidden": "You did not create this course, so you cannot rename it",
+    "renameGone": "That course no longer exists",
+    "renameSession": "Rename chat",
+    "renameSessionAria": "Rename chat “{{name}}”",
+    "renameSessionFailed": "Rename failed, please retry",
+    "delete": "Delete",
+    "confirmDelete": "Confirm delete",
+    "deleting": "Deleting…",
+    "deleteFailed": "Couldn't delete. Please try again.",
+    "tabsAria": "Chats and courses",
+    "savedDrawerAria": "Saved courses",
+    "courseTabsAria": "Open courses",
+    "courseTabClose": "Close tab: {{name}}",
+    "courseTabRunning": "Generating",
+    "foldersUnavailable": "Folders are not available in this build"
+  },
   "profile": {
     "title": "Profile",
     "defaultNickname": "Learner",
@@ -1833,29 +1940,6 @@
     "speed": "Speed",
     "language": "Language"
   },
-  "accessCode": {
-    "title": "Enter Access Code",
-    "placeholder": "Access code",
-    "error": "Invalid access code. Please try again."
-  },
-  "workspace": {
-    "untitledCourse": "Untitled course",
-    "sceneCount": "{{count}} pages",
-    "sceneCount_one": "{{count}} page",
-    "sceneCount_other": "{{count}} pages",
-    "courseLinkHint": "Open {{name}} in the right pane",
-    "courseLinkMore": "{{count}} more classroom(s)",
-    "courseMention": {
-      "title": "Reference a classroom for this message",
-      "empty": "No classroom matches",
-      "alreadyNamed": "Already referenced",
-      "remove": "Remove {{name}}",
-      "pillHint": "This message references {{name}}",
-      "notAccepted": "The classroom you referenced did not take effect while the server is deploying. Please resend shortly.",
-      "reference": "Reference {{name}}",
-      "capped": "Showing the first {{count}} — keep typing to narrow it down"
-    }
-  },
   "proMode": {
     "attach": "Attach material",
     "mentionCourse": "Reference a classroom",
@@ -1867,6 +1951,27 @@
     "builtinSkillsGroup": "Built-in Skills",
     "skillsLoadFailed": "Skills failed to load. Click to retry",
     "retrySkills": "Retry",
-    "noSkillMatch": "No Skills match “{{query}}”"
+    "noSkillMatch": "No Skills match “{{query}}”",
+    "badgeAria": "Pro mode",
+    "badgeEnter": "Pro mode",
+    "badgeExit": "Back to classic",
+    "launchPlaceholder": "Describe the learning experience you want to create",
+    "launchSend": "Start build"
+  },
+  "accessCode": {
+    "title": "Enter Access Code",
+    "placeholder": "Access code",
+    "error": "Invalid access code. Please try again."
+  },
+  "workbench": {
+    "tool": {
+      "label": {
+        "extractMaterial": null,
+        "waitMaterials": null
+      },
+      "error": {
+        "materialExtraction": null
+      }
+    }
   }
 }

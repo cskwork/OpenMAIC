@@ -205,8 +205,10 @@ function stageTitle(
 
 const MATERIAL_TOOLS = new Set([
   'list_materials',
+  'extract_material',
   'read_material',
   'use_material_media',
+  'wait_for_materials',
   'search_material',
 ]);
 
@@ -300,6 +302,24 @@ export function presentTool(
               ),
             }
           : {}),
+      };
+
+    case 'extract_material':
+      return {
+        icon: FileSearch,
+        label: t('workbench.tool.label.extractMaterial'),
+        chips,
+        hidePayload: true,
+        ...(failed ? { errorText: t('workbench.tool.error.materialExtraction') } : {}),
+      };
+
+    case 'wait_for_materials':
+      return {
+        icon: FileSearch,
+        label: t('workbench.tool.label.waitMaterials'),
+        chips,
+        hidePayload: true,
+        ...(failed ? { errorText: t('workbench.tool.error.materialExtraction') } : {}),
       };
 
     case 'read_material':
