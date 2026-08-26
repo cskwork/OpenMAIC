@@ -97,6 +97,6 @@ describe('composeFollowUpText', () => {
     });
     expect(text).toContain('lecture.mp4');
     expect(text).toContain('video/mp4');
-    expect(text).toContain('reading support will be provided in a later delivery');
+    expect(text).toContain('use use_material_media');
   });
 });
