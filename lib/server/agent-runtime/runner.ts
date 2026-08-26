@@ -19,17 +19,29 @@ import { buildAgent } from '@/lib/agent/runtime/build-agent';
 import { createCallLlmStreamFn } from '@/lib/agent/runtime/stream-fn';
 import { HOST_AGENT_LIFECYCLE as LIFECYCLE } from '@/lib/agent-runtime/lifecycle';
 import { createLogger } from '@/lib/logger';
+import { withPlainJsonDocumentWrites } from '@/lib/document-store/plain-json-store';
+import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
+import type { AppScene } from '@/lib/types/stage';
+import type { AppStage } from '@/lib/document-store/persistence-types';
+import type { DocumentStore } from '@openmaic/storage';
 
 import { resolveAgentDriverModel } from './agent-driver-model';
 import { buildAskUserTool } from './ask-user';
 import { agentRuntimeConfig as config } from './config';
 import { buildCreateSkillTool } from './create-skill';
+import { buildDslCourseToolset, type CourseStore } from './course-tools';
+import {
+  buildCurriculumTools,
+  CURRICULUM_ALLOWLIST,
+  CURRICULUM_TOOLS_PROMPT,
+} from './curriculum-tools';
+import { DSL_COURSE_TOOL_NAMES } from './dsl-tools';
 import {
   buildFetchUrlTool,
   fetchPromptBlock,
   untrustedContentPolicyPromptBlock,
 } from './fetch-url';
-import { assembleRunnerTools } from './runner-contract';
+import { assembleRunnerTools, buildRunnerCoursePrompt } from './runner-contract';
 import { buildMaterialTools, MATERIAL_TOOL_NAMES } from './material-tools';
 import { buildSkillEditTools, SKILL_EDIT_TOOL_NAMES } from './skill-edit-tools';
 import { buildWebSearchTool, resolveWebSearchCapability, searchPromptBlock } from './web-search';
@@ -65,63 +77,15 @@ const MESSAGE_UPDATE_MIN_INTERVAL_MS = 150;
 export const MINIMAL_AGENT_TOOL_NAMES = new Set(['ask_user']);
 
 /**
- * Shared prompt lines for every registered toolset.
- *
- * The ask_user-only claim no longer exists as a runner form: the skill tools
- * (create_skill / read_skill / patch_skill) are registered unconditionally on
- * every run, so "your only available tool is ask_user" is never true.
+ * System prompt for a run with the given registered toolset, assembled by
+ * `buildRunnerCoursePrompt` (runner-contract.ts): the shared base lines from
+ * course-tools.ts, the DSL compatibility block (always present), and every
+ * capability block that is actually registered — the web-search block only
+ * when a web-search backend is configured, the curriculum block always, the
+ * skill discovery block when skills are installed, the fetch_url guidance
+ * and untrusted-content policy always (fetch_url is always registered), and
+ * the session-materials block only when the session has materials.
  */
-const AGENT_RUNTIME_SYSTEM_PROMPT_LINES = [
-  'You are a capable assistant working in a durable background session.',
-  'Complete the user request carefully and explain the result clearly.',
-  'The conversation may pause, restart on another worker, or receive follow-up messages.',
-  'Treat earlier conversation messages as durable context.',
-  'Do not claim access to tools or data that are not present in this session.',
-  'Use ask_user only when a decision genuinely belongs to the user.',
-  'Make every question self-contained and concise.',
-  'Offer stable, unique option ids when choices are useful.',
-  'After ask_user succeeds, stop and wait for the next user message.',
-  'Do not answer your own question or invent the user decision.',
-  'If no clarification is needed, answer directly without calling a tool.',
-  'Follow later user messages as updates to the same conversation.',
-  'Be honest about uncertainty and unavailable capabilities.',
-  "Reply in the user's language unless the user requests another language.",
-];
-
-/**
- * Product-neutral prompt for the minimal ask_user-only runtime slice.
- *
- * Retained for callers that build a deliberately minimal agent; the background
- * runner no longer uses it because the skill tools are always registered.
- */
-export const AGENT_RUNTIME_SYSTEM_PROMPT = [
-  ...AGENT_RUNTIME_SYSTEM_PROMPT_LINES.slice(0, 5),
-  'Your only available tool is ask_user.',
-  ...AGENT_RUNTIME_SYSTEM_PROMPT_LINES.slice(5),
-].join('\n');
-
-/**
- * System prompt for a run with the given registered toolset. When web_search is
- * registered the web-search capability block is appended; when skills are
- * installed, pi's standard `<available_skills>` discovery block is appended
- * too. The untrusted-content policy and fetch_url guidance are always present,
- * because the material tools are always registered (reference semantics: only
- * web_search is capability-gated). When the session has materials, the
- * session-materials block lists them so the model knows what it can read.
- */
-export function buildRunnerSystemPrompt(
-  webSearchRegistered: boolean,
-  availableSkills?: string,
-  materials?: string,
-): string {
-  const base = webSearchRegistered
-    ? [...AGENT_RUNTIME_SYSTEM_PROMPT_LINES, searchPromptBlock()].join('\n')
-    : AGENT_RUNTIME_SYSTEM_PROMPT_LINES.join('\n');
-  const withFetch = [base, fetchPromptBlock(), untrustedContentPolicyPromptBlock()].join('\n\n');
-  const withMaterials = materials ? `${withFetch}\n\n${materials}` : withFetch;
-  return availableSkills ? `${withMaterials}\n\n${availableSkills}` : withMaterials;
-}
-
 function isLeaseLostError(error: unknown): boolean {
   let current = error;
   const visited = new Set<unknown>();
@@ -765,6 +729,34 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
           ),
         ]
       : [];
+    // The owner-bound document store: ONE store per run, bound to the claimed
+    // session's owner (`forOwner`), shared by every stage tool. The owner id is
+    // deliberately absent from every model-visible parameter — the model cannot
+    // forge a target owner, and a stage owned by another owner reads as missing
+    // and cannot be written. `withPlainJsonDocumentWrites` strips
+    // undefined-valued members at the write boundary so a JSON pointer `set`
+    // that carries them never persists a JSON-null key (reference semantics).
+    // `getAgentSessionStore` above already guards on DATABASE_URL, so the
+    // provider can only be reached with a configured connection string.
+    const { documentStore } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
+    const ownerScopedStore: CourseStore = withPlainJsonDocumentWrites(
+      documentStore.forOwner(meta.ownerId) as unknown as DocumentStore<AppScene, AppStage>,
+    );
+    // The stage read/patch toolset and the stage-level CRUD it needs. All of
+    // them write through `ownerScopedStore`; patch_stage is marked sequential
+    // by the shared STAGE_WRITER_TOOL_NAMES registry (course-tools.ts).
+    const dslTools = buildDslCourseToolset({
+      store: ownerScopedStore,
+      onCheckpoint: (info) => emit(LIFECYCLE.checkpoint, info),
+      sessionId: id,
+    });
+    const curriculumTools = buildCurriculumTools({
+      store: ownerScopedStore,
+      ownerId: meta.ownerId,
+      sessionId: id,
+      onStageLink: (course) => emit(LIFECYCLE.stageLink, course),
+      onLibraryChanged: (change) => emit(LIFECYCLE.libraryChanged, change),
+    });
     // Session-scoped material tools and the materials prompt block are wired
     // from durable session identity on every start and resume (reference
     // semantics: the material tools are always registered alongside the
@@ -794,17 +786,22 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       // fetch inside the session's observed origins, and it is the tool's core
       // security property.
       [buildFetchUrlTool({ sessionId: id })],
+      dslTools,
+      curriculumTools,
       materialTools,
     );
     const askUserLatch = createAskUserTerminateLatch();
     let toolCalls = 0;
     const agent = buildAgent({
       streamFn,
-      systemPrompt: buildRunnerSystemPrompt(
-        search !== null,
-        availableSkillsPromptBlock(installedSkills),
-        materials.length ? sessionMaterialsPromptBlock(materials) : undefined,
-      ),
+      systemPrompt: buildRunnerCoursePrompt({
+        availableSkills: availableSkillsPromptBlock(installedSkills),
+        curriculum: CURRICULUM_TOOLS_PROMPT,
+        ...(search ? { search: searchPromptBlock() } : {}),
+        fetch: fetchPromptBlock(),
+        untrustedContent: untrustedContentPolicyPromptBlock(),
+        ...(materials.length ? { materials: sessionMaterialsPromptBlock(materials) } : {}),
+      }),
       model: driver.piModel,
       tools,
       allowedToolNames: new Set([
@@ -814,6 +811,8 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
         ...SKILL_EDIT_TOOL_NAMES,
         ...(skillReadTool ? ['read'] : []),
         ...MATERIAL_TOOL_NAMES,
+        ...DSL_COURSE_TOOL_NAMES,
+        ...CURRICULUM_ALLOWLIST,
       ]),
       ...(plan.kind === 'start' ? {} : { history: modelMessages }),
       afterToolCall: (toolContext) => {
@@ -1178,7 +1177,8 @@ export function startAgentRunner(): AgentRunnerHandle {
   log.info(
     'agent runner toolset: ask_user always; web_search when a web-search backend is configured; ' +
       'create_skill/read_skill/patch_skill and the skill-scoped read when skills are installed; ' +
-      'fetch_url always (URL trust gate enforced per call)',
+      'fetch_url always (URL trust gate enforced per call); ' +
+      'read_stage/patch_stage/grep_stage and create_stage/read_stage_outline always (owner-scoped store)',
   );
 
   return {

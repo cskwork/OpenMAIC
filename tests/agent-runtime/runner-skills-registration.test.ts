@@ -46,6 +46,7 @@ const fixture = vi.hoisted(() => {
 const mocks = vi.hoisted(() => ({
   randomUUID: vi.fn(() => 'runner-test-uuid'),
   getAgentSessionStore: vi.fn(),
+  getServerPersistenceProvider: vi.fn(),
   openEntryStorage: vi.fn(),
   resolveAgentDriverModel: vi.fn(),
   createCallLlmStreamFn: vi.fn(),
@@ -59,6 +60,10 @@ vi.mock('node:crypto', async (importActual) => {
 
 vi.mock('@/lib/server/agent-runtime/store', () => ({
   getAgentSessionStore: mocks.getAgentSessionStore,
+}));
+
+vi.mock('@/lib/persistence/server-provider', () => ({
+  getServerPersistenceProvider: mocks.getServerPersistenceProvider,
 }));
 
 // The runner lists the session's materials to build the materials prompt
@@ -202,6 +207,11 @@ beforeEach(() => {
     reservedOutputTokens: 8192,
   });
   mocks.createCallLlmStreamFn.mockReturnValue((() => {}) as never);
+  // The owner-bound document store is never touched in these runner pins
+  // (buildAgent is mocked), so a bare forOwner facade is enough.
+  mocks.getServerPersistenceProvider.mockResolvedValue({
+    documentStore: { forOwner: () => ({}) },
+  });
 });
 
 interface RunOutcome {
@@ -247,6 +257,11 @@ describe('skills runner registration', () => {
       'patch_skill',
       'read',
       'fetch_url',
+      'read_stage',
+      'patch_stage',
+      'grep_stage',
+      'create_stage',
+      'read_stage_outline',
       'list_materials',
       'read_material',
       'search_material',
@@ -254,12 +269,17 @@ describe('skills runner registration', () => {
     expect([...(options.allowedToolNames ?? [])].sort()).toEqual([
       'ask_user',
       'create_skill',
+      'create_stage',
       'fetch_url',
+      'grep_stage',
       'list_materials',
       'patch_skill',
+      'patch_stage',
       'read',
       'read_material',
       'read_skill',
+      'read_stage',
+      'read_stage_outline',
       'search_material',
     ]);
     expect(options.systemPrompt).toContain('<available_skills>');
