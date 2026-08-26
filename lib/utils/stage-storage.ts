@@ -40,7 +40,8 @@ import {
   withRuntimeStorageExclusiveLockUntilSettled,
   withRuntimeStorageSharedLock,
 } from './chat-storage-lock';
-import { DocumentVersionError } from '@openmaic/storage';
+import { DocumentVersionError, type DocumentSummary } from '@openmaic/storage';
+import { isBrowserPersistenceEnabled } from '@/lib/persistence/bootstrap';
 import { preparePBLScenesForDocumentPersistence } from '@/lib/pbl/v2/runtime/document-persistence';
 import {
   MISSING_ASSET_LEASE,
@@ -721,10 +722,57 @@ async function performStageDeletion(stageId: string): Promise<void> {
 }
 
 /**
+ * PG mode: the owner-scoped course listing.
+ *
+ * The generic `GET /api/persistence/documents` listing is deliberately refused
+ * server-side (`403 FORBIDDEN_DOCUMENTS`): the capability model serves reads by
+ * id and listings owner-only, so the home's course list must not ask for an
+ * unscoped listing at all. `GET /api/stages` IS the owner listing — it resolves
+ * the anonymous owner from the same cookie the workbench uses and returns that
+ * owner's stage documents. Folders stay device-local (Dexie), so the same
+ * membership overlay the local path applies keeps courses filed in this browser
+ * grouped.
+ */
+async function listOwnerStagesFromServer(): Promise<StageListItem[]> {
+  const res = await fetch('/api/stages', { credentials: 'include' });
+  if (!res.ok) {
+    throw new Error(`Failed to list owner stages: HTTP ${res.status}`);
+  }
+  const body = (await res.json().catch(() => null)) as { stages?: unknown } | null;
+  if (!body || !Array.isArray(body.stages)) {
+    throw new Error('Malformed /api/stages response: expected { stages: [...] }');
+  }
+  const memberships = await db.stageFolders.toArray();
+  const folderByStage = new Map(memberships.map((m) => [m.stageId, m.folderId]));
+  return (body.stages as DocumentSummary[])
+    .map((item) => {
+      const base: StageListItem = {
+        id: item.id,
+        name: item.name,
+        sceneCount: item.sceneCount,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+        ...(item.description !== undefined ? { description: item.description } : {}),
+        ...(item.interactiveMode !== undefined ? { interactiveMode: item.interactiveMode } : {}),
+        ...(item.taskEngineMode !== undefined ? { taskEngineMode: item.taskEngineMode } : {}),
+      };
+      const folderId = folderByStage.get(item.id) ?? item.folderId;
+      return folderId ? { ...base, folderId } : base;
+    })
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+/**
  * List all stages
  */
 export async function listStages(): Promise<StageListItem[]> {
   try {
+    if (isBrowserPersistenceEnabled()) {
+      // Server persistence is on: the generic document listing answers 403 by
+      // design, so the home/workspace library lists through the owner-scoped
+      // workbench surface instead.
+      return await listOwnerStagesFromServer();
+    }
     const summaries = await getDocumentStore().listDocuments();
     const ids = new Set(summaries.map((summary) => summary.id));
     const legacy = await getLegacyDocumentStore().listStages();

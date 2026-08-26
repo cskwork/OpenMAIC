@@ -945,6 +945,41 @@ describe('an answer ends with the classrooms it touched', () => {
     expect(cardsOf(state)).toEqual([['stage-a', 'stage-b']]);
   });
 
+  it('flushes an interrupted answer’s classrooms when the repaired run ends cancelled', () => {
+    // A server restart parks the run (`session_interrupted`), the next instance
+    // resumes it (`session_resumed`), and the stop lands before pi closes the
+    // answer (`session_end` cancelled) — so no `agent_end` ever drains the
+    // buffer. The pending sightings are the classrooms this answer produced,
+    // and the terminal card must still carry them: the card the timeline ends
+    // with is the course the session knows, not the stopped caption alone.
+    const state = foldAll([
+      ev('session_start', { prompt: '写一门课' }),
+      ev('agent_start', {}),
+      ev('checkpoint', {
+        tool: 'patch_stage',
+        stageId: 'stage-a',
+        sceneId: 's1',
+        order: 1,
+        outline: [],
+        courseTitle: '光的折射',
+      }),
+      ev('session_interrupted', { reason: 'lease lost' }),
+      ev('session_resumed', { reason: 'crash', repairedToolCalls: [] }),
+      ev('session_end', { status: 'cancelled' }),
+    ]);
+    const courses = state.chat.filter((n) => n.kind === 'course');
+    expect(courses).toHaveLength(1);
+    // The card carries the known stage ref — the name/link the timeline ends on.
+    expect(courses[0]?.stageIds).toEqual(['stage-a']);
+    // It sits at the tail, directly above the stopped caption.
+    const kinds = contentOf(state).map((n) => n.kind);
+    expect(kinds.slice(-2)).toEqual(['course', 'boundary']);
+    // The buffer drained into the card, and the fold still knows the course
+    // name the card renders from.
+    expect(state.runCourseStageIds).toEqual([]);
+    expect(state.courseTitle).toBe('光的折射');
+  });
+
   it('keeps the legacy single unbound row for checkpoints without a stageId', () => {
     // A v1 transcript's page checkpoint carried no stage id at all — and may
     // predate the pi frames the per-exchange rule flushes on, so this row is
