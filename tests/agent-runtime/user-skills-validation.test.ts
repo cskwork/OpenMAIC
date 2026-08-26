@@ -28,4 +28,21 @@ describe('user Skill validation', () => {
       /64 KiB/,
     );
   });
+
+  it('rejects a NUL in the instructions with the same storability error the patch path uses', () => {
+    // Without this the NUL reaches PG, which refuses it as an opaque database
+    // error (`invalid byte sequence for encoding "UTF8"`). The create path must
+    // share the patch path's clear rejection instead.
+    expect(() => validateUserSkillInput({ ...valid, content: 'a\u0000b' })).toThrowError(
+      expect.objectContaining({ code: 'unstorable-character' }),
+    );
+  });
+
+  it('rejects an unpaired surrogate in the instructions instead of storing U+FFFD', () => {
+    // PG silently rewrites a lone surrogate to U+FFFD (measured), so without
+    // this the user's text would be changed irreversibly at create time.
+    expect(() => validateUserSkillInput({ ...valid, content: 'a\ud800b' })).toThrowError(
+      expect.objectContaining({ code: 'unpaired-surrogate' }),
+    );
+  });
 });

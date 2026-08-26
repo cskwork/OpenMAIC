@@ -10,7 +10,7 @@ import { NextResponse } from 'next/server';
 import { isAgentRuntimeEnabled } from '@/lib/config/feature-flags';
 import { apiError } from '@/lib/server/api-response';
 import { MAX_SESSION_TEXT_LENGTH } from '@/lib/server/agent-runtime/limits';
-import { inferSkillIdFromPrompt, listSkills } from '@/lib/server/agent-runtime/skills';
+import { findSkill, inferSkillIdFromPrompt, listSkills } from '@/lib/server/agent-runtime/skills';
 import { getAgentSessionStore } from '@/lib/server/agent-runtime/store';
 import { withRequestOwnerId } from '@/lib/server/agent-runtime/with-owner';
 import { buildRequestOrigin, isValidClassroomId } from '@/lib/server/classroom-storage';
@@ -63,11 +63,14 @@ export async function POST(req: NextRequest) {
     // An EXPLICIT skill — a `?skill=` launch link, not composer UI — is
     // rejected here rather than at claim time: a session created with a typo'd
     // skill would otherwise sit queued and then quietly build an ordinary
-    // conversation.
-    const explicitSkillId = (body.skill ?? '').toString().trim() || undefined;
+    // conversation. The runner's `findSkill` matches a reference by id OR name
+    // (a user skill's natural handle is `name`, `my-*`), so the route validates
+    // with the same lookup and freezes the resolved id.
+    let explicitSkillId = (body.skill ?? '').toString().trim() || undefined;
     if (explicitSkillId) {
-      const known = await listSkills(ownerId);
-      if (!known.some((s) => s.id === explicitSkillId)) {
+      const found = await findSkill(explicitSkillId, ownerId);
+      if (!found) {
+        const known = await listSkills(ownerId);
         return new NextResponse(
           JSON.stringify({
             success: false as const,
@@ -79,6 +82,7 @@ export async function POST(req: NextRequest) {
           { status: 400, headers: responseHeaders },
         );
       }
+      explicitSkillId = found.id;
     }
     /**
      * Otherwise, read the skill off the message itself.

@@ -236,13 +236,32 @@ function readSkillTitle(filePath: string): string | undefined {
   }
 }
 
+/**
+ * A skill answers to a reference by its stable id OR its user-visible name —
+ * the single matching rule for every skill lookup in this module (`findSkill`,
+ * `inferSkillIdFromPrompt`, `skillsNamedInText`) and the one the sessions route
+ * reuses when validating an explicit `?skill=` value. Builtins carry
+ * id === name, so the two arms agree there.
+ */
+function matchesSkillRef(skill: LoadedSkill, ref: string): boolean {
+  return skill.id === ref || skill.name === ref;
+}
+
+/**
+ * The installed skill answering a reference — a stable id OR the user-visible
+ * handle (`name`). This is the one lookup both the runner and the sessions
+ * route use: the runner validates a session's frozen skill against it at claim
+ * time, and the route validates an explicit `skill` against it at creation, so
+ * a launch link built from the picker's `name` (a user skill's natural handle,
+ * `my-*`) is accepted exactly where the runner would accept it.
+ */
 export async function findSkill(
-  id: string | undefined,
+  ref: string | undefined,
   ownerId?: string,
 ): Promise<LoadedSkill | null> {
-  if (!id) return null;
+  if (!ref) return null;
   const all = await listSkills(ownerId);
-  return all.find((s) => s.id === id) ?? null;
+  return all.find((s) => matchesSkillRef(s, ref)) ?? null;
 }
 
 /**
@@ -298,9 +317,8 @@ export function skillsNamedInText(
     const handle = skillHandleName(token.text);
     if (!handle) continue;
     // Match on the id (the directory name / stored handle) and on `name`, which
-    // is what the menu writes into the draft — same rule as
-    // `inferSkillIdFromPrompt`.
-    const skill = skills.find((candidate) => candidate.id === handle || candidate.name === handle);
+    // is what the menu writes into the draft — same rule as `findSkill`.
+    const skill = skills.find((candidate) => matchesSkillRef(candidate, handle));
     if (!skill || seen.has(skill.id)) continue;
     seen.add(skill.id);
     found.push(skill);
@@ -321,11 +339,9 @@ export async function inferSkillIdFromPrompt(
 ): Promise<string | undefined> {
   const handle = leadingSkillHandle(prompt);
   if (!handle) return undefined;
-  const installed = await listSkills(ownerId);
   // Match on the id (the directory name / stored handle) and on `name`, which is
-  // what the menu writes into the draft.
-  const found = installed.find((skill) => skill.id === handle || skill.name === handle);
-  return found?.id;
+  // what the menu writes into the draft — the same lookup `findSkill` uses.
+  return (await findSkill(handle, ownerId))?.id;
 }
 
 // ── Pi-native discovery and invocation ───────────────────────────────────────

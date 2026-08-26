@@ -170,6 +170,28 @@ describe('PgUserSkillStore with PGlite', () => {
     await expect(store.list(OWNER)).resolves.toHaveLength(0);
   });
 
+  test("create shares the patch path's storability gate: NUL and lone surrogates never reach PG", async () => {
+    // The create path must refuse these BEFORE the database, with the same
+    // codes the patch path uses — not as an opaque PG error (NUL) or a silent
+    // U+FFFD rewrite (lone surrogate).
+    const nul = await store.create(OWNER, { ...input('my-nul'), content: 'a\u0000b' }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(nul).toBeInstanceOf(UserSkillError);
+    expect((nul as UserSkillError).code).toBe('unstorable-character');
+
+    const lone = await store.create(OWNER, { ...input('my-lone'), content: 'a\ud800b' }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(lone).toBeInstanceOf(UserSkillError);
+    expect((lone as UserSkillError).code).toBe('unpaired-surrogate');
+
+    // Nothing was persisted: the table is still empty.
+    await expect(store.list(OWNER)).resolves.toHaveLength(0);
+  });
+
   test('patch persists a str_replace, advances updated_at, and reports applied ops', async () => {
     const skill = await store.create(OWNER, {
       ...input('my-method'),

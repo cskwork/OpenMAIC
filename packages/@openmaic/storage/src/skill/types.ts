@@ -165,6 +165,11 @@ export function validateUserSkillFields(input: {
       'invalid-content',
     );
   }
+  // The same storability gate the patch path applies to its result
+  // (`applyUserSkillPatchOps`): a lone surrogate or a NUL is refused here
+  // rather than reaching PG as a silent U+FFFD rewrite or an opaque database
+  // error.
+  assertStorableUserSkillFields({ title, description, content }, 'This Skill');
   return { title, description, content };
 }
 
@@ -269,6 +274,55 @@ export function hasUnpairedSurrogate(text: string): boolean {
     }
   }
   return false;
+}
+
+/**
+ * The storability gate every path that writes a row must pass. The create path
+ * (`validateUserSkillFields`) and the patch path (`applyUserSkillPatchOps`)
+ * share ONE check, so the same input fails the same way everywhere instead of
+ * surfacing as an opaque database error or silently mangling stored text.
+ *
+ * PG is the last transform in the chain, and two inputs make it disagree with
+ * what was computed:
+ *
+ *  - a LONE SURROGATE is silently rewritten to U+FFFD (measured, not assumed),
+ *    which is irreversible damage to the user's text;
+ *  - a NUL is rejected outright (`invalid byte sequence for encoding "UTF8"`),
+ *    which would surface as an opaque database error.
+ *
+ * Everything else round-trips byte-for-byte, including tabs, newlines, emoji
+ * and bidi marks, so `content` needs no further restriction.
+ *
+ * Runs on NORMALIZED fields, because that is exactly what the row will hold —
+ * the patch path normalizes before this and the create path calls it after its
+ * own normalization, so both refuse precisely the values the database would
+ * receive.
+ *
+ * `subject` names the caller in the message ("This batch" from the patch path,
+ * "This Skill" from the create path).
+ */
+function assertStorableUserSkillFields(fields: UserSkillFields, subject: string): void {
+  for (const [label, value] of [
+    ['title', fields.title],
+    ['description', fields.description],
+    ['content', fields.content],
+  ] as const) {
+    if (hasUnpairedSurrogate(value)) {
+      throw new UserSkillError(
+        `${subject} would leave ${label} with an incomplete character (half a surrogate pair); ` +
+          'nothing was changed. A character was cut in half — e.g. using the high half of an emoji ' +
+          'as an anchor or replacement. Use whole characters.',
+        'unpaired-surrogate',
+      );
+    }
+    if (value.includes('\u0000')) {
+      throw new UserSkillError(
+        `${subject} would leave ${label} with a NUL character the database cannot store; ` +
+          'nothing was changed. Remove it.',
+        'unstorable-character',
+      );
+    }
+  }
 }
 
 /**
@@ -460,37 +514,10 @@ export function applyUserSkillPatchOps(
   // ── Storability, checked on the normalized result ────────────────────────
   //
   // PG is the last transform in the chain, and two inputs make it disagree with
-  // what we computed. Both are checked here so the fixpoint below is reasoning
-  // about a value that really can round-trip:
-  //
-  //  - a LONE SURROGATE is silently rewritten to U+FFFD (measured, not assumed),
-  //    which is irreversible damage to the user's text;
-  //  - a NUL is rejected outright (`invalid byte sequence for encoding "UTF8"`),
-  //    which would surface as an opaque database error.
-  //
-  // Everything else round-trips byte-for-byte, including tabs, newlines, emoji
-  // and bidi marks, so `content` needs no further restriction.
-  for (const [label, value] of [
-    ['title', first.fields.title],
-    ['description', first.fields.description],
-    ['content', first.fields.content],
-  ] as const) {
-    if (hasUnpairedSurrogate(value)) {
-      throw new UserSkillError(
-        `This batch would leave ${label} with an incomplete character (half a surrogate pair); ` +
-          'nothing was changed. An anchor or replacement fell inside a character — e.g. using the ' +
-          'high half of an emoji as oldText. Use whole characters as anchors.',
-        'unpaired-surrogate',
-      );
-    }
-    if (value.includes('\u0000')) {
-      throw new UserSkillError(
-        `This batch would leave ${label} with a NUL character the database cannot store; ` +
-          'nothing was changed. Remove it from the replacement text.',
-        'unstorable-character',
-      );
-    }
-  }
+  // what we computed. Both are refused here — by the SAME gate the create path
+  // runs (`validateUserSkillFields`) — so the fixpoint below is reasoning about
+  // a value that really can round-trip. See `assertStorableUserSkillFields`.
+  assertStorableUserSkillFields(first.fields, 'This batch');
   let second: UserSkillFields;
   try {
     // Starts from `first.fields`, which IS the row's future content — so this
