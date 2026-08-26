@@ -97,3 +97,67 @@ describe('web_search abort handling', () => {
     ).rejects.toThrow('aborted');
   });
 });
+
+describe('web_search URL observation', () => {
+  const capability: WebSearchCapability = {
+    providerId: 'searxng',
+    apiKey: '',
+    baseUrl: 'https://search.example',
+  };
+
+  it('registers every result URL before returning when a callback is supplied', async () => {
+    searchWebMock.mockResolvedValue({
+      answer: '',
+      query: 'q',
+      responseTime: 0.1,
+      sources: [
+        { title: 'A', url: 'https://a.example/', content: 'a', score: 1 },
+        { title: 'B', url: 'https://b.example/path?q=1', content: 'b', score: 1 },
+      ],
+    });
+    const onUrlsObserved = vi.fn(async () => undefined);
+    const tool = buildWebSearchTool(capability, onUrlsObserved);
+
+    const output = await tool.execute('call_1', { query: 'q' } as never, undefined);
+
+    expect(onUrlsObserved).toHaveBeenCalledWith([
+      'https://a.example/',
+      'https://b.example/path?q=1',
+    ]);
+    // Registration happens before the tool result resolves, and the result is
+    // still returned normally.
+    expect(output).toMatchObject({ content: [{ type: 'text', text: 'search context' }] });
+  });
+
+  it('skips registration when no callback is supplied', async () => {
+    searchWebMock.mockResolvedValue({
+      answer: '',
+      query: 'q',
+      responseTime: 0.1,
+      sources: [{ title: 'A', url: 'https://a.example/', content: 'a', score: 1 }],
+    });
+    const tool = buildWebSearchTool(capability);
+
+    await expect(tool.execute('call_1', { query: 'q' } as never, undefined)).resolves.toBeDefined();
+  });
+
+  it('lets a registration failure fail the tool call (reference semantics)', async () => {
+    searchWebMock.mockResolvedValue({
+      answer: '',
+      query: 'q',
+      responseTime: 0.1,
+      sources: [{ title: 'A', url: 'https://a.example/', content: 'a', score: 1 }],
+    });
+    const onUrlsObserved = vi.fn(async () => {
+      throw new Error('store unavailable');
+    });
+    const tool = buildWebSearchTool(capability, onUrlsObserved);
+
+    // The reference awaits registration inside execute without swallowing, so
+    // a store failure surfaces as a failed tool call rather than returning
+    // results the trust gate cannot back.
+    await expect(tool.execute('call_1', { query: 'q' } as never, undefined)).rejects.toThrow(
+      'store unavailable',
+    );
+  });
+});

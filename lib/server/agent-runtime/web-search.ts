@@ -40,7 +40,10 @@ const SEARCH_SCHEMA = Type.Object({
   query: Type.String({ description: 'The search query, in the language of the course.' }),
 });
 
-export function buildWebSearchTool(capability: WebSearchCapability): AgentTool<never, never> {
+export function buildWebSearchTool(
+  capability: WebSearchCapability,
+  onUrlsObserved?: (urls: string[]) => Promise<void>,
+): AgentTool<never, never> {
   const tool: AgentTool<typeof SEARCH_SCHEMA, unknown> = {
     name: 'web_search',
     label: 'Search the web',
@@ -62,10 +65,11 @@ export function buildWebSearchTool(capability: WebSearchCapability): AgentTool<n
         ...(signal ? { signal } : {}),
       });
       if (signal?.aborted) throw new Error('aborted');
-      // NOTE: URL observation attaches at this seam in a later slice — every
-      // result URL is registered with the session's durable session-urls store
-      // before the tool result is returned. The store is not ported here, so
-      // nothing is recorded yet.
+      // Every result URL is registered with the session's durable session-urls
+      // store before the tool result is returned (reference semantics): the
+      // registration is awaited, so a store failure fails this tool call
+      // rather than silently returning results the trust gate cannot back.
+      await onUrlsObserved?.(result.sources.map((source) => source.url));
       const context = formatSearchResultsAsContext(result);
       return {
         content: [

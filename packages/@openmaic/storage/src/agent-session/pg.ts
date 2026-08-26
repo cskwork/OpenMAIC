@@ -14,6 +14,7 @@ import {
   AgentSessionAccessError,
   AgentSessionEntryTreeError,
   AgentSessionLeaseLostError,
+  normalizeObservedUrl,
   type AgentSessionEntry,
   type AgentSessionEntryTree,
   type AgentSessionEntryTreeHandle,
@@ -22,6 +23,8 @@ import {
   type AgentSessionMeta,
   type AgentSessionStore,
   type AgentSessionTransaction,
+  type AgentSessionUrlSource,
+  type AgentSessionUrlStore,
   type AgentSessionUserMessage,
   type ClaimedAgentSession,
   type ClaimAgentSessionOptions,
@@ -44,6 +47,7 @@ export interface AgentSessionTableNames {
   entries: string;
   ownerEventCounters: string;
   ownerEvents: string;
+  urls: string;
 }
 
 export const DEFAULT_AGENT_SESSION_TABLE_NAMES: Readonly<AgentSessionTableNames> = {
@@ -52,6 +56,7 @@ export const DEFAULT_AGENT_SESSION_TABLE_NAMES: Readonly<AgentSessionTableNames>
   entries: 'agent_session_entries',
   ownerEventCounters: 'agent_owner_session_event_counters',
   ownerEvents: 'agent_owner_session_events',
+  urls: 'agent_session_urls',
 };
 
 export interface AgentSessionLogger {
@@ -157,6 +162,18 @@ CREATE TABLE IF NOT EXISTS agent_owner_session_events (
   CONSTRAINT agent_owner_session_events_attempt_nonnegative
     CHECK (attempt IS NULL OR attempt >= 0)
 );
+
+CREATE TABLE IF NOT EXISTS agent_session_urls (
+  session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+  url        TEXT NOT NULL,
+  source     TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (session_id, url),
+  CONSTRAINT agent_session_urls_source_known CHECK (source IN ('user','web_search'))
+);
+
+CREATE INDEX IF NOT EXISTS agent_session_urls_session_created_idx
+  ON agent_session_urls (session_id, created_at);
 `;
 
 function quoteIdentifier(identifier: string): string {
@@ -187,6 +204,7 @@ function schemaFor(names: AgentSessionTableNames): string {
   const t = quoteIdentifier(names.entries);
   const c = quoteIdentifier(names.ownerEventCounters);
   const o = quoteIdentifier(names.ownerEvents);
+  const u = quoteIdentifier(names.urls);
   // Index names derive from the table-name substitution verbatim: the template
   // index names (`agent_sessions_status_live_idx`, ...) are re-keyed by the
   // same replaceAll that re-keys their tables, so no separate prefix rewriting
@@ -198,6 +216,7 @@ function schemaFor(names: AgentSessionTableNames): string {
     .replaceAll('agent_owner_session_events', names.ownerEvents)
     .replaceAll('agent_session_entries', names.entries)
     .replaceAll('agent_session_events', names.events)
+    .replaceAll('agent_session_urls', names.urls)
     .replaceAll('agent_sessions', names.sessions)
     .replaceAll(`REFERENCES ${names.sessions}`, `REFERENCES ${s}`)
     .replaceAll(`ON ${names.sessions}`, `ON ${s}`)
@@ -212,7 +231,8 @@ function schemaFor(names: AgentSessionTableNames): string {
     .replaceAll(
       `CREATE TABLE IF NOT EXISTS ${names.ownerEvents}`,
       `CREATE TABLE IF NOT EXISTS ${o}`,
-    );
+    )
+    .replaceAll(`CREATE TABLE IF NOT EXISTS ${names.urls}`, `CREATE TABLE IF NOT EXISTS ${u}`);
 }
 
 /** Create all backend-owned tables when absent; existing schemas require migrations. */
@@ -251,6 +271,15 @@ const SESSION_COLUMNS = `id, owner_id, prompt, stage_id, skill_id, origin,
 
 function epoch(value: Date | string): number {
   return value instanceof Date ? value.getTime() : new Date(value).getTime();
+}
+
+/** WHATWG origin (scheme + host + port, default ports dropped); null when unparseable. */
+function urlOrigin(value: string): string | null {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
 }
 
 function sessionMeta(row: SessionRow): AgentSessionMeta {
@@ -301,7 +330,8 @@ export class PgAgentSessionStore
     AgentSessionStore,
     AgentSessionEventLog,
     AgentSessionEntryTree,
-    OwnerSessionEventProjection
+    OwnerSessionEventProjection,
+    AgentSessionUrlStore
 {
   private readonly queryable: Queryable;
   private readonly transactionHook: WithTransaction;
@@ -891,6 +921,46 @@ export class PgAgentSessionStore
        WHERE id = $1 AND deleted_at IS NULL`,
       [sessionId],
     );
+  }
+
+  async registerSessionUrls(
+    sessionId: string,
+    values: string[],
+    source: AgentSessionUrlSource,
+    transaction?: AgentSessionTransaction,
+  ): Promise<string[]> {
+    const urls = [
+      ...new Set(values.map(normalizeObservedUrl).filter((url): url is string => !!url)),
+    ];
+    if (urls.length === 0) return [];
+    const target: Queryable = transaction ?? this.queryable;
+    const valueRows = urls
+      .map((_url, index) => `($1, $${index * 2 + 2}, $${index * 2 + 3})`)
+      .join(', ');
+    await target.query(
+      `INSERT INTO ${this.table('urls')} (session_id, url, source)
+       VALUES ${valueRows}
+       ON CONFLICT (session_id, url) DO NOTHING`,
+      [sessionId, ...urls.flatMap((url) => [url, source])],
+    );
+    return urls;
+  }
+
+  /**
+   * Rows are pulled into JS and compared by WHATWG origin, which normalizes
+   * default ports and never treats a string prefix like `https://arxiv.org` as
+   * matching `https://arxiv.org.evil.com`. Per session this is a few hundred
+   * rows at most, which is negligible for a fetch_url gate.
+   */
+  async isSessionUrlAllowed(sessionId: string, value: string): Promise<boolean> {
+    const url = normalizeObservedUrl(value);
+    if (!url) return false;
+    const candidateOrigin = new URL(url).origin;
+    const result = await this.queryable.query<{ url: string }>(
+      `SELECT url FROM ${this.table('urls')} WHERE session_id = $1`,
+      [sessionId],
+    );
+    return result.rows.some((row) => urlOrigin(row.url) === candidateOrigin);
   }
 
   async openEntryTree(

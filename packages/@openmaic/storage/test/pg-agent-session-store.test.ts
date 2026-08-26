@@ -11,6 +11,7 @@ import {
 import { AgentSessionEntryTreeError } from '../src/agent-session/types.js';
 import { runAgentSessionConcurrencyContract } from './agent-session-concurrency-contract.js';
 import { makeAgentSessionInput, runAgentSessionStoreContract } from './agent-session-contract.js';
+import { runAgentSessionUrlContract } from './agent-session-url-contract.js';
 
 function optionsFor(db: PGlite): PgAgentSessionStoreOptions {
   return { withTransaction: (body) => db.transaction((tx: Queryable) => body(tx)) };
@@ -35,8 +36,9 @@ describe('PgAgentSessionStore with PGlite', () => {
   runAgentSessionConcurrencyContract('Postgres (PGlite)', () => store, {
     genuineConcurrency: false,
   });
+  runAgentSessionUrlContract('Postgres (PGlite)', () => store);
 
-  test('provisions all five tables idempotently', async () => {
+  test('provisions all six tables idempotently', async () => {
     await expect(ensureAgentSessionSchema(db)).resolves.toBeUndefined();
     const result = await db.query<{ table_name: string }>(
       `SELECT table_name FROM information_schema.tables

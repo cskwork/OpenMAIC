@@ -9,6 +9,7 @@ import {
 } from '../src/agent-session/pg.js';
 import { runAgentSessionConcurrencyContract } from './agent-session-concurrency-contract.js';
 import { runAgentSessionStoreContract } from './agent-session-contract.js';
+import { runAgentSessionUrlContract } from './agent-session-url-contract.js';
 
 const contractUrl = process.env.PG_CONTRACT_URL;
 
@@ -53,7 +54,7 @@ describe.skipIf(!contractUrl)('PgAgentSessionStore with PostgreSQL 16', () => {
     await pool.query(
       `TRUNCATE agent_session_entries, agent_session_events,
                 agent_owner_session_events, agent_owner_session_event_counters,
-                agent_sessions`,
+                agent_session_urls, agent_sessions`,
     );
     store = new PgAgentSessionStore(pool as Queryable, { withTransaction: transactionFor(pool) });
   });
@@ -66,6 +67,7 @@ describe.skipIf(!contractUrl)('PgAgentSessionStore with PostgreSQL 16', () => {
   runAgentSessionConcurrencyContract('PostgreSQL 16 (node-postgres)', () => store, {
     genuineConcurrency: true,
   });
+  runAgentSessionUrlContract('PostgreSQL 16 (node-postgres)', () => store);
 
   test('runs against PostgreSQL 16 or newer', async () => {
     const result = await pool.query<{ version_num: string }>(

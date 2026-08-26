@@ -4,6 +4,7 @@ import {
   type Queryable,
   type WithTransaction,
 } from '@openmaic/storage/agent-session/pg';
+import { extractObservedUrls } from '@openmaic/storage';
 import type { Pool } from 'pg';
 
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
@@ -43,9 +44,31 @@ export function nodePostgresTransaction(pool: Pool): WithTransaction {
 async function createAgentSessionStore(connectionString: string): Promise<PgAgentSessionStore> {
   const { pool } = await getServerPersistenceProvider(connectionString);
   await ensureAgentSessionSchema(pool);
-  return new PgAgentSessionStore(pool, {
+  // URL observations from user-authored prompt/message text are registered
+  // inside the same business transaction that creates the session / posts the
+  // message (reference session-store semantics), so they commit atomically and
+  // a registration failure aborts the write. The hooks run only after the
+  // store is constructed, so the closure reference is always assigned.
+  const store: PgAgentSessionStore = new PgAgentSessionStore(pool, {
     withTransaction: nodePostgresTransaction(pool),
+    onSessionCreated: async (transaction, meta): Promise<void> => {
+      await store.registerSessionUrls(
+        meta.id,
+        extractObservedUrls(meta.prompt),
+        'user',
+        transaction,
+      );
+    },
+    onUserMessagePosted: async (transaction, input): Promise<void> => {
+      await store.registerSessionUrls(
+        input.session.id,
+        extractObservedUrls(input.text),
+        'user',
+        transaction,
+      );
+    },
   });
+  return store;
 }
 
 /**

@@ -18,6 +18,39 @@ export const AGENT_SESSION_STATUSES = [
 
 export type AgentSessionStatus = (typeof AGENT_SESSION_STATUSES)[number];
 
+/** Which trusted producer observed a URL: a user-authored message or web search. */
+export const AGENT_SESSION_URL_SOURCES = ['user', 'web_search'] as const;
+
+export type AgentSessionUrlSource = (typeof AGENT_SESSION_URL_SOURCES)[number];
+
+// URL literals look like `https?://…`; matching stops at whitespace, HTML
+// delimiters, quotes, and CJK punctuation (escaped as code points so the
+// source stays plain ASCII), so prose never bleeds into the candidate.
+const URL_CANDIDATE =
+  /https?:\/\/[^\s<>"'`\u{FF0C}\u{3002}\u{FF01}\u{FF1F}\u{FF1B}\u{FF1A}\u{3001}]+/giu;
+const TRAILING_PROSE = /[\])}>,\u{FF0C}\u{3002}\u{FF01}\u{FF1F}\u{FF1B}\u{FF1A}\u{3001}.!?;:]+$/u;
+
+/** Normalize only absolute HTTP(S) URLs; malformed prose matches are ignored. */
+export function normalizeObservedUrl(value: string): string | null {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    return parsed.href;
+  } catch {
+    return null;
+  }
+}
+
+/** Extract URL literals from a user-authored message without treating model output as authority. */
+export function extractObservedUrls(text: string): string[] {
+  const urls = new Set<string>();
+  for (const match of text.matchAll(URL_CANDIDATE)) {
+    const normalized = normalizeObservedUrl(match[0].replace(TRAILING_PROSE, ''));
+    if (normalized) urls.add(normalized);
+  }
+  return [...urls];
+}
+
 export const AGENT_SESSION_LIFECYCLE = {
   sessionStart: 'session_start',
   sessionResumed: 'session_resumed',
@@ -436,4 +469,33 @@ export interface AgentSessionHooks {
       clientRequestId: string;
     },
   ) => Promise<void>;
+}
+
+/**
+ * Durable per-session URL trust gate: only origins the user exposed (in a
+ * prompt or message) or that web_search surfaced may later be fetched by the
+ * host's fetch_url tool. The trust anchor is unchanged from the reference:
+ * links scraped from fetched pages are never registered, so a page cannot
+ * widen the allowlist by itself.
+ */
+export interface AgentSessionUrlStore {
+  /**
+   * Register WHATWG-normalized absolute http(s) URLs for a session. Values
+   * that are malformed or not http(s) are ignored, and re-registering an
+   * existing (sessionId, url) pair is a no-op. Returns the normalized URLs
+   * that were considered. Pass a transaction to commit the observations
+   * atomically with the business write that produced them.
+   */
+  registerSessionUrls(
+    sessionId: string,
+    urls: string[],
+    source: AgentSessionUrlSource,
+    transaction?: AgentSessionTransaction,
+  ): Promise<string[]>;
+  /**
+   * Allow any URL whose WHATWG origin (scheme + host + port, default ports
+   * dropped) matches a session-observed URL. Fails closed on malformed or
+   * non-http(s) candidates and on sessions with no observations.
+   */
+  isSessionUrlAllowed(sessionId: string, url: string): Promise<boolean>;
 }
