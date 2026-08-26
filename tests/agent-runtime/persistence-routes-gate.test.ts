@@ -77,7 +77,11 @@ interface RouteCase {
 const params = (id: string) => ({ params: Promise.resolve({ id }) });
 
 const ROUTES: RouteCase[] = [
-  { name: 'GET /api/stages', call: () => getStages(new NextRequest('http://localhost/api/stages')), happyStatus: 200 },
+  {
+    name: 'GET /api/stages',
+    call: () => getStages(new NextRequest('http://localhost/api/stages')),
+    happyStatus: 200,
+  },
   {
     name: 'POST /api/stages',
     call: () =>
@@ -92,7 +96,8 @@ const ROUTES: RouteCase[] = [
   },
   {
     name: 'GET /api/stages/[id]',
-    call: () => getStage(new NextRequest(`http://localhost/api/stages/${STAGE_ID}`), params(STAGE_ID)),
+    call: () =>
+      getStage(new NextRequest(`http://localhost/api/stages/${STAGE_ID}`), params(STAGE_ID)),
     happyStatus: 200,
   },
   {
@@ -124,7 +129,10 @@ const ROUTES: RouteCase[] = [
   {
     name: 'DELETE /api/stages/[id]',
     call: () =>
-      deleteStage(new NextRequest(`http://localhost/api/stages/${STAGE_ID}`, { method: 'DELETE' }), params(STAGE_ID)),
+      deleteStage(
+        new NextRequest(`http://localhost/api/stages/${STAGE_ID}`, { method: 'DELETE' }),
+        params(STAGE_ID),
+      ),
     happyStatus: 200,
   },
   {
@@ -138,18 +146,26 @@ const ROUTES: RouteCase[] = [
   },
   {
     name: 'GET /api/stages/[id]/manifest',
-    call: () => getManifest(new NextRequest(`http://localhost/api/stages/${STAGE_ID}/manifest`), params(STAGE_ID)),
+    call: () =>
+      getManifest(
+        new NextRequest(`http://localhost/api/stages/${STAGE_ID}/manifest`),
+        params(STAGE_ID),
+      ),
     happyStatus: 200,
   },
   {
     name: 'GET /api/stages/[id]/freshness',
     call: () =>
-      getFreshness(new NextRequest(`http://localhost/api/stages/${STAGE_ID}/freshness`), params(STAGE_ID)),
+      getFreshness(
+        new NextRequest(`http://localhost/api/stages/${STAGE_ID}/freshness`),
+        params(STAGE_ID),
+      ),
     happyStatus: 200,
   },
   {
     name: 'GET /api/materials',
-    call: () => getMaterials(new NextRequest(`http://localhost/api/materials?sessionId=${SESSION_ID}`)),
+    call: () =>
+      getMaterials(new NextRequest(`http://localhost/api/materials?sessionId=${SESSION_ID}`)),
     happyStatus: 200,
   },
   {
@@ -184,9 +200,19 @@ interface EnvState {
 }
 
 const STATES: EnvState[] = [
-  { label: 'flag off, no DATABASE_URL', runtimeFlag: undefined, databaseUrl: undefined, serves: false },
+  {
+    label: 'flag off, no DATABASE_URL',
+    runtimeFlag: undefined,
+    databaseUrl: undefined,
+    serves: false,
+  },
   { label: 'flag on, no DATABASE_URL', runtimeFlag: 'true', databaseUrl: undefined, serves: false },
-  { label: 'flag on, DATABASE_URL present', runtimeFlag: 'true', databaseUrl: 'postgres://runtime', serves: true },
+  {
+    label: 'flag on, DATABASE_URL present',
+    runtimeFlag: 'true',
+    databaseUrl: 'postgres://runtime',
+    serves: true,
+  },
 ];
 
 function material(): AgentSessionMaterial {
@@ -212,7 +238,8 @@ for (const state of STATES) {
         originals.set(key, process.env[key]);
         delete process.env[key];
       }
-      if (state.runtimeFlag !== undefined) process.env.OPENMAIC_AGENT_RUNTIME_ENABLED = state.runtimeFlag;
+      if (state.runtimeFlag !== undefined)
+        process.env.OPENMAIC_AGENT_RUNTIME_ENABLED = state.runtimeFlag;
       if (state.databaseUrl !== undefined) process.env.DATABASE_URL = state.databaseUrl;
 
       vi.clearAllMocks();
@@ -237,22 +264,19 @@ for (const state of STATES) {
       originals.clear();
     });
 
-    it.each(ROUTES.map((route) => [route.name, route] as const))(
-      '%s',
-      async (_name, route) => {
-        const response = await route.call();
-        if (state.serves) {
-          expect(response.status).toBe(route.happyStatus);
-        } else {
-          // The 404 must come from the gate, before any owner/store work —
-          // and it must be a 404, never the 500 a store without a connection
-          // would have produced.
-          expect(response.status).toBe(404);
-        }
-        // Close any stream the freshness route opened so its timers cannot
-        // outlive the test.
-        await response.body?.cancel().catch(() => undefined);
-      },
-    );
+    it.each(ROUTES.map((route) => [route.name, route] as const))('%s', async (_name, route) => {
+      const response = await route.call();
+      if (state.serves) {
+        expect(response.status).toBe(route.happyStatus);
+      } else {
+        // The 404 must come from the gate, before any owner/store work —
+        // and it must be a 404, never the 500 a store without a connection
+        // would have produced.
+        expect(response.status).toBe(404);
+      }
+      // Close any stream the freshness route opened so its timers cannot
+      // outlive the test.
+      await response.body?.cancel().catch(() => undefined);
+    });
   });
 }
