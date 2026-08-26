@@ -23,6 +23,8 @@ import { createLogger } from '@/lib/logger';
 import { resolveAgentDriverModel } from './agent-driver-model';
 import { buildAskUserTool } from './ask-user';
 import { agentRuntimeConfig as config } from './config';
+import { assembleRunnerTools } from './runner-contract';
+import { buildWebSearchTool, resolveWebSearchCapability, searchPromptBlock } from './web-search';
 import {
   AgentSessionEntryStorage,
   loadSessionEntryHistory,
@@ -42,17 +44,20 @@ const WORKER_ID = `${randomUUID().slice(0, 8)}:${process.pid}`;
 const SESSION_WAKEUP_FALLBACK_MS = 5_000;
 const MESSAGE_UPDATE_MIN_INTERVAL_MS = 150;
 
-/** The runner starts with one capability and no product-specific tools. */
+/** The runner's always-registered tool; additional tools are capability-gated. */
 export const MINIMAL_AGENT_TOOL_NAMES = new Set(['ask_user']);
 
-/** Product-neutral prompt for the zero-tool runtime slice. */
-export const AGENT_RUNTIME_SYSTEM_PROMPT = [
+/**
+ * Shared prompt lines for every registered toolset. The ask_user-only claim is
+ * conditional: it is true only while web_search is not registered, so it lives
+ * in `AGENT_RUNTIME_SYSTEM_PROMPT` (the unregistered form) rather than here.
+ */
+const AGENT_RUNTIME_SYSTEM_PROMPT_LINES = [
   'You are a capable assistant working in a durable background session.',
   'Complete the user request carefully and explain the result clearly.',
   'The conversation may pause, restart on another worker, or receive follow-up messages.',
   'Treat earlier conversation messages as durable context.',
   'Do not claim access to tools or data that are not present in this session.',
-  'Your only available tool is ask_user.',
   'Use ask_user only when a decision genuinely belongs to the user.',
   'Make every question self-contained and concise.',
   'Offer stable, unique option ids when choices are useful.',
@@ -62,7 +67,24 @@ export const AGENT_RUNTIME_SYSTEM_PROMPT = [
   'Follow later user messages as updates to the same conversation.',
   'Be honest about uncertainty and unavailable capabilities.',
   "Reply in the user's language unless the user requests another language.",
+];
+
+/** Product-neutral prompt for the ask_user-only runtime slice. */
+export const AGENT_RUNTIME_SYSTEM_PROMPT = [
+  ...AGENT_RUNTIME_SYSTEM_PROMPT_LINES.slice(0, 5),
+  'Your only available tool is ask_user.',
+  ...AGENT_RUNTIME_SYSTEM_PROMPT_LINES.slice(5),
 ].join('\n');
+
+/**
+ * System prompt for a run with the given registered toolset. When web_search is
+ * registered the ask_user-only claim is dropped (it would be false) and the
+ * capability prompt block is appended in its place.
+ */
+export function buildRunnerSystemPrompt(webSearchRegistered: boolean): string {
+  if (!webSearchRegistered) return AGENT_RUNTIME_SYSTEM_PROMPT;
+  return [...AGENT_RUNTIME_SYSTEM_PROMPT_LINES, searchPromptBlock()].join('\n');
+}
 
 function isLeaseLostError(error: unknown): boolean {
   let current = error;
@@ -672,15 +694,20 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
     const askUserTool = buildAskUserTool({
       onUserQuestion: (question) => emit(LIFECYCLE.userQuestion, question),
     });
-    const tools = [askUserTool];
+    // web_search is capability-registered: the tool exists in the toolset
+    // exactly when this deployment has a working web-search backend. An
+    // unconfigured deployment gets no tool, so the model never sees a dead one.
+    const search = resolveWebSearchCapability();
+    const webSearchTools = search ? [buildWebSearchTool(search)] : [];
+    const tools = assembleRunnerTools([askUserTool], webSearchTools);
     const askUserLatch = createAskUserTerminateLatch();
     let toolCalls = 0;
     const agent = buildAgent({
       streamFn,
-      systemPrompt: AGENT_RUNTIME_SYSTEM_PROMPT,
+      systemPrompt: buildRunnerSystemPrompt(search !== null),
       model: driver.piModel,
       tools,
-      allowedToolNames: MINIMAL_AGENT_TOOL_NAMES,
+      allowedToolNames: new Set([...MINIMAL_AGENT_TOOL_NAMES, ...(search ? ['web_search'] : [])]),
       ...(plan.kind === 'start' ? {} : { history: modelMessages }),
       afterToolCall: (toolContext) => {
         toolCalls += 1;
@@ -958,7 +985,9 @@ export function startAgentRunner(): AgentRunnerHandle {
       `heartbeat=${config.heartbeatIntervalMs}ms, leaseTtl=${config.leaseTtlMs}ms, ` +
       `maxConcurrent=${config.maxConcurrent}, maxAttempts=${config.maxAttempts})`,
   );
-  log.info('minimal tool set enabled: ask_user');
+  log.info(
+    'agent runner toolset: ask_user always; web_search when a web-search backend is configured',
+  );
 
   return {
     workerId: WORKER_ID,
