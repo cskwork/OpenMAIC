@@ -5,13 +5,13 @@ import { createFakeDocumentStore } from './_fake-document-store';
 import { FIXED_NOW, makeDocument, makeSlideScene } from './_stage-fixtures';
 
 const mocks = vi.hoisted(() => ({
-  runtimeEnabled: true,
+  runtimeConfigured: true,
   resolveRequestOwnerId: vi.fn(),
   fakeStore: null as ReturnType<typeof createFakeDocumentStore> | null,
 }));
 
 vi.mock('@/lib/config/feature-flags', () => ({
-  isAgentRuntimeEnabled: () => mocks.runtimeEnabled,
+  isAgentRuntimeConfigured: () => mocks.runtimeConfigured,
 }));
 vi.mock('@/lib/server/agent-runtime/owner', () => ({
   resolveRequestOwnerId: mocks.resolveRequestOwnerId,
@@ -50,7 +50,7 @@ async function readUntilFreshness(
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
-  mocks.runtimeEnabled = true;
+  mocks.runtimeConfigured = true;
   mocks.resolveRequestOwnerId.mockReturnValue('owner-1');
   mocks.fakeStore = createFakeDocumentStore();
   mocks.fakeStore.docs.set(
@@ -133,8 +133,8 @@ describe('GET /api/stages/[id]/freshness', () => {
     expect(response.headers.get('set-cookie')).toContain('anonymous_id=anon-2');
   });
 
-  it('answers 404 when the agent runtime is disabled', async () => {
-    mocks.runtimeEnabled = false;
+  it('answers 404 when the agent runtime is not configured', async () => {
+    mocks.runtimeConfigured = false;
     expect((await call()).status).toBe(404);
   });
 });
