@@ -1,14 +1,5 @@
 'use client';
 
-/**
- * The shared installed-skill registry: the fetch, its cache, `useAgentSkills`
- * and the display-name helpers. The chat timeline names a loaded skill with
- * `skillLabelForId`, the composer's `/` menu and the skill button read the same
- * snapshot.
- *
- * NOTE (chat slice): ported as-is so the chat surface and its tests can run;
- * the sibling data-layer slice owns this module and supersedes this copy.
- */
 import { useCallback, useEffect, useState } from 'react';
 import {
   defaultWorkbenchTranslator,
@@ -32,7 +23,10 @@ interface RegistrySnapshot {
   skills: AgentSkillInfo[];
   loading: boolean;
   /**
-   * Why the list is missing, as a COPY KEY rather than a sentence.
+   * Why the list is missing, as a COPY KEY rather than a sentence. This module is
+   * the shared registry and has no locale of its own; the surface that renders
+   * the failure translates the key (`agentSkillsErrorText`), so the same
+   * snapshot reads correctly in every language and in a replayed test.
    */
   error: WorkbenchCopyKey | null;
 }
@@ -82,6 +76,9 @@ function loadAgentSkills(force = false): Promise<AgentSkillInfo[]> {
       return (await res.json()) as AgentSkillInfo[];
     })
     .then((list) => {
+      // An auth transition can happen while the old owner's request is in
+      // flight. Its result still resolves for invalidation sequencing, but it
+      // must never repopulate the shared owner-scoped registry.
       if (requestEpoch !== ownerEpoch) return list;
       skillsCache = list;
       publish({ skills: list, loading: false, error: null });
@@ -128,6 +125,9 @@ export function useAgentSkills(): RegistrySnapshot & { reload: () => Promise<voi
   useEffect(() => {
     const listener = () => render((value) => value + 1);
     const onAuthChange = () => {
+      // This registry is owner-scoped. A same-tab logout/login must never keep
+      // another owner's Skill metadata in memory, even though the API would
+      // still reject selecting its stable id.
       void refreshAgentSkillsForOwnerChange().catch(() => {});
     };
     listeners.add(listener);
@@ -146,6 +146,12 @@ export function useAgentSkills(): RegistrySnapshot & { reload: () => Promise<voi
 
 /**
  * A built-in skill's display name in the reader's language.
+ *
+ * The registry ships `title:` from the skill's frontmatter, which is one string
+ * for every locale — so the product copy for the skills it installs itself lives
+ * in `workbench.skill.title.<handle>` and wins here. The frontmatter stays the
+ * fallback: a user Skill is named by its author, and a built-in one whose copy
+ * has not landed yet still reads as itself instead of as a key.
  */
 export function skillTitle(
   skill: { readonly name: string; readonly title?: string | null; readonly source?: string },
@@ -161,6 +167,10 @@ export function skillTitle(
 
 /**
  * One line naming a skill: `<title> /<id>`.
+ *
+ * For surfaces that have a single text slot (the timeline's skill row). Menus
+ * that can afford two spans render the title and the `/id` themselves, with
+ * the id in the muted ramp — same two facts, laid out rather than joined.
  */
 export function skillDisplayLabel(
   skill: {
@@ -180,5 +190,7 @@ export function skillLabelForId(
   t: WorkbenchTranslator = defaultWorkbenchTranslator,
 ): string {
   const known = skills.find((skill) => skill.id === id || skill.name === id);
+  // A skill the registry does not list is still named by its handle — the
+  // timeline records that handle, and the copy map may well have its title.
   return known ? skillDisplayLabel(known, t) : skillDisplayLabel({ name: id }, t);
 }

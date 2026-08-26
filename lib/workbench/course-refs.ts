@@ -2,13 +2,19 @@
  * Course references — the classrooms a user names for the agent alongside a
  * message (e.g. "@course-name, swap the example on page 3").
  *
+ * This exists because the workspace's two content columns are INDEPENDENT: a
+ * course can be open on the right while the conversation in the middle is about
+ * something else entirely, so the runner has no honest way to infer which
+ * classroom a sentence is about. It is told instead — the user types `@`, picks
+ * a course, and that pick is the turn's editing target.
+ *
  * The wire shape is the sibling of `ElementRef` (`lib/workbench/element-refs`)
  * with the element identity removed: same strict decoder in the same two modes,
  * same cap-and-dedupe discipline, same "the id is the handle, the human label is
- * a snapshot" split.
- *
- * NOTE (chat slice): ported as-is so the chat surface and its tests can run;
- * the sibling data-layer slice owns this module and supersedes this copy.
+ * a snapshot" split. `title` is a CLIENT SNAPSHOT and is only ever used for
+ * display and for degrading a reference that no longer resolves — the runner
+ * reads the course's real current name from the owner-bound store when it
+ * injects (see `resolveCourseRefsForContext`).
  */
 
 export interface CourseRef {
@@ -22,7 +28,9 @@ export interface CourseRef {
 }
 
 /**
- * How many courses one message may name.
+ * How many courses one message may name. Lower than the element cap on purpose:
+ * a turn that points at six classrooms is not an editing target, it is a
+ * sentence about a curriculum, and that is what plain prose is for.
  */
 export const MAX_COURSE_REFS = 5;
 
@@ -32,7 +40,9 @@ export const COURSE_REF_TITLE_MAX = 120;
 const COURSE_REF_FIELDS = new Set(['kind', 'stageId', 'title']);
 
 /**
- * Build a ref from a picked course.
+ * Build a ref from a picked course. A course with no name still gets a ref — the
+ * caller passes whatever it shows the user (an "untitled course" placeholder),
+ * because a pill with no label is worse than a pill with a generic one.
  */
 export function makeCourseRef(stageId: string, title: string): CourseRef | null {
   const id = stageId.trim();
@@ -72,6 +82,8 @@ export type CourseRefsDecodeResult = { ok: true; refs: CourseRef[] } | { ok: fal
 
 /**
  * The one strict wire decoder used by both the POST boundary and durable replay.
+ * The route rejects the first invalid item; replay drops invalid historical
+ * items and deterministically keeps the first `MAX_COURSE_REFS` valid refs.
  */
 export function decodeCourseRefs(
   value: unknown,

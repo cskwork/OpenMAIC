@@ -1,9 +1,3 @@
-/**
- * Which file kinds a workbench material attachment accepts, in one place.
- *
- * NOTE (chat slice): ported as-is so the chat surface can run; the sibling
- * data-layer slice owns this module and supersedes this copy.
- */
 export const MEDIA_MIME_TYPES = [
   'video/mp4',
   'video/quicktime',

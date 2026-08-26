@@ -11,10 +11,6 @@
  * fold cannot import that one — it pulls in lucide icons and the workbench
  * translator, which have no business inside a pure reducer. Kept dependency-free
  * so both sides can hold the same rule.
- *
- * NOTE (chat slice): this file is ported as-is from the reference so the chat
- * surface and its tests can run; the sibling data-layer slice owns the same
- * module and this copy is superseded when it lands.
  */
 
 /** The minimum a caller must know about a tool card for these questions. */

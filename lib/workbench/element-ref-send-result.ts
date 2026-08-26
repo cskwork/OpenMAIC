@@ -5,9 +5,6 @@ import type { ElementRef } from '@/lib/workbench/element-refs';
  * Finalize a successful message POST without losing a retryable ref draft.
  * A missing capability receipt means an old route accepted the text but
  * silently ignored elementRefs during a rolling deploy.
- *
- * NOTE (chat slice): ported as-is so the chat surface can run; the sibling
- * data-layer slice owns this module and supersedes this copy.
  */
 export function settleSentElementRefs({
   sessionId,

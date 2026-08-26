@@ -7,8 +7,7 @@ import type { CourseRef } from '@/lib/workbench/course-refs';
  * not carry courseRefs during a rolling deploy — the draft is kept so the user
  * can resend rather than silently losing the course they named.
  *
- * NOTE (chat slice): ported as-is so the chat surface can run; the sibling
- * data-layer slice owns this module and supersedes this copy.
+ * The sibling of `settleSentElementRefs`, and deliberately its exact shape.
  */
 export function settleSentCourseRefs({
   sessionId,

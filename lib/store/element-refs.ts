@@ -1,48 +1,65 @@
-'use client';
-
-/**
- * ════════════════════════════════════════════════════════════════════════════
- * SEAM — the workbench client data layer lands in the sibling U1 slice.
- *
- * The full reference `lib/store/element-refs.ts` (the owner-fenced draft store
- * with draft-generation stamps, `addMany`, hover wiring, `removeSent` matching)
- * is ported by the DATA-LAYER slice. This file is the thin local stand-in the
- * chat surface compiles and runs against: same exported API, same owner fence,
- * identity-based dedupe/removal. When the sibling lands, replace this file
- * wholesale; the components must not change.
- * ════════════════════════════════════════════════════════════════════════════
- */
 import { create } from 'zustand';
 import { useEffect } from 'react';
 import { createSelectors } from '@/lib/utils/create-selectors';
+import { sameDraftPick, stampDraft } from '@/lib/store/draft-generation';
 import {
   MAX_ELEMENT_REFS,
+  addElementRef,
   elementRefIdentity,
+  elementRefOrdinal,
+  hasElementRef,
+  removeElementRef,
+  removeElementRefValue,
+  sameElementRef,
+  toggleElementRef,
   type ElementRef,
 } from '@/lib/workbench/element-refs';
 
+/**
+ * Element Refs Store — the elements staged for the NEXT message.
+ *
+ * Draft state, deliberately not persisted: a reference is only meaningful while
+ * the sentence it belongs to is being written, and a stale ref revived after a
+ * reload would point at an element the agent has since rewritten. The send path
+ * clears it; nothing else outlives the composer.
+ *
+ * `hovered` is the cross-surface link between a chip and the canvas: the
+ * composer's chips write it on hover, and the canvas pin layer reads it to ring
+ * the element. It lives here rather than in the canvas store because it is a
+ * property of the reference list, not of the canvas's own selection.
+ */
 interface ElementRefsState {
   /** Conversation that owns this draft list. */
   ownerSessionId: string | null;
   refs: ElementRef[];
   /** The ref the pointer is currently over, wherever it is being pointed at. */
   hovered: { stageId: string; sceneId: string; elementId: string } | null;
+  /** Monotonic local token; never serialized with the wire ref. */
+  nextGeneration: number;
 
   attachOwner: (sessionId: string) => void;
   /** Drop an ephemeral draft when its chat detaches. */
   detachOwner: (sessionId?: string) => void;
   add: (ref: ElementRef) => void;
+  /** Add unique refs in order and report only unique items actually lost to the cap. */
+  addMany: (refs: readonly ElementRef[]) => { added: number; droppedByCap: number };
   remove: (stageId: string, sceneId: string, elementId: string) => void;
   removeRef: (ref: ElementRef) => void;
   removeSent: (sessionId: string, refs: readonly ElementRef[]) => void;
+  toggle: (ref: ElementRef) => void;
   clear: () => void;
   setHovered: (target: { stageId: string; sceneId: string; elementId: string } | null) => void;
 }
 
-const useElementRefsStoreBase = create<ElementRefsState>((set) => ({
+/** The shared stamp (`lib/store/draft-generation`) — see `removeSent` below. */
+const draftRef = (ref: ElementRef, generation: number): ElementRef =>
+  stampDraft(ref, generation) as ElementRef;
+
+const useElementRefsStoreBase = create<ElementRefsState>((set, get) => ({
   ownerSessionId: null,
   refs: [],
   hovered: null,
+  nextGeneration: 1,
 
   attachOwner: (sessionId) =>
     set((state) =>
@@ -60,26 +77,42 @@ const useElementRefsStoreBase = create<ElementRefsState>((set) => ({
 
   add: (ref) =>
     set((state) => {
-      if (state.refs.length >= MAX_ELEMENT_REFS) return state;
       if (
-        state.refs.some((candidate) => elementRefIdentity(candidate) === elementRefIdentity(ref))
+        state.refs.length >= MAX_ELEMENT_REFS ||
+        state.refs.some((candidate) => sameElementRef(candidate, ref))
       ) {
         return state;
       }
-      return { refs: [...state.refs, ref] };
+      return {
+        refs: addElementRef(state.refs, draftRef(ref, state.nextGeneration)),
+        nextGeneration: state.nextGeneration + 1,
+      };
     }),
+
+  addMany: (refs) => {
+    const before = get().refs;
+    let next = before;
+    let droppedByCap = 0;
+    let nextGeneration = get().nextGeneration;
+    const seen = new Set(before.map(elementRefIdentity));
+    for (const ref of refs) {
+      const key = elementRefIdentity(ref);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (next.length >= MAX_ELEMENT_REFS) {
+        droppedByCap += 1;
+        continue;
+      }
+      next = addElementRef(next, draftRef(ref, nextGeneration));
+      nextGeneration += 1;
+    }
+    if (next !== before) set({ refs: next, nextGeneration });
+    return { added: next.length - before.length, droppedByCap };
+  },
 
   remove: (stageId, sceneId, elementId) =>
     set((state) => {
-      const refs = state.refs.filter(
-        (ref) =>
-          !(
-            ref.kind === 'slide-element' &&
-            ref.stageId === stageId &&
-            ref.sceneId === sceneId &&
-            ref.elementId === elementId
-          ),
-      );
+      const refs = removeElementRef(state.refs, stageId, sceneId, elementId);
       const hovered =
         state.hovered &&
         state.hovered.stageId === stageId &&
@@ -92,8 +125,7 @@ const useElementRefsStoreBase = create<ElementRefsState>((set) => ({
 
   removeRef: (target) =>
     set((state) => {
-      const identity = elementRefIdentity(target);
-      const refs = state.refs.filter((ref) => elementRefIdentity(ref) !== identity);
+      const refs = removeElementRefValue(state.refs, target);
       const hovered =
         target.kind === 'slide-element' &&
         state.hovered?.stageId === target.stageId &&
@@ -107,9 +139,34 @@ const useElementRefsStoreBase = create<ElementRefsState>((set) => ({
   removeSent: (sessionId, sent) =>
     set((state) => {
       if (state.ownerSessionId !== sessionId || sent.length === 0) return state;
-      const sentIds = new Set(sent.map(elementRefIdentity));
-      const refs = state.refs.filter((ref) => !sentIds.has(elementRefIdentity(ref)));
-      return refs.length === state.refs.length ? state : { refs };
+      const wasSent = (ref: ElementRef) =>
+        sent.some((snapshot) => sameDraftPick(ref, snapshot, sameElementRef));
+      const refs = state.refs.filter((ref) => !wasSent(ref));
+      const hovered =
+        state.hovered &&
+        state.refs.some(
+          (ref) =>
+            ref.kind === 'slide-element' &&
+            ref.stageId === state.hovered!.stageId &&
+            ref.sceneId === state.hovered!.sceneId &&
+            ref.elementId === state.hovered!.elementId &&
+            wasSent(ref),
+        )
+          ? null
+          : state.hovered;
+      return refs.length === state.refs.length ? state : { refs, hovered };
+    }),
+
+  toggle: (ref) =>
+    set((state) => {
+      if (state.refs.some((candidate) => sameElementRef(candidate, ref))) {
+        return { refs: toggleElementRef(state.refs, ref) };
+      }
+      if (state.refs.length >= MAX_ELEMENT_REFS) return state;
+      return {
+        refs: addElementRef(state.refs, draftRef(ref, state.nextGeneration)),
+        nextGeneration: state.nextGeneration + 1,
+      };
     }),
 
   clear: () => set({ refs: [], hovered: null }),
@@ -139,6 +196,43 @@ export function useElementRefsOwnerLifecycle(sessionId: string | null): void {
     store.attachOwner(sessionId);
     return () => useElementRefsStore.getState().detachOwner(sessionId);
   }, [sessionId]);
+}
+
+/** Never expose another conversation's cross-surface hover during navigation. */
+export function useElementRefsHoveredForSession(
+  sessionId: string | null,
+): ElementRefsState['hovered'] {
+  return useElementRefsStore((state) =>
+    sessionId && state.ownerSessionId === sessionId ? state.hovered : null,
+  );
+}
+
+/** Is this element already staged? Read outside React (pick layer hit-tests). */
+export function isElementReferenced(
+  sessionId: string | null,
+  stageId: string,
+  sceneId: string,
+  elementId: string,
+): boolean {
+  const state = useElementRefsStore.getState();
+  return (
+    !!sessionId &&
+    state.ownerSessionId === sessionId &&
+    hasElementRef(state.refs, stageId, sceneId, elementId)
+  );
+}
+
+/** 1-based pin number for an element, or 0 when it is not staged. */
+export function referencedElementOrdinal(
+  sessionId: string | null,
+  stageId: string,
+  sceneId: string,
+  elementId: string,
+): number {
+  const state = useElementRefsStore.getState();
+  return sessionId && state.ownerSessionId === sessionId
+    ? elementRefOrdinal(state.refs, stageId, sceneId, elementId)
+    : 0;
 }
 
 export { MAX_ELEMENT_REFS };

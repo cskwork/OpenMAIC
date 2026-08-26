@@ -15,6 +15,16 @@
  * degrades to a readable sentence rather than to `workbench.tool.label.x`, and
  * `tests/workbench/workbench-i18n.test.ts` holds the ten to the shape.
  */
+import workbenchArSA from './workbench-locales/ar-SA.json' with { type: 'json' };
+import workbenchDeDE from './workbench-locales/de-DE.json' with { type: 'json' };
+import workbenchEsMX from './workbench-locales/es-MX.json' with { type: 'json' };
+import workbenchFrFR from './workbench-locales/fr-FR.json' with { type: 'json' };
+import workbenchJaJP from './workbench-locales/ja-JP.json' with { type: 'json' };
+import workbenchKoKR from './workbench-locales/ko-KR.json' with { type: 'json' };
+import workbenchPtBR from './workbench-locales/pt-BR.json' with { type: 'json' };
+import workbenchRuRU from './workbench-locales/ru-RU.json' with { type: 'json' };
+import workbenchViVN from './workbench-locales/vi-VN.json' with { type: 'json' };
+import workbenchZhTW from './workbench-locales/zh-TW.json' with { type: 'json' };
 
 export const workbenchEn = {
   common: {
@@ -652,15 +662,24 @@ type WorkbenchResource = Record<string, unknown>;
 /**
  * The other ten locales.
  *
- * This port ships `workbenchEn` (en-US) and `workbenchZh` (zh-CN) only. The
- * reference keeps ten per-locale JSON overlays in `lib/i18n/workbench-locales/`
- * (the U1 data-layer sibling owns those); they are intentionally NOT
- * machine-translated here, so every other locale resolves `workbench.*` through
- * the base map below — English underneath, Chinese for `zh-*` — exactly the
- * "add the keys and let them fall back" rule of the chat slice spec. When the
- * sibling layer lands its overlays, extend `localeOverrides` with them.
+ * `workbenchEn` is the shape and `workbenchZh` is its Chinese twin; every other
+ * locale is a JSON overlay on one of those two, so a key that a locale has not
+ * translated yet resolves to English (or, for `zh-TW`, to Simplified) instead of
+ * to the key. Same precedence as i18next applies to `live-locales/*.json`, which
+ * is what keeps the hook-free translator below and the React `t` in agreement.
  */
-const localeOverrides: Record<string, WorkbenchResource> = {};
+const localeOverrides: Record<string, WorkbenchResource> = {
+  'zh-TW': workbenchZhTW,
+  'ja-JP': workbenchJaJP,
+  'ko-KR': workbenchKoKR,
+  'de-DE': workbenchDeDE,
+  'fr-FR': workbenchFrFR,
+  'es-MX': workbenchEsMX,
+  'pt-BR': workbenchPtBR,
+  'ru-RU': workbenchRuRU,
+  'ar-SA': workbenchArSA,
+  'vi-VN': workbenchViVN,
+};
 
 function isRecord(value: unknown): value is WorkbenchResource {
   return value !== null && typeof value === 'object' && !Array.isArray(value);

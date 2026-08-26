@@ -1,10 +1,3 @@
-/**
- * Composer material upload scheduling — slot accounting, identity gating and
- * concurrency, all pure enough to test without a DOM.
- *
- * NOTE (chat slice): ported as-is so the chat surface can run; the sibling
- * data-layer slice owns this module and supersedes this copy.
- */
 export const MAX_COMPOSER_MATERIALS = 20;
 export const MATERIAL_UPLOAD_CONCURRENCY = 3;
 
@@ -59,7 +52,7 @@ export function createMaterialUploadIdentityGate(): MaterialUploadIdentityGate {
   };
 }
 
-export class MaterialUploadQueue {
+class MaterialUploadQueue {
   private active = 0;
   private readonly waiting: Array<() => void> = [];
 
@@ -118,7 +111,9 @@ export async function retryMaterialUpload<T>(
 /**
  * The owner cookie is HttpOnly, so the browser cannot reliably tell whether a
  * batch starts without an identity. Wait for the first successful response
- * (and therefore its Set-Cookie) before parallelising the rest.
+ * (and therefore its Set-Cookie) before parallelising the rest. If an upload
+ * fails, keep serialising until one succeeds so subsequent anonymous requests
+ * cannot mint competing owners.
  */
 export async function uploadFirstSuccessfulThenParallel<T>(
   items: T[],
