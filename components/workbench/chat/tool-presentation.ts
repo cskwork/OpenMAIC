@@ -7,10 +7,11 @@
  * the generic fallback. The retired `finish` tool is not shown.
  *
  * (Port note: the table is reconciled against THIS runtime's tool registry, not
- * the reference's — voice-clone, PPT-import, video/image and personal-history
- * tools are not registered upstream and have no rows. The folder and rename
- * stage tools arrived on the integration base after this slice was written and
- * gained their rows with the folder-organisation tools.)
+ * the reference's — PPT-import, video/image and personal-history tools are not
+ * registered upstream and have no rows. The folder/rename stage tools and the
+ * roster/voice-clone tools arrived on the integration base after this slice was
+ * written and gained their rows with the folder-organisation and
+ * roster/voice-registration tools.)
  *
  * ## The rule
  *
@@ -64,7 +65,9 @@ import {
   MessageCircleQuestion,
   Pencil,
   Presentation,
+  Scissors,
   Sparkles,
+  Users,
   Volume2,
   Wrench,
   type LucideIcon,
@@ -332,6 +335,52 @@ export function presentTool(
         chips,
         hidePayload: true,
         ...(failed ? { errorText: t('workbench.tool.error.searchMaterial') } : {}),
+      };
+
+    case 'clip_audio': {
+      const duration =
+        num(d.durationSeconds) ??
+        (num(args.endSec) !== undefined && num(args.startSec) !== undefined
+          ? num(args.endSec)! - num(args.startSec)!
+          : undefined);
+      if (duration !== undefined) {
+        chips.push({
+          label: t('workbench.tool.chip.seconds', { count: duration }),
+          tone: 'accent',
+        });
+      }
+      return {
+        icon: Scissors,
+        label: t('workbench.tool.label.clipAudio'),
+        chips,
+        hidePayload: true,
+        ...(failed
+          ? { errorText: errorLine(t('workbench.tool.error.clipAudio'), node.toolResultText) }
+          : {}),
+      };
+    }
+
+    case 'register_voice':
+      return {
+        icon: AudioLines,
+        label: t('workbench.tool.label.registerVoice'),
+        subject: str(d.name) ?? str(args.name),
+        chips,
+        hidePayload: true,
+        ...(failed
+          ? { errorText: errorLine(t('workbench.tool.error.registerVoice'), node.toolResultText) }
+          : {}),
+      };
+
+    case 'list_voices':
+      return {
+        icon: AudioLines,
+        label: t('workbench.tool.label.listVoices'),
+        chips,
+        hidePayload: true,
+        ...(failed
+          ? { errorText: errorLine(t('workbench.tool.error.listVoices'), node.toolResultText) }
+          : {}),
       };
 
     // ── The web ──────────────────────────────────────────────────────────────
@@ -726,6 +775,42 @@ export function presentTool(
         hidePayload: true,
         ...(failed
           ? { errorText: errorLine(t('workbench.tool.error.askUser'), node.toolResultText) }
+          : {}),
+      };
+    }
+
+    // ── The classroom's cast ─────────────────────────────────────────────────
+    case 'generate_roster':
+    case 'set_roster': {
+      const roster = Array.isArray(d.roster) ? (d.roster as unknown[]) : undefined;
+      if (roster) {
+        chips.push({
+          label: t('workbench.tool.chip.roles', { count: roster.length }),
+          tone: 'accent',
+        });
+      }
+      if (d.voicesAvailable === false) {
+        chips.push({ label: t('workbench.tool.chip.noVoices'), tone: 'warn' });
+      }
+      const names = roster
+        ?.map((agent) => str(asRecord(agent).name))
+        .filter((n): n is string => !!n);
+      return {
+        icon: Users,
+        // `generate_roster` designs the cast; `set_roster` writes down the one
+        // the user already named. Same object, different authorship.
+        label: t(
+          name === 'set_roster'
+            ? 'workbench.tool.label.setRoster'
+            : 'workbench.tool.label.generateRoster',
+        ),
+        subject:
+          names && names.length > 0
+            ? oneLine(names.join(t('workbench.tool.listSeparator')), 90)
+            : undefined,
+        chips,
+        ...(failed
+          ? { errorText: errorLine(t('workbench.tool.error.roster'), node.toolResultText) }
           : {}),
       };
     }

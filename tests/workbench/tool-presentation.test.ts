@@ -11,6 +11,8 @@ import { COURSE_AUDIO_DECK_TOOL_NAMES } from '@/lib/server/agent-runtime/course-
 import { MATERIAL_MEDIA_TOOL_NAME } from '@/lib/server/agent-runtime/material-media';
 import { CURRICULUM_ALLOWLIST } from '@/lib/server/agent-runtime/curriculum-tools';
 import { MATERIAL_TOOL_NAMES } from '@/lib/server/agent-runtime/material-tools';
+import { ROSTER_TOOL_NAMES } from '@/lib/server/agent-runtime/roster-tools';
+import { VOICE_CLONE_TOOL_NAMES } from '@/lib/server/agent-runtime/voice-clone-tools';
 import { RENDER_SCENE_PREVIEW_TOOL_NAME } from '@/lib/server/agent-runtime/scene-preview';
 import { SKILL_EDIT_TOOL_NAMES } from '@/lib/server/agent-runtime/skill-edit-tools';
 import { createWorkbenchTranslator } from '@/lib/i18n/workbench';
@@ -416,6 +418,8 @@ describe('allowlist ↔ presentation reconciliation', () => {
     RENDER_SCENE_PREVIEW_TOOL_NAME,
     ...CURRICULUM_ALLOWLIST,
     ...MATERIAL_TOOL_NAMES,
+    ...ROSTER_TOOL_NAMES,
+    ...VOICE_CLONE_TOOL_NAMES,
     ...SKILL_EDIT_TOOL_NAMES,
     'create_skill',
     // ask_user is the runner's minimal agent latch; web_search is
