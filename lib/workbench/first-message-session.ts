@@ -9,14 +9,14 @@
  * Two existing calls, in order, and no third path:
  *
  *  1. `openWorkbenchForExistingCourse` mints the durable session — idle, no model
- *     turn, no credit gate. Merely acquiring a conversation must not bill, and it
+ *     turn and no run admission. Merely acquiring a conversation must not start work, and it
  *     must not paint the prompt as a chat bubble either (an idle attach emits
  *     `session_resumed`, not `session_start`, precisely so the first real
  *     `user_message` is the only bubble).
  *  2. `postWorkbenchMessage` delivers the first message through the ORDINARY
  *     message path, which is what makes it an ordinary message: the durable
  *     `user_message` event, its materials, its element refs, its `@`-named
- *     courses, its own credit gate, and the requeue that starts the run. The
+ *     courses, its own run admission, and the requeue that starts the run. The
  *     session-creation endpoint carries none of those — it already tells callers
  *     to "send them on the first message instead" for attachments, and refs are
  *     the same story.

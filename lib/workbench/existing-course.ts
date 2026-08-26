@@ -2,7 +2,7 @@
  * Open the workbench on an already-built classroom.
  *
  * Creates the durable session for a course and starts NO model turn: the row is
- * born `succeeded` (idle) and the credit gate is skipped, because minting a
+ * born `succeeded` (idle) and run admission is skipped, because minting a
  * conversation is not generation and must never be billed as one.
  *
  * The caller supplies the `prompt`, which is what names the conversation in the

@@ -27,7 +27,7 @@
  * course". That matching version (newest session whose `stageId === courseId`)
  * was an ownership inference, and the panes are being pulled apart precisely so
  * that inference stops existing: an agent is pointed at a classroom by being TOLD
- * (`@课堂`), not by a stage id happening to match. Silently swapping the user's
+ * (an explicit course mention), not by a stage id happening to match. Silently swapping the user's
  * open conversation for another one about the course they just clicked is the two
  * columns becoming one object again.
  *

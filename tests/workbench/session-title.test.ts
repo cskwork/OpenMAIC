@@ -30,8 +30,8 @@ describe('what a conversation is called', () => {
   });
 
   it('has nothing to show for an empty conversation', () => {
-    // The caller supplies its own placeholder — the rail says 未命名对话, the
-    // pane header says 新建对话, because they answer different questions.
+    // The caller supplies its own placeholder — the rail says "untitled chat", the
+    // pane header says "new chat", because they answer different questions.
     expect(workbenchSessionTitle({ title: null, prompt: '' })).toBeNull();
     expect(workbenchSessionTitle({})).toBeNull();
   });

@@ -32,7 +32,7 @@ describe('openWorkbenchForExistingCourse', () => {
     expect(createWorkbenchSession).toHaveBeenCalledWith({
       prompt: '把第三页换个例子',
       stageId: 'stage-1',
-      // Load-bearing: it is what keeps the row idle and skips the credit gate, so
+      // Load-bearing: it is what keeps the row idle and skips run admission, so
       // acquiring a conversation is never billed as a generation.
       existingCourse: true,
     });

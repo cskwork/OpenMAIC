@@ -3,7 +3,7 @@
 /**
  * Naming a chat from the rail.
  *
- * The chat rows used to be the one list whose ⋯ had no 重命名 — a chat was
+ * The chat rows used to be the one list whose overflow menu had no rename item — a chat was
  * whatever its first message said, forever. This pins the row-level half of the
  * rename: the entry exists, the row turns into an input in place (the same
  * `InlineNameRow` a course row uses), and — unlike a course or a folder — an
@@ -141,7 +141,7 @@ async function openRename(sessionId: string): Promise<HTMLInputElement> {
     trigger!.click();
   });
   const item = byTestId(`pro-nav-more-session-${sessionId}-rename`);
-  expect(item, 'the chat row menu must offer 重命名').not.toBeNull();
+  expect(item, 'the chat row menu must offer a rename item').not.toBeNull();
   await act(async () => item!.click());
   const input = byTestId(`pro-nav-session-rename-${sessionId}-input`);
   expect(input, 'the row must become an input in place').not.toBeNull();

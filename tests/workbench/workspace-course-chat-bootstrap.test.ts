@@ -630,8 +630,8 @@ describe('workspace home intent', () => {
 });
 
 /**
- * The bug this pair of assertions exists for: after 新建对话 the middle column
- * showed a spinner and 连接中 forever. The pane must be handed a DRAFT (which is
+ * The bug this pair of assertions exists for: after "new chat" the middle column
+ * showed a spinner and "connecting" forever. The pane must be handed a DRAFT (which is
  * what makes it an empty composer) and no status at all — a conversation that does
  * not exist has no run to report.
  */
@@ -663,7 +663,7 @@ describe('a new conversation is a live composer, not a loading pane', () => {
 
   it('keeps reporting status for a conversation that really is attached', async () => {
     // The other direction: a pane WITH a session must still get its status, so the
-    // fix cannot be "never show 连接中".
+    // fix cannot be "never show the connecting state".
     mocks.searchParams = new URLSearchParams('session=session-1&course=stage-1');
     mocks.store.sessionId = 'session-1';
     mocks.store.status = 'connecting';
@@ -678,7 +678,7 @@ describe('a new conversation is a live composer, not a loading pane', () => {
 /**
  * A card in the chat opens the right pane, WHATEVER the right pane is doing.
  *
- * The cards used to label themselves 侧边打开 / 切到标签页 / 正在显示 from the
+ * The cards used to label themselves open-aside / switch-to-tab / showing from the
  * pane's own state, which invited the reading that a card whose course is
  * already showing is somehow spent. It never was — and the case that had to be
  * nailed down is the one the label could not describe at all: the classroom
@@ -758,7 +758,7 @@ describe('opening a course from a card in the conversation', () => {
   it('is a press with no state to read: the pane’s open set is not published', async () => {
     await render();
     await act(async () => {});
-    // `openCourseIds` existed only so a card could say 切到标签页 / 正在显示 about
+    // `openCourseIds` existed only so a card could say switch-to-tab / showing about
     // a tab. With the cue gone the contract does not carry it, and nothing can
     // grow a conditional card off it again.
     expect(navigation()).not.toHaveProperty('openCourseIds');
