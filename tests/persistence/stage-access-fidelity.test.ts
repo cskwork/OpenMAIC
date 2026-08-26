@@ -51,6 +51,11 @@ function ownerStore(pool: PGlitePool, ownerId: string) {
   });
 }
 
+/** A single row read back from stage_meta after a delete. */
+interface StageMetaTombstoneRow {
+  deleted_at: string | Date | null;
+}
+
 describe('reference-fidelity stage access', () => {
   let pool: PGlitePool;
   const ownerCookie = '11111111-1111-4111-8111-111111111111';
@@ -162,13 +167,13 @@ describe('reference-fidelity stage access', () => {
     await expect(
       owner.saveDocument(courseDocument(stageId, 'Resurrection')),
     ).rejects.toBeInstanceOf(StageAccessError);
-    const rows = await pool.query<{ deleted_at: string | Date | null }>(
+    const rows = await pool.query(
       `SELECT meta.deleted_at
          FROM stage_meta AS meta
          JOIN document_stages AS stages ON stages.id = meta.stage_id
         WHERE meta.stage_id = $1`,
       [stageId],
     );
-    expect(rows.rows[0]?.deleted_at).not.toBeNull();
+    expect((rows.rows[0] as StageMetaTombstoneRow | undefined)?.deleted_at).not.toBeNull();
   });
 });
