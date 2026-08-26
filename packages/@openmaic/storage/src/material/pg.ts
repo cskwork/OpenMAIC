@@ -399,7 +399,7 @@ export class PgAgentSessionMaterialStore implements AgentSessionMaterialStore {
   }
 
   async completeExtraction(input: CompleteMaterialExtractionInput): Promise<boolean> {
-    const derived = input.derived;
+    const derived = Array.isArray(input.derived) ? input.derived : [input.derived];
     const result = await this.queryable.query(
       `WITH source AS (
          UPDATE ${this.table}
@@ -412,28 +412,34 @@ export class PgAgentSessionMaterialStore implements AgentSessionMaterialStore {
           RETURNING session_id
        ), removed AS (
          DELETE FROM ${this.table} WHERE derived_from = $1
+       ), derivative AS (
+         SELECT * FROM unnest(
+           $5::text[], $6::text[], $7::text[], $8::text[], $9::text[], $10::integer[]
+         ) AS value(id, kind, title, text_asset_id, raw_asset_id, text_chars)
        )
        INSERT INTO ${this.table}
          (id, session_id, kind, title, text_asset_id, raw_asset_id, text_chars,
           derived_from, extraction_status, extraction_stats, extractor_version, created_at)
-       SELECT $5, source.session_id, $6, $7, $8, $9, $10, $1, 'done', $3::jsonb, $4, $11
-         FROM source
+       SELECT derivative.id, source.session_id, derivative.kind, derivative.title,
+              derivative.text_asset_id, derivative.raw_asset_id, derivative.text_chars,
+              $1, 'done', $3::jsonb, $4, $11
+         FROM source CROSS JOIN derivative
        RETURNING id`,
       [
         input.sourceId,
         input.workerId,
         JSON.stringify(input.stats),
         input.extractorVersion,
-        derived.id,
-        derived.kind,
-        derived.title ?? null,
-        derived.textAssetId ?? null,
-        derived.rawAssetId ?? null,
-        derived.textChars ?? 0,
+        derived.map((item) => item.id),
+        derived.map((item) => item.kind),
+        derived.map((item) => item.title ?? null),
+        derived.map((item) => item.textAssetId ?? null),
+        derived.map((item) => item.rawAssetId ?? null),
+        derived.map((item) => item.textChars ?? 0),
         this.now(),
       ],
     );
-    return result.rows.length > 0;
+    return result.rows.length === derived.length;
   }
 
   async settleExtractionFailure(

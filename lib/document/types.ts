@@ -86,6 +86,8 @@ export interface MediaExtractorProvider {
    * artifacts are derived and cached. Nothing consumes it yet.
    */
   version: string;
+  /** Resolve optional runtime requirements before this provider is selected. */
+  availability?(input: MediaExtractorInput): Promise<{ available: boolean; reason?: string }>;
   extract(input: MediaExtractorInput): Promise<MediaArtifact>;
 }
 

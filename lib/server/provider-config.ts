@@ -416,6 +416,24 @@ export function resolveManagedAliDocMindCredentials():
   return undefined;
 }
 
+/** Provider-neutral extraction input populated from server-managed media credentials. */
+export function resolveServerMediaExtractorConfig(): {
+  providerId: string;
+  accessKeyId?: string;
+  accessKeySecret?: string;
+  baseUrl?: string;
+  allowEnvFallback: boolean;
+} {
+  const credentials = resolveManagedAliDocMindCredentials();
+  return {
+    providerId: '',
+    accessKeyId: credentials?.accessKeyId,
+    accessKeySecret: credentials?.accessKeySecret,
+    baseUrl: credentials?.baseUrl,
+    allowEnvFallback: true,
+  };
+}
+
 function applyOpenAIImageFallback(
   imageConfig: Record<string, ServerProviderEntry>,
   yamlImageSection: Record<string, Partial<ServerProviderEntry>> | undefined,
