@@ -7,7 +7,10 @@ const mocks = vi.hoisted(() => ({
   postUserMessage: vi.fn(),
 }));
 
-vi.mock('@/lib/config/feature-flags', () => ({ isAgentRuntimeEnabled: () => true }));
+vi.mock('@/lib/config/feature-flags', () => ({
+  isAgentRuntimeEnabled: () => true,
+  isAgentRuntimeConfigured: () => true,
+}));
 vi.mock('@/lib/server/agent-runtime/owner', () => ({
   resolveRequestOwnerId: (_request: NextRequest, headers: Headers) => {
     headers.append('Set-Cookie', 'anonymous_id=test; Path=/; HttpOnly');
