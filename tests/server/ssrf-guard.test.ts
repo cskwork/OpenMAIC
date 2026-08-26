@@ -319,6 +319,13 @@ describe('assertSafeIp', () => {
     expect(() => assertSafeIp('::ffff:8.8.8.8')).not.toThrow();
   });
 
+  it('rejects ISATAP addresses that embed private IPv4 beneath a public IPv6 prefix', async () => {
+    const { assertSafeIp } = await import('@/lib/server/ssrf-guard');
+    expect(() => assertSafeIp('2001:4860:0:1:200:5efe:7f00:1')).toThrow(STRICT_BLOCK_MESSAGE);
+    expect(() => assertSafeIp('2001:4860:0:1:0:5efe:a00:1')).toThrow(STRICT_BLOCK_MESSAGE);
+    expect(() => assertSafeIp('2001:4860:0:1:200:5efe:808:808')).not.toThrow();
+  });
+
   it('throws a classified error for unparseable input', async () => {
     const { assertSafeIp, UnsafeNetworkTargetError } = await import('@/lib/server/ssrf-guard');
     expect(() => assertSafeIp('not-an-ip')).toThrow(UnsafeNetworkTargetError);
