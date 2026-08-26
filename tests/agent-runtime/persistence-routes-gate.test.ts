@@ -42,6 +42,12 @@ vi.mock('@/lib/server/agent-runtime/owner', () => ({
 vi.mock('@/lib/persistence/server-provider', () => ({
   getServerPersistenceProvider: async () => ({ documentStore: mocks.fakeStore!.store }),
 }));
+// The stage routes obtain their store through the owner-scoped seam (which
+// needs a live PG pool); the gate test only exercises env-state gating, so
+// hand it the same fake store the provider mock serves.
+vi.mock('@/lib/server/agent-runtime/owner-scoped-documents', () => ({
+  getOwnerScopedDocumentStore: async () => mocks.fakeStore!.store,
+}));
 vi.mock('@/lib/server/agent-runtime/session-materials', async (importOriginal) => {
   const actual =
     await importOriginal<typeof import('@/lib/server/agent-runtime/session-materials')>();

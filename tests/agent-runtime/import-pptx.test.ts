@@ -150,6 +150,7 @@ async function runImport(
 ) {
   const checkpoints: { tool: string; detail: string }[] = [];
   const tools = buildDslCourseToolset({
+    stageAccess: async () => ({ kind: 'owned' as const }),
     store,
     sessionId: 'ses_1',
     onCheckpoint: (info) => checkpoints.push({ tool: info.tool, detail: info.detail }),
@@ -219,6 +220,7 @@ describe('import_pptx tool', () => {
     expect(DSL_TOOLS_PROMPT).toContain('pptx-import');
     expect(DSL_TOOLS_PROMPT).toContain('layout-preserving import');
     const tools = buildDslCourseToolset({
+      stageAccess: async () => ({ kind: 'owned' as const }),
       store: makeStore(),
       onCheckpoint: () => {},
     });
@@ -437,6 +439,7 @@ describe('import_pptx tool', () => {
 
   it('drops the replace parameter and exposes atOrder as an integer >= 1', () => {
     const tools = buildDslCourseToolset({
+      stageAccess: async () => ({ kind: 'owned' as const }),
       store: makeStore(),
       onCheckpoint: () => {},
     }) as unknown as {
@@ -466,6 +469,7 @@ describe('import_pptx tool', () => {
     // The model-visible schema carries no ownership parameter: the owner comes
     // from the run's bound store, never from the caller.
     const tools = buildDslCourseToolset({
+      stageAccess: async () => ({ kind: 'owned' as const }),
       store: makeStore(),
       sessionId: 'ses_1',
       onCheckpoint: () => {},

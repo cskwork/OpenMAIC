@@ -36,6 +36,7 @@ function courseDeps(overrides: Record<string, unknown> = {}) {
     store: {} as never,
     onCheckpoint: () => undefined,
     sessionId: 'session-owner',
+    stageAccess: async () => ({ kind: 'owned' as const }),
     ...overrides,
   };
 }
