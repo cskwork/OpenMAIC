@@ -7,6 +7,15 @@ describe('embedded persistence route', () => {
     vi.resetModules();
     vi.unstubAllEnvs();
     vi.stubEnv('ASSET_S3_BUCKET', '');
+    vi.doMock('@/lib/persistence/stage-meta', () => ({
+      ensureStageMetaSchema: vi.fn().mockResolvedValue(undefined),
+      readStageMeta: vi.fn().mockResolvedValue({
+        stageId: 'adapter-test',
+        ownerId: 'adapter-test-owner',
+        isPublic: false,
+        deletedAt: null,
+      }),
+    }));
   });
 
   it('returns a clear 404 when DATABASE_URL is unset', async () => {
