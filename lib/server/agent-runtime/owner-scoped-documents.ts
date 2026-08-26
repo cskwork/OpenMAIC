@@ -1,4 +1,8 @@
-import type { DocumentStore, StageFreshnessManifestStore } from '@openmaic/storage';
+import type {
+  DocumentFolderStore,
+  DocumentStore,
+  StageFreshnessManifestStore,
+} from '@openmaic/storage';
 
 import { withPlainJsonDocumentWrites } from '@/lib/document-store/plain-json-store';
 import type { AppStage } from '@/lib/document-store/persistence-types';
@@ -12,6 +16,7 @@ import type { AppScene } from '@/lib/types/stage';
  * trigger-maintained freshness manifest read the PG backend provides.
  */
 export type OwnerScopedDocumentStore = DocumentStore<AppScene, AppStage> &
+  DocumentFolderStore &
   StageFreshnessManifestStore;
 
 /**

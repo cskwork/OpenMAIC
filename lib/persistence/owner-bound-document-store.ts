@@ -111,8 +111,8 @@ class OwnerBoundDocumentStore<TScene extends SceneLike, TStage extends Stage>
   }
 
   /** The trigger-maintained freshness manifest is a read: capability-by-id. */
-  async readStageFreshnessManifest(stageId: string) {
-    return this.readGated(stageId, () => this.inner.readStageFreshnessManifest(stageId));
+  async readFreshnessManifest(stageId: string) {
+    return this.readGated(stageId, () => this.inner.readFreshnessManifest(stageId));
   }
 
   private async readGated<T>(stageId: string, body: () => Promise<T>): Promise<T | null> {
