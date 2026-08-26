@@ -48,10 +48,7 @@ export interface PgDocumentStoreOptions {
   validateScene?: SceneValidator;
   /** Stage write-boundary validator. Defaults to the DSL validateStage. */
   validateStage?: StageValidator;
-  /**
-   * Restrict every read and write to this owner. Omit this for the historical
-   * client-owned partition, whose rows have a null `owner_id`.
-   */
+  /** Restrict writes, listings, and folders to this owner. Reads remain id-capable. */
   ownerId?: string;
 }
 
@@ -67,6 +64,12 @@ CREATE TABLE IF NOT EXISTS document_folders (
   PRIMARY KEY (owner_id, id),
   UNIQUE (owner_id, normalized_name)
 );
+
+ALTER TABLE document_folders
+  ADD COLUMN IF NOT EXISTS folder_order DOUBLE PRECISION NOT NULL DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS document_folders_owner_order_idx
+  ON document_folders (owner_id, folder_order, id);
 
 CREATE TABLE IF NOT EXISTS document_stages (
   id TEXT PRIMARY KEY,
@@ -146,6 +149,7 @@ interface SummaryRow extends Record<string, unknown> {
 interface FolderRow extends Record<string, unknown> {
   id: string;
   name: string;
+  folder_order: number | string;
   created_at: number | string;
   updated_at: number | string;
 }
@@ -253,7 +257,7 @@ export class PgDocumentStore<TScene extends SceneLike = Scene, TStage extends St
     this.options = options;
   }
 
-  /** Bind the complete document contract to one trusted owner identity. */
+  /** Bind document writes, listings, and folders to one trusted owner identity. */
   forOwner(ownerId: string): PgDocumentStore<TScene, TStage> {
     return new PgDocumentStore(this.queryable, { ...this.options, ownerId });
   }
@@ -293,8 +297,8 @@ export class PgDocumentStore<TScene extends SceneLike = Scene, TStage extends St
     const result = await queryable.query<StoredJsonRow>(
       `SELECT data
          FROM document_stages
-        WHERE id = $1 AND ${this.scopePredicate('', 2)}${suffix}`,
-      this.scopeParams(stageId),
+        WHERE id = $1${suffix}`,
+      [stageId],
     );
     const storedRow = result.rows[0];
     if (!storedRow) return undefined;
@@ -508,7 +512,7 @@ export class PgDocumentStore<TScene extends SceneLike = Scene, TStage extends St
     const normalizedName = name.toLocaleLowerCase('en-US');
     return this.transaction(async (queryable) => {
       const existing = await queryable.query<FolderRow>(
-        `SELECT id, name, created_at, updated_at
+        `SELECT id, name, folder_order, created_at, updated_at
            FROM document_folders
           WHERE owner_id = $1 AND normalized_name = $2
           LIMIT 1`,
@@ -520,6 +524,7 @@ export class PgDocumentStore<TScene extends SceneLike = Scene, TStage extends St
           folder: {
             id: row.id,
             name: row.name,
+            order: Number(row.folder_order),
             createdAt: Number(row.created_at),
             updatedAt: Number(row.updated_at),
           },
@@ -532,20 +537,30 @@ export class PgDocumentStore<TScene extends SceneLike = Scene, TStage extends St
       );
       if (Number(count.rows[0]?.count ?? 0) >= limit) throw new DocumentFolderLimitError(limit);
       const now = Date.now();
+      // Same order rule as the local model: a new folder goes after the
+      // current maximum (folders are displayed by `order` ascending).
+      const maxOrder = await queryable.query<{ max: number | string | null }>(
+        `SELECT MAX(folder_order)::text AS max
+           FROM document_folders
+          WHERE owner_id = $1`,
+        [ownerId],
+      );
+      const order = Number(maxOrder.rows[0]?.max ?? -1) + 1;
       const inserted = await queryable.query<FolderRow>(
         `INSERT INTO document_folders
-           (owner_id, id, name, normalized_name, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $5)
+           (owner_id, id, name, normalized_name, folder_order, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $6)
          ON CONFLICT (owner_id, normalized_name) DO UPDATE
            SET normalized_name = EXCLUDED.normalized_name
-         RETURNING id, name, created_at, updated_at`,
-        [ownerId, folderId, name, normalizedName, now],
+         RETURNING id, name, folder_order, created_at, updated_at`,
+        [ownerId, folderId, name, normalizedName, order, now],
       );
       const row = inserted.rows[0]!;
       return {
         folder: {
           id: row.id,
           name: row.name,
+          order: Number(row.folder_order),
           createdAt: Number(row.created_at),
           updatedAt: Number(row.updated_at),
         },
@@ -557,23 +572,105 @@ export class PgDocumentStore<TScene extends SceneLike = Scene, TStage extends St
   async listFolders(): Promise<DocumentFolder[]> {
     const ownerId = this.requireOwner('listFolders');
     const result = await this.queryable.query<FolderRow>(
-      `SELECT id, name, created_at, updated_at
+      `SELECT id, name, folder_order, created_at, updated_at
          FROM document_folders
         WHERE owner_id = $1
-        ORDER BY created_at ASC, id ASC`,
+        ORDER BY folder_order ASC, id ASC`,
       [ownerId],
     );
     return result.rows.map((row) => ({
       id: row.id,
       name: row.name,
+      order: Number(row.folder_order),
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at),
     }));
   }
 
+  async renameFolder(id: string, name: string): Promise<DocumentFolder | null> {
+    const ownerId = this.requireOwner('renameFolder');
+    if (!isPgQueryableKey(id) || !isPgQueryableKey(name)) {
+      throw new Error('@openmaic/storage: folder id and name must be lossless JSON text');
+    }
+    const normalizedName = name.toLocaleLowerCase('en-US');
+    const updated = await this.queryable.query<FolderRow>(
+      `UPDATE document_folders
+          SET name = $3, normalized_name = $4, updated_at = $5
+        WHERE owner_id = $1 AND id = $2
+        RETURNING id, name, folder_order, created_at, updated_at`,
+      [ownerId, id, name, normalizedName, Date.now()],
+    );
+    const row = updated.rows[0];
+    if (!row) return null;
+    return {
+      id: row.id,
+      name: row.name,
+      order: Number(row.folder_order),
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+    };
+  }
+
+  async deleteFolder(
+    id: string,
+    mode: 'ungroup' | 'remove',
+  ): Promise<{ removedStageIds: string[] } | null> {
+    const ownerId = this.requireOwner('deleteFolder');
+    if (!isPgQueryableKey(id)) return null;
+    return this.transaction(async (queryable) => {
+      // Capture the filed documents before the folder row goes away. Every
+      // document in this folder is owner-scoped (the folder is owner-scoped),
+      // so the captured ids are exactly the caller's own courses.
+      let removedStageIds: string[] = [];
+      if (mode === 'remove') {
+        const members = await queryable.query<{ id: string }>(
+          `SELECT id
+             FROM document_stages
+            WHERE owner_id = $1 AND folder_id = $2
+            ORDER BY id ASC`,
+          [ownerId, id],
+        );
+        removedStageIds = members.rows.map((row) => row.id);
+      }
+      // Clear the membership of every filed document: 'ungroup' keeps the
+      // courses (they become unfiled), 'remove' hands them to the caller's
+      // cascade without leaving dangling folder pointers behind.
+      await queryable.query(
+        `UPDATE document_stages
+            SET folder_id = NULL
+          WHERE owner_id = $1 AND folder_id = $2`,
+        [ownerId, id],
+      );
+      const deleted = await queryable.query<{ id: string }>(
+        `DELETE FROM document_folders
+          WHERE owner_id = $1 AND id = $2
+          RETURNING id`,
+        [ownerId, id],
+      );
+      if (deleted.rows.length === 0) return null;
+      return { removedStageIds };
+    });
+  }
+
   async moveDocumentToFolder(stageId: string, folderId: string): Promise<boolean> {
-    const ownerId = this.requireOwner('moveDocumentToFolder');
-    if (!isPgQueryableKey(stageId) || !isPgQueryableKey(folderId)) return false;
+    return this.setStageFolder(stageId, folderId);
+  }
+
+  async setStageFolder(stageId: string, folderId: string | null): Promise<boolean> {
+    const ownerId = this.requireOwner('setStageFolder');
+    if (!isPgQueryableKey(stageId)) return false;
+    if (folderId === null) {
+      // Un-file: a missing membership row already means unfiled, so this is
+      // idempotent and never refuses (the route's contract for folderId null).
+      await this.queryable.query(
+        `UPDATE document_stages
+            SET folder_id = NULL
+          WHERE id = $1 AND owner_id = $2`,
+        [stageId, ownerId],
+      );
+      return true;
+    }
+    if (!isPgQueryableKey(folderId)) return false;
     const result = await this.queryable.query<{ id: string }>(
       `UPDATE document_stages AS stages
           SET folder_id = $2

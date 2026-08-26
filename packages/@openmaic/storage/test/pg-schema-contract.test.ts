@@ -48,6 +48,12 @@ CREATE TABLE IF NOT EXISTS document_folders (
   UNIQUE (owner_id, normalized_name)
 );
 
+ALTER TABLE document_folders
+  ADD COLUMN IF NOT EXISTS folder_order DOUBLE PRECISION NOT NULL DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS document_folders_owner_order_idx
+  ON document_folders (owner_id, folder_order, id);
+
 CREATE TABLE IF NOT EXISTS document_stages (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,

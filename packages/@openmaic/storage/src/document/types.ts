@@ -113,6 +113,8 @@ export interface DocumentSummary {
 export interface DocumentFolder {
   id: string;
   name: string;
+  /** Sort order within the owner's folder list (ascending; mirrors the local model's `FolderRecord.order`). */
+  order: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -138,7 +140,34 @@ export interface DocumentFolderStore {
     limit?: number,
   ): Promise<{ folder: DocumentFolder; reused: boolean }>;
   listFolders(): Promise<DocumentFolder[]>;
+  /**
+   * Rename an owned folder. `null` when the folder does not exist in this
+   * owner's scope. A case-insensitive duplicate name (other than the folder
+   * itself) surfaces as the unique-constraint violation of the rename UPDATE.
+   */
+  renameFolder(id: string, name: string): Promise<DocumentFolder | null>;
+  /**
+   * Delete an owned folder. `null` when the folder does not exist in this
+   * owner's scope.
+   *
+   * - `'ungroup'`: the folder is dropped and its filed documents become
+   *   unfiled (folder_id cleared, documents kept).
+   * - `'remove'`: the folder is dropped AND the ids of the documents that
+   *   were filed in it are returned, so the caller can run its own cascade.
+   */
+  deleteFolder(
+    id: string,
+    mode: 'ungroup' | 'remove',
+  ): Promise<{ removedStageIds: string[] } | null>;
+  /** File an owned document into an owned folder; the folder must exist and belong to this owner. */
   moveDocumentToFolder(stageId: string, folderId: string): Promise<boolean>;
+  /**
+   * Set a document's folder membership (idempotent). `folderId` non-null
+   * behaves exactly like {@link moveDocumentToFolder}; `folderId` null un-files
+   * the document and always succeeds (a missing membership already means
+   * unfiled).
+   */
+  setStageFolder(stageId: string, folderId: string | null): Promise<boolean>;
   listDocuments(folderId?: string): Promise<DocumentSummary[]>;
 }
 
