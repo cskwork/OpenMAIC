@@ -63,8 +63,7 @@ export function startMaterialExtractionRunner(
       const store = await getStore();
       const available = agentRuntimeConfig.maxConcurrent - running.size;
       for (let index = 0; !stopping && index < available; index += 1) {
-        let job: Promise<void>;
-        job = runNextMaterialExtraction(store, workerId, execute)
+        const job: Promise<void> = runNextMaterialExtraction(store, workerId, execute)
           .then(() => undefined)
           .catch((error) => {
             console.error('[material-extraction] job failed before settlement', error);
