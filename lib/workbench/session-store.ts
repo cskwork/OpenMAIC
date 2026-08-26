@@ -320,8 +320,12 @@ export interface WorkbenchFold {
    * It deliberately spans the gap BEFORE a run opens. A `user_message` is written
    * by the control plane outside any run, so a classroom the user `@`-named lands
    * here first and is flushed at the end of the answer to it. A run that dies
-   * without ever reaching `agent_end` therefore paints no card — nothing was
-   * produced to point at, and the user's own bubble already shows the `@` pill.
+   * without ever reaching `agent_end` — a plain failure — therefore paints no
+   * card: nothing was produced to point at, and the user's own bubble already
+   * shows the `@` pill. A run that is interrupted and repaired and then stopped
+   * (`session_end` cancelled) is different: the answer's sightings survive the
+   * repair, so the cancelled terminal flush paints the card set (see `agent_end`
+   * and `session_end`).
    *
    * See `lib/workbench/run-courses` for what counts as a sighting.
    */
@@ -1647,6 +1651,28 @@ export function foldEvent(state: WorkbenchFold, event: WorkbenchEvent): Workbenc
         // raced the loop's exit — would otherwise be left spinning under a
         // transcript that already says the run stopped. A stopped run has
         // nothing still running, so the cards say so.
+        //
+        // A run that was interrupted and then repaired can end cancelled
+        // without ever reaching `agent_end` — a server restart parked it
+        // (`session_interrupted`) and the next instance resumed it
+        // (`session_resumed`) only for the stop to land before pi closed the
+        // answer. The exchange's pending classroom sightings would otherwise
+        // strand in the buffer and the timeline would end on the caption alone,
+        // losing the course the answer produced. Flush them into the same card
+        // set `agent_end` paints, so the terminal card carries the known stage
+        // refs whenever the session has them.
+        const pendingCourses =
+          next.runCourseStageIds.length > 0
+            ? [
+                {
+                  key: `${key}-course`,
+                  kind: 'course' as const,
+                  text: '',
+                  stageIds: next.runCourseStageIds,
+                },
+              ]
+            : [];
+        if (pendingCourses.length > 0) next.runCourseStageIds = [];
         next.chat = [
           ...settleRunningToolCards(settled, {
             ts: event.ts,
@@ -1656,6 +1682,7 @@ export function foldEvent(state: WorkbenchFold, event: WorkbenchEvent): Workbenc
               next.generatingOrder = null;
             },
           }),
+          ...pendingCourses,
           {
             key,
             kind: 'boundary',
