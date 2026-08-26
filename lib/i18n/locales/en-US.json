@@ -1830,6 +1830,25 @@
     "speed": "Speed",
     "language": "Language"
   },
+  "proMode": {
+    "badgeAria": "Pro mode",
+    "badgeEnter": "Open the agent workbench",
+    "badgeExit": "Back to classic",
+    "launchPlaceholder": "Describe the learning experience you want to create",
+    "launchSend": "Start build",
+    "attach": "Attach material",
+    "mentionCourse": "Reference a classroom",
+    "loadSkill": "Load a skill",
+    "skillMenuTitle": "Choose a course-design skill",
+    "skillsLoading": "Loading skills…",
+    "noSkillsAvailable": "No skills available",
+    "userSkillsGroup": "My Skills",
+    "builtinSkillsGroup": "Built-in Skills",
+    "skillsLoadFailed": "Skills failed to load. Click to retry",
+    "retrySkills": "Retry",
+    "noSkillMatch": "No Skills match “{{query}}”",
+    "attachFailed": "Upload failed, please retry"
+  },
   "accessCode": {
     "title": "Enter Access Code",
     "placeholder": "Access code",
