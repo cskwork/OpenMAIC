@@ -7,8 +7,9 @@
  * extracted markdown is stored through the host's hash-addressed asset
  * registry/byte store and the row records the returned asset id — the neutral
  * counterpart of the reference's `ossKey` linkage. `fetch_url` is this
- * adapter's first consumer; later slices can persist uploads and derived
- * records through the same store.
+ * adapter's first consumer; `read_material` / `search_material` resolve a
+ * row's recorded asset id back to bytes through the same registry. Later
+ * slices can persist uploads and derived records through the same store.
  */
 import {
   PgAgentSessionMaterialStore,
@@ -16,6 +17,7 @@ import {
 } from '@openmaic/storage/material/pg';
 import {
   createMaterialId,
+  toAssetId,
   type AgentSessionMaterial,
   type AssetPrincipal,
   type ListAgentSessionMaterialsOptions,
@@ -142,4 +144,49 @@ export async function getSessionMaterial(
 ): Promise<AgentSessionMaterial | null> {
   const store = await getAgentSessionMaterialStore();
   return store.getMaterial(sessionId, materialId);
+}
+
+/**
+ * Resolve a material's recorded text asset to its bytes, or `null` when the
+ * asset is absent. The lookup is scoped to the session's own asset-registry
+ * partition, so a foreign or stale `textAssetId` — even one read off another
+ * session's row — resolves as a miss, never as another session's content.
+ */
+export async function resolveSessionMaterialText(
+  sessionId: string,
+  textAssetId: string,
+): Promise<Buffer | null> {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error('Agent runtime requires DATABASE_URL');
+  const provider = await getServerPersistenceProvider(connectionString);
+  const resolved = await provider.assetStore.resolve(
+    materialPrincipal(sessionId),
+    toAssetId(textAssetId),
+  );
+  if (!resolved) return null;
+  return Buffer.from(resolved.bytes);
+}
+
+/**
+ * Safe metadata and typed-tool guidance for materials bound to one session.
+ * Material contents stay in the asset registry and are available only through
+ * the session-scoped material tools, never through this block. Ported from the
+ * reference's session-materials prompt block, minus the tools this slice does
+ * not register (extract/wait/use-media).
+ */
+export function sessionMaterialsPromptBlock(materials: AgentSessionMaterial[]): string {
+  if (materials.length === 0) return '';
+
+  return [
+    '## Registered session materials',
+    '',
+    'These materials are associated with this session:',
+    ...materials.map(
+      (material) =>
+        `- "${material.title ?? material.id}" (${material.kind}, ${material.textChars} characters)`,
+    ),
+    '',
+    'Material workflow: call `list_materials` to inspect the session materials and discover `mat_` ids; call `read_material` on a `mat_` id to read its text in pages (continue with the returned `nextOffset`); call `search_material` to locate case-insensitive literal text across the readable materials.',
+    'A `web` material was already fetched and extracted; read it directly with `read_material` and page through offsets.',
+  ].join('\n');
 }

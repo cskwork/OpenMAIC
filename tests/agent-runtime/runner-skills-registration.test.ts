@@ -61,6 +61,15 @@ vi.mock('@/lib/server/agent-runtime/store', () => ({
   getAgentSessionStore: mocks.getAgentSessionStore,
 }));
 
+// The runner lists the session's materials to build the materials prompt
+// block. No material store exists in this harness; an empty list keeps the
+// prompt free of the block while the real tool builders stay loaded.
+vi.mock('@/lib/server/agent-runtime/session-materials', async (importActual) => {
+  const actual =
+    await importActual<typeof import('@/lib/server/agent-runtime/session-materials')>();
+  return { ...actual, listSessionMaterials: vi.fn(async () => []) };
+});
+
 vi.mock('@/lib/server/agent-runtime/entry-tree-storage', async (importActual) => {
   const actual =
     await importActual<typeof import('@/lib/server/agent-runtime/entry-tree-storage')>();
@@ -238,14 +247,20 @@ describe('skills runner registration', () => {
       'patch_skill',
       'read',
       'fetch_url',
+      'list_materials',
+      'read_material',
+      'search_material',
     ]);
     expect([...(options.allowedToolNames ?? [])].sort()).toEqual([
       'ask_user',
       'create_skill',
       'fetch_url',
+      'list_materials',
       'patch_skill',
       'read',
+      'read_material',
       'read_skill',
+      'search_material',
     ]);
     expect(options.systemPrompt).toContain('<available_skills>');
     expect(options.systemPrompt).toContain('<name>pro-editing</name>');

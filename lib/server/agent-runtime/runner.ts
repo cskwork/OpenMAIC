@@ -30,9 +30,11 @@ import {
   untrustedContentPolicyPromptBlock,
 } from './fetch-url';
 import { assembleRunnerTools } from './runner-contract';
+import { buildMaterialTools, MATERIAL_TOOL_NAMES } from './material-tools';
 import { buildSkillEditTools, SKILL_EDIT_TOOL_NAMES } from './skill-edit-tools';
 import { buildWebSearchTool, resolveWebSearchCapability, searchPromptBlock } from './web-search';
 import { buildSkillPreload, preloadUserMessage } from './skill-preload';
+import { listSessionMaterials, sessionMaterialsPromptBlock } from './session-materials';
 import {
   availableSkillsPromptBlock,
   createNativeSkillReadTool,
@@ -103,18 +105,21 @@ export const AGENT_RUNTIME_SYSTEM_PROMPT = [
  * registered the web-search capability block is appended; when skills are
  * installed, pi's standard `<available_skills>` discovery block is appended
  * too. The untrusted-content policy and fetch_url guidance are always present,
- * because `fetch_url` is always registered (reference semantics: the material
- * tools are unconditional, only web_search is capability-gated).
+ * because the material tools are always registered (reference semantics: only
+ * web_search is capability-gated). When the session has materials, the
+ * session-materials block lists them so the model knows what it can read.
  */
 export function buildRunnerSystemPrompt(
   webSearchRegistered: boolean,
   availableSkills?: string,
+  materials?: string,
 ): string {
   const base = webSearchRegistered
     ? [...AGENT_RUNTIME_SYSTEM_PROMPT_LINES, searchPromptBlock()].join('\n')
     : AGENT_RUNTIME_SYSTEM_PROMPT_LINES.join('\n');
   const withFetch = [base, fetchPromptBlock(), untrustedContentPolicyPromptBlock()].join('\n\n');
-  return availableSkills ? `${withFetch}\n\n${availableSkills}` : withFetch;
+  const withMaterials = materials ? `${withFetch}\n\n${materials}` : withFetch;
+  return availableSkills ? `${withMaterials}\n\n${availableSkills}` : withMaterials;
 }
 
 function isLeaseLostError(error: unknown): boolean {
@@ -760,6 +765,13 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
           ),
         ]
       : [];
+    // Session-scoped material tools and the materials prompt block are wired
+    // from durable session identity on every start and resume (reference
+    // semantics: the material tools are always registered alongside the
+    // capability-gated web_search). The listing only feeds the prompt block;
+    // the tools read through the same session-scoped store on each call.
+    const materials = await listSessionMaterials(id);
+    const materialTools = buildMaterialTools({ sessionId: id });
     const tools = assembleRunnerTools(
       [askUserTool],
       webSearchTools,
@@ -782,6 +794,7 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       // fetch inside the session's observed origins, and it is the tool's core
       // security property.
       [buildFetchUrlTool({ sessionId: id })],
+      materialTools,
     );
     const askUserLatch = createAskUserTerminateLatch();
     let toolCalls = 0;
@@ -790,6 +803,7 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       systemPrompt: buildRunnerSystemPrompt(
         search !== null,
         availableSkillsPromptBlock(installedSkills),
+        materials.length ? sessionMaterialsPromptBlock(materials) : undefined,
       ),
       model: driver.piModel,
       tools,
@@ -799,7 +813,7 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
         'create_skill',
         ...SKILL_EDIT_TOOL_NAMES,
         ...(skillReadTool ? ['read'] : []),
-        'fetch_url',
+        ...MATERIAL_TOOL_NAMES,
       ]),
       ...(plan.kind === 'start' ? {} : { history: modelMessages }),
       afterToolCall: (toolContext) => {
