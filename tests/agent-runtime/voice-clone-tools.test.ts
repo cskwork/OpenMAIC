@@ -115,6 +115,8 @@ function material(overrides: Partial<AgentSessionMaterial> = {}): AgentSessionMa
     textAssetId: null,
     rawAssetId: 'ast_clip',
     textChars: 0,
+    derivedFrom: null,
+    extraction: { status: 'done', attempts: 0 },
     createdAt: new Date(0).toISOString(),
     ...overrides,
   };

@@ -22,6 +22,8 @@ describe('generation media tools', () => {
       textAssetId: null,
       rawAssetId: 'ast_session_media',
       textChars: 0,
+      derivedFrom: null,
+      extraction: { status: 'done', attempts: 0 },
       createdAt: new Date(0).toISOString(),
     } satisfies AgentSessionMaterial;
     const tool = buildMaterialMediaTool({

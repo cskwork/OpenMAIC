@@ -24,6 +24,8 @@ function material(overrides: Partial<AgentSessionMaterial> = {}): AgentSessionMa
     textAssetId: 'ast_text',
     rawAssetId: null,
     textChars: 10,
+    derivedFrom: null,
+    extraction: { status: 'done', attempts: 0 },
     createdAt: new Date(0).toISOString(),
     ...overrides,
   };
@@ -39,7 +41,12 @@ function assetMap(contents: Map<string, Buffer>) {
   );
 }
 
-type MaterialToolName = 'list_materials' | 'read_material' | 'search_material';
+type MaterialToolName =
+  | 'list_materials'
+  | 'read_material'
+  | 'search_material'
+  | 'extract_material'
+  | 'wait_for_materials';
 
 function tool(tools: AgentTool<never, never>[], name: MaterialToolName): AgentTool<never, never> {
   return tools.find((candidate) => candidate.name === name)!;
@@ -66,20 +73,115 @@ function fencedBodyOf(result: { content: Array<{ type?: string; text?: string }>
 }
 
 describe('material agent tools', () => {
-  it('registers list, read, and search on the material tool surface', () => {
+  it('registers list, read, search, extract, and wait on the material tool surface', () => {
     const tools = buildMaterialTools({ sessionId: 'ses_1' });
     expect(tools.map((candidate) => candidate.name)).toEqual([
       'list_materials',
       'read_material',
       'search_material',
+      'extract_material',
+      'wait_for_materials',
     ]);
     // fetch_url is part of the material toolset but lives in its own builder.
     expect(MATERIAL_TOOL_NAMES).toEqual([
       'list_materials',
       'read_material',
       'search_material',
+      'extract_material',
+      'wait_for_materials',
       'fetch_url',
     ]);
+  });
+
+  it('queues an idle uploaded source exactly once', async () => {
+    const enqueueExtraction = vi.fn().mockResolvedValue(true);
+    const extract = tool(
+      buildMaterialTools({
+        sessionId: 'ses_1',
+        getMaterial: vi.fn().mockResolvedValue(
+          material({
+            id: 'mat_source',
+            kind: 'source',
+            rawAssetId: 'ast_raw',
+            textAssetId: null,
+            extraction: { status: 'idle', attempts: 0 },
+          }),
+        ),
+        enqueueExtraction,
+      }),
+      'extract_material',
+    );
+    const result = await extract.execute('call_1', { materialId: 'mat_source' } as never);
+    expect(enqueueExtraction).toHaveBeenCalledWith('ses_1', 'mat_source');
+    expect(result.details).toMatchObject({ materialId: 'mat_source', status: 'pending' });
+  });
+
+  it('waits through running and reports each terminal material including failure reason', async () => {
+    const states = [
+      material({
+        id: 'mat_source',
+        kind: 'source',
+        extraction: { status: 'running', attempts: 0 },
+      }),
+      material({
+        id: 'mat_source',
+        kind: 'source',
+        extraction: { status: 'failed', attempts: 0, error: 'extractor rejected input' },
+      }),
+    ];
+    const getMaterial = vi.fn(async () => states.shift()!);
+    const wait = tool(
+      buildMaterialTools({
+        sessionId: 'ses_1',
+        getMaterial,
+        waitPollIntervalMs: 1,
+        waitForDelay: vi.fn().mockResolvedValue(undefined),
+      }),
+      'wait_for_materials',
+    );
+    const result = await wait.execute('call_1', {
+      materialIds: ['mat_source'],
+      timeoutSec: 1,
+    } as never);
+    expect(result.details).toMatchObject({
+      complete: true,
+      timedOut: false,
+      materials: [
+        { materialId: 'mat_source', status: 'failed', reason: 'extractor rejected input' },
+      ],
+    });
+  });
+
+  it('honours the wait bound and returns current per-material status', async () => {
+    let clock = 0;
+    const wait = tool(
+      buildMaterialTools({
+        sessionId: 'ses_1',
+        getMaterial: vi.fn().mockResolvedValue(
+          material({
+            id: 'mat_source',
+            kind: 'source',
+            extraction: { status: 'running', attempts: 0 },
+          }),
+        ),
+        now: () => clock,
+        waitPollIntervalMs: 1_000,
+        waitForDelay: vi.fn(async (milliseconds: number) => {
+          clock += milliseconds;
+        }),
+      }),
+      'wait_for_materials',
+    );
+    const result = await wait.execute('call_1', {
+      materialIds: ['mat_source'],
+      timeoutSec: 1,
+    } as never);
+    expect(result.details).toMatchObject({
+      complete: false,
+      timedOut: true,
+      materials: [{ materialId: 'mat_source', status: 'running' }],
+    });
+    expect(clock).toBe(1_000);
   });
 
   it('lists only records returned by the scoped store, without internal fields', async () => {

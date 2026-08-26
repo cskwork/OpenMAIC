@@ -10,8 +10,9 @@
  * linkage. The material id (`mat_` + Crockford base32 suffix) is minted by
  * {@link createMaterialId}, mirroring the reference's id shape.
  *
- * No per-owner quota and no extraction queue in this slice: materials are
- * session-scoped only, and a `web` material is already extracted at fetch time.
+ * Extraction is coordinated durably on source rows. Bytes continue to live in
+ * the asset registry; the lifecycle only coordinates which worker may turn a
+ * source asset into a text-bearing derivative.
  */
 import { randomBytes } from 'node:crypto';
 
@@ -54,6 +55,32 @@ export const AGENT_SESSION_MATERIAL_KINDS = [
 
 export type AgentSessionMaterialKind = (typeof AGENT_SESSION_MATERIAL_KINDS)[number];
 
+export const MATERIAL_EXTRACTION_STATUSES = [
+  'idle',
+  'pending',
+  'running',
+  'done',
+  'failed',
+] as const;
+
+export type MaterialExtractionStatus = (typeof MATERIAL_EXTRACTION_STATUSES)[number];
+
+export interface MaterialExtractionStats {
+  chars: number;
+  pages: number;
+  imageCount: number;
+  truncated?: boolean;
+  diagnostics?: string[];
+}
+
+export interface MaterialExtractionState {
+  status: MaterialExtractionStatus;
+  attempts: number;
+  error?: string;
+  stats?: MaterialExtractionStats;
+  extractorVersion?: string;
+}
+
 export function isAgentSessionMaterialKind(value: unknown): value is AgentSessionMaterialKind {
   return (
     typeof value === 'string' && (AGENT_SESSION_MATERIAL_KINDS as readonly string[]).includes(value)
@@ -74,6 +101,9 @@ export interface AgentSessionMaterial {
   rawAssetId: string | null;
   /** Character count of the extracted text, for preview/paging decisions. */
   textChars: number;
+  /** Source id for an extraction-produced derivative. */
+  derivedFrom: string | null;
+  extraction: MaterialExtractionState;
   /** ISO-8601 timestamp of the row. */
   createdAt: string;
 }
@@ -87,7 +117,34 @@ export interface CreateAgentSessionMaterialInput {
   textAssetId?: string;
   rawAssetId?: string;
   textChars?: number;
+  /** Source id for an extraction-produced derivative. */
+  derivedFrom?: string;
 }
+
+export interface ClaimedMaterialExtraction {
+  material: AgentSessionMaterial;
+  workerId: string;
+  heartbeatAt: number;
+}
+
+export interface ClaimMaterialExtractionOptions {
+  leaseTtlMs: number;
+}
+
+export interface CompleteMaterialExtractionInput {
+  sourceId: string;
+  workerId: string;
+  extractorVersion: string;
+  stats: MaterialExtractionStats;
+  derived: CreateAgentSessionMaterialInput & { id: string; kind: 'extraction' | 'transcript' };
+}
+
+export interface MaterialExtractionFailureSettlement {
+  status: 'pending' | 'failed';
+  attempts: number;
+}
+
+export const MAX_MATERIAL_EXTRACTION_RETRIES = 2;
 
 export interface ListAgentSessionMaterialsOptions {
   /** Maximum rows returned (default 50, capped at 200). */
@@ -124,4 +181,17 @@ export interface AgentSessionMaterialStore {
     options?: ListAgentSessionMaterialsOptions,
   ): Promise<AgentSessionMaterial[]>;
   getMaterial(sessionId: string, materialId: string): Promise<AgentSessionMaterial | null>;
+  enqueueExtraction(sessionId: string, materialId: string): Promise<boolean>;
+  claimNextExtraction(
+    workerId: string,
+    options: ClaimMaterialExtractionOptions,
+  ): Promise<ClaimedMaterialExtraction | null>;
+  heartbeatExtraction(materialId: string, workerId: string): Promise<boolean>;
+  completeExtraction(input: CompleteMaterialExtractionInput): Promise<boolean>;
+  settleExtractionFailure(
+    materialId: string,
+    workerId: string,
+    error: string,
+    retryable: boolean,
+  ): Promise<MaterialExtractionFailureSettlement | null>;
 }

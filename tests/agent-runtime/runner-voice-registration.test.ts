@@ -307,6 +307,8 @@ describe('voice tool runner registration', () => {
       'list_materials',
       'read_material',
       'search_material',
+      'extract_material',
+      'wait_for_materials',
       'list_voices',
       'set_roster',
       'clip_audio',
@@ -321,6 +323,7 @@ describe('voice tool runner registration', () => {
         'create_stage',
         'duplicate_scene',
         'edit_deck',
+        'extract_material',
         'fetch_url',
         'generate_actions',
         'generate_image',
@@ -344,6 +347,7 @@ describe('voice tool runner registration', () => {
         'search_material',
         'set_roster',
         'use_material_media',
+        'wait_for_materials',
       ].sort(),
     );
     expect(options.systemPrompt).toContain('set_roster');
@@ -384,6 +388,8 @@ describe('voice tool runner registration', () => {
       'list_materials',
       'read_material',
       'search_material',
+      'extract_material',
+      'wait_for_materials',
       'list_voices',
       'set_roster',
       'clip_audio',
@@ -397,6 +403,7 @@ describe('voice tool runner registration', () => {
         'create_stage',
         'duplicate_scene',
         'edit_deck',
+        'extract_material',
         'fetch_url',
         'generate_actions',
         'generate_image',
@@ -419,6 +426,7 @@ describe('voice tool runner registration', () => {
         'search_material',
         'set_roster',
         'use_material_media',
+        'wait_for_materials',
       ].sort(),
     );
     // The model is told registration is unavailable instead of being handed a

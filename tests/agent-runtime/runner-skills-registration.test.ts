@@ -278,6 +278,8 @@ describe('skills runner registration', () => {
       'list_materials',
       'read_material',
       'search_material',
+      'extract_material',
+      'wait_for_materials',
       'list_voices',
       'set_roster',
       'clip_audio',
@@ -290,6 +292,7 @@ describe('skills runner registration', () => {
       'create_stage',
       'duplicate_scene',
       'edit_deck',
+      'extract_material',
       'fetch_url',
       'generate_actions',
       'generate_image',
@@ -313,6 +316,7 @@ describe('skills runner registration', () => {
       'search_material',
       'set_roster',
       'use_material_media',
+      'wait_for_materials',
     ]);
     expect(options.systemPrompt).toContain('<available_skills>');
     expect(options.systemPrompt).toContain('<name>pro-editing</name>');
