@@ -9,8 +9,8 @@
  *  1. A notice is a summary, optionally a hint (what you can do), optionally a
  *     technical cause. The cause never joins the sentence: the raw provider
  *     string is developer prose, and inlining it turned a failed run into a
- *     console line (「本轮构建失败：MODEL_ROUTES must explicitly …。可以再说一句
- *     让它重试」 — note the 「.。」 seam where the two languages met).
+ *     console line — the failure text and its retry hint welded into one run-on
+ *     sentence, with the two languages' punctuation spliced together.
  *  2. Consecutive identical notices collapse to one row with a count. Each
  *     automatic retry appends its own failure marker, so a provider outage used
  *     to print five byte-identical lines; the count says "five times" without
@@ -44,7 +44,7 @@ export function isNoticeNode(node: ChatNode): boolean {
 
 /**
  * Sentence-final punctuation a UI line does not need. Stripped from the
- * summary and the hint so a copy edit cannot leave 「…失败。」 or the 「.。」
+ * summary and the hint so a copy edit cannot leave a trailing stop or the
  * double stop that concatenation used to produce.
  */
 const TRAILING_STOPS = /[。．.,，、;；:：!！?？\s]+$/u;

@@ -146,8 +146,8 @@ describe('QuestionCard render', () => {
       async () => true,
     );
     expect(live).toContain('workbench-question-confirm');
-    // The options are live; only 确认 starts dead, because confirming an empty
-    // pick set would send nothing.
+    // The options are live; only confirm starts dead, because confirming an
+    // empty pick set would send nothing.
     expect(deadControls(live)).toBe(1);
     const answered = render(
       question({ questionOptions: options, questionMultiSelect: true, questionAnswered: true }),

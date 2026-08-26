@@ -124,7 +124,7 @@ describe('after inserting a skill, nothing is open', () => {
 
 describe('after picking a course, nothing is open', () => {
   it('does not pop the skill menu open on what the splice left behind', () => {
-    // `/stage-design @光的折射` → pick → `/stage-design`, which is a live query.
+    // `/stage-design @course` → pick → `/stage-design`, which is a live query.
     const left = '/stage-design';
     expect(menuOf(left, { slashDismissedOn: left }).menu).toBeNull();
   });

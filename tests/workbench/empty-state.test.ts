@@ -51,10 +51,10 @@ describe('WorkbenchChatEmptyState', () => {
   });
 
   /**
-   * The copy used to read 「这节课还没有工作台记录」 — the conversation described as
-   * the course's record, which is the binding the two independent columns removed,
-   * restated in words. An empty conversation is a NEW conversation, and the hint is
-   * where `@` is taught.
+   * The copy used to read "this course has no workbench record yet" — the
+   * conversation described as the course's record, which is the binding the two
+   * independent columns removed, restated in words. An empty conversation is a
+   * NEW conversation, and the hint is where `@` is taught.
    */
   it('invites a new conversation instead of calling itself a course’s record', () => {
     for (const locale of supportedLocales.map((entry) => entry.code)) {

@@ -1,6 +1,6 @@
 /**
  * Element references — the slide elements a user hands the agent alongside a
- * message ("这几个元素，把标题改短一点").
+ * message (e.g. "these elements — make the title shorter").
  *
  * The wire shape is deliberately self-describing. `elementId` is the handle the
  * agent's edit tools address, but an id alone is worthless in a transcript and

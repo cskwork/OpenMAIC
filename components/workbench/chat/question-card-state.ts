@@ -60,7 +60,8 @@ export function togglePicked(picked: readonly string[], id: string): string[] {
 
 /**
  * How several picked labels become one message. Locale-scoped: the answer lands
- * in the user's own bubble, so it reads 「A、B」 in Chinese and "A, B" elsewhere.
+ * in the user's own bubble, so it reads with the CJK enumeration comma in
+ * Chinese and "A, B" elsewhere.
  */
 export function multiAnswerSeparator(t: WorkbenchTranslator): string {
   return t('workbench.question.multiAnswerSeparator');
@@ -148,7 +149,7 @@ export function useQuestionAnswer(
   answered: boolean;
   /** Send one option's label (single choice: the click IS the answer). */
   answerWith: (text: string) => void;
-  /** Send the picked labels as one message (multi-select 确认). */
+  /** Send the picked labels as one message (multi-select confirm). */
   confirm: () => void;
 } {
   const [picked, setPicked] = useState<readonly string[]>([]);

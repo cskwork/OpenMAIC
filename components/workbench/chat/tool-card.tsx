@@ -48,7 +48,7 @@ export function ToolCard({
   const [open, setOpen] = useState(false);
   // A skill load's subject is the skill's id, which is the only thing the
   // transcript records. The copy map (and, for a user Skill, the installed
-  // registry) turns it into display name + 英文 id — the same pairing the
+  // registry) turns it into display name + the English id — the same pairing the
   // composer's picker and chip show — and falls back to the bare id for a skill
   // that has neither.
   const { skills } = useAgentSkills();

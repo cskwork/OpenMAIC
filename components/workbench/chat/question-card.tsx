@@ -24,7 +24,7 @@
  * Two shapes, decided entirely by the folded envelope (see `questionMode`): an
  * OPEN question is just the question — it points nowhere, because the composer
  * IS the form while it waits and there is nothing to explain when it is not; a
- * SINGLE choice sends the clicked option's label; MULTI toggles and 确认 sends the
+ * SINGLE choice sends the clicked option's label; MULTI toggles and confirm sends the
  * picked labels as one message.
  * All of them travel the host's own send path, so the answer arrives as an
  * ordinary user message with the ordinary optimistic state — the entire answer
@@ -80,8 +80,8 @@ export function QuestionCard({
 }) {
   const answer = useQuestionAnswer(node, onAnswer, t);
   const { answered, locked, hint, mode, options } = answer;
-  // The footer only exists when something is in it: 确认 for a multi-select, the
-  // way back to a dismissed form, or the one hint that still has work to do.
+  // The footer only exists when something is in it: confirm for a multi-select,
+  // the way back to a dismissed form, or the one hint that still has work to do.
   const footer = !answered && (mode === 'multi' || Boolean(onRevive) || Boolean(hint));
   // An answered question is a record, so it never collapses: the form is gone by
   // then and this row is the only place the question survives.

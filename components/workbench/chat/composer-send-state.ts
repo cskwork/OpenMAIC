@@ -3,7 +3,7 @@
 /**
  * The composer's optimistic states — the two moments where the button has to
  * answer before the runner can: "send was just pressed, show STOP" and "stop
- * was just accepted, show 正在停止".
+ * was just accepted, show the stopping label".
  *
  * The fold's `status` only moves when a runner lifecycle event arrives:
  * `session_resumed` / `session_start` flip it to `running`, and a posted
@@ -64,7 +64,7 @@ export function shouldDropPendingSend(input: {
 }
 
 /**
- * Whether the optimistic 「正在停止…」 should be dropped, i.e. the run is no
+ * Whether the optimistic "stopping" label should be dropped, i.e. the run is no
  * longer live.
  *
  * `POST /cancel` answers 202: it means the runner has been ASKED, not that it
@@ -79,7 +79,7 @@ export function shouldDropPendingSend(input: {
  * value it had"): a cancel pressed while the status is already terminal — a
  * follow-up that the runner has not claimed yet, so the composer is showing
  * STOP on `pendingSend` alone — would then wait for a change that may never
- * come, and stick on 「正在停止…」 forever. Asking "is it still live" cannot
+ * come, and stick on "stopping" forever. Asking "is it still live" cannot
  * strand the button.
  */
 export function shouldDropPendingStop(input: {

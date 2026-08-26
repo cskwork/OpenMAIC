@@ -208,12 +208,12 @@ export const wbStyles = {
    *
    * No elevation of its own, no colour of its own, no second type scale. A
    * takeover that also shouted would read as a modal, and this blocks nothing —
-   * 放弃 hands the box straight back.
+   * the dismiss control hands the box straight back.
    *
    * Both scroll caps exist for one reason: the composer's footer is
    * bottom-anchored, so a form that grew without bound would grow off the top of
    * the viewport. A long question scrolls (~22vh) and a long option list scrolls
-   * (~34vh); the footer with 提交 is never among what scrolls away.
+   * (~34vh); the footer with the submit control is never among what scrolls away.
    */
   questionForm: {
     box: 'flex flex-col gap-2.5 rounded-2xl border border-[var(--wb-accent-line)] bg-[var(--wb-surface)] px-3 py-3 shadow-[0_10px_32px_-14px_rgba(15,23,42,0.22)] motion-safe:animate-[wb-form-fade_var(--wb-duration-base)_var(--wb-ease-out)] motion-reduce:animate-none dark:shadow-[0_12px_36px_-12px_rgba(0,0,0,0.55)]',
@@ -224,7 +224,7 @@ export const wbStyles = {
     rows: 'flex max-h-[34vh] flex-col gap-1 overflow-y-auto',
     /**
      * One row = one decision. The frame lives on the wrapper (not the button)
-     * because the 其他 row grows a text box inside the same frame, and its
+     * because the "other" row grows a text box inside the same frame, and its
      * highlight/picked states have to cover both.
      *
      * `data-highlight` is the keyboard's position and `data-picked` is the
@@ -243,8 +243,8 @@ export const wbStyles = {
     // filled centre; the checkbox gets a glyph instead.
     mark: 'mt-[2px] inline-flex size-[15px] shrink-0 items-center justify-center rounded-full border border-[var(--wb-line)] text-primary-foreground transition-colors duration-[var(--wb-duration-base)] data-[multi=true]:rounded-[4px] data-[picked=true]:border-[var(--wb-accent)] data-[picked=true]:bg-[var(--wb-accent)] data-[multi=false]:data-[picked=true]:shadow-[inset_0_0_0_3px_var(--wb-surface)] motion-reduce:transition-none',
     label: 'min-w-0 flex-1 [overflow-wrap:anywhere]',
-    // The free-text box on the 其他 row: underline only, so it reads as part of
-    // the row it belongs to instead of a second boxed control inside a box.
+    // The free-text box on the "other" row: underline only, so it reads as part
+    // of the row it belongs to instead of a second boxed control inside a box.
     otherInput:
       'mx-2 mb-1.5 ml-[54px] block w-auto border-0 border-b border-[var(--wb-accent-line)] bg-transparent px-0 py-1 text-[length:var(--wb-text-sm)] leading-relaxed text-[var(--wb-text)] outline-none placeholder:text-[var(--wb-text-faint)] focus:border-[var(--wb-accent)] disabled:opacity-60',
     // An open question's whole answer surface: the composer's own textarea skin,

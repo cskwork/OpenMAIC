@@ -1,6 +1,6 @@
 /**
  * Course references — the classrooms a user names for the agent alongside a
- * message ("@光的折射 把第三页换个例子").
+ * message (e.g. "@course-name, swap the example on page 3").
  *
  * The wire shape is the sibling of `ElementRef` (`lib/workbench/element-refs`)
  * with the element identity removed: same strict decoder in the same two modes,

@@ -65,7 +65,7 @@ export interface ChatNode {
   detail?: string;
   hint?: string;
   hintCopyKey?: WorkbenchCopyKey;
-  /** Thinking bars only: wall-clock bounds for the "已思考 Ns" summary. */
+  /** Thinking bars only: wall-clock bounds for the "thought for Ns" summary. */
   startedAt?: number;
   endedAt?: number;
   /** Tool cards only. */

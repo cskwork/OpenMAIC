@@ -3,7 +3,7 @@
  *
  * The visual system is the OpenPBL kimi-chat vocabulary
  * (`openpbl/.../chat/chat-tokens.tailwind.css` + `text-block.tailwind.css`),
- * re-rooted for a SINGLE-agent surface and mapped onto openmaic-live's shadcn
+ * re-rooted for a SINGLE-agent surface and mapped onto this app's shadcn
  * semantic variables (`--background` / `--foreground` / `--primary` / …), so
  * light/dark follow the app theme through `.dark` with no palette of its own.
  *
@@ -189,8 +189,8 @@
     overflow-wrap: break-word;
     min-width: 0;
     max-width: 100%;
-    /* Trims the sidebearing of fullwidth CJK punctuation so 「，」「。」 do
-       not leave a half-em hole. */
+    /* Trims the sidebearing of fullwidth CJK punctuation so commas and
+       full stops do not leave a half-em hole. */
     text-spacing-trim: space-first;
   }
 

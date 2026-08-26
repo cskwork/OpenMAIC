@@ -5,8 +5,9 @@
  *
  * The two content columns of the workspace are independent, so the agent is
  * never told which classroom a sentence is about by the layout. This is where it
- * IS told: open the picker (type `@`, or choose 「引用课堂」 from `+`), pick a
- * course, and the pick rides along with the message as an explicit target.
+ * IS told: open the picker (type `@`, or choose the "reference a course" entry
+ * from `+`), pick a course, and the pick rides along with the message as an
+ * explicit target.
  *
  * IT IS A PICKER AND NOTHING ELSE. A pick becomes a `courseRef` carrying a
  * stageId, which the server resolves against the owner's own library at
@@ -20,13 +21,14 @@
  * Every row does the same thing: name this classroom for this turn. That is the
  * whole menu.
  *
- * It used to have two sections. The top one, 「本对话涉及」, showed a DERIVED set
- * of classrooms the conversation was "involved with", in accent text, and
- * activating one opened the classroom pane instead of naming it — plus a hover
- * `✕` to take a classroom out of that set, which needed a stored ignore list and
- * a column on the session row. All of it is gone, because the premise was wrong:
- * 「课堂没有所谓的关联逻辑，就是单纯的选」. Nothing here is a membership, so
- * there is nothing to pin, nothing to correct, and no second verb to explain.
+ * It used to have two sections. The top one, "mentioned in this conversation",
+ * showed a DERIVED set of classrooms the conversation was "involved with", in
+ * accent text, and activating one opened the classroom pane instead of naming
+ * it — plus a hover `✕` to take a classroom out of that set, which needed a
+ * stored ignore list and a column on the session row. All of it is gone,
+ * because the premise was wrong: a classroom has no "relation logic" here — a
+ * mention is just a selection. Nothing is a membership, so there is nothing to
+ * pin, nothing to correct, and no second verb to explain.
  *
  * That also removes the whole class of bug the old rows kept producing: no row
  * carries a trailing control, so nothing can be painted over a long title and

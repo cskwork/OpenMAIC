@@ -8,7 +8,7 @@
  * no thumbnail, no media card, no preview. A glyph, a name, and how many pages.
  *
  * ALWAYS PRESSABLE, AND ALWAYS THE SAME PRESS. The card used to end in a state
- * cue — 侧边打开 / 切到标签页 / 正在显示 — driven by the pane's open set and its
+ * cue — open-in-side-pane / switch-to-tab / now-showing — driven by the pane's open set and its
  * active id. That cue is gone with the state machine behind it: it reported a
  * fact the reader gets by glancing right, it made a card look conditional when
  * it never was, and it was the loudest thing on a row whose subject is a course

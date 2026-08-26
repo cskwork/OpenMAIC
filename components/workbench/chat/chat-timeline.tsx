@@ -7,7 +7,7 @@
  * replayed log groups identically to a live one): consecutive action bars
  * (thinking, tools, the pre-token wait) share one stack, then split per
  * kind-run for render — a consecutive tool run keeps its `ToolGroup`
- * aggregate ("N 个工具调用") even when a thinking bar sits next to it, and
+ * aggregate ("N tool calls") even when a thinking bar sits next to it, and
  * thinking bars render as their own rows. Consecutive identical system notices
  * collapse the same way, into one row with a count.
  *
@@ -124,7 +124,7 @@ export function collapseAdjacentThinking(nodes: ChatNode[]): ChatNode[] {
 /**
  * Consecutive action bars share a cluster, then split per run kind: thinking,
  * skill loads (`read` of SKILL.md), and ordinary tools. A tool run still
- * renders as ONE `ToolGroup` ("N 个工具调用") even when a thinking bar sits
+ * renders as ONE `ToolGroup` ("N tool calls") even when a thinking bar sits
  * next to it; skill loads stay in their own run so they are never folded into
  * that aggregate. Waiting stays glued to the stretch it follows.
  */

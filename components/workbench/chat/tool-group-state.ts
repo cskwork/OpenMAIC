@@ -21,8 +21,8 @@ export function initialToolGroupOpen(status: ToolGroupStatus): boolean {
 
 /**
  * The breathing pause between "every call settled" and the fold closing. The
- * finished state (green dot + 已完成) has to be readable before the group
- * takes its own height away, otherwise the collapse reads as a twitch.
+ * finished state (green dot + the done label) has to be readable before the
+ * group takes its own height away, otherwise the collapse reads as a twitch.
  */
 export const TOOL_GROUP_AUTO_COLLAPSE_MS = 600;
 

@@ -143,7 +143,7 @@ export function oneLine(value: string, max = 120): string {
  * A failure, as a sentence. The tools do not all return prose — a real run can
  * produce a `generate_scene` whose entire error result is `"gateway 524: "`,
  * accurate and unreadable on its own. The prefix supplies the subject the tool
- * did not; the raw string is still verbatim in 结果原文.
+ * did not; the raw string is still verbatim in the raw-result disclosure.
  */
 function formatErrorLine(
   subject: string,
@@ -155,7 +155,7 @@ function formatErrorLine(
   return message ? `${subject}${separator}${message}` : subject;
 }
 
-/** The learner-facing name of a page type. `procedural-skill` is 「实训」. */
+/** The learner-facing name of a page type. `procedural-skill` is "practice". */
 export function pageTypeLabel(
   type?: string,
   widgetType?: string,
@@ -222,7 +222,7 @@ export function isWorkbenchToolFailed(node: ChatNode): boolean {
  * The generic fallback: the argument a reader would most likely have wanted —
  * a fixed priority list of key names, then the first non-empty string. It is
  * the difference between an unknown tool rendering as its name alone and
- * rendering as 「plan_course · Ancient Egypt」.
+ * rendering as `plan_course · Ancient Egypt`.
  */
 const SALIENT_KEYS = [
   'title',
@@ -254,9 +254,9 @@ function salientArg(args: Record<string, unknown>): string | undefined {
 /**
  * `plan` is the session's outline. It is what lets a *running*
  * `generate_scene` say which page it is on — the tool's own `details.title`
- * does not exist until the call has finished, and 「生成第 3 页」 with the
- * title arriving four minutes later is exactly the "nothing is happening"
- * feeling the traces were added for.
+ * does not exist until the call has finished, and the "generating page 3"
+ * label with the title arriving four minutes later is exactly the "nothing is
+ * happening" feeling the traces were added for.
  */
 export function presentTool(
   node: ChatNode,
@@ -371,7 +371,7 @@ export function presentTool(
 
     // Pi-native skill invocation is a `read` of SKILL.md. It is not a course
     // tool: the timeline renders it as its own skill bar, not folded into
-    // "N 个工具调用".
+    // "N tool calls".
     case 'read': {
       const skillId = skillLoadId(node);
       if (!skillId) {

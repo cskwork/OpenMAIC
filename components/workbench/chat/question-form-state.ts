@@ -14,15 +14,15 @@
  * The row list, the highlight and the answer text are three separate facts on
  * purpose:
  *
- *  - ROWS are the envelope's options plus the always-last 其他… row. The free-text
+ *  - ROWS are the envelope's options plus the always-last "other…" row. The free-text
  *    channel is a row, not a sentence pointing somewhere else, because the box it
  *    used to point at is now this form.
- *  - HIGHLIGHT is one index over rows PLUS one past the end, which is 提交. That
- *    is what makes "Enter 在提交按钮上时提交" a case of one rule rather than a
- *    second key handler.
+ *  - HIGHLIGHT is one index over rows PLUS one past the end, which is submit. That
+ *    is what makes "Enter on the submit button submits" a case of one rule rather
+ *    than a second key handler.
  *  - ANSWER TEXT is derived from the picks every time. Submit is enabled iff that
- *    text is non-empty, so "未选/未填时禁用" needs no separate validity flag that
- *    could disagree with what would actually be sent.
+ *    text is non-empty, so "disabled when nothing is picked or filled" needs no
+ *    separate validity flag that could disagree with what would actually be sent.
  */
 import { useMemo, useState } from 'react';
 import type { ChatNode, QuestionOption } from '@/lib/workbench/session-store';
@@ -75,7 +75,7 @@ export type QuestionFormRow =
   | { readonly kind: 'option'; readonly id: string; readonly label: string }
   | { readonly kind: 'other' };
 
-/** What is selected right now: envelope option ids, plus whether 其他 is on. */
+/** What is selected right now: envelope option ids, plus whether the "other" row is on. */
 export interface QuestionFormPicks {
   readonly picked: readonly string[];
   readonly otherPicked: boolean;
@@ -98,8 +98,9 @@ export function questionFormRows(node: ChatNode): QuestionFormRow[] {
 
 /**
  * Pick an envelope option. Single choice REPLACES (radio semantics, and it drops
- * 其他 — one answer means one answer); multi toggles, and leaves 其他 alone
- * because a checkbox list can carry both canned picks and a written addition.
+ * the "other" pick — one answer means one answer); multi toggles, and leaves the
+ * "other" pick alone because a checkbox list can carry both canned picks and a
+ * written addition.
  */
 export function pickOption(
   state: QuestionFormPicks,
@@ -111,7 +112,7 @@ export function pickOption(
 }
 
 /**
- * Pick the 其他 row. Single choice selects it and clears the canned picks;
+ * Pick the "other" row. Single choice selects it and clears the canned picks;
  * a second single-choice click does NOT unselect it (a radio cannot be emptied
  * by clicking it again), while multi toggles it like any other box.
  */
@@ -126,8 +127,8 @@ export function pickOther(state: QuestionFormPicks, multi: boolean): QuestionFor
  * ENVELOPE ORDER for the canned labels (the agent listed them in the order it
  * wants them read), and the written answer always last — the same place its row
  * sits in the list. An empty string means "nothing to send", which is exactly
- * the condition 提交 is disabled on: an unpicked question, or 其他 with a blank
- * box.
+ * the condition submit is disabled on: an unpicked question, or the "other" box
+ * with a blank answer.
  */
 export function formAnswerText(input: {
   mode: 'open' | 'single' | 'multi';
@@ -147,10 +148,10 @@ export function formAnswerText(input: {
 
 /**
  * Highlight movement: CLAMPED, not wrapping. ↑ on the first option must not
- * teleport to 提交 at the other end of the form — in a five-row questionnaire
+ * teleport to submit at the other end of the form — in a five-row questionnaire
  * that reads as the highlight vanishing.
  *
- * `rowCount` is the number of rows; index `rowCount` is 提交, which is why the
+ * `rowCount` is the number of rows; index `rowCount` is submit, which is why the
  * upper bound is `rowCount` and not `rowCount - 1`.
  */
 export function moveHighlight(current: number, delta: number, rowCount: number): number {
@@ -161,10 +162,10 @@ export function moveHighlight(current: number, delta: number, rowCount: number):
 }
 
 /**
- * Which row a digit picks: 1-9 map to the first nine rows (其他 included — it is
- * a row like any other). Anything past nine has no shortcut; that is a real
- * limit, not a bug, and the badges keep counting so the numbering does not lie
- * about which row is which.
+ * Which row a digit picks: 1-9 map to the first nine rows (the "other" row
+ * included — it is a row like any other). Anything past nine has no shortcut;
+ * that is a real limit, not a bug, and the badges keep counting so the numbering
+ * does not lie about which row is which.
  */
 export function quickPickIndex(key: string, rowCount: number): number | null {
   if (key.length !== 1 || key < '1' || key > '9') return null;
@@ -175,7 +176,7 @@ export function quickPickIndex(key: string, rowCount: number): number | null {
 /** Whether the event's target is a text box, and whether Enter belongs to it. */
 export type QuestionFormEditing = false | 'line' | 'multiline';
 
-/** `event.target.tagName` → editing kind. The 其他 box is a line; the open answer is not. */
+/** `event.target.tagName` → editing kind. The "other" box is a line; the open answer is not. */
 export function editingKindFor(tagName: string): QuestionFormEditing {
   const tag = tagName.toUpperCase();
   if (tag === 'TEXTAREA') return 'multiline';
@@ -194,17 +195,18 @@ export type QuestionFormKeyAction =
  * One key, one action — the whole keyboard contract of the form.
  *
  * The rule that earns this function its own tests is the editing guard: while
- * the caret is in the 其他 box (or an open question's textarea), the digits are
- * TEXT. A form that quick-picks row 3 because the user typed "3" in a sentence
- * would be unusable, so nothing but Enter and Escape is interpreted there.
+ * the caret is in the "other" box (or an open question's textarea), the digits
+ * are TEXT. A form that quick-picks row 3 because the user typed "3" in a
+ * sentence would be unusable, so nothing but Enter and Escape is interpreted
+ * there.
  *
  *  Escape          → dismiss, from anywhere, typing included (the way out is
  *                    never behind a focus state).
  *  ⌘/Ctrl+Enter    → submit, from anywhere, same reason.
- *  Enter           → in a multi-line box it is a newline; in the 其他 line it
- *                    submits (single-line boxes have nothing else to do with it);
- *                    otherwise it CONFIRMS the highlight — which is 提交 when the
- *                    highlight has moved past the last row.
+ *  Enter           → in a multi-line box it is a newline; in the "other" line
+ *                    it submits (single-line boxes have nothing else to do with
+ *                    it); otherwise it CONFIRMS the highlight — which is submit
+ *                    when the highlight has moved past the last row.
  *  ↑ ↓             → move the highlight (clamped).
  *  1-9             → confirm that row directly, i.e. the digit is the fast path
  *                    for "highlight it, then Enter".
@@ -243,10 +245,11 @@ export function questionFormKeyAction(input: {
  *
  * `select` is what a MOUSE does — it picks, and nothing else. `activate` is what
  * Enter and the digits do: pick, and on a single-choice row send immediately,
- * because 确认 is the verb those keys are bound to. That asymmetry is deliberate:
- * a click that sent the moment it landed would make the 提交 button decoration in
- * single-choice mode, and a keyboard that needed two Enters to answer a radio
- * list would make the takeover slower than the box it replaced.
+ * because confirm is the verb those keys are bound to. That asymmetry is
+ * deliberate: a click that sent the moment it landed would make the submit
+ * button decoration in single-choice mode, and a keyboard that needed two Enters
+ * to answer a radio list would make the takeover slower than the box it
+ * replaced.
  *
  * `sending` covers the POST window only. The durable answer is the user message
  * the send produces; the fold's `questionAnswered` retires the whole form the
@@ -273,7 +276,7 @@ export function useQuestionForm(
   canSubmit: boolean;
   /** Mouse: pick this row. */
   select: (index: number) => void;
-  /** Keyboard: confirm this row (single choice sends; past the last row is 提交). */
+  /** Keyboard: confirm this row (single choice sends; past the last row is submit). */
   activate: (index: number) => void;
   submit: () => void;
 } {
@@ -340,14 +343,14 @@ export function useQuestionForm(
     },
     activate: (index) => {
       if (locked) return;
-      // Past the last row is 提交 — one highlight space, one Enter.
+      // Past the last row is submit — one highlight space, one Enter.
       if (index >= rows.length) {
         send(answerText);
         return;
       }
       const next = pick(index);
-      // A single-choice canned row IS the answer. 其他 never sends on confirm:
-      // there is a box to fill first, and the focus lands in it.
+      // A single-choice canned row IS the answer. The "other" row never sends on
+      // confirm: there is a box to fill first, and the focus lands in it.
       if (next && mode === 'single' && rows[index]?.kind === 'option') {
         send(formAnswerText({ mode, options, picks: next, otherText, openText, t }));
       }

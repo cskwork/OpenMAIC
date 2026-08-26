@@ -182,7 +182,7 @@ describe('every tool has a verb of its own', () => {
 
   it('keeps the page verb when the order is known', () => {
     // The order rides the label for the per-page tools, the same way
-    // `generate_scene` has always said 「生成第 3 页」.
+    // `generate_scene` has always said "generate page 3".
     expect(
       presentTool(toolNode({ toolName: 'generate_actions', toolDetails: { order: 3 } })).label,
     ).toBe('生成第 3 页旁白');

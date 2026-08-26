@@ -2,7 +2,7 @@
 
 /**
  * Pre-token loading — three pulsing dots. OpenPBL keeps this separate from
- * the thinking bar: no "思考中" label, no brain icon, no fabricated thought.
+ * the thinking bar: no "thinking" label, no brain icon, no fabricated thought.
  * The fold opens it on session start / user message / message start / tool
  * end, and removes it the moment the first real part arrives.
  */

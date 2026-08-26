@@ -159,7 +159,7 @@ describe('rowsForRender tool-run aggregation', () => {
   it('keeps the tool-run aggregate when a thinking bar follows the tools', () => {
     // Regression: tools + a trailing thinking bar used to land in one mixed
     // cluster, where ActionCluster aggregated only when EVERY bar was a tool
-    // — so the "2 个工具调用" head dissolved into three loose cards.
+    // — so the "2 tool calls" head dissolved into three loose cards.
     const rows = rowsForRender([
       tool('read_scene', 'r1'),
       tool('read_scene', 'r2'),

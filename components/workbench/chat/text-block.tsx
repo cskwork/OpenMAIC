@@ -6,10 +6,10 @@
  * Streamdown owns the parse and render; three things are added:
  *
  *  - `remark-cjk-friendly` BEFORE `remark-gfm`, because CommonMark's emphasis
- *    flanking rules misfire next to fullwidth CJK punctuation — `使用**“智能”**引号`
- *    otherwise reaches the user with its asterisks on (the spike's S10 lesson).
- *    Streamdown's `remarkPlugins` prop REPLACES its defaults, so the defaults
- *    (`gfm`, `codeMeta`) are re-spread explicitly after the CJK plugin.
+ *    flanking rules misfire next to fullwidth CJK punctuation — e.g. `**smart**`
+ *    quotes otherwise reach the user with their asterisks on (the spike's S10
+ *    lesson). Streamdown's `remarkPlugins` prop REPLACES its defaults, so the
+ *    defaults (`gfm`, `codeMeta`) are re-spread explicitly after the CJK plugin.
  *  - the `.wb-prose` skin (see `workbench-chat.css`), which styles Streamdown's
  *    `data-streamdown` node contract rather than its Tailwind class names.
  *  - an anchor override, so a link the agent writes to a course becomes the

@@ -207,9 +207,10 @@ export function SkillSlashMenu({
                           )}
                         >
                           <span className="flex min-w-0 max-w-full items-baseline gap-1.5">
-                            {/* Display name + 英文 id: the name is what the reader recognises,
-                    the id is what they type and what the session records. The id
-                    is never dropped — it is the skill's actual handle. */}
+                            {/* Display name + English id: the name is what the reader
+                    recognises, the id is what they type and what the session
+                    records. The id is never dropped — it is the skill's actual
+                    handle. */}
                             {skillTitle(skill, t) ? (
                               <span className="min-w-0 truncate text-[12.5px] font-medium text-foreground">
                                 {skillTitle(skill, t)}

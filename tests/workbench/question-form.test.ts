@@ -8,8 +8,8 @@
  * things when it is wrong — what happens to those keys while the caret sits in a
  * text box. The RENDER assertions cover what a user can tell apart: a
  * questionnaire with numbered rows and the free-text row at the end, an open
- * question degraded to one box, and a 提交 that starts dead because nothing is
- * picked yet.
+ * question degraded to one box, and a submit control that starts dead because
+ * nothing is picked yet.
  */
 import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
@@ -128,7 +128,7 @@ describe('formAnswerText', () => {
   it('is empty until there is something to send — which is what disables 提交', () => {
     expect(answer({})).toBe('');
     expect(answer({ mode: 'open', openText: '   ' })).toBe('');
-    // 其他 picked but blank is still nothing to send.
+    // The "other" pick, blank, is still nothing to send.
     expect(answer({ picks: { picked: [], otherPicked: true } })).toBe('');
   });
 
@@ -157,7 +157,7 @@ describe('formAnswerText', () => {
 });
 
 describe('highlight movement', () => {
-  // Three rows means indexes 0..2, plus 3 = 提交.
+  // Three rows means indexes 0..2, plus 3 = submit.
   it('is clamped at both ends: ↑ on the first row does not teleport to 提交', () => {
     expect(moveHighlight(0, -1, 3)).toBe(0);
     expect(moveHighlight(0, 1, 3)).toBe(1);
@@ -224,7 +224,7 @@ describe('questionFormKeyAction', () => {
   });
 
   it('typing in a box never quick-picks and never moves the highlight', () => {
-    // The one that would make the 其他 box unusable: digits are text there.
+    // The one that would make the "other" box unusable: digits are text there.
     expect(key({ key: '2', editing: 'line' })).toEqual({ type: 'none' });
     expect(key({ key: '2', editing: 'multiline' })).toEqual({ type: 'none' });
     expect(key({ key: 'a', editing: 'line' })).toEqual({ type: 'none' });
@@ -266,7 +266,7 @@ describe('composerTakeover', () => {
   it('gives the composer to the waiting question, and back when it is waved off', () => {
     expect(composerTakeover({ pending: null, dismissedKey: null })).toBeNull();
     expect(composerTakeover({ pending: q1, dismissedKey: null })).toBe(q1);
-    // 放弃: the composer is restored, and the question itself is untouched.
+    // Dismiss: the composer is restored, and the question itself is untouched.
     expect(composerTakeover({ pending: q1, dismissedKey: 'q1' })).toBeNull();
   });
 
@@ -297,7 +297,7 @@ describe('QuestionForm render', () => {
     expect(html).toContain('role="radiogroup"');
     expect(html).toContain('role="radio"');
     expect(html).toContain('aria-checked="false"');
-    // Nothing is picked yet, so 提交 is the only dead control.
+    // Nothing is picked yet, so submit is the only dead control.
     expect(html).toContain('workbench-question-form-submit');
     expect(deadControls(html)).toBe(1);
     expect(html).toContain('workbench-question-form-dismiss');
@@ -365,7 +365,7 @@ describe('QuestionForm render', () => {
 
   it('a host with no send path renders the record with everything dead', () => {
     const html = form(question({ questionOptions: options }));
-    // Two option rows + 其他 + 提交.
+    // Two option rows + the "other" row + submit.
     expect(deadControls(html)).toBe(4);
   });
 

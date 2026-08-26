@@ -160,7 +160,7 @@ export function skillTitle(
 }
 
 /**
- * One line naming a skill: 「课堂设计 /stage-design」.
+ * One line naming a skill: `<title> /<id>`.
  */
 export function skillDisplayLabel(
   skill: {

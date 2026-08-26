@@ -16,8 +16,8 @@
  * "the next user message" and nothing more. While a question is UNANSWERED the
  * composer is TAKEN OVER by its form (`chat/question-form.tsx`): the run ended on
  * `ask_user`, so there is nothing to type into until it is answered, and its
- * transcript row is at the bottom of a long log and easy to scroll past. 放弃
- * hands the box back — the question stays open, the form just stops holding it
+ * transcript row is at the bottom of a long log and easy to scroll past. The
+ * dismiss control hands the box back — the question stays open, the form just stops holding it
  * (`dismissedQuestionKey` below), and the transcript card offers the way back.
  * While a run is live the composer
  * shows STOP (POST cancel) instead of send; that ends the run, never the
@@ -206,7 +206,7 @@ export function WorkbenchChat({
    * is open (`resolveComposerMenu`).
    *
    * `slashDismissed` exists because splicing an `@` token out can leave a bare
-   * `/handle` behind — pick a course out of `/stage-design @光的折射` and the draft
+   * `/handle` behind — pick a course out of `/stage-design @course` and the draft
    * becomes `/stage-design`, a live slash query — and finishing with one menu must
    * never open the other.
    */
@@ -539,9 +539,10 @@ export function WorkbenchChat({
     if (takeoverKey) void scrollToBottomRef.current();
   }, [takeoverKey]);
 
-  // The event stream is what lifts 「正在停止…」: whatever terminal status lands
-  // (cancelled normally, or succeeded/failed if the run beat the cancel to the
-  // finish line) means the run is no longer live, and the composer goes back to
+  // The event stream is what lifts the stopping label: whatever terminal status
+  // lands (cancelled normally, or succeeded/failed if the run beat the cancel to
+  // the finish line) means the run is no longer live, and the composer goes back
+  // to being a composer.
   // being a composer.
   useEffect(() => {
     if (shouldDropPendingStop({ pendingStop, status })) setPendingStop(false);
@@ -553,7 +554,7 @@ export function WorkbenchChat({
     try {
       await cancelWorkbenchSession(sessionId);
       // 202: the runner has been ASKED. The terminal state still arrives through
-      // the event stream, so the button says 正在停止 until it does — silence
+      // the event stream, so the button says stopping until it does — silence
       // for tens of seconds is exactly what made stopping feel ignored.
       setPendingStop(true);
     } catch (err) {

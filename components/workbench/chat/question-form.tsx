@@ -13,7 +13,7 @@
  * Shape, per envelope (`questionFormRows`):
  *
  *  - With options: numbered full-width rows, radio or checkbox, plus the
- *    always-last 其他… row whose inline underline box is the free-text channel.
+ *    always-last "other…" row whose inline underline box is the free-text channel.
  *    That row is why no sentence points at "the box below" any more — this IS the
  *    box below.
  *  - Without options: the title and one multi-line box. Nothing else to draw.
@@ -24,10 +24,10 @@
  * the caret is in a text box, except the two that are always an escape hatch
  * (Esc, ⌘/Ctrl+Enter).
  *
- * 放弃 is not "cancel the question": the transcript card stays live and clickable,
- * and the host remembers only that this question's form was waved off (see
- * `WorkbenchChat`). Nothing about the question changes — it just stops holding
- * the composer hostage.
+ * Dismissing is not "cancel the question": the transcript card stays live and
+ * clickable, and the host remembers only that this question's form was waved off
+ * (see `WorkbenchChat`). Nothing about the question changes — it just stops
+ * holding the composer hostage.
  */
 import { useEffect, useRef } from 'react';
 import { Check } from 'lucide-react';
@@ -69,8 +69,8 @@ export function QuestionForm({
   /**
    * Focus follows the highlight — that is what makes ↑↓ navigation real rather
    * than a coloured border, and what puts the first option under the keyboard the
-   * moment the form appears. The one exception is the selected 其他 row, where the
-   * thing to type into is the box, not the row.
+   * moment the form appears. The one exception is the selected "other" row,
+   * where the thing to type into is the box, not the row.
    */
   useEffect(() => {
     if (mode === 'open') return;
