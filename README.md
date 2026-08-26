@@ -21,7 +21,7 @@
   <br/>
   <a href="https://discord.gg/p8Pf2r3SaG"><img src="https://img.shields.io/badge/Discord-Join_Community-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"/></a>
   &nbsp;
-  <a href="community/feishu.md"><img src="https://img.shields.io/badge/Feishu-飞书交流群-00D6B9?style=for-the-badge&logo=bytedance&logoColor=white" alt="Feishu"/></a>
+  <a href="community/feishu.md"><img src="https://img.shields.io/badge/Feishu-Community-00D6B9?style=for-the-badge&logo=bytedance&logoColor=white" alt="Feishu Community"/></a>
   <br/>
   <img src="https://img.shields.io/badge/Next.js-16-black?style=flat-square&logo=next.js" alt="Next.js"/>
   <img src="https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=white" alt="React"/>
@@ -31,14 +31,31 @@
 </p>
 
 <p align="center">
-  <a href="./README.md">English</a> | <a href="./README-zh.md">简体中文</a>
+  <a href="./README.md">English</a> | <a href="./README-zh.md">Simplified Chinese</a>
   <br/>
   <a href="https://open.maic.chat/">Live Demo</a> · <a href="#-quick-start">Quick Start</a> · <a href="#lemonade-local-ai">Lemonade</a> · <a href="#funasr-local-asr">FunASR</a> · <a href="#-features">Features</a> · <a href="#-use-cases">Use Cases</a> · <a href="#-openclaw-integration">OpenClaw</a>
 </p>
 
+## OpenMAIC 1.0.0 — Build courses with an agent
+
+OpenMAIC 1.0.0 introduces the foundation for an agentic course-building workflow. Alongside the classic one-click classroom generator, an opt-in Pro workbench can plan a curriculum, create and revise course pages, work from uploaded or fetched materials, and keep long-running work recoverable.
+
+### What's new in 1.0.0
+
+- **Agent workbench and durable sessions** — A conversational workbench surface drives PostgreSQL-backed agent sessions with leases, heartbeats, crash resume, cancellation, and follow-up steering. The runtime ships with 20 built-in course-design and editing skills, plus owner-scoped skills that users can create and revise.
+- **End-to-end course tools** — The agent can plan multi-lesson curricula; create folders and courses; read and atomically patch the stage DSL; generate, duplicate, reorder, and preview pages; edit decks and narration; import `.pptx` slides while preserving their layout; generate images and videos; and manage classroom rosters and voices. Voice registration is exposed only when a configured adapter supports cloning.
+- **Session materials with explicit trust boundaries** — Uploads move through a durable extraction lifecycle for documents, audio, and video. `fetch_url` accepts only URLs already introduced by the user or web search, then applies strict SSRF checks and stores extracted content as a session material.
+- **Provider-neutral server execution** — Server routes resolve image, video, ASR, TTS, search, and LLM configuration without sending provider credentials to the browser. Uniform `<CAP>_<PREFIX>_ENABLED=false` switches can force off served media and search capabilities, startup validation warns about bad model configuration, and unresolved model routes fail loudly instead of guessing a vendor.
+- **Fresh, isolated editing** — A revision manifest and freshness stream let the workbench detect course changes and batch-refetch changed scene IDs. Stage, session, material, folder, and user-skill operations are scoped to a stable anonymous owner so unrelated visitors cannot see or mutate one another's work.
+- **Pluggable persistence** — `@openmaic/storage` supplies document, learner-runtime, KV, asset, agent-session, material, and user-skill stores. The default remains a no-database browser deployment; HTTP and PostgreSQL backends add server persistence, with PostgreSQL or S3-backed asset bytes.
+
+> [!IMPORTANT]
+> **Pro mode is opt-in.** Enable the agent runtime with `OPENMAIC_AGENT_RUNTIME_ENABLED=true` and a non-empty `DATABASE_URL`. Set `NEXT_PUBLIC_PERSISTENCE=1` when the browser should use server-backed persistence, and explicitly route `maic-agent-driver` in `MODEL_ROUTES`. Leave these settings unset and OpenMAIC keeps the existing browser-only experience.
+
 
 ## 🗞️ News
 
+- **2026-08-26** — **OpenMAIC 1.0.0:** an opt-in agent workbench, durable course-building sessions, reusable skills, session materials, provider-neutral server capabilities, and a pluggable persistence stack.
 - **2026-08-14** — [v0.3.2 released!](https://github.com/THU-MAIC/OpenMAIC/releases/tag/v0.3.2) Video export hardening (deterministic Quiz/PBL covers, fidelity polish, interactive HTML capture, CPU resource profiles); server-backed persistence completed (full document cutover, one-command Postgres stack, incremental saves) plus the asset registry; the `@openmaic/generation` package; four new locales; Amazon Bedrock, Atlas Cloud, and Claude search providers; FunASR ASR. See [changelog](CHANGELOG.md).
 - **2026-07-21** — [v0.3.1 released!](https://github.com/THU-MAIC/OpenMAIC/releases/tag/v0.3.1) One-click MP4 video export; server-backed runtime storage with a Postgres reference server; direct slide manipulation in the editor (drag, resize, rotate, multi-select); smarter "Edit with AI" (validated JSON Patch edits, multi-session history); expanded Document Parsing (multi-format upload, audio/video extraction, AliDocMind, MinerU); new providers (Azure OpenAI, SearXNG, ComfyUI) and the GPT-5.6 model family; action-level playback navigation; SSRF hardening. See [changelog](CHANGELOG.md).
 - **2026-06-28** — [v0.3.0 released!](https://github.com/THU-MAIC/OpenMAIC/releases/tag/v0.3.0) Project-Based Learning (PBL) v2 with classroom UI; "Edit with AI" Pro-mode editor agent; the `@openmaic/*` SDK family (DSL/renderer/importer) published to npm; optional per-stage model routing; new models (GLM-5.2, Kimi K2.7 Code, Qwen3.7 Plus/Max); a vocational-learning task engine; Korean (ko-KR) locale; and relicensing from AGPL-3.0 to MIT. See [changelog](CHANGELOG.md).
@@ -409,27 +426,33 @@ and
 Leave `NEXT_PUBLIC_PERSISTENCE` unset to retain the existing browser-only
 behavior.
 
-### Optional: Agent runtime (experimental)
+### Optional: Agent workbench and runtime
 
-Background agent sessions — the `/api/agent/*` control-plane routes plus an
-in-process session runner — are experimental and off by default. To enable
-them, set the server-side flag and provide the same PostgreSQL connection used
+The Pro workbench foundation consists of the conversational workbench UI,
+`/api/agent/*` control-plane routes, and an in-process session runner. It is off
+by default. Enable the server runtime with the same PostgreSQL connection used
 by server-backed persistence:
 
 ```env
 OPENMAIC_AGENT_RUNTIME_ENABLED=true
 DATABASE_URL=postgres://openmaic:openmaic-dev@postgres:5432/openmaic
+MODEL_ROUTES='{"maic-agent-driver":{"model":"openai:gpt-5.5","api":"openai-completions"}}'
 ```
 
 While the flag is off, the `/api/agent/sessions*` and `/api/agent/owner-events`
 routes answer `404`. Enabling it
 without a `DATABASE_URL` never starts the runner and makes the session routes
-error, so the runtime is server-backed by design. While enabled, `MODEL_ROUTES`
-must explicitly route the `maic-agent-driver` stage to a provider-prefixed
-model with an `openai-completions` or `openai-responses` `api`/`dialect`; there
-is intentionally no fallback. Runner cadence (scan interval, heartbeat, lease
-TTL, concurrency, attempts) and the reserved compaction knobs are listed in
-`.env.example` under **Agent runtime (experimental)**.
+error, so the runtime is server-backed by design. `MODEL_ROUTES` must explicitly
+route `maic-agent-driver` to a provider-prefixed model with an
+`openai-completions` or `openai-responses` `api`/`dialect`; there is intentionally
+no fallback.
+
+To make the browser use the same server-backed document and runtime stores,
+also build with `NEXT_PUBLIC_PERSISTENCE=1` and configure the matching
+development tokens described in [Server-backed persistence](#server-backed-persistence-postgresql).
+Without these opt-ins, OpenMAIC retains its existing browser-only behavior.
+Runner cadence (scan interval, heartbeat, lease TTL, concurrency, attempts) and
+the reserved compaction knobs are listed in `.env.example`.
 
 ### Optional: MP4 Video Export (Render Service)
 
@@ -484,6 +507,40 @@ TTS_VOXCPM_BASE_URL=http://localhost:8000/v1
 ---
 
 ## ✨ Features
+
+### Agent Workbench and Pro Mode (1.0.0)
+
+The opt-in workbench adds a conversational course-building agent to OpenMAIC.
+Its durable sessions can be resumed after a worker restart, accept follow-up
+instructions while running, and stream a replayable event history to the chat
+surface.
+
+The agent works through explicit, validated tools rather than editing opaque
+blobs:
+
+| Area | Capabilities |
+| --- | --- |
+| **Plan and organize** | Plan multi-lesson curricula; create courses and folders; rename and move courses |
+| **Build and edit** | Read/search the stage DSL; atomically patch one scene; generate, duplicate, insert, delete, and reorder pages; edit narration and deck structure |
+| **Use materials** | Upload files; extract documents, audio, and video; search extracted text; fetch trusted web URLs; reuse material media |
+| **Create media** | Generate images and videos through configured server providers; generate narration audio |
+| **Import and inspect** | Import `.pptx` slides with their layout preserved; render scene previews for visual inspection when available |
+| **Configure the classroom** | List available voices, set the agent roster, and clone/register a voice when a pluggable registration adapter is configured |
+
+Twenty built-in skills cover curriculum planning, deep research, interactive,
+lecture, workshop, vocational, and other teaching styles, slide/stage craft,
+PPTX import, editing, and style reuse. User-authored skills are stored per owner
+and can be created, read, and patched through the same runtime.
+
+### Pluggable Storage
+
+OpenMAIC runs without a database by default: course documents, learner runtime
+records, device/account KV values, and assets use browser storage. The
+`@openmaic/storage` package defines swappable stores for those primitives and
+adds PostgreSQL-backed documents, learner runtime, assets, durable agent
+sessions, session materials, and user skills. HTTP clients connect the browser
+to the embedded persistence endpoint, while the server asset layer can keep
+bytes in PostgreSQL or S3.
 
 ### Deep Interactive Mode (New!)
 
@@ -595,7 +652,10 @@ If you are looking for a version with richer functionality, stronger interactivi
 
 ### Lesson Generation
 
-Describe what you want to learn or attach reference materials. OpenMAIC's two-stage pipeline handles the rest:
+Describe what you want to learn or attach reference materials. PDF, Word,
+PowerPoint, spreadsheet, text, image, audio, and video inputs can enter the
+material pipeline; configured extractors turn supported sources into content
+for generation. OpenMAIC's classic two-stage pipeline handles the rest:
 
 | Stage | What Happens |
 |-------|-------------|
@@ -761,6 +821,8 @@ Optional config in `~/.openclaw/openclaw.json`:
 - **Text-to-Speech** — Multiple voice providers with customizable voices
 - **Speech Recognition** — Talk to your AI teacher using your microphone
 - **Web Search** — Agents search the web for up-to-date information during class
+- **Provider controls** — Server-side capability discovery, model resolution, force-off switches, and fail-loud routing keep deployments explicit
+- **Course freshness** — Revision manifests, freshness events, and targeted scene fetches keep workbench views synchronized
 - **i18n** — Interface supports 12 locales across 11 languages: Simplified Chinese, Traditional Chinese, English, Japanese, Korean, Russian, Arabic, Portuguese (Brazil), Spanish (Mexico), French, Vietnamese, and German
 - **Dark Mode** — Easy on the eyes for late-night study sessions
 
@@ -814,7 +876,9 @@ We welcome contributions from the community! Whether it's bug reports, feature i
 ```
 OpenMAIC/
 ├── app/                        # Next.js App Router
-│   ├── api/                    #   Server API routes (~18 endpoints)
+│   ├── api/                    #   Generation, media, persistence, and agent APIs
+│   │   ├── agent/              #     Durable session, event, material, and skill control plane
+│   │   ├── stages/             #     Owner-scoped course reads, writes, manifests, and scene fetches
 │   │   ├── generate/           #     Scene generation pipeline (outlines, content, images, TTS …)
 │   │   ├── generate-classroom/ #     Async classroom job submission + polling
 │   │   ├── chat/               #     Multi-agent discussion (SSE streaming)
@@ -834,6 +898,8 @@ OpenMAIC/
 │   ├── types/                  #   Centralized TypeScript type definitions
 │   ├── audio/                  #   TTS & ASR providers
 │   ├── media/                  #   Image & video generation providers
+│   ├── persistence/            #   Browser/server persistence wiring and PostgreSQL provider
+│   ├── server/agent-runtime/   #   Durable runner, skills, materials, and course-building tools
 │   ├── export/                 #   PPTX & HTML export
 │   ├── hooks/                  #   React custom hooks (55+)
 │   ├── i18n/                   #   Internationalization (zh-CN, zh-TW, en-US, ja-JP, ko-KR, ru-RU, ar-SA, pt-BR, es-MX, fr-FR, vi-VN, de-DE)
@@ -845,6 +911,7 @@ OpenMAIC/
 │   │   └── components/element/ #     Element renderers (text, image, shape, table, chart …)
 │   ├── scene-renderers/        #   Quiz, Interactive, PBL scene renderers
 │   ├── generation/             #   Lesson generation toolbar & progress
+│   ├── workbench/              #   Pro workbench conversation and course-reference UI
 │   ├── chat/                   #   Chat area & session management
 │   ├── settings/               #   Settings panel (providers, TTS, ASR, media …)
 │   ├── whiteboard/             #   SVG-based whiteboard drawing
@@ -853,6 +920,12 @@ OpenMAIC/
 │   └── ...                     #   audio, roundtable, stage, ai-elements
 │
 ├── packages/                   # Workspace packages
+│   ├── @openmaic/dsl/          #   Versioned course/slide data contract and validators
+│   ├── @openmaic/renderer/     #   React renderer for the slide DSL
+│   ├── @openmaic/editor/       #   Composable slide editing core and React surface
+│   ├── @openmaic/importer/     #   PPTX → OpenMAIC slide importer
+│   ├── @openmaic/generation/   #   Generation contracts, pipeline, and prompt assets
+│   ├── @openmaic/storage/      #   Browser, HTTP, PostgreSQL, and S3 persistence primitives
 │   ├── pptxgenjs/              #   Customized PowerPoint generation
 │   └── mathml2omml/            #   MathML → Office Math conversion
 │
@@ -868,6 +941,8 @@ OpenMAIC/
 ### Key Architecture
 
 - **Generation Pipeline** (`@openmaic/generation`) — Two-stage: outline generation → scene content generation
+- **Agent Runtime** (`lib/server/agent-runtime/`) — PostgreSQL-backed sessions with leased execution, resume/steer semantics, skills, materials, and validated course tools
+- **Persistence Layer** (`@openmaic/storage`) — Swappable document, runtime, KV, asset, agent-session, material, and user-skill stores
 - **Multi-Agent Orchestration** (`lib/orchestration/`) — LangGraph state machine managing agent turns and discussions
 - **Playback Engine** (`lib/playback/`) — State machine driving classroom playback and live interaction
 - **Action Engine** (`lib/action/`) — Executes 28+ action types (speech, whiteboard draw/text/shape/chart, spotlight, laser …)
