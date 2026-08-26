@@ -42,9 +42,11 @@ import {
   untrustedContentPolicyPromptBlock,
 } from './fetch-url';
 import { assembleRunnerTools, buildRunnerCoursePrompt } from './runner-contract';
+import { buildMaterialTools, MATERIAL_TOOL_NAMES } from './material-tools';
 import { buildSkillEditTools, SKILL_EDIT_TOOL_NAMES } from './skill-edit-tools';
 import { buildWebSearchTool, resolveWebSearchCapability, searchPromptBlock } from './web-search';
 import { buildSkillPreload, preloadUserMessage } from './skill-preload';
+import { listSessionMaterials, sessionMaterialsPromptBlock } from './session-materials';
 import {
   availableSkillsPromptBlock,
   createNativeSkillReadTool,
@@ -80,8 +82,9 @@ export const MINIMAL_AGENT_TOOL_NAMES = new Set(['ask_user']);
  * course-tools.ts, the DSL compatibility block (always present), and every
  * capability block that is actually registered — the web-search block only
  * when a web-search backend is configured, the curriculum block always, the
- * skill discovery block when skills are installed, and the fetch_url guidance
- * and untrusted-content policy always (fetch_url is always registered).
+ * skill discovery block when skills are installed, the fetch_url guidance
+ * and untrusted-content policy always (fetch_url is always registered), and
+ * the session-materials block only when the session has materials.
  */
 function isLeaseLostError(error: unknown): boolean {
   let current = error;
@@ -754,6 +757,13 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       onStageLink: (course) => emit(LIFECYCLE.stageLink, course),
       onLibraryChanged: (change) => emit(LIFECYCLE.libraryChanged, change),
     });
+    // Session-scoped material tools and the materials prompt block are wired
+    // from durable session identity on every start and resume (reference
+    // semantics: the material tools are always registered alongside the
+    // capability-gated web_search). The listing only feeds the prompt block;
+    // the tools read through the same session-scoped store on each call.
+    const materials = await listSessionMaterials(id);
+    const materialTools = buildMaterialTools({ sessionId: id });
     const tools = assembleRunnerTools(
       [askUserTool],
       webSearchTools,
@@ -778,6 +788,7 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       [buildFetchUrlTool({ sessionId: id })],
       dslTools,
       curriculumTools,
+      materialTools,
     );
     const askUserLatch = createAskUserTerminateLatch();
     let toolCalls = 0;
@@ -789,6 +800,7 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
         ...(search ? { search: searchPromptBlock() } : {}),
         fetch: fetchPromptBlock(),
         untrustedContent: untrustedContentPolicyPromptBlock(),
+        ...(materials.length ? { materials: sessionMaterialsPromptBlock(materials) } : {}),
       }),
       model: driver.piModel,
       tools,
@@ -798,7 +810,7 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
         'create_skill',
         ...SKILL_EDIT_TOOL_NAMES,
         ...(skillReadTool ? ['read'] : []),
-        'fetch_url',
+        ...MATERIAL_TOOL_NAMES,
         ...DSL_COURSE_TOOL_NAMES,
         ...CURRICULUM_ALLOWLIST,
       ]),

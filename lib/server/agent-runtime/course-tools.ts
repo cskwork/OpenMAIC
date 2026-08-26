@@ -167,6 +167,12 @@ interface CoursePromptBlocks {
   fetch?: string;
   /** Compatibility guidance for installed legacy skills and resumed transcripts. */
   dslTools?: string;
+  /**
+   * Session-materials listing. Present only when the session actually has
+   * materials (reference semantics: the block must not appear for a session
+   * with nothing to read).
+   */
+  materials?: string;
 }
 
 /**
@@ -182,5 +188,6 @@ export function courseSystemPrompt(blocks: CoursePromptBlocks): string {
   if (blocks.dslTools) parts.push('', blocks.dslTools);
   if (blocks.fetch) parts.push('', blocks.fetch);
   if (blocks.untrustedContent) parts.push('', blocks.untrustedContent);
+  if (blocks.materials) parts.push('', blocks.materials);
   return parts.join('\n');
 }
