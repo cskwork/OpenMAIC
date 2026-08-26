@@ -2,15 +2,13 @@
  * GET /api/stages/[id]/manifest — freshness manifest for one course (the
  * reference's `stages/:id/manifest`, ported onto the owner-bound store).
  *
- * Returns `{rev, scenes: [{id, order, rev}]}` — the revision index the
- * workbench canvas diffs against before re-fetching scenes. The upstream
- * store carries no per-scene revisions and adds none (this slice reuses the
- * existing stores), so `rev` is the document's `stage.updatedAt` and every
- * scene shares it: any document-level change invalidates the whole scene set,
- * which is correct if coarser than the reference — the client's manifest diff
- * logic works unchanged and re-fetches exactly the (possibly all) scenes
- * whose rev moved. Writes through this slice's PUT/PATCH bump `updatedAt`, so
- * the UI's own saves drive the signal.
+ * Returns `{rev, scenes: [{id, order, rev}]}` — the per-stage monotonic
+ * revision and each scene's own revision, produced by DB triggers on
+ * `document_stages` / `document_scenes` (provisioned by the storage package's
+ * schema), so every write seam — HTTP routes, agent tools, jobs, manual SQL —
+ * moves them without application cooperation. The workbench canvas diffs this
+ * manifest against what it rendered with and re-fetches only the scenes whose
+ * rev changed.
  *
  * Permission boundary is the same as every stage route: the owner-bound store
  * reads a foreign or missing stage as absent, and both answer the identical
@@ -33,16 +31,8 @@ export async function GET(req: NextRequest, { params }: Params) {
   return withRequestOwnerId(req, async (ownerId, responseHeaders) => {
     const { id } = await params;
     const store = await getOwnerScopedDocumentStore(ownerId);
-    const document = await store.loadDocument(id);
-    if (!document) return ownerNotFound(responseHeaders);
-    const rev = document.stage.updatedAt;
-    return ownerJson(
-      {
-        rev,
-        scenes: document.scenes.map((scene) => ({ id: scene.id, order: scene.order, rev })),
-      },
-      200,
-      responseHeaders,
-    );
+    const manifest = await store.readFreshnessManifest(id);
+    if (!manifest) return ownerNotFound(responseHeaders);
+    return ownerJson(manifest, 200, responseHeaders);
   });
 }

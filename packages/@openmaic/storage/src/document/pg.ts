@@ -30,6 +30,8 @@ import type {
   MaicDocument,
   SceneLike,
   SceneValidator,
+  StageFreshnessManifest,
+  StageFreshnessManifestStore,
   StageValidator,
 } from './types.js';
 import { DocumentFolderLimitError, DocumentNotFoundError, DocumentVersionError } from './types.js';
@@ -112,7 +114,187 @@ CREATE TABLE IF NOT EXISTS document_outlines (
   stage_id TEXT PRIMARY KEY REFERENCES document_stages(id) ON DELETE CASCADE,
   data JSONB NOT NULL
 );
+
+-- Per-scene monotonic revision signal, at the DB layer (ported from the
+-- reference implementation's migration 0071).
+--
+-- WHY THE DB LAYER: course content has several write seams that share no
+-- application-level signal (HTTP routes, agent tools, jobs, migration
+-- scripts, manual psql). Only a trigger can make "wrote but never signaled"
+-- unexpressible. These companion tables and triggers keep a monotonic
+-- per-stage revision and a per-scene revision on every insert/update/delete
+-- of document_stages / document_scenes. Companion tables instead of columns
+-- keep the document tables' authoritative DDL untouched.
+--
+-- LOCK ORDER INVARIANT: the scene trigger bumps document_stage_revision (SR)
+-- BEFORE document_scene_revision (SCR) — the same order saveDocument uses
+-- (stage upsert first, then per-scene upserts). Any future code that writes
+-- these two companion tables must take SR before SCR, or the deadlock (40P01)
+-- between concurrent stage-first and scene-first writers comes back.
+--
+-- NOTIFY: each bump emits a JSON route {kind:'stage',stageId} on the
+-- agent-event wakeup channel (the same channel the reference's agent event
+-- notify bus LISTENs on), so a stage notification wakes exactly the
+-- subscribers listening for that stage. The payload is built with
+-- json_build_object — never hand-concatenated, because a stageId containing
+-- quotes or backslashes would yield invalid JSON.
+--
+-- NOTIFY SUPPRESSION SWITCH: both triggers check
+-- current_setting('openmaic.suppress_stage_notify', true) before pg_notify.
+-- Batch/backfill writers MUST run SET LOCAL openmaic.suppress_stage_notify =
+-- 'on' inside each batch transaction: the revision still bumps, only the
+-- notification is skipped. NOTE: SET LOCAL outside a transaction block only
+-- emits a warning and has NO effect.
+--
+-- TRUNCATE DOES NOT FIRE ROW TRIGGERS: a TRUNCATE reset of document_scenes /
+-- document_stages leaves the companion revision rows behind, so any TRUNCATE
+-- reset must also truncate document_scene_revision and
+-- document_stage_revision.
+--
+-- IDEMPOTENT BY CONSTRUCTION: CREATE TABLE IF NOT EXISTS, CREATE OR REPLACE
+-- FUNCTION, DROP TRIGGER IF EXISTS — replayable in any environment.
+
+CREATE TABLE IF NOT EXISTS document_stage_revision (
+  stage_id TEXT PRIMARY KEY NOT NULL,
+  rev BIGINT DEFAULT 0 NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS document_scene_revision (
+  stage_id TEXT NOT NULL,
+  scene_id TEXT NOT NULL,
+  rev BIGINT DEFAULT 0 NOT NULL,
+  CONSTRAINT document_scene_revision_pkey PRIMARY KEY (stage_id, scene_id)
+);
+
+CREATE OR REPLACE FUNCTION openmaic_bump_scene_revision() RETURNS trigger AS $$
+DECLARE
+  v_stage_id text;
+  v_scene_id text;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    v_stage_id := OLD.stage_id;
+    v_scene_id := OLD.id;
+  ELSE
+    v_stage_id := NEW.stage_id;
+    v_scene_id := NEW.id;
+  END IF;
+  -- LOCK ORDER INVARIANT: SR row BEFORE the SCR row (see the header comment).
+  INSERT INTO document_stage_revision (stage_id, rev)
+  VALUES (v_stage_id, 1)
+  ON CONFLICT (stage_id) DO UPDATE SET rev = document_stage_revision.rev + 1;
+  INSERT INTO document_scene_revision (stage_id, scene_id, rev)
+  VALUES (v_stage_id, v_scene_id, 1)
+  ON CONFLICT (stage_id, scene_id) DO UPDATE SET rev = document_scene_revision.rev + 1;
+  IF coalesce(current_setting('openmaic.suppress_stage_notify', true), '') <> 'on' THEN
+    PERFORM pg_notify('openmaic_agent_event_wakeup', json_build_object('kind', 'stage', 'stageId', v_stage_id)::text);
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION openmaic_bump_stage_revision() RETURNS trigger AS $$
+DECLARE
+  v_stage_id text;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    v_stage_id := OLD.id;
+  ELSE
+    v_stage_id := NEW.id;
+  END IF;
+  INSERT INTO document_stage_revision (stage_id, rev)
+  VALUES (v_stage_id, 1)
+  ON CONFLICT (stage_id) DO UPDATE SET rev = document_stage_revision.rev + 1;
+  IF coalesce(current_setting('openmaic.suppress_stage_notify', true), '') <> 'on' THEN
+    PERFORM pg_notify('openmaic_agent_event_wakeup', json_build_object('kind', 'stage', 'stageId', v_stage_id)::text);
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS openmaic_scene_revision_trigger ON document_scenes;
+
+CREATE TRIGGER openmaic_scene_revision_trigger
+AFTER INSERT OR UPDATE OR DELETE ON document_scenes
+FOR EACH ROW EXECUTE FUNCTION openmaic_bump_scene_revision();
+
+DROP TRIGGER IF EXISTS openmaic_stage_revision_trigger ON document_stages;
+
+CREATE TRIGGER openmaic_stage_revision_trigger
+AFTER INSERT OR UPDATE OR DELETE ON document_stages
+FOR EACH ROW EXECUTE FUNCTION openmaic_bump_stage_revision();
 `;
+
+/**
+ * Split a DDL string into individual statements. A plain `split(';')` would
+ * carve the `BEGIN ... END;` blocks inside the dollar-quoted plpgsql trigger
+ * bodies into bogus statements, so the splitter skips over single-quoted
+ * strings, double-quoted identifiers, `$$...$$` / `$tag$...$tag$` bodies, and
+ * `--` line comments and slash-star block comments.
+ */
+export function splitSqlStatements(sql: string): string[] {
+  const statements: string[] = [];
+  let current = '';
+  let i = 0;
+  const end = sql.length;
+  while (i < end) {
+    const rest = sql.slice(i);
+    const ch = sql[i];
+    if (ch === ';') {
+      statements.push(current);
+      current = '';
+      i += 1;
+      continue;
+    }
+    if (ch === '-' && rest.startsWith('--')) {
+      const newline = rest.indexOf('\n');
+      const lineEnd = newline === -1 ? end : i + newline + 1;
+      current += sql.slice(i, lineEnd);
+      i = lineEnd;
+      continue;
+    }
+    if (ch === '/' && rest.startsWith('/*')) {
+      const close = rest.indexOf('*/', 2);
+      const blockEnd = close === -1 ? end : i + close + 2;
+      current += sql.slice(i, blockEnd);
+      i = blockEnd;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      // Single-quoted string literal or double-quoted identifier; the quote
+      // is escaped by doubling, and an unterminated run consumes the rest.
+      current += ch;
+      i += 1;
+      while (i < end) {
+        current += sql[i];
+        if (sql[i] === ch) {
+          if (sql[i + 1] === ch) {
+            current += sql[i + 1];
+            i += 2;
+            continue;
+          }
+          i += 1;
+          break;
+        }
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === '$') {
+      const tag = /^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/.exec(rest)?.[0];
+      if (tag) {
+        const close = rest.indexOf(tag, tag.length);
+        if (close !== -1) {
+          current += rest.slice(0, close + tag.length);
+          i += close + tag.length;
+          continue;
+        }
+      }
+    }
+    current += ch;
+    i += 1;
+  }
+  return statements.map((statement) => statement.trim()).filter((statement) => statement !== '');
+}
 
 /**
  * Create the tables owned by this backend when absent. Safe to call repeatedly;
@@ -120,10 +302,59 @@ CREATE TABLE IF NOT EXISTS document_outlines (
  */
 export async function ensureDocumentSchema(queryable: Queryable): Promise<void> {
   // Keep Queryable minimal and PGlite-compatible: issue one statement at a time.
-  for (const sql of DOCUMENT_PG_SCHEMA.split(';')) {
-    const statement = sql.trim();
-    if (statement !== '') await queryable.query(statement);
+  for (const statement of splitSqlStatements(DOCUMENT_PG_SCHEMA)) {
+    await queryable.query(statement);
   }
+}
+
+const STAGE_REV_SQL = `
+  SELECT rev
+    FROM document_stage_revision
+   WHERE stage_id = $1
+`;
+
+const SCENES_SQL = `
+  SELECT s.id,
+         s.scene_order,
+         COALESCE(sr.rev, 0) AS rev
+    FROM document_scenes s
+    LEFT JOIN document_scene_revision sr
+      ON sr.stage_id = s.stage_id
+     AND sr.scene_id = s.id
+   WHERE s.stage_id = $1
+   ORDER BY s.scene_order ASC, s.id ASC
+`;
+
+/**
+ * Read the freshness manifest for one stage: the stage's monotonic revision
+ * plus every live scene's id/order/rev, produced by the triggers provisioned
+ * in `DOCUMENT_PG_SCHEMA`. A stage with no revision row yet reads as `rev: 0`
+ * (written before the triggers existed, or never written since); a scene the
+ * trigger never bumped also reads 0. Callers gate existence/visibility first
+ * (the owner-bound store method does), so this function assumes the stage
+ * exists and does not re-check it. Kept free of driver imports so the whole
+ * read is unit-testable against any queryable.
+ */
+export async function readStageFreshnessManifest(
+  stageId: string,
+  queryable: Queryable,
+): Promise<StageFreshnessManifest> {
+  const [stageRows, sceneRows] = await Promise.all([
+    queryable.query<{ rev: number | string }>(STAGE_REV_SQL, [stageId]),
+    queryable.query<{ id: string; scene_order: number | string; rev: number | string }>(
+      SCENES_SQL,
+      [stageId],
+    ),
+  ]);
+
+  return {
+    rev: stageRows.rows[0] === undefined ? 0 : Number(stageRows.rows[0].rev),
+    scenes: sceneRows.rows.map((row) => ({
+      id: row.id,
+      order: Number(row.scene_order),
+      rev: Number(row.rev),
+    })),
+  };
 }
 
 interface StoredJsonRow extends Record<string, unknown> {
@@ -229,7 +460,7 @@ function isPgQueryableKey(value: string): boolean {
 }
 
 export class PgDocumentStore<TScene extends SceneLike = Scene, TStage extends Stage = Stage>
-  implements DocumentStore<TScene, TStage>, DocumentFolderStore
+  implements DocumentStore<TScene, TStage>, DocumentFolderStore, StageFreshnessManifestStore
 {
   private readonly queryable: Queryable;
   private readonly transactionHook: WithTransaction;
@@ -498,6 +729,23 @@ export class PgDocumentStore<TScene extends SceneLike = Scene, TStage extends St
     const rows = await this.transaction((queryable) => this.loadRows(queryable, stageId));
     if (!rows) return null;
     return migrateDocument(reassembleDocument(rows.stageRow, rows.sceneRows, rows.outlineRow));
+  }
+
+  async readFreshnessManifest(stageId: string): Promise<StageFreshnessManifest | null> {
+    if (!isPgQueryableKey(stageId)) return null;
+    return this.transaction(async (queryable) => {
+      // Existence and ownership gate, exactly like loadDocument: a foreign or
+      // missing stage answers the same null. The revision read itself is
+      // un-scoped (readStageFreshnessManifest assumes the stage exists).
+      const scoped = await queryable.query<{ id: string }>(
+        `SELECT id
+           FROM document_stages
+          WHERE id = $1 AND ${this.scopePredicate('', 2)}`,
+        this.scopeParams(stageId),
+      );
+      if (scoped.rows.length === 0) return null;
+      return readStageFreshnessManifest(stageId, queryable);
+    });
   }
 
   async createFolder(

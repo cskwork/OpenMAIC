@@ -1,4 +1,8 @@
-import type { DocumentStore } from '@openmaic/storage';
+import type {
+  DocumentFolderStore,
+  DocumentStore,
+  StageFreshnessManifestStore,
+} from '@openmaic/storage';
 
 import { withPlainJsonDocumentWrites } from '@/lib/document-store/plain-json-store';
 import type { AppStage } from '@/lib/document-store/persistence-types';
@@ -6,6 +10,14 @@ import { validateAppScene, validateAppStage } from '@/lib/document-store/validat
 import { createOwnerBoundDocumentStore } from '@/lib/persistence/owner-bound-document-store';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
 import type { AppScene } from '@/lib/types/stage';
+
+/**
+ * The owner-bound document store for one HTTP request, plus the
+ * trigger-maintained freshness manifest read the PG backend provides.
+ */
+export type OwnerScopedDocumentStore = DocumentStore<AppScene, AppStage> &
+  DocumentFolderStore &
+  StageFreshnessManifestStore;
 
 /**
  * The owner-bound document store for one HTTP request.
@@ -21,7 +33,7 @@ import type { AppScene } from '@/lib/types/stage';
  */
 export async function getOwnerScopedDocumentStore(
   ownerId: string,
-): Promise<DocumentStore<AppScene, AppStage>> {
+): Promise<OwnerScopedDocumentStore> {
   const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
   return withPlainJsonDocumentWrites(
     createOwnerBoundDocumentStore<AppScene, AppStage>({
@@ -29,6 +41,6 @@ export async function getOwnerScopedDocumentStore(
       ownerId,
       validateScene: validateAppScene,
       validateStage: validateAppStage,
-    }),
+    }) as unknown as OwnerScopedDocumentStore,
   );
 }

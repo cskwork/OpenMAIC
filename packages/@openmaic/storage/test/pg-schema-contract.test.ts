@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { AGENT_SESSION_PG_SCHEMA, ensureAgentSessionSchema } from '../src/agent-session/pg.js';
-import { DOCUMENT_PG_SCHEMA, ensureDocumentSchema } from '../src/document/pg.js';
+import {
+  DOCUMENT_PG_SCHEMA,
+  ensureDocumentSchema,
+  splitSqlStatements,
+} from '../src/document/pg.js';
 import { RUNTIME_PG_SCHEMA, ensureSchema } from '../src/runtime/pg.js';
 import { USER_SKILL_PG_SCHEMA, ensureUserSkillSchema } from '../src/skill/pg.js';
 import {
@@ -95,6 +99,114 @@ CREATE TABLE IF NOT EXISTS document_outlines (
   stage_id TEXT PRIMARY KEY REFERENCES document_stages(id) ON DELETE CASCADE,
   data JSONB NOT NULL
 );
+
+-- Per-scene monotonic revision signal, at the DB layer (ported from the
+-- reference implementation's migration 0071).
+--
+-- WHY THE DB LAYER: course content has several write seams that share no
+-- application-level signal (HTTP routes, agent tools, jobs, migration
+-- scripts, manual psql). Only a trigger can make "wrote but never signaled"
+-- unexpressible. These companion tables and triggers keep a monotonic
+-- per-stage revision and a per-scene revision on every insert/update/delete
+-- of document_stages / document_scenes. Companion tables instead of columns
+-- keep the document tables' authoritative DDL untouched.
+--
+-- LOCK ORDER INVARIANT: the scene trigger bumps document_stage_revision (SR)
+-- BEFORE document_scene_revision (SCR) — the same order saveDocument uses
+-- (stage upsert first, then per-scene upserts). Any future code that writes
+-- these two companion tables must take SR before SCR, or the deadlock (40P01)
+-- between concurrent stage-first and scene-first writers comes back.
+--
+-- NOTIFY: each bump emits a JSON route {kind:'stage',stageId} on the
+-- agent-event wakeup channel (the same channel the reference's agent event
+-- notify bus LISTENs on), so a stage notification wakes exactly the
+-- subscribers listening for that stage. The payload is built with
+-- json_build_object — never hand-concatenated, because a stageId containing
+-- quotes or backslashes would yield invalid JSON.
+--
+-- NOTIFY SUPPRESSION SWITCH: both triggers check
+-- current_setting('openmaic.suppress_stage_notify', true) before pg_notify.
+-- Batch/backfill writers MUST run SET LOCAL openmaic.suppress_stage_notify =
+-- 'on' inside each batch transaction: the revision still bumps, only the
+-- notification is skipped. NOTE: SET LOCAL outside a transaction block only
+-- emits a warning and has NO effect.
+--
+-- TRUNCATE DOES NOT FIRE ROW TRIGGERS: a TRUNCATE reset of document_scenes /
+-- document_stages leaves the companion revision rows behind, so any TRUNCATE
+-- reset must also truncate document_scene_revision and
+-- document_stage_revision.
+--
+-- IDEMPOTENT BY CONSTRUCTION: CREATE TABLE IF NOT EXISTS, CREATE OR REPLACE
+-- FUNCTION, DROP TRIGGER IF EXISTS — replayable in any environment.
+
+CREATE TABLE IF NOT EXISTS document_stage_revision (
+  stage_id TEXT PRIMARY KEY NOT NULL,
+  rev BIGINT DEFAULT 0 NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS document_scene_revision (
+  stage_id TEXT NOT NULL,
+  scene_id TEXT NOT NULL,
+  rev BIGINT DEFAULT 0 NOT NULL,
+  CONSTRAINT document_scene_revision_pkey PRIMARY KEY (stage_id, scene_id)
+);
+
+CREATE OR REPLACE FUNCTION openmaic_bump_scene_revision() RETURNS trigger AS $$
+DECLARE
+  v_stage_id text;
+  v_scene_id text;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    v_stage_id := OLD.stage_id;
+    v_scene_id := OLD.id;
+  ELSE
+    v_stage_id := NEW.stage_id;
+    v_scene_id := NEW.id;
+  END IF;
+  -- LOCK ORDER INVARIANT: SR row BEFORE the SCR row (see the header comment).
+  INSERT INTO document_stage_revision (stage_id, rev)
+  VALUES (v_stage_id, 1)
+  ON CONFLICT (stage_id) DO UPDATE SET rev = document_stage_revision.rev + 1;
+  INSERT INTO document_scene_revision (stage_id, scene_id, rev)
+  VALUES (v_stage_id, v_scene_id, 1)
+  ON CONFLICT (stage_id, scene_id) DO UPDATE SET rev = document_scene_revision.rev + 1;
+  IF coalesce(current_setting('openmaic.suppress_stage_notify', true), '') <> 'on' THEN
+    PERFORM pg_notify('openmaic_agent_event_wakeup', json_build_object('kind', 'stage', 'stageId', v_stage_id)::text);
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION openmaic_bump_stage_revision() RETURNS trigger AS $$
+DECLARE
+  v_stage_id text;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    v_stage_id := OLD.id;
+  ELSE
+    v_stage_id := NEW.id;
+  END IF;
+  INSERT INTO document_stage_revision (stage_id, rev)
+  VALUES (v_stage_id, 1)
+  ON CONFLICT (stage_id) DO UPDATE SET rev = document_stage_revision.rev + 1;
+  IF coalesce(current_setting('openmaic.suppress_stage_notify', true), '') <> 'on' THEN
+    PERFORM pg_notify('openmaic_agent_event_wakeup', json_build_object('kind', 'stage', 'stageId', v_stage_id)::text);
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS openmaic_scene_revision_trigger ON document_scenes;
+
+CREATE TRIGGER openmaic_scene_revision_trigger
+AFTER INSERT OR UPDATE OR DELETE ON document_scenes
+FOR EACH ROW EXECUTE FUNCTION openmaic_bump_scene_revision();
+
+DROP TRIGGER IF EXISTS openmaic_stage_revision_trigger ON document_stages;
+
+CREATE TRIGGER openmaic_stage_revision_trigger
+AFTER INSERT OR UPDATE OR DELETE ON document_stages
+FOR EACH ROW EXECUTE FUNCTION openmaic_bump_stage_revision();
 `;
 
 const EXPECTED_RUNTIME_PG_SCHEMA = `
@@ -306,10 +418,9 @@ function recordingQueryable(): { statements: string[]; queryable: Queryable } {
 }
 
 function statementsOf(schema: string): string[] {
-  return schema
-    .split(';')
-    .map((statement) => statement.trim())
-    .filter((statement) => statement !== '');
+  // Same splitter the ensure functions run: plain `split(';')` would carve the
+  // dollar-quoted plpgsql trigger bodies into bogus statements.
+  return splitSqlStatements(schema);
 }
 
 const schemas = [
@@ -373,16 +484,21 @@ describe.each(schemas)('$name is a pinned contract', ({ name, actual, expected, 
   });
 
   it('keeps every statement guarded so the ensure functions stay idempotent', () => {
-    const statements = actual
-      .split(';')
-      .map((statement) => statement.trim())
-      .filter((statement) => statement !== '');
+    const statements = splitSqlStatements(actual);
 
     expect(statements.length).toBeGreaterThan(0);
     for (const statement of statements) {
+      // The splitter keeps leading `--` comment lines attached to the
+      // statement that follows them; strip them before judging the DDL.
+      const sql = statement.replace(/^(--[^\n]*\n?)+/, '').trim();
       expect(
-        /^CREATE (TABLE|INDEX|UNIQUE INDEX) IF NOT EXISTS /.test(statement) ||
-          /^ALTER TABLE [a-z_]+\s+ADD COLUMN IF NOT EXISTS /.test(statement),
+        /^CREATE (TABLE|INDEX|UNIQUE INDEX) IF NOT EXISTS /.test(sql) ||
+          /^ALTER TABLE [a-z_]+\s+ADD COLUMN IF NOT EXISTS /.test(sql) ||
+          /^CREATE OR REPLACE FUNCTION /.test(sql) ||
+          /^DROP TRIGGER IF EXISTS /.test(sql) ||
+          // CREATE TRIGGER is made idempotent by the paired DROP TRIGGER IF
+          // EXISTS that precedes it in the same schema constant.
+          /^CREATE TRIGGER /.test(sql),
         `${name} statement is not an idempotent create or additive migration: ${statement}`,
       ).toBe(true);
     }
