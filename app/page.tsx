@@ -98,7 +98,11 @@ import {
 import { useImportPptx } from '@/lib/import/use-import-pptx';
 import { InteractiveModeButton } from '@/components/generation/interactive-mode-button';
 import { ProBadge } from '@/components/workbench/ProBadge';
-import { startProSwap } from '@/lib/workbench/pro-swap';
+import { arrivedByProSwap, startProSwap } from '@/lib/workbench/pro-swap';
+import {
+  readLastWorkspaceSessionId,
+  workspaceResumeHref,
+} from '@/lib/workbench/workspace-session-memory';
 
 const log = createLogger('Home');
 
@@ -134,6 +138,10 @@ function HomePage() {
   const { t } = useI18n();
   const { theme, setTheme } = useTheme();
   const router = useRouter();
+  // Do not replay the classic hero's entrance after the route handoff already
+  // carried the lockup and composer into place.
+  const [swapped] = useState(arrivedByProSwap);
+  const heroEnter = (from: Record<string, number>) => (swapped ? false : from);
   const showVocationalTestUi = shouldShowVocationalTestUi();
   const workbenchBuildEnabled = isProWorkbenchEnabled();
   const [workbenchRuntimeEnabled, setWorkbenchRuntimeEnabled] = useState(
@@ -156,7 +164,10 @@ function HomePage() {
     };
   }, [workbenchBuildEnabled]);
   const workbenchEntryEnabled = workbenchBuildEnabled && workbenchRuntimeEnabled;
-  const enterWorkbench = () => startProSwap('/workspace', (href) => router.push(href));
+  const enterWorkbench = () => {
+    const href = workspaceResumeHref(readLastWorkspaceSessionId());
+    startProSwap(href, (next) => router.push(next));
+  };
   useEffect(() => {
     if (workbenchEntryEnabled) router.prefetch('/workspace');
   }, [router, workbenchEntryEnabled]);
@@ -1024,7 +1035,7 @@ function HomePage() {
 
       {/* ═══ Hero section: title + input (centered, wider) ═══ */}
       <motion.div
-        initial={{ opacity: 0, y: 20 }}
+        initial={heroEnter({ opacity: 0, y: 20 })}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6, ease: 'easeOut' }}
         className={cn('relative z-20 w-full max-w-[800px] flex flex-col items-center mt-[10vh]')}
@@ -1034,7 +1045,7 @@ function HomePage() {
           <motion.img
             src="/logo-horizontal.png"
             alt="OpenMAIC"
-            initial={{ opacity: 0, scale: 0.9 }}
+            initial={heroEnter({ opacity: 0, scale: 0.9 })}
             animate={{ opacity: 1, scale: 1 }}
             transition={{
               delay: 0.1,
@@ -1056,7 +1067,7 @@ function HomePage() {
 
         {/* ── Slogan ── */}
         <motion.p
-          initial={{ opacity: 0 }}
+          initial={heroEnter({ opacity: 0 })}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.25 }}
           className="text-sm text-muted-foreground/60 mb-8"
@@ -1066,7 +1077,7 @@ function HomePage() {
 
         {/* ── Unified input area ── */}
         <motion.div
-          initial={{ opacity: 0, scale: 0.97 }}
+          initial={heroEnter({ opacity: 0, scale: 0.97 })}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ delay: 0.35 }}
           className="w-full"
