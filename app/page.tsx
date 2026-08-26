@@ -90,9 +90,15 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { useDraftCache } from '@/lib/hooks/use-draft-cache';
 import { SpeechButton } from '@/components/audio/speech-button';
 import { useImportClassroom } from '@/lib/import/use-import-classroom';
-import { isPptxImportEnabled, shouldShowVocationalTestUi } from '@/lib/config/feature-flags';
+import {
+  isProWorkbenchEnabled,
+  isPptxImportEnabled,
+  shouldShowVocationalTestUi,
+} from '@/lib/config/feature-flags';
 import { useImportPptx } from '@/lib/import/use-import-pptx';
 import { InteractiveModeButton } from '@/components/generation/interactive-mode-button';
+import { ProBadge } from '@/components/workbench/ProBadge';
+import { startProSwap } from '@/lib/workbench/pro-swap';
 
 const log = createLogger('Home');
 
@@ -104,6 +110,9 @@ const INTERACTIVE_MODE_STORAGE_KEY = 'interactiveModeEnabled';
 // yet, so the flow only logs the parsed slides. Hide the entry point behind a
 // flag until it's wired end-to-end, so the UI doesn't expose a no-op button.
 const PPTX_IMPORT_ENABLED = isPptxImportEnabled();
+
+/** The configured runtime probe result, retained across client navigations. */
+let workbenchRuntimeCache: boolean | null = null;
 
 interface FormState {
   courseMaterials: SelectedCourseMaterial[];
@@ -126,6 +135,31 @@ function HomePage() {
   const { theme, setTheme } = useTheme();
   const router = useRouter();
   const showVocationalTestUi = shouldShowVocationalTestUi();
+  const workbenchBuildEnabled = isProWorkbenchEnabled();
+  const [workbenchRuntimeEnabled, setWorkbenchRuntimeEnabled] = useState(
+    workbenchRuntimeCache === true,
+  );
+  useEffect(() => {
+    if (!workbenchBuildEnabled || workbenchRuntimeCache !== null) return;
+    let cancelled = false;
+    fetch('/api/agent/runtime')
+      .then((response) => (response.ok ? response.json() : null))
+      .then((body) => {
+        workbenchRuntimeCache = body?.enabled === true;
+        if (!cancelled) setWorkbenchRuntimeEnabled(workbenchRuntimeCache);
+      })
+      .catch(() => {
+        // A failed probe keeps the entry hidden and allows a later visit to retry.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workbenchBuildEnabled]);
+  const workbenchEntryEnabled = workbenchBuildEnabled && workbenchRuntimeEnabled;
+  const enterWorkbench = () => startProSwap('/workspace', (href) => router.push(href));
+  useEffect(() => {
+    if (workbenchEntryEnabled) router.prefetch('/workspace');
+  }, [router, workbenchEntryEnabled]);
   const [form, setForm] = useState<FormState>(initialFormState);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<
@@ -996,19 +1030,29 @@ function HomePage() {
         className={cn('relative z-20 w-full max-w-[800px] flex flex-col items-center mt-[10vh]')}
       >
         {/* ── Logo ── */}
-        <motion.img
-          src="/logo-horizontal.png"
-          alt="OpenMAIC"
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{
-            delay: 0.1,
-            type: 'spring',
-            stiffness: 200,
-            damping: 20,
-          }}
-          className="h-12 md:h-16 mb-2 -ml-2 md:-ml-3"
-        />
+        <div className="relative" data-pro-morph="lockup">
+          <motion.img
+            src="/logo-horizontal.png"
+            alt="OpenMAIC"
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{
+              delay: 0.1,
+              type: 'spring',
+              stiffness: 200,
+              damping: 20,
+            }}
+            className="h-12 md:h-16 mb-2 -ml-2 md:-ml-3"
+          />
+          {workbenchEntryEnabled ? (
+            <div
+              className="absolute left-full top-0 ml-1.5 mt-[10px] md:ml-2 md:mt-[14px]"
+              data-pro-morph="badge"
+            >
+              <ProBadge active={false} onToggle={enterWorkbench} />
+            </div>
+          ) : null}
+        </div>
 
         {/* ── Slogan ── */}
         <motion.p
@@ -1027,7 +1071,10 @@ function HomePage() {
           transition={{ delay: 0.35 }}
           className="w-full"
         >
-          <div className="w-full rounded-2xl border border-border/60 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl shadow-xl shadow-black/[0.03] dark:shadow-black/20 transition-shadow focus-within:shadow-2xl focus-within:shadow-violet-500/[0.06]">
+          <div
+            data-pro-morph="composer"
+            className="w-full rounded-2xl border border-border/60 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl shadow-xl shadow-black/[0.03] dark:shadow-black/20 transition-shadow focus-within:shadow-2xl focus-within:shadow-violet-500/[0.06]"
+          >
             {/* ── Greeting + Profile + Agents ── */}
             <div className="relative z-20 flex items-start justify-between">
               <GreetingBar />
