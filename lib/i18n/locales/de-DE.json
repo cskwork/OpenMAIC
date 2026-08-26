@@ -1868,5 +1868,16 @@
     "skillsLoadFailed": "Skill 加载失败，点击重试",
     "retrySkills": "重试",
     "noSkillMatch": "没有匹配“{{query}}”的 Skill"
+  },
+  "workbench": {
+    "tool": {
+      "label": {
+        "extractMaterial": null,
+        "waitMaterials": null
+      },
+      "error": {
+        "materialExtraction": null
+      }
+    }
   }
 }

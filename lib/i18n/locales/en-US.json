@@ -1868,5 +1868,16 @@
     "skillsLoadFailed": "Skills failed to load. Click to retry",
     "retrySkills": "Retry",
     "noSkillMatch": "No Skills match “{{query}}”"
+  },
+  "workbench": {
+    "tool": {
+      "label": {
+        "extractMaterial": null,
+        "waitMaterials": null
+      },
+      "error": {
+        "materialExtraction": null
+      }
+    }
   }
 }
