@@ -225,6 +225,8 @@ function material(): AgentSessionMaterial {
     textAssetId: 'asset-1',
     rawAssetId: null,
     textChars: 42,
+    derivedFrom: null,
+    extraction: { status: 'idle' as const, attempts: 0 },
     createdAt: '2025-01-01T00:00:00.000Z',
   };
 }
