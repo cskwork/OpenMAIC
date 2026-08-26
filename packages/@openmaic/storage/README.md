@@ -88,6 +88,10 @@ a browser.
   (`validateStage` / `validateScene`) so schema drift fails loud. The outline is
   an opaque, app-owned snapshot carried alongside — persisted verbatim, neither
   validated nor migrated.
+- **Server document ownership.** `PgDocumentStore` without an owner remains the
+  historical client-owned partition (`owner_id IS NULL`). Server features bind
+  the same complete contract to a trusted identity with `store.forOwner(ownerId)`;
+  owned stages are invisible and immutable across owner boundaries.
 - **Generic over scene type.** `DocumentStore<TScene>` defaults to the DSL
   `Scene` (universal `slide` / `quiz`). An app that widens `Scene` with its own
   kinds (`interactive` / `pbl`, content the DSL does not own) parameterizes the

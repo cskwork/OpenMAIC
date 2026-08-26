@@ -56,6 +56,27 @@ describe('PgDocumentStore with PGlite', () => {
   }));
 });
 
+describe('owner-scoped PgDocumentStore contract', () => {
+  let db: PGlite;
+  let store: DocumentStore;
+
+  beforeEach(async () => {
+    db = new PGlite();
+    await db.waitReady;
+    await ensureDocumentSchema(db);
+    store = new PgDocumentStore(db, transactionOptions(db)).forOwner('anon:contract-owner');
+  });
+
+  afterEach(async () => {
+    await db.close();
+  });
+
+  runDocumentStoreContract('Postgres owner scope (PGlite)', () => ({
+    store,
+    seedStoredVersion: (stageId, version) => restamp(db, stageId, version),
+  }));
+});
+
 describe('PgDocumentStore Postgres behavior', () => {
   let db: PGlite;
   let store: PgDocumentStore;
@@ -87,6 +108,82 @@ describe('PgDocumentStore Postgres behavior', () => {
       'document_scenes',
       'document_stages',
     ]);
+  });
+
+  test('ensureDocumentSchema adds the nullable owner column to an existing stage table', async () => {
+    const legacy = new PGlite();
+    await legacy.waitReady;
+    try {
+      await legacy.query(`CREATE TABLE document_stages (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        interactive_mode BOOLEAN,
+        task_engine_mode BOOLEAN,
+        created_at DOUBLE PRECISION NOT NULL,
+        updated_at DOUBLE PRECISION NOT NULL,
+        data JSONB NOT NULL
+      )`);
+      await ensureDocumentSchema(legacy);
+      const columns = await legacy.query<{ column_name: string; is_nullable: string }>(
+        `SELECT column_name, is_nullable
+           FROM information_schema.columns
+          WHERE table_name = 'document_stages' AND column_name = 'owner_id'`,
+      );
+      expect(columns.rows).toEqual([{ column_name: 'owner_id', is_nullable: 'YES' }]);
+    } finally {
+      await legacy.close();
+    }
+  });
+
+  test('owner scopes isolate the full contract and cannot claim an existing stage id', async () => {
+    const alice = store.forOwner('anon:alice');
+    const bob = store.forOwner('anon:bob');
+    await alice.saveDocument(makeDocument('alice-stage'));
+    await bob.saveDocument(makeDocument('bob-stage'));
+
+    await expect(alice.loadDocument('bob-stage')).resolves.toBeNull();
+    await expect(bob.getScene('alice-stage', 'scene-a')).resolves.toBeNull();
+    await expect(alice.listDocuments()).resolves.toEqual([
+      expect.objectContaining({ id: 'alice-stage' }),
+    ]);
+    await expect(bob.saveDocument(makeDocument('alice-stage'))).rejects.toBeInstanceOf(
+      DocumentNotFoundError,
+    );
+
+    await bob.deleteDocument('alice-stage');
+    await expect(alice.loadDocument('alice-stage')).resolves.not.toBeNull();
+  });
+
+  test('the historical unowned path remains byte-identical beside owned documents', async () => {
+    const legacyDocument = makeDocument('legacy-stage');
+    await store.saveDocument(legacyDocument);
+    const beforeDocument = JSON.stringify(await store.loadDocument('legacy-stage'));
+    const beforeList = JSON.stringify(await store.listDocuments());
+    const beforeRows = JSON.stringify(
+      (
+        await db.query<{ data: unknown }>(
+          'SELECT data FROM document_stages WHERE id = $1 AND owner_id IS NULL',
+          ['legacy-stage'],
+        )
+      ).rows,
+    );
+
+    await store.forOwner('anon:agent').saveDocument(makeDocument('agent-stage'));
+
+    expect(JSON.stringify(await store.loadDocument('legacy-stage'))).toBe(beforeDocument);
+    expect(JSON.stringify(await store.listDocuments())).toBe(beforeList);
+    expect(
+      JSON.stringify(
+        (
+          await db.query<{ data: unknown }>(
+            'SELECT data FROM document_stages WHERE id = $1 AND owner_id IS NULL',
+            ['legacy-stage'],
+          )
+        ).rows,
+      ),
+    ).toBe(beforeRows);
+    await expect(store.loadDocument('agent-stage')).resolves.toBeNull();
   });
 
   test('requires a transaction hook at construction time', () => {
