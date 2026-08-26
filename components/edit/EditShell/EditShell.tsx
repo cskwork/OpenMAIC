@@ -28,12 +28,6 @@ interface EditShellProps {
    * is hidden, so the entire top chrome reduces to a single bar.
    */
   readonly commandTrailing?: ReactNode;
-  /**
-   * Optional right-side panel slot. Used by the MAIC Agent PoC to mount the
-   * AI sidebar. Like `leftRail`, it is a pure chrome handoff — surface code
-   * never imports it. Collapses to zero width when absent.
-   */
-  readonly rightRail?: ReactNode;
   /** Optional bottom bar (under the canvas) — used for the actions timeline. */
   readonly bottomRail?: ReactNode;
 }
@@ -55,7 +49,7 @@ const LEFT_RAIL_DELAY = CHROME_STAGGER * 2;
  *   ├──────────┬───────────────────────────────────┤
  *   │ leftRail │ Canvas / unsupported-scene        │
  *   │ (opt)    │ FloatingToolbar (when selected)   │
- *   │          │ HintRail (AI, reserved)            │
+ *   │          │ HintRail (surface hints)           │
  *   └──────────┴───────────────────────────────────┘
  *
  * Mount choreography: CommandBar drops in from top, leftRail slides in
@@ -75,7 +69,6 @@ export function EditShell({
   scene,
   leftRail,
   commandTrailing,
-  rightRail,
   bottomRail,
 }: EditShellProps) {
   const surface = sceneEditorRegistry.resolve(scene.type) ?? NOOP_SURFACE;
@@ -108,7 +101,6 @@ export function EditShell({
         history={state?.history}
         commands={state?.commands}
         trailing={commandTrailing}
-        rightRail={rightRail}
         bottomRail={bottomRail}
       >
         <SurfaceComponent />
@@ -231,7 +223,6 @@ interface FrameProps {
   readonly history?: React.ComponentProps<typeof CommandBar>['history'];
   readonly commands?: React.ComponentProps<typeof CommandBar>['commands'];
   readonly trailing?: ReactNode;
-  readonly rightRail?: ReactNode;
   readonly bottomRail?: ReactNode;
   readonly children: ReactNode;
 }
@@ -242,7 +233,6 @@ function Frame({
   history,
   commands,
   trailing,
-  rightRail,
   bottomRail,
   children,
 }: FrameProps) {
@@ -303,7 +293,6 @@ function Frame({
           </div>
         </div>
       }
-      rightSlot={rightRail ? <div className="h-full shrink-0">{rightRail}</div> : null}
       bottomSlot={bottomRail ?? null}
     />
   );
