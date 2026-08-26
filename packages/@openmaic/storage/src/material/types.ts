@@ -6,9 +6,8 @@
  * bytes are not kept on this row — they are stored through the package's
  * hash-addressed asset registry/byte store and the row records the returned
  * asset ids (`textAssetId` for the extracted markdown, `rawAssetId` for the
- * optional raw download), exactly like the reference product's `ossKey`
- * linkage. The material id (`mat_` + Crockford base32 suffix) is minted by
- * {@link createMaterialId}, mirroring the reference's id shape.
+ * optional raw download). The material id (`mat_` + Crockford base32 suffix)
+ * is minted by {@link createMaterialId}.
  *
  * Extraction is coordinated durably on source rows. Bytes continue to live in
  * the asset registry; the lifecycle only coordinates which worker may turn a
@@ -18,7 +17,7 @@ import { randomBytes } from 'node:crypto';
 
 const CROCKFORD_BASE32 = '0123456789abcdefghjkmnpqrstvwxyz';
 
-/** Allocate a private material id from 128 random bits (reference id shape). */
+/** Allocate a private material id from 128 random bits. */
 export function createMaterialId(): string {
   const bytes = randomBytes(16);
   let bits = 0;
@@ -39,10 +38,8 @@ export function createMaterialId(): string {
 }
 
 /**
- * The reference store's kind vocabulary. Only `web` is written by this slice,
- * but the CHECK keeps the full forward-compatible set so a later slice can
- * persist `source` uploads and derived extraction/transcript/media records
- * without a migration.
+ * The material kind vocabulary covers source uploads and their
+ * extraction/transcript/media derivatives without a schema migration.
  */
 export const AGENT_SESSION_MATERIAL_KINDS = [
   'source',
@@ -71,6 +68,8 @@ export interface MaterialExtractionStats {
   imageCount: number;
   truncated?: boolean;
   diagnostics?: string[];
+  durationSec?: number;
+  asrChunks?: number;
 }
 
 export interface MaterialExtractionState {
@@ -136,7 +135,17 @@ export interface CompleteMaterialExtractionInput {
   workerId: string;
   extractorVersion: string;
   stats: MaterialExtractionStats;
-  derived: CreateAgentSessionMaterialInput & { id: string; kind: 'extraction' | 'transcript' };
+  derived:
+    | (CreateAgentSessionMaterialInput & {
+        id: string;
+        kind: 'extraction' | 'transcript' | 'audio-track' | 'image';
+      })
+    | Array<
+        CreateAgentSessionMaterialInput & {
+          id: string;
+          kind: 'extraction' | 'transcript' | 'audio-track' | 'image';
+        }
+      >;
 }
 
 export interface MaterialExtractionFailureSettlement {
