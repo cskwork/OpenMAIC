@@ -19,12 +19,14 @@ import {
   createMaterialId,
   toAssetId,
   type AgentSessionMaterial,
+  type AgentSessionMeta,
   type AssetPrincipal,
   type ListAgentSessionMaterialsOptions,
 } from '@openmaic/storage';
 
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
 
+import { getAgentSessionStore } from './store';
 import type { ExtractedWebPage } from './fetch-url';
 
 interface AgentSessionMaterialStoreState {
@@ -126,6 +128,95 @@ export async function createWebMaterial(
     }
     throw error;
   }
+}
+
+/** A user-uploaded source file, persisted through the same seams as a fetch. */
+export interface CreateSourceMaterialInput {
+  /** Display name of the uploaded file (the `x-material-filename` header). */
+  filename: string;
+  /** Canonical MIME type of the uploaded bytes. */
+  mimeType: string;
+  /** The uploaded bytes. */
+  bytes: Buffer;
+}
+
+/**
+ * Persist a user-uploaded file as a session material: the raw bytes go into
+ * the asset registry under the session's own partition and the material row
+ * records the returned asset id (`rawAssetId`), mirroring
+ * {@link createWebMaterial}'s asset/metadata handoff. The kind is `source`,
+ * the same vocabulary the reference uses for uploads: source records carry no
+ * readable text by design (the agent reads extraction or image derivatives
+ * instead), so `textChars` stays 0 and only `rawAssetId` is recorded. A
+ * confirmed material-row failure removes the just-stored asset; ambiguous
+ * database outcomes are verified before cleanup, exactly like the web path.
+ */
+export async function createSourceMaterial(
+  sessionId: string,
+  input: CreateSourceMaterialInput,
+): Promise<AgentSessionMaterial> {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error('Agent runtime requires DATABASE_URL');
+  const provider = await getServerPersistenceProvider(connectionString);
+  const id = createMaterialId();
+  const body = Buffer.from(input.bytes);
+  const principal = materialPrincipal(sessionId);
+  const store = await getAgentSessionMaterialStore();
+  const assetId = await provider.assetStore.put(
+    principal,
+    new Blob([body], { type: input.mimeType }),
+    { contentType: input.mimeType },
+  );
+  try {
+    return await store.createMaterial(sessionId, {
+      id,
+      kind: 'source',
+      title: input.filename,
+      rawAssetId: assetId,
+      textChars: 0,
+    });
+  } catch (error) {
+    // Same ambiguous-commit discipline as createWebMaterial: only remove the
+    // asset when the row is confirmed absent.
+    const committed = await store.getMaterial(sessionId, id).catch(() => undefined);
+    if (committed) return committed;
+    if (committed === null) {
+      await provider.assetStore.remove(principal, assetId).catch(() => undefined);
+    }
+    throw error;
+  }
+}
+
+/**
+ * The HTTP-visible projection of one material row — the same shape the
+ * `list_materials` agent tool exposes. Asset ids stay off the wire: the
+ * registry handles are internal to the host seam, and nothing downstream of
+ * the store should depend on them.
+ */
+export function publicMaterialView(record: AgentSessionMaterial): Record<string, unknown> {
+  return {
+    materialId: record.id,
+    kind: record.kind,
+    ...(record.title ? { title: record.title } : {}),
+    ...(record.sourceUrl ? { sourceUrl: record.sourceUrl } : {}),
+    textChars: record.textChars,
+    createdAt: record.createdAt,
+  };
+}
+
+/**
+ * Resolve a session the owner may reach, or `null` — the materials routes'
+ * ownership gate. Materials are session-scoped, so an HTTP client must name
+ * the session it means; the session's own owner row is the authorization, and
+ * a foreign or missing session answers the same `null` (no existence oracle).
+ */
+export async function resolveOwnedSession(
+  sessionId: string,
+  ownerId: string,
+): Promise<AgentSessionMeta | null> {
+  const store = await getAgentSessionStore();
+  const session = await store.getSession(sessionId);
+  return session && session.ownerId === ownerId ? session : null;
 }
 
 /** Newest-first session material listing with keyset paging. */
