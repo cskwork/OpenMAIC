@@ -22,6 +22,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   randomUUID: vi.fn(() => 'runner-test-uuid'),
   getAgentSessionStore: vi.fn(),
+  getServerPersistenceProvider: vi.fn(),
   openEntryStorage: vi.fn(),
   resolveAgentDriverModel: vi.fn(),
   createCallLlmStreamFn: vi.fn(),
@@ -35,6 +36,10 @@ vi.mock('node:crypto', async (importActual) => {
 
 vi.mock('@/lib/server/agent-runtime/store', () => ({
   getAgentSessionStore: mocks.getAgentSessionStore,
+}));
+
+vi.mock('@/lib/persistence/server-provider', () => ({
+  getServerPersistenceProvider: mocks.getServerPersistenceProvider,
 }));
 
 vi.mock('@/lib/server/agent-runtime/entry-tree-storage', async (importActual) => {
@@ -231,6 +236,11 @@ beforeEach(() => {
     reservedOutputTokens: 8192,
   });
   mocks.createCallLlmStreamFn.mockReturnValue((() => {}) as never);
+  // The owner-bound document store is never touched in these runner pins
+  // (buildAgent is mocked), so a bare forOwner facade is enough.
+  mocks.getServerPersistenceProvider.mockResolvedValue({
+    documentStore: { forOwner: () => ({}) },
+  });
 });
 
 describe('write-time settlement of interrupted tool calls', () => {

@@ -1,0 +1,186 @@
+/**
+ * The stage read/patch toolset — the agent's document-level DSL surface.
+ *
+ * This slice wires the three generic stage tools (`read_stage`, `patch_stage`,
+ * `grep_stage` from `./dsl-tools`) and the stage-level CRUD they need
+ * (`create_stage`, `read_stage_outline` from `./curriculum-tools`) into the
+ * background runner. Generation, media, page-list and folder tools belong to
+ * later slices and are deliberately NOT registered here.
+ *
+ * What this layer owns:
+ *
+ *  - **Owner-scoped writes.** Every tool receives ONE store bound to the run's
+ *    session owner (`pgDocuments.forOwner(ownerId)` in `runner.ts`). The owner
+ *    never appears in a model-visible parameter; a stage owned by another
+ *    owner reads as missing and cannot be written.
+ *  - **Sequential scheduling for document writers.** `patch_stage` loads the
+ *    whole document, applies its change in memory and writes the scene back.
+ *    The agent routinely emits several writers as PARALLEL tool calls in one
+ *    turn, and then they all load the same snapshot and overwrite each other —
+ *    the last writer wins, every sibling op is lost while still reporting
+ *    success. The write set is derived from the shared
+ *    `STAGE_WRITER_TOOL_NAMES` registry (the same list that arms client-side
+ *    write ownership) and declared `executionMode: 'sequential'` to pi, so a
+ *    batch containing a writer runs entirely sequentially and reads next to a
+ *    write observe committed state.
+ *  - **The DSL compatibility prompt block.** `DSL_TOOLS_PROMPT` teaches the
+ *    model the current tool names (legacy transcripts named the retired
+ *    per-type editors) and is layered into every runner prompt by
+ *    `buildRunnerCoursePrompt` (runner-contract.ts).
+ */
+import type { AgentTool } from '@earendil-works/pi-agent-core';
+import type { DocumentStore, MaicDocument } from '@openmaic/storage';
+import type { Stage } from '@openmaic/dsl';
+
+import type { Scene } from '@/lib/types/stage';
+import { STAGE_WRITER_TOOL_NAMES } from '@/lib/agent-runtime/stage-writer-tools';
+import { buildDslCourseTools, DSL_COURSE_TOOL_NAMES } from './dsl-tools';
+import { CURRICULUM_ALLOWLIST } from './curriculum-tools';
+
+export type CourseDocument = MaicDocument<Scene, Stage>;
+export type CourseStore = DocumentStore<Scene, Stage>;
+
+/** Progress metadata emitted on the durable `checkpoint` channel after a write. */
+export interface CheckpointInfo {
+  tool: string;
+  detail: string;
+  /** The stage the checkpoint wrote to — unlocks the workbench's real-time
+   * sync for courses that were opened, not minted, by this session. */
+  stageId?: string;
+  sceneId?: string;
+  order?: number;
+  title?: string;
+  sceneType?: string;
+}
+
+export interface CourseToolDeps {
+  /** The owner-bound document store of the run's session owner. */
+  store: CourseStore;
+  /** Emitted after a successful document write (the durable `checkpoint` event). */
+  onCheckpoint: (info: CheckpointInfo) => void;
+  /** The session id, recorded on the document as the producer reference. */
+  sessionId?: string;
+}
+
+/**
+ * Every tool in this toolset that is a read-modify-write of the persisted
+ * course document: it loads the document (or one scene), applies its change in
+ * memory, and writes a whole scene or the whole document back.
+ *
+ * Derived from the shared `STAGE_WRITER_TOOL_NAMES` (the same list that arms
+ * client-side write ownership) so the scheduler and the workbench can never
+ * disagree about who writes. `rename_stage` is excluded here only because it
+ * belongs to the curriculum toolset and never runs through this toolset's
+ * scheduler.
+ */
+export const DOCUMENT_WRITING_TOOLS: ReadonlySet<string> = new Set<string>(
+  [...STAGE_WRITER_TOOL_NAMES].filter((name) => name !== 'rename_stage'),
+);
+
+/**
+ * Declare the document writers as `executionMode: 'sequential'`.
+ *
+ * None of them takes a lock: each is `load whole document → apply one op in
+ * memory → write the whole scene back`. The agent routinely emits several of
+ * them for one page as PARALLEL tool calls in a single turn, and then they all
+ * load the same snapshot and overwrite each other. The damage is silent — the
+ * last writer wins, every sibling op is lost while still reporting success, and
+ * an element added by one call is erased by a sibling whose snapshot predates
+ * it.
+ *
+ * pi is the scheduler, so the requirement is declared to pi rather than
+ * hand-rolled here: in `executeToolCalls` (pi-agent-core agent-loop.js) a batch
+ * containing ANY call to a `sequential` tool runs entirely through
+ * `executeToolCallsSequential`. That is deliberately stronger than serializing
+ * only the writers against each other — it also orders the READS in the same
+ * batch, so a `read_stage` next to an edit observes committed state instead of
+ * the pre-write snapshot, which is the other half of what made the agent loop.
+ *
+ * The cost is that a batch mixing a write with otherwise-parallel reads loses
+ * that parallelism. That is the intended trade: a lost write is not
+ * self-correcting, a slower turn is.
+ */
+export function markDocumentWritersSequential(
+  tools: AgentTool<never, never>[],
+): AgentTool<never, never>[] {
+  return tools.map((tool) => {
+    const named = tool as unknown as { name: string };
+    if (!DOCUMENT_WRITING_TOOLS.has(named.name)) return tool;
+    return { ...tool, executionMode: 'sequential' } as unknown as AgentTool<never, never>;
+  });
+}
+
+/**
+ * The stage read/patch toolset registered on the runner: the three generic DSL
+ * tools, with `patch_stage` marked sequential through the shared writer
+ * registry.
+ */
+export function buildDslCourseToolset(deps: CourseToolDeps): AgentTool<never, never>[] {
+  return markDocumentWritersSequential(buildDslCourseTools(deps));
+}
+
+/** The exact registered tool names of this slice's toolset. */
+export function buildCourseAllowlist(): ReadonlySet<string> {
+  return new Set([...DSL_COURSE_TOOL_NAMES, ...CURRICULUM_ALLOWLIST]);
+}
+
+export const DSL_TOOLS_PROMPT = [
+  'Some installed skills and older transcripts were written for earlier tool names. Translate on sight: read_scene → read_stage (path=/scenes/<order|id>); edit_slide / edit_quiz / edit_widget / edit_actions / edit_pbl → patch_stage (same JSON-pointer ops, target the scene); read_course → read_stage; patch_course → patch_stage; grep_course → grep_stage. Never call the legacy names.',
+  'The generic DSL tools replace read_scene and the per-type edit tools.',
+  'Every read_stage, patch_stage and grep_stage call requires an explicit stageId obtained from create_stage.',
+  'Example: read_stage {"stageId":"stage-...","path":"/scenes/1","detail":"source"}. Use paths "", /outline, /scenes/<1-based order|sceneId>, and /scenes/<...>/actions.',
+  'Before patching a structure you have not touched, read the stage-dsl skill and its matching reference chapter.',
+  'Always read_stage detail:"source" for the target, patch_stage with the smallest /content/... or /actions/... JSON Pointer, then read_stage again to verify.',
+  'For one targeted change inside a large HTML or long text field, use patch_stage op "str_replace" (path, oldText, newText; set replaceAll only when the anchor repeats) instead of rewriting the whole field with set.',
+  'Use grep_stage for literal stage-wide text/source search.',
+  'Start with detail:"tree" to see structure; read source only for the subtree you will edit; for long content, prefer grep_stage over paging with offset.',
+].join(' ');
+
+/** Base runner identity/environment lines, shared by every runner prompt. */
+export const COURSE_SYSTEM_PROMPT = [
+  'You are a capable assistant working in a durable background session.',
+  'Complete the user request carefully and explain the result clearly.',
+  'The conversation may pause, restart on another worker, or receive follow-up messages.',
+  'Treat earlier conversation messages as durable context.',
+  'Do not claim access to tools or data that are not present in this session.',
+  'Use ask_user only when a decision genuinely belongs to the user.',
+  'Make every question self-contained and concise.',
+  'Offer stable, unique option ids when choices are useful.',
+  'After ask_user succeeds, stop and wait for the next user message.',
+  'Do not answer your own question or invent the user decision.',
+  'If no clarification is needed, answer directly without calling a tool.',
+  'Follow later user messages as updates to the same conversation.',
+  'Be honest about uncertainty and unavailable capabilities.',
+  "Reply in the user's language unless the user requests another language.",
+].join('\n');
+
+interface CoursePromptBlocks {
+  /** Pi's native `<available_skills>` discovery block. */
+  availableSkills?: string;
+  /** Multi-stage workflow guidance (explicit stage ids and folders). */
+  curriculum?: string;
+  /** Present exactly when the web_search tool is registered. */
+  search?: string;
+  /** Policy boundary for content fetched from session-observed URLs. */
+  untrustedContent?: string;
+  /** fetch_url usage guidance (the tool is always registered). */
+  fetch?: string;
+  /** Compatibility guidance for installed legacy skills and resumed transcripts. */
+  dslTools?: string;
+}
+
+/**
+ * The agent's system prompt, assembled from the capabilities this session
+ * actually has. The DSL compatibility block is always present; every other
+ * block is included only when the corresponding capability is registered.
+ */
+export function courseSystemPrompt(blocks: CoursePromptBlocks): string {
+  const parts = [COURSE_SYSTEM_PROMPT];
+  if (blocks.availableSkills) parts.push('', blocks.availableSkills);
+  if (blocks.curriculum) parts.push('', blocks.curriculum);
+  if (blocks.search) parts.push('', blocks.search);
+  if (blocks.dslTools) parts.push('', blocks.dslTools);
+  if (blocks.fetch) parts.push('', blocks.fetch);
+  if (blocks.untrustedContent) parts.push('', blocks.untrustedContent);
+  return parts.join('\n');
+}

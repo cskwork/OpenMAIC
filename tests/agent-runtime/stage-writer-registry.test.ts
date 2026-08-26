@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { STAGE_WRITER_TOOL_NAMES, isStageWriterTool } from '@/lib/agent-runtime/stage-writer-tools';
+import { DOCUMENT_WRITING_TOOLS } from '@/lib/server/agent-runtime/course-tools';
+import { DSL_COURSE_WRITE_TOOLS } from '@/lib/server/agent-runtime/dsl-tools';
 
 /**
  * The stage-writer registry is the single source of truth for "which agent
  * tools WRITE a stage document". The cross-module consistency assertions
  * against the server scheduler (`DOCUMENT_WRITING_TOOLS`) and the per-toolset
- * writer lists live in this suite once those modules land in a later slice;
- * here the registry's own contents and the reader/writer split are pinned.
+ * writer lists live here: the scheduler set must be exactly the shared list
+ * minus `rename_stage`, and every per-toolset writer list must be contained in
+ * the shared registry.
  */
-describe('stage writer registry is the single source', () => {
+describe('stage writer registry is the single source (R6-P1-1)', () => {
   it('every registered name is recognized as a writer', () => {
     for (const name of STAGE_WRITER_TOOL_NAMES) {
       expect(isStageWriterTool(name)).toBe(true);
@@ -33,6 +36,20 @@ describe('stage writer registry is the single source', () => {
         'rename_stage',
       ].sort(),
     );
+  });
+
+  it('the server scheduler set is exactly the shared list minus rename_stage', () => {
+    const expected = new Set(
+      [...STAGE_WRITER_TOOL_NAMES].filter((name) => name !== 'rename_stage'),
+    );
+    expect(new Set(DOCUMENT_WRITING_TOOLS)).toEqual(expected);
+  });
+
+  it('every per-toolset writer list is contained in the shared registry', () => {
+    for (const name of [...DSL_COURSE_WRITE_TOOLS]) {
+      expect(isStageWriterTool(name)).toBe(true);
+    }
+    expect(isStageWriterTool('rename_stage')).toBe(true);
   });
 
   it('reader tools are NOT writers — ownership must never arm on them', () => {
