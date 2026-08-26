@@ -38,15 +38,6 @@ importers:
       '@alicloud/tea-util':
         specifier: ^1.4.11
         version: 1.4.11
-      '@assistant-ui/react':
-        specifier: ^0.14.18
-        version: 0.14.23(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(immer@11.1.4)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(use-sync-external-store@1.6.0(react@19.2.3))
-      '@assistant-ui/react-markdown':
-        specifier: ^0.14.1
-        version: 0.14.4(@assistant-ui/react@0.14.23(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(immer@11.1.4)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(use-sync-external-store@1.6.0(react@19.2.3)))(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
-      '@assistant-ui/react-streamdown':
-        specifier: ^0.3.3
-        version: 0.3.4(@assistant-ui/react@0.14.23(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(immer@11.1.4)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(use-sync-external-store@1.6.0(react@19.2.3)))(@streamdown/code@1.1.1(react@19.2.3))(@types/react@19.2.14)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       '@aws-sdk/client-s3':
         specifier: ^3.1048.0
         version: 3.1106.0
