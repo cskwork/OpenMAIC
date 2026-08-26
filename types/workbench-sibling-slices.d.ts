@@ -100,11 +100,6 @@ declare module '@/lib/workbench/session-title' {
   }): Promise<SessionRenameOutcome>;
 }
 
-declare module '@/lib/workbench/pro-swap' {
-  export function arrivedByProSwap(): boolean;
-  export function startProSwap(href: string, push: (href: string) => void): void;
-}
-
 declare module '@/lib/workbench/use-workbench-pro-edit' {
   export const useWorkbenchProEditing: () => void;
 }
@@ -176,11 +171,6 @@ declare module '@/lib/workbench/workspace-course-tabs' {
   export function writeCourseTabsMemory(tabs: WorkspaceCourseTabs): void;
 }
 
-declare module '@/lib/workbench/workspace-session-memory' {
-  export function rememberWorkspaceSession(sessionId: string): void;
-  export function forgetWorkspaceSession(sessionId: string): void;
-}
-
 declare module '@/lib/brand/brand-context' {
   export interface BrandConfig {
     productName: string;
@@ -194,14 +184,6 @@ declare module '@/lib/brand/brand-context' {
   export const useIsDesktop: () => boolean;
 }
 
-declare module '@/components/workbench/ProBadge' {
-  import type { ComponentType } from 'react';
-  export const ProBadge: ComponentType<any>;
-}
-declare module '@/components/workbench/ProLaunchPanel' {
-  import type { ComponentType } from 'react';
-  export const ProLaunchPanel: ComponentType<any>;
-}
 declare module '@/components/classroom/ClassroomSurface' {
   import type { ComponentType } from 'react';
   export const ClassroomSurface: ComponentType<any>;
