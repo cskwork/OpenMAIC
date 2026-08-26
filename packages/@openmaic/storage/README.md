@@ -88,10 +88,10 @@ a browser.
   (`validateStage` / `validateScene`) so schema drift fails loud. The outline is
   an opaque, app-owned snapshot carried alongside — persisted verbatim, neither
   validated nor migrated.
-- **Server document ownership.** `PgDocumentStore` without an owner remains the
-  historical client-owned partition (`owner_id IS NULL`). Server features bind
-  the same complete contract to a trusted identity with `store.forOwner(ownerId)`;
-  owned stages are invisible and immutable across owner boundaries.
+- **Server document ownership.** A document id is a read capability. Binding a
+  `PgDocumentStore` with `store.forOwner(ownerId)` filters listings and protects
+  writes while leaving direct reads addressable by id. Deployments that need
+  stronger lifecycle rules can add an ownership metadata decorator.
 - **Owner-scoped folders.** An owner-bound `PgDocumentStore` also implements
   `DocumentFolderStore`: folders are durable entities, so empty folders are
   representable, while `folder_id` membership on stage rows makes filtered

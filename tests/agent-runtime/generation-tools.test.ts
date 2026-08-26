@@ -82,6 +82,7 @@ function find(tools: AgentTool<never, never>[], name: string) {
 function deps(store: CourseStore, extra: Record<string, unknown> = {}) {
   return {
     store,
+    stageAccess: async () => ({ kind: 'owned' as const }),
     sessionId: 'session-a',
     onCheckpoint: vi.fn(),
     synthesizeTts: vi.fn(async () => ({

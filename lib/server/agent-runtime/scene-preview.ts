@@ -20,6 +20,12 @@ const Params = Type.Object({
 
 export interface ScenePreviewDeps {
   store: CourseStore;
+  /** Fail-closed owner probe for the previewed stage. */
+  stageAccess: (
+    stageId: string,
+  ) => Promise<{ kind: 'owned' | 'missing' | 'foreign' | 'tombstoned' }>;
+  /** The session owner; rides the render request as the trusted client id. */
+  ownerId: string;
   renderService?: ReturnType<typeof resolveRenderServiceUrl>;
   fetchPreview?: typeof proxyFetch;
 }
@@ -42,9 +48,15 @@ export function buildScenePreviewTools(deps: ScenePreviewDeps): AgentTool<never,
       description: 'Render one persisted page to PNG for visual inspection.',
       parameters: Params,
       async execute(_callId, params, signal) {
+        if (signal?.aborted) return failure(params.sceneId, 'operation aborted');
+        const access = await deps.stageAccess(params.stageId);
+        if (signal?.aborted) return failure(params.sceneId, 'operation aborted');
+        if (access.kind !== 'owned') {
+          return failure(params.sceneId, 'course not found or not owned by this session user');
+        }
         const doc = await deps.store.loadDocument(params.stageId);
         const scene = doc?.scenes.find((item) => item.id === params.sceneId);
-        if (!doc || !scene) return failure(params.sceneId, 'page not found');
+        if (!doc || !scene) return failure(params.sceneId, 'page not found in this session course');
         const viewport = {
           width: params.viewport?.width ?? 1280,
           height: params.viewport?.height ?? 720,
@@ -53,7 +65,10 @@ export function buildScenePreviewTools(deps: ScenePreviewDeps): AgentTool<never,
         try {
           const response = await (deps.fetchPreview ?? proxyFetch)(`${service.url}/preview`, {
             method: 'POST',
-            headers: { 'content-type': 'application/json' },
+            headers: {
+              'content-type': 'application/json',
+              'x-openmaic-client': deps.ownerId,
+            },
             body: JSON.stringify({
               version: 1,
               scene,

@@ -33,17 +33,26 @@ export function Stage({
 }) {
   const { mode, setMode, scenes, currentSceneId, generatingOutlines } = useStageStore();
   const currentScene = useStageStore((s) => s.getCurrentScene());
+  // Editing is owner-only (the reference's classroom access fields). `isOwner`
+  // is true and `readOnly` is false by default — the upstream single-user
+  // assumption — so this gate is a no-op unless the stage-meta sidecar
+  // answered that the viewer neither owns nor bookmarked this course.
+  const isOwner = useStageStore((s) => s.isOwner);
+  const readOnly = useStageStore((s) => s.readOnly);
+  const canEditOwnedStage = isOwner && !readOnly;
 
   // Predicate for "can the user enter Pro mode for the current scene?".
   // Single source of truth feeds the Header's Pro Switch state and the
   // auto-exit effect below; keeping them in lock-step prevents an
   // edit-mode entry that would immediately auto-exit.
-  const isEditable = isCurrentSceneEditable({
-    currentSceneId,
-    sceneCount: scenes.length,
-    generatingOutlineCount: generatingOutlines.length,
-    hasCurrentScene: !!currentScene,
-  });
+  const isEditable =
+    canEditOwnedStage &&
+    isCurrentSceneEditable({
+      currentSceneId,
+      sceneCount: scenes.length,
+      generatingOutlineCount: generatingOutlines.length,
+      hasCurrentScene: !!currentScene,
+    });
 
   const playbackRef = useRef<PlaybackChromeRootHandle>(null);
 

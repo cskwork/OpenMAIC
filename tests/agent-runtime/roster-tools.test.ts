@@ -26,6 +26,7 @@ import {
   type CourseDocument,
   type CourseStore,
 } from '@/lib/server/agent-runtime/roster-tools';
+import { withOwnerStageAuthorization } from '@/lib/server/agent-runtime/course-tools';
 
 const mocks = vi.hoisted(() => ({
   enabledServerTTSProviderIds: vi.fn(),
@@ -443,6 +444,44 @@ describe('roster abort handling', () => {
     ).rejects.toThrow('aborted');
     const doc = await store.loadDocument('stage-test');
     expect(doc?.stage?.generatedAgentConfigs).toBeUndefined();
+  });
+});
+
+describe('roster owner gate (reference semantics)', () => {
+  it('refuses a foreign stage on set_roster before any store IO', async () => {
+    mocks.enabledServerTTSProviderIds.mockReturnValue([]);
+    mocks.resolveTTSApiKey.mockReturnValue('sk-test');
+    const store = makeStore(makeDoc());
+    const save = vi.spyOn(store as unknown as { saveDocument(): Promise<void> }, 'saveDocument');
+    const tools = withOwnerStageAuthorization(buildRosterTools({ store, onCheckpoint: () => {} }), {
+      stageAccess: async () => ({ kind: 'foreign' as const }),
+    });
+    const set = tools.find((candidate) => candidate.name === 'set_roster');
+    if (!set) throw new Error('set_roster not registered');
+
+    const result = (await set.execute('call-1', {
+      stageId: 'stage-foreign',
+      agents: [llmAgent({}), llmAgent({ role: 'student' })],
+    } as never)) as ToolResultShape;
+    expect(result).toMatchObject({
+      isError: true,
+      details: { refused: true, stageId: 'stage-foreign' },
+    });
+    expect(result.content[0].text).toContain('does not belong to this session user');
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('list_voices (no stage target) passes through the owner gate untouched', async () => {
+    const tools = withOwnerStageAuthorization(
+      buildRosterTools({ store: makeStore(makeDoc()), onCheckpoint: () => {} }),
+      {
+        stageAccess: async () => ({ kind: 'foreign' as const }),
+      },
+    );
+    const list = tools.find((candidate) => candidate.name === 'list_voices');
+    if (!list) throw new Error('list_voices not registered');
+    const result = (await list.execute('call-1', {} as never)) as ToolResultShape;
+    expect(result.isError).toBeUndefined();
   });
 });
 
