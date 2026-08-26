@@ -38,19 +38,19 @@
 
 ## OpenMAIC 1.0.0 — Build courses with an agent
 
-OpenMAIC 1.0.0 introduces the foundation for an agentic course-building workflow. Alongside the classic one-click classroom generator, an opt-in Pro workbench can plan a curriculum, create and revise course pages, work from uploaded or fetched materials, and keep long-running work recoverable.
+OpenMAIC 1.0.0 introduces an agentic course-building workflow. Alongside the classic one-click classroom generator, an opt-in Pro workbench can plan a curriculum, create and revise course pages, work from uploaded or fetched materials, and keep long-running work recoverable.
 
 ### What's new in 1.0.0
 
-- **Agent workbench and durable sessions** — A conversational workbench surface drives PostgreSQL-backed agent sessions with leases, heartbeats, crash resume, cancellation, and follow-up steering. The runtime ships with 20 built-in course-design and editing skills, plus owner-scoped skills that users can create and revise.
+- **Agent workbench and durable sessions** — Enter Pro mode from the home page, then work in a three-pane workspace with a collapsible folders/conversations rail, chat, and tabbed course classrooms. The home and workspace controls switch between classic and Pro modes, while PostgreSQL-backed agent sessions provide leases, heartbeats, crash resume, cancellation, and follow-up steering. The runtime ships with 20 built-in course-design and editing skills, plus owner-scoped skills that users can create and revise.
 - **End-to-end course tools** — The agent can plan multi-lesson curricula; create folders and courses; read and atomically patch the stage DSL; generate, duplicate, reorder, and preview pages; edit decks and narration; import `.pptx` slides while preserving their layout; generate images and videos; and manage classroom rosters and voices. Voice registration is exposed only when a configured adapter supports cloning.
-- **Session materials with explicit trust boundaries** — Uploads move through a durable extraction lifecycle for documents, audio, and video. `fetch_url` accepts only URLs already introduced by the user or web search, then applies strict SSRF checks and stores extracted content as a session material.
+- **Session materials with explicit trust boundaries** — The material upload API validates and persists supported files before documents, audio, and video move through a durable extraction lifecycle. Audio/video extraction can use a configured cloud provider or the optional local ffmpeg/ffprobe provider with server-side ASR. `fetch_url` accepts only URLs already introduced by the user or web search, then applies strict SSRF checks and stores extracted content as a session material.
 - **Provider-neutral server execution** — Server routes resolve image, video, ASR, TTS, search, and LLM configuration without sending provider credentials to the browser. Uniform `<CAP>_<PREFIX>_ENABLED=false` switches can force off served media and search capabilities, startup validation warns about bad model configuration, and unresolved model routes fail loudly instead of guessing a vendor.
-- **Fresh, isolated editing** — A revision manifest and freshness stream let the workbench detect course changes and batch-refetch changed scene IDs. Stage, session, material, folder, and user-skill operations are scoped to a stable anonymous owner so unrelated visitors cannot see or mutate one another's work.
+- **Fresh, capability-aware editing** — PostgreSQL triggers maintain monotonic per-stage and per-scene revision counters; freshness events and manifests let the workbench batch-refetch only changed scenes. Stage reads use the stage ID as a sharing capability, while writes remain owner-only. Folder routes and per-viewer stage metadata cover organization, publishing, bookmarks, and generation-complete state; sessions, materials, folders, and user skills remain scoped to a stable owner identity.
 - **Pluggable persistence** — `@openmaic/storage` supplies document, learner-runtime, KV, asset, agent-session, material, and user-skill stores. The default remains a no-database browser deployment; HTTP and PostgreSQL backends add server persistence, with PostgreSQL or S3-backed asset bytes.
 
 > [!IMPORTANT]
-> **Pro mode is opt-in.** Enable the agent runtime with `OPENMAIC_AGENT_RUNTIME_ENABLED=true` and a non-empty `DATABASE_URL`. Set `NEXT_PUBLIC_PERSISTENCE=1` when the browser should use server-backed persistence, and explicitly route `maic-agent-driver` in `MODEL_ROUTES`. Leave these settings unset and OpenMAIC keeps the existing browser-only experience.
+> **Pro mode is opt-in.** Build with `NEXT_PUBLIC_PRO_WORKBENCH_ENABLED=true`, enable the agent runtime with `OPENMAIC_AGENT_RUNTIME_ENABLED=true` and a non-empty `DATABASE_URL`, and explicitly route `maic-agent-driver` in `MODEL_ROUTES`. Set `NEXT_PUBLIC_PERSISTENCE=1` when the classic browser surface should also use server-backed persistence. Leave the Pro/runtime settings unset and OpenMAIC keeps the existing browser-only experience.
 
 
 ## 🗞️ News
@@ -434,12 +434,14 @@ behavior.
 
 ### Optional: Agent workbench and runtime
 
-The Pro workbench foundation consists of the conversational workbench UI,
-`/api/agent/*` control-plane routes, and an in-process session runner. It is off
-by default. Enable the server runtime with the same PostgreSQL connection used
-by server-backed persistence:
+The Pro workbench is a usable course-building surface entered from the home
+page. Its collapsible navigation rail, conversation pane, and tabbed classroom
+pane share `/api/agent/*` control-plane routes and an in-process session runner.
+It is off by default. Enable its build-time entry point and the server runtime
+with the same PostgreSQL connection used by server-backed persistence:
 
 ```env
+NEXT_PUBLIC_PRO_WORKBENCH_ENABLED=true
 OPENMAIC_AGENT_RUNTIME_ENABLED=true
 DATABASE_URL=postgres://openmaic:openmaic-dev@postgres:5432/openmaic
 MODEL_ROUTES='{"maic-agent-driver":{"model":"openai:gpt-5.5","api":"openai-completions"}}'
@@ -521,6 +523,12 @@ Its durable sessions can be resumed after a worker restart, accept follow-up
 instructions while running, and stream a replayable event history to the chat
 surface.
 
+Open it from the Pro control on the home page. The workspace combines a
+transient, collapsible folders/conversations rail with a chat pane and a
+classroom pane whose open courses stay in tabs. Workspace controls return to
+classic mode, and either entry remains gated by the public workbench flag plus
+the configured server runtime.
+
 The agent works through explicit, validated tools rather than editing opaque
 blobs:
 
@@ -537,6 +545,14 @@ Twenty built-in skills cover curriculum planning, deep research, interactive,
 lecture, workshop, vocational, and other teaching styles, slide/stage craft,
 PPTX import, editing, and style reuse. User-authored skills are stored per owner
 and can be created, read, and patched through the same runtime.
+
+The server-backed workbench also exposes owner-scoped folder routes and a
+per-viewer stage metadata sidecar for ownership, publication, bookmarks, and
+generation-complete state. A stage ID acts as the capability for reading a
+non-deleted course, but stage mutations remain restricted to its owner. The
+material upload contract stores supported source bytes before lease-fenced
+document or media extraction records derived text and images; media extraction
+can select AliDocMind or the optional local ffmpeg/ffprobe provider.
 
 ### Pluggable Storage
 
@@ -828,7 +844,7 @@ Optional config in `~/.openclaw/openclaw.json`:
 - **Speech Recognition** — Talk to your AI teacher using your microphone
 - **Web Search** — Agents search the web for up-to-date information during class
 - **Provider controls** — Server-side capability discovery, model resolution, force-off switches, and fail-loud routing keep deployments explicit
-- **Course freshness** — Revision manifests, freshness events, and targeted scene fetches keep workbench views synchronized
+- **Course freshness** — Database-triggered per-scene revision counters, freshness events, and targeted scene fetches keep workbench views synchronized
 - **i18n** — Interface supports 12 locales across 11 languages: Simplified Chinese, Traditional Chinese, English, Japanese, Korean, Russian, Arabic, Portuguese (Brazil), Spanish (Mexico), French, Vietnamese, and German
 - **Dark Mode** — Easy on the eyes for late-night study sessions
 
