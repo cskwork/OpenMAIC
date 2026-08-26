@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  isAgentRuntimeConfigured,
+  isAgentRuntimeEnabled,
   isEditorRendererEnabled,
   isMaicEditorEnabled,
   isPlaybackRendererEnabled,
@@ -14,6 +16,44 @@ import {
 } from '@/lib/config/feature-flags';
 
 const FLAG = 'NEXT_PUBLIC_MAIC_EDITOR_ENABLED';
+
+describe('agent runtime configuration predicate', () => {
+  const ENV_KEYS = ['OPENMAIC_AGENT_RUNTIME_ENABLED', 'DATABASE_URL'] as const;
+  const originals = new Map<string, string | undefined>();
+
+  beforeEach(() => {
+    for (const key of ENV_KEYS) {
+      originals.set(key, process.env[key]);
+      delete process.env[key];
+    }
+  });
+
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      const original = originals.get(key);
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+    }
+    originals.clear();
+  });
+
+  it.each([
+    ['the flag is off with no DATABASE_URL', undefined, undefined, false, false],
+    ['the flag is off with DATABASE_URL set', undefined, 'postgres://runtime', false, false],
+    ['the flag is on with no DATABASE_URL', 'true', undefined, true, false],
+    ['the flag is on with a blank DATABASE_URL', 'true', '   ', true, false],
+    ['the flag is on with DATABASE_URL set', 'true', 'postgres://runtime', true, true],
+  ])(
+    '%s: enabled = %s, configured = %s',
+    (_case, runtimeFlag, databaseUrl, enabled, configured) => {
+      if (runtimeFlag !== undefined) process.env.OPENMAIC_AGENT_RUNTIME_ENABLED = runtimeFlag;
+      if (databaseUrl !== undefined) process.env.DATABASE_URL = databaseUrl;
+
+      expect(isAgentRuntimeEnabled()).toBe(enabled);
+      expect(isAgentRuntimeConfigured()).toBe(configured);
+    },
+  );
+});
 
 describe('isMaicEditorEnabled', () => {
   let original: string | undefined;

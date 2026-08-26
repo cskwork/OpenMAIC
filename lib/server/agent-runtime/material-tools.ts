@@ -3,9 +3,7 @@
  * product's lib/server/agent-runtime/material-tools.ts, as the READ surface
  * over the session material store. `fetch_url` (the write side) was ported
  * earlier and stays in fetch-url.ts; `use_material_media` (media promotion)
- * and `extract_material` / `wait_for_materials` (the live extraction-lease
- * queue) are later slices, so only `list_materials`, `read_material`, and
- * `search_material` are built here.
+ * plus the durable extraction lifecycle for uploaded source materials.
  *
  * The row carries no text: the extracted markdown lives in the host's
  * hash-addressed asset registry under a per-session principal, and the row
@@ -30,6 +28,7 @@ import {
   getSessionMaterial,
   listSessionMaterials,
   resolveSessionMaterialText,
+  getAgentSessionMaterialStore,
 } from './session-materials';
 
 const TEXT_WINDOW_CHARS = 8000;
@@ -40,6 +39,9 @@ const MAX_SEARCH_HITS_TOTAL = 30;
 const MAX_SEARCH_CHARS_PER_EXEC = 1_000_000;
 const SEARCH_SCAN_CHUNK_CHARS = 16_384;
 const SEARCH_TIME_BUDGET_MS = 100;
+const DEFAULT_MATERIAL_WAIT_SECONDS = 60;
+const MAX_MATERIAL_WAIT_SECONDS = 300;
+const MATERIAL_WAIT_POLL_MS = 1_000;
 
 const LIST_MATERIALS_SCHEMA = Type.Object({});
 const READ_MATERIAL_SCHEMA = Type.Object({
@@ -58,6 +60,25 @@ const SEARCH_MATERIAL_SCHEMA = Type.Object({
     Type.String({ description: 'Optionally restrict the search to one visible mat_ id.' }),
   ),
 });
+const EXTRACT_MATERIAL_SCHEMA = Type.Object({
+  materialId: Type.String({ description: 'The source mat_ id returned by list_materials.' }),
+});
+const WAIT_FOR_MATERIALS_SCHEMA = Type.Object({
+  materialIds: Type.Optional(
+    Type.Array(Type.String(), {
+      minItems: 1,
+      uniqueItems: true,
+      description: 'Wait only for these session-visible mat_ ids.',
+    }),
+  ),
+  timeoutSec: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      maximum: MAX_MATERIAL_WAIT_SECONDS,
+      description: `Maximum wait in seconds (default ${DEFAULT_MATERIAL_WAIT_SECONDS}, maximum ${MAX_MATERIAL_WAIT_SECONDS}).`,
+    }),
+  ),
+});
 
 export interface MaterialToolDependencies {
   sessionId: string;
@@ -67,6 +88,10 @@ export interface MaterialToolDependencies {
   getMaterial?: (sessionId: string, materialId: string) => Promise<AgentSessionMaterial | null>;
   /** Test seam; defaults to asset-registry text resolution scoped to the session. */
   readTextAsset?: (sessionId: string, textAssetId: string) => Promise<Buffer | null>;
+  enqueueExtraction?: (sessionId: string, materialId: string) => Promise<boolean>;
+  waitPollIntervalMs?: number;
+  waitForDelay?: (milliseconds: number) => Promise<void>;
+  now?: () => number;
 }
 
 /** The fail-closed answer: a referenced id does not exist or is not visible here. */
@@ -157,6 +182,20 @@ function publicMaterialOf(record: AgentSessionMaterial) {
     ...(record.sourceUrl ? { sourceUrl: record.sourceUrl } : {}),
     textChars: record.textChars,
     createdAt: record.createdAt,
+    extraction: record.extraction,
+  };
+}
+
+function extractionStateOf(record: AgentSessionMaterial) {
+  const state = {
+    materialId: record.id,
+    status: record.extraction.status,
+    ...(record.extraction.error ? { reason: record.extraction.error } : {}),
+    ...(record.extraction.stats ? { stats: record.extraction.stats } : {}),
+  };
+  return {
+    content: [{ type: 'text' as const, text: JSON.stringify(state, null, 2) }],
+    details: state,
   };
 }
 
@@ -234,6 +273,15 @@ export function buildMaterialTools(deps: MaterialToolDependencies): AgentTool<ne
   const listMaterials = deps.listMaterials ?? listSessionMaterials;
   const getMaterial = deps.getMaterial ?? getSessionMaterial;
   const readTextAsset = deps.readTextAsset ?? resolveSessionMaterialText;
+  const enqueueExtraction =
+    deps.enqueueExtraction ??
+    (async (sessionId: string, materialId: string) =>
+      (await getAgentSessionMaterialStore()).enqueueExtraction(sessionId, materialId));
+  const waitForDelay =
+    deps.waitForDelay ??
+    ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  const waitPollIntervalMs = deps.waitPollIntervalMs ?? MATERIAL_WAIT_POLL_MS;
+  const now = deps.now ?? Date.now;
 
   const listTool: AgentTool<typeof LIST_MATERIALS_SCHEMA> = {
     name: 'list_materials',
@@ -463,12 +511,101 @@ export function buildMaterialTools(deps: MaterialToolDependencies): AgentTool<ne
     },
   };
 
-  return [listTool, readTool, searchTool] as unknown as AgentTool<never, never>[];
+  const extractTool: AgentTool<typeof EXTRACT_MATERIAL_SCHEMA> = {
+    name: 'extract_material',
+    label: 'Extract source material',
+    description:
+      'Idempotently queue one session-visible source material for extraction. Completed and in-progress materials keep their current state; failed materials start an explicit retry.',
+    parameters: EXTRACT_MATERIAL_SCHEMA,
+    execute: async (_callId, params, signal) => {
+      throwIfAborted(signal);
+      let record = await getMaterial(deps.sessionId, params.materialId);
+      throwIfAborted(signal);
+      if (!record) return notFoundResult();
+      if (record.kind !== 'source')
+        throw new Error('extract_material only accepts source materials.');
+      if (record.extraction.status === 'idle' || record.extraction.status === 'failed') {
+        const changed = await enqueueExtraction(deps.sessionId, record.id);
+        throwIfAborted(signal);
+        if (changed) {
+          record = {
+            ...record,
+            extraction: { status: 'pending', attempts: 0 },
+          };
+        } else {
+          record = (await getMaterial(deps.sessionId, params.materialId)) ?? record;
+        }
+      }
+      return extractionStateOf(record);
+    },
+  };
+
+  const waitTool: AgentTool<typeof WAIT_FOR_MATERIALS_SCHEMA> = {
+    name: 'wait_for_materials',
+    label: 'Wait for material extraction',
+    description:
+      'Wait until selected session-visible materials finish extraction (done or failed), or until the bounded timeout. Omit materialIds to wait for every source material in the session.',
+    parameters: WAIT_FOR_MATERIALS_SCHEMA,
+    execute: async (_callId, params, signal) => {
+      const timeoutMs = (params.timeoutSec ?? DEFAULT_MATERIAL_WAIT_SECONDS) * 1_000;
+      const deadline = now() + timeoutMs;
+      for (;;) {
+        throwIfAborted(signal);
+        let records: AgentSessionMaterial[];
+        if (params.materialIds) {
+          const resolved = await Promise.all(
+            params.materialIds.map((materialId) => getMaterial(deps.sessionId, materialId)),
+          );
+          if (resolved.some((record) => record === null)) return notFoundResult();
+          records = resolved as AgentSessionMaterial[];
+        } else {
+          records = (await listMaterials(deps.sessionId)).filter(
+            (record) => record.kind === 'source',
+          );
+        }
+        const materials = records.map((record) => ({
+          materialId: record.id,
+          status: record.extraction.status,
+          ...(record.extraction.status === 'idle'
+            ? { nextAction: 'Call extract_material before waiting or reading.' }
+            : {}),
+          ...(record.extraction.error ? { reason: record.extraction.error } : {}),
+          ...(record.extraction.stats ? { stats: record.extraction.stats } : {}),
+        }));
+        const requiresExtraction = materials.some((material) => material.status === 'idle');
+        const complete = materials.every(
+          (material) => material.status === 'done' || material.status === 'failed',
+        );
+        const remainingMs = deadline - now();
+        const timedOut = !complete && remainingMs <= 0;
+        if (requiresExtraction || complete || timedOut) {
+          const summary = {
+            complete,
+            timedOut,
+            ...(requiresExtraction ? { requiresExtraction: true } : {}),
+            materials,
+          };
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(summary, null, 2) }],
+            details: summary,
+          };
+        }
+        await waitForDelay(Math.min(waitPollIntervalMs, remainingMs));
+      }
+    },
+  };
+
+  return [listTool, readTool, searchTool, extractTool, waitTool] as unknown as AgentTool<
+    never,
+    never
+  >[];
 }
 
 export const MATERIAL_TOOL_NAMES = [
   'list_materials',
   'read_material',
   'search_material',
+  'extract_material',
+  'wait_for_materials',
   'fetch_url',
 ] as const;

@@ -88,6 +88,11 @@ describe.skipIf(!contractUrl)('PgAgentSessionMaterialStore with PostgreSQL 16', 
       createMaterial: materialStore.createMaterial.bind(materialStore),
       listMaterials: materialStore.listMaterials.bind(materialStore),
       getMaterial: materialStore.getMaterial.bind(materialStore),
+      enqueueExtraction: materialStore.enqueueExtraction.bind(materialStore),
+      claimNextExtraction: materialStore.claimNextExtraction.bind(materialStore),
+      heartbeatExtraction: materialStore.heartbeatExtraction.bind(materialStore),
+      completeExtraction: materialStore.completeExtraction.bind(materialStore),
+      settleExtractionFailure: materialStore.settleExtractionFailure.bind(materialStore),
     };
   });
 

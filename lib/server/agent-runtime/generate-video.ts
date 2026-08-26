@@ -1,0 +1,324 @@
+import type { AgentTool } from '@earendil-works/pi-agent-core';
+import type { AssetStore } from '@openmaic/storage';
+import { Type, type Static } from 'typebox';
+
+import { generateVideo, normalizeVideoOptions, VIDEO_PROVIDERS } from '@/lib/media/video-providers';
+import type {
+  VideoGenerationConfig,
+  VideoGenerationOptions,
+  VideoGenerationResult,
+  VideoProviderId,
+} from '@/lib/media/types';
+import {
+  getServerVideoProviders,
+  resolveVideoApiKey,
+  resolveVideoBaseUrl,
+  resolveVideoModel,
+} from '@/lib/server/provider-config';
+import { recordGenerationUsage } from '@/lib/server/usage-storage';
+import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
+import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
+import { readResponseBodyWithLimit } from '@/lib/server/bounded-download';
+import type { CourseToolDeps } from './course-tools';
+import { COURSE_STAGE_ID_DESCRIPTION } from './course-stage';
+
+export const GENERATE_VIDEO_TOOL_NAME = 'generate_video';
+// The longest provider poll budget is 15 minutes.
+export const GENERATE_VIDEO_TIMEOUT_MS = 15 * 60_000;
+export const MAX_GENERATED_VIDEO_BYTES = 200 * 1024 * 1024;
+
+export const GenerateVideoParams = Type.Object({
+  stageId: Type.String({ description: COURSE_STAGE_ID_DESCRIPTION }),
+  prompt: Type.String({
+    minLength: 1,
+    description: 'A concrete visual and motion description of the video to create.',
+  }),
+  aspectRatio: Type.Optional(
+    Type.Union(
+      [
+        Type.Literal('16:9'),
+        Type.Literal('4:3'),
+        Type.Literal('1:1'),
+        Type.Literal('9:16'),
+        Type.Literal('3:4'),
+        Type.Literal('21:9'),
+      ],
+      { description: 'Requested output aspect ratio. Provider capabilities may normalize it.' },
+    ),
+  ),
+  durationSec: Type.Optional(
+    Type.Number({
+      minimum: 1,
+      description: 'Requested duration in seconds. Provider capabilities may normalize it.',
+    }),
+  ),
+  resolution: Type.Optional(
+    Type.Union([Type.Literal('480p'), Type.Literal('720p'), Type.Literal('1080p')], {
+      description: 'Requested output resolution. Provider capabilities may normalize it.',
+    }),
+  ),
+});
+
+type GenerateConfiguredVideo = (
+  config: VideoGenerationConfig,
+  options: VideoGenerationOptions,
+) => Promise<VideoGenerationResult>;
+
+interface PersistVideoInput {
+  result: VideoGenerationResult;
+  stageId: string;
+  signal: AbortSignal;
+}
+
+interface PersistedVideo {
+  src: string;
+  mime: string;
+}
+
+type PersistGeneratedVideo = (input: PersistVideoInput) => Promise<PersistedVideo>;
+
+export interface GenerateVideoToolDeps extends Pick<CourseToolDeps, 'sessionId' | 'abortSignal'> {
+  getConfiguredVideoProviders?: () => Record<string, unknown>;
+  resolveVideoProviderConfig?: (providerId: VideoProviderId) => VideoGenerationConfig;
+  generateConfiguredVideo?: GenerateConfiguredVideo;
+  persistGeneratedVideo?: PersistGeneratedVideo;
+  timeoutMs?: number;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error('aborted');
+}
+
+function combineSignals(primary: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return primary ? AbortSignal.any([primary, timeout]) : timeout;
+}
+
+function isTimeout(signal: AbortSignal): boolean {
+  return (
+    signal.aborted && signal.reason instanceof DOMException && signal.reason.name === 'TimeoutError'
+  );
+}
+
+async function awaitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  throwIfAborted(signal);
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason ?? new Error('aborted'));
+    signal.addEventListener('abort', abort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+  });
+}
+
+async function fetchGeneratedVideo(url: string, signal: AbortSignal): Promise<Response> {
+  const maxRedirects = 5;
+  let currentUrl = url;
+  for (let hop = 0; ; hop++) {
+    throwIfAborted(signal);
+    const ssrfError = await validateUrlForSSRF(currentUrl);
+    throwIfAborted(signal);
+    if (ssrfError) throw new Error(ssrfError);
+
+    const response = await fetch(currentUrl, { redirect: 'manual', signal });
+    if (response.status < 300 || response.status >= 400) return response;
+
+    const location = response.headers.get('location');
+    if (!location) throw new Error('Video download redirect has no Location header');
+    if (hop >= maxRedirects) throw new Error('Video download exceeded 5 redirects');
+    currentUrl = new URL(location, currentUrl).href;
+  }
+}
+
+/**
+ * Video providers return hosted URLs only, including download URLs that may
+ * expire. Materialize those bytes through the shared asset registry (the same
+ * neutral surface `use_material_media` and `generate_image` use); the returned
+ * id is the stable `src` the agent writes into a slide video element.
+ */
+export async function defaultPersistGeneratedVideo(
+  input: PersistVideoInput,
+  assetStore?: Pick<AssetStore, 'put'>,
+): Promise<PersistedVideo> {
+  throwIfAborted(input.signal);
+  let parsed: URL;
+  try {
+    parsed = new URL(input.result.url);
+  } catch {
+    throw new Error('Video provider returned an invalid URL');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`Video provider returned an unsupported URL protocol: ${parsed.protocol}`);
+  }
+
+  const response = await fetchGeneratedVideo(input.result.url, input.signal);
+  if (!response.ok) throw new Error(`Generated video download failed: HTTP ${response.status}`);
+  const mime = response.headers.get('content-type')?.split(';')[0]?.trim() || 'video/mp4';
+  if (!mime.startsWith('video/')) {
+    throw new Error(`Generated video download returned unexpected content type: ${mime}`);
+  }
+  const bytes = await readResponseBodyWithLimit(response, { maxBytes: MAX_GENERATED_VIDEO_BYTES });
+  throwIfAborted(input.signal);
+
+  const store =
+    assetStore ?? (await getServerPersistenceProvider(process.env.DATABASE_URL ?? '')).assetStore;
+  // Copy into a fresh ArrayBuffer-backed view: BlobPart requires an
+  // ArrayBuffer-backed typed array, and a caller-supplied Buffer may be backed
+  // by a pool or SharedArrayBuffer.
+  const src = await store.put(
+    { key: 'shared' },
+    new Blob([new Uint8Array(bytes)], { type: mime }),
+    { contentType: mime },
+  );
+  throwIfAborted(input.signal);
+  if (!src) throw new Error('Video storage returned an empty URL');
+  return { src, mime };
+}
+
+function errorResult(text: string, details: Record<string, unknown> = {}) {
+  return {
+    content: [{ type: 'text' as const, text }],
+    details,
+    isError: true,
+  };
+}
+
+function configuredProviderIds(configured: Record<string, unknown>): VideoProviderId[] {
+  return Object.keys(configured).filter((id): id is VideoProviderId => id in VIDEO_PROVIDERS);
+}
+
+/** Server-side config resolution; the server `_MODELS` pin is authoritative. */
+function defaultResolveVideoProviderConfig(providerId: VideoProviderId): VideoGenerationConfig {
+  return {
+    providerId,
+    apiKey: resolveVideoApiKey(providerId),
+    baseUrl: resolveVideoBaseUrl(providerId),
+    model: resolveVideoModel(providerId),
+  };
+}
+
+/** Capability gate used before the tool enters a session's registered toolset. */
+export function hasConfiguredVideoGeneration(deps: Partial<GenerateVideoToolDeps> = {}): boolean {
+  const getConfigured = deps.getConfiguredVideoProviders ?? getServerVideoProviders;
+  const resolveConfig = deps.resolveVideoProviderConfig ?? defaultResolveVideoProviderConfig;
+  return configuredProviderIds(getConfigured()).some((providerId) => {
+    const provider = VIDEO_PROVIDERS[providerId];
+    const config = resolveConfig(providerId);
+    return !provider.requiresApiKey || !!config.apiKey;
+  });
+}
+
+export function buildGenerateVideoTool(
+  deps: GenerateVideoToolDeps,
+): AgentTool<typeof GenerateVideoParams, unknown> {
+  const getConfigured = deps.getConfiguredVideoProviders ?? getServerVideoProviders;
+  const resolveConfig = deps.resolveVideoProviderConfig ?? defaultResolveVideoProviderConfig;
+  const callProvider = deps.generateConfiguredVideo ?? generateVideo;
+  const persist = deps.persistGeneratedVideo ?? defaultPersistGeneratedVideo;
+
+  return {
+    name: GENERATE_VIDEO_TOOL_NAME,
+    label: 'Generate video',
+    description:
+      'Create a new video from a prompt, persist its provider-hosted result for the explicitly targeted course, and return a renderable src, mime and duration. Use the returned src in a later patch_stage set of an existing video element, or add a video element with patch_stage. Video elements also support autoplay and poster. This tool never edits a page itself.',
+    parameters: GenerateVideoParams,
+    async execute(_toolCallId, params: Static<typeof GenerateVideoParams>, signal) {
+      const callerSignal = signal ?? deps.abortSignal;
+      throwIfAborted(callerSignal);
+
+      const prompt = params.prompt.trim();
+      if (!prompt) return errorResult('Video generation failed: prompt must not be empty.');
+      const stageId = params.stageId;
+
+      const configured = getConfigured();
+      const providerId = configuredProviderIds(configured).find((id) => {
+        const provider = VIDEO_PROVIDERS[id];
+        return !provider.requiresApiKey || !!resolveConfig(id).apiKey;
+      });
+      if (!providerId) {
+        return errorResult(
+          'Video generation is unavailable: no server video provider is configured.',
+          {
+            stageId,
+            sessionId: deps.sessionId,
+            provider: null,
+          },
+        );
+      }
+
+      const providerConfig = resolveConfig(providerId);
+      const model = providerConfig.model;
+      // Same fail-loud discipline as generate_image: the server-side model
+      // resolution is authoritative, and a provider that expects an explicit
+      // model errors here instead of silently defaulting.
+      if ((VIDEO_PROVIDERS[providerId]?.models?.length ?? 0) > 0 && !model) {
+        return errorResult(
+          `Video generation is unavailable: no model is configured for provider ${providerId} on this server.`,
+          { stageId, provider: providerId, reason: 'missing-model' },
+        );
+      }
+      const normalized = normalizeVideoOptions(providerId, {
+        prompt,
+        ...(params.aspectRatio ? { aspectRatio: params.aspectRatio } : {}),
+        ...(params.durationSec ? { duration: params.durationSec } : {}),
+        ...(params.resolution ? { resolution: params.resolution } : {}),
+        stageId,
+      });
+      const timeoutMs = deps.timeoutMs ?? GENERATE_VIDEO_TIMEOUT_MS;
+      const ioSignal = combineSignals(callerSignal, timeoutMs);
+
+      try {
+        const result = await awaitWithSignal(
+          callProvider(providerConfig, { ...normalized, signal: ioSignal }),
+          ioSignal,
+        );
+        throwIfAborted(ioSignal);
+        const stored = await persist({
+          result,
+          stageId,
+          signal: ioSignal,
+        });
+        throwIfAborted(ioSignal);
+
+        void recordGenerationUsage({
+          kind: 'video',
+          unit: 'second',
+          providerId,
+          modelId: model,
+          quantity: result.duration,
+        });
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Generated video: src=${stored.src}, mime=${stored.mime}, duration=${result.duration}s. Use this src with patch_stage set or add a video element; set autoplay and poster as needed.`,
+            },
+          ],
+          details: {
+            src: stored.src,
+            mime: stored.mime,
+            ...(result.duration ? { durationSec: result.duration } : {}),
+            provider: providerId,
+          },
+        };
+      } catch (error) {
+        if (callerSignal?.aborted) throw new Error('aborted');
+        if (isTimeout(ioSignal)) {
+          return errorResult(
+            `Video generation timed out after ${timeoutMs}ms (provider ${providerId}).`,
+            {
+              stageId,
+              provider: providerId,
+              reason: 'timeout',
+            },
+          );
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        return errorResult(`Video generation failed with provider ${providerId}: ${message}`, {
+          stageId,
+          provider: providerId,
+          reason: 'provider-or-storage-error',
+        });
+      }
+    },
+  };
+}

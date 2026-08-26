@@ -40,6 +40,18 @@ import { buildGenerationTools, GENERATION_TOOL_NAMES } from './generation-tools'
 import { buildCourseAudioAndDeckTools, COURSE_AUDIO_DECK_TOOL_NAMES } from './course-edit/tools';
 import { buildMaterialMediaTool, MATERIAL_MEDIA_TOOL_NAME } from './material-media';
 import { buildScenePreviewTools, RENDER_SCENE_PREVIEW_TOOL_NAME } from './scene-preview';
+import { buildImportPptxTool, IMPORT_PPTX_TOOL_NAME, type ImportPptxToolDeps } from './import-pptx';
+import {
+  buildGenerateImageTool,
+  GENERATE_IMAGE_TOOL_NAME,
+  type GenerateImageToolDeps,
+} from './generate-image';
+import {
+  buildGenerateVideoTool,
+  GENERATE_VIDEO_TOOL_NAME,
+  hasConfiguredVideoGeneration,
+  type GenerateVideoToolDeps,
+} from './generate-video';
 import type { SceneTtsInput, SceneTtsSummary } from './scene-tts';
 
 export type CourseDocument = MaicDocument<Scene, Stage>;
@@ -121,24 +133,40 @@ export function markDocumentWritersSequential(
 /**
  * The stage read/patch toolset registered on the runner: the three generic DSL
  * tools, with `patch_stage` marked sequential through the shared writer
- * registry.
+ * registry. `import_pptx` and `generate_image` are always part of the course
+ * toolset; `generate_video` is capability-registered and exists exactly when a
+ * video provider is configured, so the model never sees a tool that can only
+ * throw.
  */
-export function buildDslCourseToolset(deps: CourseToolDeps): AgentTool<never, never>[] {
+export function buildDslCourseToolset(
+  deps: CourseToolDeps &
+    Partial<ImportPptxToolDeps> &
+    Partial<GenerateImageToolDeps> &
+    Partial<GenerateVideoToolDeps>,
+): AgentTool<never, never>[] {
   const tools = [
     ...buildGenerationTools(deps),
+    buildImportPptxTool(deps),
+    buildGenerateImageTool(deps),
+    ...(hasConfiguredVideoGeneration(deps) ? [buildGenerateVideoTool(deps)] : []),
     ...buildCourseAudioAndDeckTools(deps),
     ...(deps.sessionId ? [buildMaterialMediaTool({ sessionId: deps.sessionId })] : []),
     ...buildScenePreviewTools({ store: deps.store }),
     ...buildDslCourseTools(deps),
-  ];
+  ] as unknown as AgentTool<never, never>[];
   return markDocumentWritersSequential(tools);
 }
 
 /** The exact registered tool names of this slice's toolset. */
-export function buildCourseAllowlist(): ReadonlySet<string> {
+export function buildCourseAllowlist(
+  videoDeps: Partial<GenerateVideoToolDeps> = {},
+): ReadonlySet<string> {
   return new Set([
     ...DSL_COURSE_TOOL_NAMES,
     ...GENERATION_TOOL_NAMES,
+    IMPORT_PPTX_TOOL_NAME,
+    GENERATE_IMAGE_TOOL_NAME,
+    ...(hasConfiguredVideoGeneration(videoDeps) ? [GENERATE_VIDEO_TOOL_NAME] : []),
     ...COURSE_AUDIO_DECK_TOOL_NAMES,
     MATERIAL_MEDIA_TOOL_NAME,
     RENDER_SCENE_PREVIEW_TOOL_NAME,
@@ -158,6 +186,9 @@ export const DSL_TOOLS_PROMPT = [
   'Start with detail:"tree" to see structure; read source only for the subtree you will edit; for long content, prefer grep_stage over paging with offset.',
   'Use generate_scene once per page: each successful call is a durable checkpoint. Use list_scenes to inspect persisted pages and generate_actions to rebuild playback actions for one page.',
   'Use duplicate_scene to copy a layout, edit_deck for retitle/insert/delete/reorder, and generate_tts after narration edits. Page-list writers keep the saved outline numbering aligned with the real pages.',
+  'To fill an uploaded .pptx into an existing stage as appended pages with its original slides kept, read the `pptx-import` skill first (it carries the import-and-repair sequence) and use `import_pptx` after `create_stage` — never extract_material + generate_scene for a layout-preserving import. The stage keeps its own title; the PPT is content, not the classroom identity.',
+  'When the page needs a new visual rather than an existing URL, call `generate_image` first, then apply its returned `src` with `patch_stage` set or add an image element; generate_image never edits the page.',
+  'When a NEW page needs visuals, obtain every real src first by reusing material or calling generate_image / generate_video, then pass each image src with its description and dimensions in `generate_scene.media` so the content model sees the media while composing the page; media generation tools never edit the page.',
   'Use use_material_media before placing session image, video, or audio bytes into a page. Use render_scene_preview selectively to inspect a persisted page when the render capability is available.',
 ].join(' ');
 

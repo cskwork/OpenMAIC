@@ -4,14 +4,14 @@ import { NextRequest } from 'next/server';
 import type { AgentSessionMaterial } from '@openmaic/storage';
 
 const mocks = vi.hoisted(() => ({
-  runtimeEnabled: true,
+  runtimeConfigured: true,
   resolveRequestOwnerId: vi.fn(),
   resolveOwnedSession: vi.fn(),
   getSessionMaterial: vi.fn(),
 }));
 
 vi.mock('@/lib/config/feature-flags', () => ({
-  isAgentRuntimeEnabled: () => mocks.runtimeEnabled,
+  isAgentRuntimeConfigured: () => mocks.runtimeConfigured,
 }));
 vi.mock('@/lib/server/agent-runtime/owner', () => ({
   resolveRequestOwnerId: mocks.resolveRequestOwnerId,
@@ -41,6 +41,8 @@ function material(overrides: Partial<AgentSessionMaterial> = {}): AgentSessionMa
     textAssetId: 'asset-1',
     rawAssetId: null,
     textChars: 42,
+    derivedFrom: null,
+    extraction: { status: 'done', attempts: 0 },
     createdAt: '2025-01-01T00:00:00.000Z',
     ...overrides,
   };
@@ -53,7 +55,7 @@ function call(id = MATERIAL_ID) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.runtimeEnabled = true;
+  mocks.runtimeConfigured = true;
   mocks.resolveRequestOwnerId.mockReturnValue('owner-1');
   mocks.resolveOwnedSession.mockResolvedValue({ id: SESSION_ID, ownerId: 'owner-1' });
   mocks.getSessionMaterial.mockResolvedValue(material());
@@ -70,6 +72,7 @@ describe('GET /api/materials/[id]', () => {
         title: 'Example',
         sourceUrl: 'https://example.com/doc',
         textChars: 42,
+        extraction: { status: 'done', attempts: 0 },
         createdAt: '2025-01-01T00:00:00.000Z',
       },
     });
@@ -108,8 +111,8 @@ describe('GET /api/materials/[id]', () => {
     expect(response.headers.get('set-cookie')).toContain('anonymous_id=anon-2');
   });
 
-  it('answers 404 when the agent runtime is disabled', async () => {
-    mocks.runtimeEnabled = false;
+  it('answers 404 when the agent runtime is not configured', async () => {
+    mocks.runtimeConfigured = false;
     expect((await call()).status).toBe(404);
   });
 });

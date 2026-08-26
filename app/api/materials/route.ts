@@ -13,15 +13,17 @@
  * no second byte path is invented. Uploaded files are `source` materials:
  * they carry no readable text by design, matching the agent tools' contract.
  *
- * The runtime flag gates the family: the workbench is agent-runtime
+ * The configured runtime gates the family: the workbench is agent-runtime
  * territory, and there is deliberately no separate materials flag in this
- * repo (the runtime probe route documents that).
+ * repo (the runtime probe route documents that). A runtime that is off OR
+ * enabled without a DATABASE_URL answers the same plain 404 as the stages
+ * routes — never a 500 from a store that cannot connect.
  */
 import { basename } from 'node:path';
 
 import type { NextRequest } from 'next/server';
 
-import { isAgentRuntimeEnabled } from '@/lib/config/feature-flags';
+import { isAgentRuntimeConfigured } from '@/lib/config/feature-flags';
 import { apiError } from '@/lib/server/api-response';
 import {
   createSourceMaterial,
@@ -88,7 +90,7 @@ function parseLimit(raw: string | null): { limit?: number } | { invalid: true } 
 // GET /api/materials?sessionId=&limit=&before= — list one owned session's
 // materials, newest first, keyset-paged.
 export async function GET(req: NextRequest) {
-  if (!isAgentRuntimeEnabled()) return new Response('Not found', { status: 404 });
+  if (!isAgentRuntimeConfigured()) return new Response('Not found', { status: 404 });
 
   const url = new URL(req.url);
   const sessionId = url.searchParams.get('sessionId')?.trim();
@@ -123,7 +125,7 @@ export async function GET(req: NextRequest) {
 // session. The raw bytes ride the body; `content-type` is the MIME type and
 // `x-material-filename` the display name.
 export async function POST(req: NextRequest) {
-  if (!isAgentRuntimeEnabled()) return new Response('Not found', { status: 404 });
+  if (!isAgentRuntimeConfigured()) return new Response('Not found', { status: 404 });
 
   const sessionId = new URL(req.url).searchParams.get('sessionId')?.trim();
   if (!sessionId) return apiError('MISSING_REQUIRED_FIELD', 400, 'sessionId is required');

@@ -23,8 +23,14 @@ import {
   type AgentSessionMaterial,
   type AgentSessionMaterialKind,
   type AgentSessionMaterialStore,
+  type ClaimedMaterialExtraction,
+  type ClaimMaterialExtractionOptions,
+  type CompleteMaterialExtractionInput,
   type CreateAgentSessionMaterialInput,
   type ListAgentSessionMaterialsOptions,
+  MAX_MATERIAL_EXTRACTION_RETRIES,
+  type MaterialExtractionFailureSettlement,
+  type MaterialExtractionState,
 } from './types.js';
 
 export type { QueryResult, Queryable } from '../runtime/pg.js';
@@ -56,14 +62,30 @@ CREATE TABLE IF NOT EXISTS agent_session_materials (
   text_asset_id TEXT,
   raw_asset_id  TEXT,
   text_chars    INTEGER NOT NULL DEFAULT 0,
+  derived_from  TEXT REFERENCES agent_session_materials(id) ON DELETE CASCADE,
+  extraction_status TEXT NOT NULL DEFAULT 'done',
+  extraction_attempts INTEGER NOT NULL DEFAULT 0,
+  extraction_error TEXT,
+  extraction_stats JSONB,
+  extractor_version TEXT,
+  extraction_lease_worker_id TEXT,
+  extraction_lease_worker_pid INTEGER,
+  extraction_lease_heartbeat_at BIGINT,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT agent_session_materials_kind_known CHECK (kind IN
     ('source','extraction','transcript','audio-track','image','web')),
   CONSTRAINT agent_session_materials_text_chars_nonnegative CHECK (text_chars >= 0)
+  ,CONSTRAINT agent_session_materials_extraction_status_known CHECK (extraction_status IN
+    ('idle','pending','running','done','failed'))
+  ,CONSTRAINT agent_session_materials_extraction_attempts_nonnegative CHECK (extraction_attempts >= 0)
 );
 
 CREATE INDEX IF NOT EXISTS agent_session_materials_session_created_idx
   ON agent_session_materials (session_id, created_at);
+
+CREATE INDEX IF NOT EXISTS agent_session_materials_extraction_queue_idx
+  ON agent_session_materials (created_at)
+  WHERE kind = 'source' AND extraction_status IN ('pending','running');
 `;
 
 function quoteIdentifier(identifier: string): string {
@@ -90,7 +112,10 @@ function schemaFor(names: AgentSessionMaterialTableNames): string {
   const s = quoteIdentifier(names.materials);
   const kindCheck = `${names.materials}_kind_known`;
   const charsCheck = `${names.materials}_text_chars_nonnegative`;
+  const statusCheck = `${names.materials}_extraction_status_known`;
+  const attemptsCheck = `${names.materials}_extraction_attempts_nonnegative`;
   const sessionIdx = `${names.materials}_session_created_idx`;
+  const queueIdx = `${names.materials}_extraction_queue_idx`;
   // Constraint/index names are rewritten first (they embed the default table
   // name), then the table-name occurrences themselves; only the CREATE TABLE
   // statement gets the quoted identifier.
@@ -99,7 +124,10 @@ function schemaFor(names: AgentSessionMaterialTableNames): string {
     kindCheck,
   )
     .replaceAll('agent_session_materials_text_chars_nonnegative', charsCheck)
+    .replaceAll('agent_session_materials_extraction_status_known', statusCheck)
+    .replaceAll('agent_session_materials_extraction_attempts_nonnegative', attemptsCheck)
     .replaceAll('agent_session_materials_session_created_idx', sessionIdx)
+    .replaceAll('agent_session_materials_extraction_queue_idx', queueIdx)
     .replaceAll('agent_session_materials', names.materials)
     .replaceAll(`CREATE TABLE IF NOT EXISTS ${names.materials}`, `CREATE TABLE IF NOT EXISTS ${s}`);
 }
@@ -125,6 +153,15 @@ interface MaterialRow extends Record<string, unknown> {
   text_asset_id: string | null;
   raw_asset_id: string | null;
   text_chars: number | string;
+  derived_from: string | null;
+  extraction_status: MaterialExtractionState['status'];
+  extraction_attempts: number | string;
+  extraction_error: string | null;
+  extraction_stats: MaterialExtractionState['stats'] | null;
+  extractor_version: string | null;
+  extraction_lease_worker_id: string | null;
+  extraction_lease_worker_pid: number | string | null;
+  extraction_lease_heartbeat_at: number | string | null;
   created_at: Date | string;
 }
 
@@ -138,6 +175,14 @@ function mapRow(row: MaterialRow): AgentSessionMaterial {
     textAssetId: row.text_asset_id,
     rawAssetId: row.raw_asset_id,
     textChars: Number(row.text_chars),
+    derivedFrom: row.derived_from,
+    extraction: {
+      status: row.extraction_status,
+      attempts: Number(row.extraction_attempts),
+      ...(row.extraction_error ? { error: row.extraction_error } : {}),
+      ...(row.extraction_stats ? { stats: row.extraction_stats } : {}),
+      ...(row.extractor_version ? { extractorVersion: row.extractor_version } : {}),
+    },
     createdAt: (row.created_at instanceof Date
       ? row.created_at
       : new Date(row.created_at)
@@ -204,8 +249,9 @@ export class PgAgentSessionMaterialStore implements AgentSessionMaterialStore {
       const { rows } = await this.queryable.query<MaterialRow>(
         `INSERT INTO ${this.table}
            (id, session_id, kind, title, source_url, text_asset_id, raw_asset_id,
-            text_chars, created_at)
-         SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
+            text_chars, derived_from, extraction_status, created_at)
+         SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9,
+                CASE WHEN $3 = 'source' THEN 'idle' ELSE 'done' END, $10
          FROM agent_sessions AS session
          WHERE session.id = $2 AND session.deleted_at IS NULL
          RETURNING *`,
@@ -218,6 +264,7 @@ export class PgAgentSessionMaterialStore implements AgentSessionMaterialStore {
           input.textAssetId ?? null,
           input.rawAssetId ?? null,
           textChars,
+          input.derivedFrom ?? null,
           createdAt,
         ],
       );
@@ -279,5 +326,139 @@ export class PgAgentSessionMaterialStore implements AgentSessionMaterialStore {
       [materialId, sessionId],
     );
     return result.rows[0] ? mapRow(result.rows[0]) : null;
+  }
+
+  async enqueueExtraction(sessionId: string, materialId: string): Promise<boolean> {
+    const result = await this.queryable.query(
+      `UPDATE ${this.table} AS material
+          SET extraction_status = 'pending', extraction_attempts = 0,
+              extraction_error = NULL, extraction_stats = NULL,
+              extractor_version = NULL, extraction_lease_worker_id = NULL,
+              extraction_lease_worker_pid = NULL, extraction_lease_heartbeat_at = NULL
+         FROM agent_sessions AS session
+        WHERE material.id = $1 AND material.session_id = $2
+          AND material.session_id = session.id AND session.deleted_at IS NULL
+          AND material.kind = 'source'
+          AND material.extraction_status IN ('idle', 'failed')
+        RETURNING material.id`,
+      [materialId, sessionId],
+    );
+    return result.rows.length > 0;
+  }
+
+  async claimNextExtraction(
+    workerId: string,
+    options: ClaimMaterialExtractionOptions,
+  ): Promise<ClaimedMaterialExtraction | null> {
+    if (!Number.isSafeInteger(options.leaseTtlMs) || options.leaseTtlMs <= 0) {
+      throw new AgentSessionMaterialError('invalid_input', 'leaseTtlMs must be a positive integer');
+    }
+    const now = this.now().getTime();
+    const staleBefore = now - options.leaseTtlMs;
+    const result = await this.queryable.query<MaterialRow>(
+      `WITH candidate AS (
+         SELECT material.id
+           FROM ${this.table} AS material
+           INNER JOIN agent_sessions AS session ON session.id = material.session_id
+          WHERE session.deleted_at IS NULL AND material.kind = 'source'
+            AND (material.extraction_status = 'pending'
+              OR (material.extraction_status = 'running'
+                AND material.extraction_lease_heartbeat_at < $1
+                AND (material.extraction_lease_worker_id IS NULL
+                  OR material.extraction_lease_worker_id <> $2)))
+          ORDER BY material.created_at, material.id
+          FOR UPDATE OF material SKIP LOCKED LIMIT 1
+       )
+       UPDATE ${this.table} AS material
+          SET extraction_status = 'running', extraction_error = NULL,
+              extraction_lease_worker_id = $2, extraction_lease_worker_pid = $3,
+              extraction_lease_heartbeat_at = $4
+         FROM candidate
+        WHERE material.id = candidate.id
+          AND (material.extraction_status = 'pending'
+            OR (material.extraction_status = 'running'
+              AND material.extraction_lease_heartbeat_at < $1
+              AND (material.extraction_lease_worker_id IS NULL
+                OR material.extraction_lease_worker_id <> $2)))
+        RETURNING material.*`,
+      [staleBefore, workerId, process.pid, now],
+    );
+    if (!result.rows[0]) return null;
+    return { material: mapRow(result.rows[0]), workerId, heartbeatAt: now };
+  }
+
+  async heartbeatExtraction(materialId: string, workerId: string): Promise<boolean> {
+    const result = await this.queryable.query(
+      `UPDATE ${this.table}
+          SET extraction_lease_heartbeat_at = $3
+        WHERE id = $1 AND extraction_status = 'running'
+          AND extraction_lease_worker_id = $2 RETURNING id`,
+      [materialId, workerId, this.now().getTime()],
+    );
+    return result.rows.length > 0;
+  }
+
+  async completeExtraction(input: CompleteMaterialExtractionInput): Promise<boolean> {
+    const derived = input.derived;
+    const result = await this.queryable.query(
+      `WITH source AS (
+         UPDATE ${this.table}
+            SET extraction_status = 'done', extraction_stats = $3::jsonb,
+                extractor_version = $4, extraction_error = NULL,
+                extraction_lease_worker_id = NULL, extraction_lease_worker_pid = NULL,
+                extraction_lease_heartbeat_at = NULL
+          WHERE id = $1 AND kind = 'source' AND extraction_status = 'running'
+            AND extraction_lease_worker_id = $2
+          RETURNING session_id
+       ), removed AS (
+         DELETE FROM ${this.table} WHERE derived_from = $1
+       )
+       INSERT INTO ${this.table}
+         (id, session_id, kind, title, text_asset_id, raw_asset_id, text_chars,
+          derived_from, extraction_status, extraction_stats, extractor_version, created_at)
+       SELECT $5, source.session_id, $6, $7, $8, $9, $10, $1, 'done', $3::jsonb, $4, $11
+         FROM source
+       RETURNING id`,
+      [
+        input.sourceId,
+        input.workerId,
+        JSON.stringify(input.stats),
+        input.extractorVersion,
+        derived.id,
+        derived.kind,
+        derived.title ?? null,
+        derived.textAssetId ?? null,
+        derived.rawAssetId ?? null,
+        derived.textChars ?? 0,
+        this.now(),
+      ],
+    );
+    return result.rows.length > 0;
+  }
+
+  async settleExtractionFailure(
+    materialId: string,
+    workerId: string,
+    error: string,
+    retryable: boolean,
+  ): Promise<MaterialExtractionFailureSettlement | null> {
+    const result = await this.queryable.query<
+      MaterialExtractionFailureSettlement & Record<string, unknown>
+    >(
+      `UPDATE ${this.table}
+          SET extraction_status = CASE
+                WHEN $4 AND extraction_attempts < $5 THEN 'pending' ELSE 'failed' END,
+              extraction_attempts = CASE
+                WHEN $4 AND extraction_attempts < $5 THEN extraction_attempts + 1
+                ELSE extraction_attempts END,
+              extraction_error = $3, extraction_stats = NULL,
+              extraction_lease_worker_id = NULL, extraction_lease_worker_pid = NULL,
+              extraction_lease_heartbeat_at = NULL
+        WHERE id = $1 AND extraction_status = 'running'
+          AND extraction_lease_worker_id = $2
+        RETURNING extraction_status AS status, extraction_attempts AS attempts`,
+      [materialId, workerId, error.slice(0, 4000), retryable, MAX_MATERIAL_EXTRACTION_RETRIES],
+    );
+    return result.rows[0] ?? null;
   }
 }
