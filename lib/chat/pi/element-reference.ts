@@ -536,7 +536,11 @@ function shortContentHint(evidence: SlideElementEvidence): string {
         .filter(Boolean)
         .join(' ');
     case 'chart':
-      return [...evidence.content.labels, ...evidence.content.legends].join(' ');
+      return JSON.stringify({
+        series: evidence.content.series,
+        labels: evidence.content.labels,
+        legends: evidence.content.legends,
+      });
     case 'code':
       return evidence.content.lines.map((line) => line.content).join(' ');
     case 'line':

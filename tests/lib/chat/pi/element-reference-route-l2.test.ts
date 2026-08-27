@@ -271,4 +271,39 @@ describe('PPT element reference Route → Director → real call_agent L2', () =
     expect(stream).toContain('"type":"done"');
     expect(stream).not.toContain('"type":"error"');
   }, 15_000);
+
+  it('routes Chart series values through the Director summary and real Child evidence', async () => {
+    installAgentShell('The values decrease from 180 to 88.');
+    const { POST } = await import('@/app/api/chat/pi/route');
+    const chart = {
+      id: 'chart-1',
+      type: 'chart',
+      chartType: 'line',
+      data: {
+        labels: ['第1次', '第2次', '第3次', '第4次'],
+        legends: ['测量值'],
+        series: [[180, 145, 112, 88]],
+      },
+      themeColors: ['#7c3aed'],
+      left: 10,
+      top: 20,
+      width: 640,
+      height: 320,
+      rotate: 0,
+    };
+    const body = makeBody();
+    body.messages[0].parts[0].text = 'What are the four values and the overall trend?';
+    body.storeState.scenes[0].content.canvas.elements[0] = chart as never;
+    body.elementReference.elementId = chart.id;
+
+    const response = await POST(makeRequest(body));
+    const stream = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(mocks.callAgentExecutions).toBe(1);
+    expect(mocks.directorPrompts.join('\n')).toContain('180');
+    expect(mocks.directorPrompts.join('\n')).toContain('88');
+    expect(mocks.legacyChildPrompts.join('\n')).toContain('"series":[[180,145,112,88]]');
+    expect(stream).toContain('The values decrease from 180 to 88.');
+  }, 15_000);
 });
