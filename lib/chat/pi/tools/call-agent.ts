@@ -38,6 +38,7 @@ import {
 import { buildNativeSpotlightTool } from './native-spotlight';
 import { buildNativeWhiteboardTools } from './native-whiteboard';
 import type { WhiteboardRuntimeService } from '@/lib/whiteboard/runtime/store';
+import type { SlideElementEvidence } from '../element-reference';
 
 const CallAgentParams = Type.Object({
   agentId: Type.String({
@@ -554,6 +555,7 @@ export function buildCallAgentTool(opts: {
   isUserCued?: () => boolean;
   isSessionClosed?: () => boolean;
   takeSceneEvidence?: () => RuntimeEvidenceAttachment<DirectorSceneEvidenceMetadata[]> | undefined;
+  takeElementReferenceEvidence?: () => RuntimeEvidenceAttachment<SlideElementEvidence> | undefined;
 }): AgentTool<typeof CallAgentParams> {
   // Loop-guard (model-agnostic): an empty/errored child turn used to bypass onAgentDone,
   // so the completed-turn count never advanced and the maxAgentTurns guard was defeated — a model
@@ -663,6 +665,26 @@ export function buildCallAgentTool(opts: {
       // Take it before starting/building the child so any downstream failure cannot
       // leak the packet to a later agent.
       const sceneEvidence = opts.takeSceneEvidence?.();
+      const elementReferenceEvidence = opts.takeElementReferenceEvidence?.();
+      const capturedScene = opts.requestStartCurrentScene;
+      const hasMatchingCurrentSceneEvidence = Boolean(
+        capturedScene &&
+        capturedScene.sceneType === 'slide' &&
+        sceneEvidence?.metadata.some(
+          (metadata) =>
+            metadata.sceneId === capturedScene.sceneId && metadata.sceneType === 'slide',
+        ),
+      );
+      const spotlightElementIds = hasMatchingCurrentSceneEvidence
+        ? [...(capturedScene?.elementIds ?? [])]
+        : [];
+      if (
+        capturedScene &&
+        elementReferenceEvidence?.metadata.sceneId === capturedScene.sceneId &&
+        !spotlightElementIds.includes(elementReferenceEvidence.metadata.elementId)
+      ) {
+        spotlightElementIds.push(elementReferenceEvidence.metadata.elementId);
+      }
 
       const childAbort = new AbortController();
       const abortFromRequest = () => childAbort.abort(opts.abortSignal.reason);
@@ -710,18 +732,6 @@ export function buildCallAgentTool(opts: {
 
       const childRuntimeMode = opts.childRuntimeMode ?? 'legacy';
       if (childRuntimeMode === 'native') {
-        const capturedScene = opts.requestStartCurrentScene;
-        const hasMatchingCurrentSceneEvidence = Boolean(
-          capturedScene &&
-          capturedScene.sceneType === 'slide' &&
-          sceneEvidence?.metadata.some(
-            (metadata) =>
-              metadata.sceneId === capturedScene.sceneId && metadata.sceneType === 'slide',
-          ),
-        );
-        const spotlightElementIds = hasMatchingCurrentSceneEvidence
-          ? (capturedScene?.elementIds ?? [])
-          : [];
         const spotlightTargets = new Set(spotlightElementIds);
         const spotlightEnabled = Boolean(
           opts.enableNativeChildSpotlight &&
@@ -776,6 +786,7 @@ export function buildCallAgentTool(opts: {
             ),
             prompt: buildNativeChildTurnPrompt(params.instruction, agent.role, {
               scene: sceneEvidence?.content,
+              element: elementReferenceEvidence?.content,
               spotlightElementIds,
             }),
             tools: nativeTools,
@@ -805,6 +816,7 @@ export function buildCallAgentTool(opts: {
 
         const finalText = nativeResult.visibleOutput.trim();
         const isCompleted = nativeResult.status === 'completed';
+        const groundedChildSucceeded = isCompleted && finalText.length > 0;
         consecutiveEmptyTurns = isCompleted ? 0 : consecutiveEmptyTurns + 1;
         await opts.send({ type: 'agent_end', data: { messageId, agentId: agent.id } });
         opts.onAgentDone({
@@ -831,6 +843,12 @@ export function buildCallAgentTool(opts: {
             availableToolNames,
             nativeChildRun: nativeResult,
             ...(sceneEvidence ? { sceneEvidence: sceneEvidence.metadata } : {}),
+            ...(elementReferenceEvidence
+              ? {
+                  elementReferenceEvidence: elementReferenceEvidence.metadata,
+                  groundedChildSucceeded,
+                }
+              : {}),
           },
           ...(isCompleted ? {} : { isError: true }),
         };
@@ -849,6 +867,9 @@ export function buildCallAgentTool(opts: {
         maxActionsPerAgent: opts.maxActionsPerAgent,
         enableWhiteboardTools: opts.enableWhiteboardTools,
         whiteboardState: getLegacyWhiteboardState(),
+        ...(elementReferenceEvidence
+          ? { authorizedSpotlightElementIds: new Set(spotlightElementIds) }
+          : {}),
       });
       const childToolsByName = new Map(childTools.map((tool) => [tool.name, tool]));
 
@@ -896,6 +917,7 @@ export function buildCallAgentTool(opts: {
         await child.prompt(
           buildChildTurnPrompt(params.instruction, agent.role, {
             scene: sceneEvidence?.content,
+            element: elementReferenceEvidence?.content,
           }),
         );
         await child.waitForIdle();
@@ -944,6 +966,7 @@ export function buildCallAgentTool(opts: {
         fallbackText && !isLikelyRawStructuredFallback(fallbackText) ? fallbackText : '';
       const finalText = emittedText || safeFallback;
       const hasVisibleText = finalText.length > 0;
+      const groundedChildSucceeded = !childErrored && hasVisibleText;
       if (finalText && !emittedText) {
         await opts.send({ type: 'text_delta', data: { content: finalText, messageId } });
       }
@@ -972,7 +995,14 @@ export function buildCallAgentTool(opts: {
           text: finalText,
           actionWarnings,
           ...(sceneEvidence ? { sceneEvidence: sceneEvidence.metadata } : {}),
+          ...(elementReferenceEvidence
+            ? {
+                elementReferenceEvidence: elementReferenceEvidence.metadata,
+                groundedChildSucceeded,
+              }
+            : {}),
         },
+        ...(elementReferenceEvidence && !groundedChildSucceeded ? { isError: true } : {}),
       };
     },
   };
