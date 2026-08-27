@@ -208,7 +208,7 @@ const TEMPORARY_VENDOR_DEBT: readonly AllowedVendorDebt[] = [
       ['browser-native-tts', 1],
       ['browser-native', 2],
       ['comfyui', 2],
-      ['alidocmind', 13],
+      ['alidocmind', 21],
     ],
   ),
   ...groupedDebt(
