@@ -205,10 +205,10 @@ const TEMPORARY_VENDOR_DEBT: readonly AllowedVendorDebt[] = [
       ['baidu', 5],
       ['claude', 5],
       ['searxng', 3],
-      ['browser-native-tts', 1],
-      ['browser-native', 2],
+      ['browser-native-tts', 2],
+      ['browser-native', 3],
       ['comfyui', 2],
-      ['alidocmind', 21],
+      ['alidocmind', 14],
     ],
   ),
   ...groupedDebt(
@@ -241,6 +241,22 @@ const TEMPORARY_VENDOR_DEBT: readonly AllowedVendorDebt[] = [
     [
       ['alidocmind', 6],
       ['mineru', 15],
+      ['ffmpeg', 2],
+      ['local', 2],
+    ],
+  ),
+  ...groupedDebt(
+    'app/api/generate/voice/route.ts',
+    'Temporary: local-profile deletion semantics have not moved behind the registration adapter.',
+    [['local', 3]],
+  ),
+  ...groupedDebt(
+    'lib/document/extractors/media-registry.ts',
+    'Temporary: the media-extractor fallback chain still names concrete providers in registry and operator guidance.',
+    [
+      ['local', 4],
+      ['ffmpeg', 1],
+      ['alidocmind', 1],
     ],
   ),
   ...groupedDebt(
