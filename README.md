@@ -11,9 +11,9 @@
 </p>
 
 <p align="center">
-  <a href="https://my.feishu.cn/wiki/UIfKw9Knti0LcKkTxDNcqlUrnzh"><img src="https://img.shields.io/badge/%F0%9F%93%98%20User%20Guide-1.0.0%20%C2%B7%20English-4F8EF7?style=for-the-badge" alt="1.0.0 User Guide (English)"/></a>
+  <a href="https://my.feishu.cn/wiki/UIfKw9Knti0LcKkTxDNcqlUrnzh"><img src="https://img.shields.io/badge/%F0%9F%93%98%20User%20Guide-v1.0.0%20%C2%B7%20English-4F8EF7?style=for-the-badge" alt="v1.0.0 User Guide (English)"/></a>
   &nbsp;&nbsp;
-  <a href="https://lcn6dqn3m0yr.feishu.cn/wiki/CkQSwHFdzibQFvkGzwPcmUOfnXg"><img src="https://img.shields.io/badge/%F0%9F%93%99%20%E4%BD%93%E9%AA%8C%E6%8C%87%E5%8D%97-1.0.0%20%C2%B7%20%E4%B8%AD%E6%96%87-FF6B35?style=for-the-badge" alt="1.0.0 体验指南（中文）"/></a>
+  <a href="https://lcn6dqn3m0yr.feishu.cn/wiki/CkQSwHFdzibQFvkGzwPcmUOfnXg"><img src="https://img.shields.io/badge/%F0%9F%93%99%20%E4%BD%93%E9%AA%8C%E6%8C%87%E5%8D%97-v1.0.0%20%C2%B7%20%E4%B8%AD%E6%96%87-FF6B35?style=for-the-badge" alt="v1.0.0 体验指南（中文）"/></a>
 </p>
 
 <p align="center">
@@ -42,9 +42,9 @@
   <a href="https://open.maic.chat/">Live Demo</a> · <a href="#-quick-start">Quick Start</a> · <a href="#lemonade-local-ai">Lemonade</a> · <a href="#funasr-local-asr">FunASR</a> · <a href="#-features">Features</a> · <a href="#-use-cases">Use Cases</a> · <a href="#-openclaw-integration">OpenClaw</a>
 </p>
 
-## 🎉 OpenMAIC 1.0.0 — Build courses with an agent
+## 🎉 OpenMAIC v1.0.0 — Build courses with an agent
 
-**One prompt in, a whole course out — and now you can steer.** Released August 27, 2026, OpenMAIC 1.0.0 adds an opt-in **Pro workbench** alongside the classic one-click generator: chat with an agent that plans your curriculum, builds and revises every page, and works straight from your materials.
+**One prompt in, a whole course out — and now you can steer.** Released August 27, 2026, OpenMAIC v1.0.0 adds a **Pro workbench** alongside the classic one-click generator: chat with an agent that plans your curriculum, builds and revises every page, and works straight from your materials.
 
 - 🤖 **Agent workbench** — a chat-first workspace that plans, builds, and revises whole courses
 - 💾 **Durable sessions** — server-backed runs survive restarts; cancel, resume, and steer anytime
@@ -52,12 +52,12 @@
 - 🧰 **Course tools + 20 built-in skills** — slides, quizzes, interactives, PBL, images, video, voices, `.pptx` import
 - 🔌 **Neutral by design** — bring your own models, media, search providers, and storage backend
 
-Take the full tour in [Features](#-features), then flip it on with [Agent workbench and runtime](#optional-agent-workbench-and-runtime) — Pro mode is opt-in, and without it OpenMAIC keeps the classic browser-only experience.
+Take the full tour in [Features](#-features), then set it up with [Agent workbench and runtime](#optional-agent-workbench-and-runtime).
 
 
 ## 🗞️ News
 
-- **2026-08-27** — **OpenMAIC 1.0.0:** an opt-in agent workbench, durable course-building sessions, reusable skills, session materials, provider-neutral server capabilities, and a pluggable persistence stack.
+- **2026-08-27** — **OpenMAIC v1.0.0:** an agent workbench, durable course-building sessions, reusable skills, session materials, provider-neutral server capabilities, and a pluggable persistence stack.
 - **2026-08-14** — [v0.3.2 released!](https://github.com/THU-MAIC/OpenMAIC/releases/tag/v0.3.2) Video export hardening (deterministic Quiz/PBL covers, fidelity polish, interactive HTML capture, CPU resource profiles); server-backed persistence completed (full document cutover, one-command Postgres stack, incremental saves) plus the asset registry; the `@openmaic/generation` package; four new locales; Amazon Bedrock, Atlas Cloud, and Claude search providers; FunASR ASR. See [changelog](CHANGELOG.md).
 - **2026-07-21** — [v0.3.1 released!](https://github.com/THU-MAIC/OpenMAIC/releases/tag/v0.3.1) One-click MP4 video export; server-backed runtime storage with a Postgres reference server; direct slide manipulation in the editor (drag, resize, rotate, multi-select); smarter "Edit with AI" (validated JSON Patch edits, multi-session history); expanded Document Parsing (multi-format upload, audio/video extraction, AliDocMind, MinerU); new providers (Azure OpenAI, SearXNG, ComfyUI) and the GPT-5.6 model family; action-level playback navigation; SSRF hardening. See [changelog](CHANGELOG.md).
 - **2026-06-28** — [v0.3.0 released!](https://github.com/THU-MAIC/OpenMAIC/releases/tag/v0.3.0) Project-Based Learning (PBL) v2 with classroom UI; "Edit with AI" Pro-mode editor agent; the `@openmaic/*` SDK family (DSL/renderer/importer) published to npm; optional per-stage model routing; new models (GLM-5.2, Kimi K2.7 Code, Qwen3.7 Plus/Max); a vocational-learning task engine; Korean (ko-KR) locale; and relicensing from AGPL-3.0 to MIT. See [changelog](CHANGELOG.md).
@@ -518,9 +518,9 @@ TTS_VOXCPM_BASE_URL=http://localhost:8000/v1
 
 ## ✨ Features
 
-### Agent Workbench and Pro Mode (1.0.0)
+### Agent Workbench and Pro Mode (v1.0.0)
 
-The opt-in workbench adds a conversational course-building agent to OpenMAIC.
+The workbench adds a conversational course-building agent to OpenMAIC.
 Its durable sessions can be resumed after a worker restart, accept follow-up
 instructions while running, and stream a replayable event history to the chat
 surface.
