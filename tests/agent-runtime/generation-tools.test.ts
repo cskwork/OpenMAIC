@@ -203,6 +203,73 @@ describe('generation and deck tools', () => {
     expect(current.get()?.scenes).toHaveLength(1);
   });
 
+  it('passes widgetType and widgetOutline through to interactive generation', async () => {
+    const current = state(document([]));
+    const prompts: string[] = [];
+    let calls = 0;
+    const aiCall = vi.fn(async (_system: string, user: string) => {
+      calls += 1;
+      prompts.push(user);
+      return calls === 1
+        ? '<!DOCTYPE html><html><body><div id="water-cycle"></div></body></html>'
+        : '[]';
+    });
+    const generate = find(buildGenerationTools(deps(current.store, { aiCall })), 'generate_scene');
+    const response = await generate.execute('call', {
+      stageId: 'stage-test',
+      order: 1,
+      title: 'Water Cycle',
+      type: 'interactive',
+      brief: 'Show how the water cycle works',
+      widgetType: 'diagram',
+      widgetOutline: { concept: 'Water cycle', diagramType: 'flowchart' },
+    } as never);
+    expect(response).not.toMatchObject({ isError: true });
+    const scene = current.get()?.scenes[0];
+    expect(scene).toMatchObject({ type: 'interactive' });
+    expect(scene?.content).toMatchObject({ widgetType: 'diagram' });
+    expect(prompts[0]).toContain('flowchart');
+  });
+
+  it('falls back to a simulation widget when interactive generation omits widgetType', async () => {
+    const current = state(document([]));
+    let calls = 0;
+    const aiCall = vi.fn(async () => {
+      calls += 1;
+      return calls === 1
+        ? '<!DOCTYPE html><html><body><div id="energy-slider"></div></body></html>'
+        : '[]';
+    });
+    const generate = find(buildGenerationTools(deps(current.store, { aiCall })), 'generate_scene');
+    const response = await generate.execute('call', {
+      stageId: 'stage-test',
+      order: 1,
+      title: 'Energy',
+      type: 'interactive',
+      brief: 'Explore energy transfer',
+    } as never);
+    expect(response).not.toMatchObject({ isError: true });
+    expect(current.get()?.scenes[0]?.content).toMatchObject({ widgetType: 'simulation' });
+  });
+
+  it('rejects widgetType on non-interactive pages without writing anything', async () => {
+    const current = state(document([]));
+    const generate = find(buildGenerationTools(deps(current.store)), 'generate_scene');
+    const response = await generate.execute('call', {
+      stageId: 'stage-test',
+      order: 1,
+      title: 'Slide',
+      type: 'slide',
+      brief: 'A plain slide',
+      widgetType: 'diagram',
+    } as never);
+    expect(response).toMatchObject({
+      isError: true,
+      details: { error: 'widget-requires-interactive' },
+    });
+    expect(current.get()?.scenes).toHaveLength(0);
+  });
+
   it('detects slide media placeholders without returning page bodies', () => {
     const scene = slide('media', 1);
     (scene.content as Extract<Scene['content'], { type: 'slide' }>).canvas.elements = [
