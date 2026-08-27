@@ -246,6 +246,41 @@ describe('slide element reference projector', () => {
     expect(serialized).not.toContain('poster-secret-marker');
   });
 
+  it('projects renderer-tolerated legacy Charts with missing data arrays as empty evidence', () => {
+    const chart = {
+      ...base,
+      type: 'chart',
+      chartType: 'line',
+      themeColors: [],
+    };
+
+    const missingData = resolve(chart as unknown as PPTElement).evidence as Extract<
+      ReturnType<typeof resolve>['evidence'],
+      { elementType: 'chart' }
+    >;
+    expect(missingData.content).toMatchObject({ labels: [], legends: [], series: [] });
+
+    const missingLabels = resolve({
+      ...chart,
+      data: { legends: ['Series'], series: [[180, 88]] },
+    } as unknown as PPTElement).evidence as typeof missingData;
+    expect(missingLabels.content).toMatchObject({
+      labels: [],
+      legends: ['Series'],
+      series: [[180, 88]],
+    });
+
+    const missingSeries = resolve({
+      ...chart,
+      data: { labels: ['First'], legends: ['Series'] },
+    } as unknown as PPTElement).evidence as typeof missingData;
+    expect(missingSeries.content).toMatchObject({
+      labels: ['First'],
+      legends: ['Series'],
+      series: [],
+    });
+  });
+
   it('strictly rejects malformed, stale, duplicate, non-slide, and unsupported references', () => {
     const element = {
       ...base,
@@ -282,5 +317,13 @@ describe('slide element reference projector', () => {
 
   it('normalizes HTML by replacing tag boundaries and collapsing whitespace', () => {
     expect(normalizeElementHtml('<p>A</p><p> B <b>C</b></p>')).toBe('A B C');
+  });
+
+  it('omits script and style blocks instead of exposing their source as visible text', () => {
+    expect(
+      normalizeElementHtml(
+        '<p>Visible</p><style media="screen">.secret { color: red; }</style><SCRIPT>alert(1)</SCRIPT><p>After</p>',
+      ),
+    ).toBe('Visible After');
   });
 });

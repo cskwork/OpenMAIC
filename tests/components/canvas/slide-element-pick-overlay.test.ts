@@ -131,6 +131,25 @@ describe('slide element reference presentation', () => {
       { typeLabel: 'Text', displaySummary: 'No content' },
     );
   });
+
+  it('uses the empty-content fallback for a renderer-tolerated Chart without data', () => {
+    const legacyChart = {
+      id: 'legacy-chart',
+      type: 'chart',
+      chartType: 'line',
+      themeColors: [],
+      left: 0,
+      top: 0,
+      width: 100,
+      height: 40,
+      rotate: 0,
+    } as unknown as PPTElement;
+
+    expect(getSlideElementPresentation(legacyChart, translate)).toEqual({
+      typeLabel: 'Chart',
+      displaySummary: 'No content',
+    });
+  });
 });
 
 type Rect = { left: number; top: number; width: number; height: number };

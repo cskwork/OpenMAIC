@@ -187,6 +187,7 @@ function optionalBoundedString(
 
 export function normalizeElementHtml(value: string): string {
   return value
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/giu, ' ')
     .replace(/<[^>]*>/gu, ' ')
     .replace(/\s+/gu, ' ')
     .trim();
@@ -238,6 +239,22 @@ function validateReference(value: unknown): SlideElementReference | undefined {
 
 function setOmitted(omittedItems: Record<string, number>, path: string, count: number): void {
   if (count > 0) omittedItems[path] = (omittedItems[path] ?? 0) + count;
+}
+
+function validStringItems(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+function validNumberSeries(value: unknown): number[][] {
+  return Array.isArray(value)
+    ? value.filter(
+        (row): row is number[] =>
+          Array.isArray(row) &&
+          row.every((item) => typeof item === 'number' && Number.isFinite(item)),
+      )
+    : [];
 }
 
 function projectElement(
@@ -376,23 +393,30 @@ function projectElement(
         },
       };
     case 'chart': {
-      const labels = element.data.labels
+      const data = (element as unknown as { data?: Record<string, unknown> }).data;
+      const rawLabels = Array.isArray(data?.labels) ? data.labels : [];
+      const rawLegends = Array.isArray(data?.legends) ? data.legends : [];
+      const rawSeries = Array.isArray(data?.series) ? data.series : [];
+      const validLabels = validStringItems(rawLabels);
+      const validLegends = validStringItems(rawLegends);
+      const validSeries = validNumberSeries(rawSeries);
+      const labels = validLabels
         .slice(0, CHART_LABEL_LIMIT)
         .map((label, index) =>
           boundedString(label, METADATA_LIMIT, `content.labels[${index}]`, truncatedFields),
         );
-      const legends = element.data.legends
+      const legends = validLegends
         .slice(0, CHART_LEGEND_LIMIT)
         .map((legend, index) =>
           boundedString(legend, METADATA_LIMIT, `content.legends[${index}]`, truncatedFields),
         );
-      const series = element.data.series.slice(0, CHART_SERIES_LIMIT).map((values, index) => {
+      const series = validSeries.slice(0, CHART_SERIES_LIMIT).map((values, index) => {
         setOmitted(omittedItems, `content.series[${index}]`, values.length - CHART_POINT_LIMIT);
         return values.slice(0, CHART_POINT_LIMIT);
       });
-      setOmitted(omittedItems, 'content.labels', element.data.labels.length - labels.length);
-      setOmitted(omittedItems, 'content.legends', element.data.legends.length - legends.length);
-      setOmitted(omittedItems, 'content.series', element.data.series.length - series.length);
+      setOmitted(omittedItems, 'content.labels', rawLabels.length - labels.length);
+      setOmitted(omittedItems, 'content.legends', rawLegends.length - legends.length);
+      setOmitted(omittedItems, 'content.series', rawSeries.length - series.length);
       return {
         ...common,
         elementType: 'chart',

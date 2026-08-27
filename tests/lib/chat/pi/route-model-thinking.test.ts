@@ -219,6 +219,45 @@ describe('POST /api/chat/pi model and thinking resolution', () => {
     );
   });
 
+  it('accepts a renderer-tolerated legacy Chart without data as bounded empty evidence', async () => {
+    const body = makeBody();
+    body.storeState.scenes[0].content.canvas.elements.push({
+      id: 'chart-1',
+      type: 'chart',
+      chartType: 'line',
+      themeColors: [],
+      left: 10,
+      top: 20,
+      width: 100,
+      height: 40,
+      rotate: 0,
+    } as never);
+    Object.assign(body, {
+      elementReference: {
+        kind: 'slide_element',
+        sceneId: 'scene-1',
+        elementId: 'chart-1',
+      },
+    });
+
+    const { POST } = await import('@/app/api/chat/pi/route');
+    const response = await POST(makeRequest(body));
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('X-OpenMAIC-Element-Reference-Accepted')).toBe('1');
+    expect(mocks.runPiDirectorLoop).toHaveBeenCalledWith(
+      expect.objectContaining({
+        elementReference: expect.objectContaining({
+          evidence: expect.objectContaining({
+            elementType: 'chart',
+            content: expect.objectContaining({ labels: [], legends: [], series: [] }),
+          }),
+        }),
+      }),
+    );
+  });
+
   it('rejects malformed or stale element references before resolving a model', async () => {
     const body = makeBody();
     Object.assign(body, {

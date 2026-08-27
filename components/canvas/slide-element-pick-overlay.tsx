@@ -58,7 +58,11 @@ export function getSlideElementDisplaySummary(element: PPTElement, t: Translate)
         t('chat.elementReference.summary.noText')
       );
     case 'chart': {
-      const summary = [...element.data.labels, ...element.data.legends]
+      const data = (element as { data?: { labels?: unknown; legends?: unknown } }).data;
+      const labels = Array.isArray(data?.labels) ? data.labels : [];
+      const legends = Array.isArray(data?.legends) ? data.legends : [];
+      const summary = [...labels, ...legends]
+        .filter((value): value is string => typeof value === 'string')
         .map(normalizeDisplayText)
         .filter(Boolean)
         .join(' · ');
