@@ -36,26 +36,28 @@
   <a href="https://open.maic.chat/">Live Demo</a> · <a href="#-quick-start">Quick Start</a> · <a href="#lemonade-local-ai">Lemonade</a> · <a href="#funasr-local-asr">FunASR</a> · <a href="#-features">Features</a> · <a href="#-use-cases">Use Cases</a> · <a href="#-openclaw-integration">OpenClaw</a>
 </p>
 
-## OpenMAIC 1.0.0 — Build courses with an agent
+## 🎉 OpenMAIC 1.0.0 — Build courses with an agent
 
-OpenMAIC 1.0.0 introduces an agentic course-building workflow. Alongside the classic one-click classroom generator, an opt-in Pro workbench can plan a curriculum, create and revise course pages, work from uploaded or fetched materials, and keep long-running work recoverable.
+<p align="center">
+  <a href="https://my.feishu.cn/wiki/UIfKw9Knti0LcKkTxDNcqlUrnzh"><img src="https://img.shields.io/badge/%F0%9F%93%98%20User%20Guide-1.0.0%20%C2%B7%20English-4F8EF7?style=for-the-badge" alt="1.0.0 User Guide (English)"/></a>
+  &nbsp;&nbsp;
+  <a href="https://lcn6dqn3m0yr.feishu.cn/wiki/CkQSwHFdzibQFvkGzwPcmUOfnXg"><img src="https://img.shields.io/badge/%F0%9F%93%99%20%E4%BD%93%E9%AA%8C%E6%8C%87%E5%8D%97-1.0.0%20%C2%B7%20%E4%B8%AD%E6%96%87-FF6B35?style=for-the-badge" alt="1.0.0 体验指南（中文）"/></a>
+</p>
 
-### What's new in 1.0.0
+**One prompt in, a whole course out — and now you can steer.** Released August 27, 2026, OpenMAIC 1.0.0 adds an opt-in **Pro workbench** alongside the classic one-click generator: chat with an agent that plans your curriculum, builds and revises every page, and works straight from your materials.
 
-- **Agent workbench and durable sessions** — Enter Pro mode from the home page, then work in a three-pane workspace with a collapsible folders/conversations rail, chat, and tabbed course classrooms. The home and workspace controls switch between classic and Pro modes, while PostgreSQL-backed agent sessions provide leases, heartbeats, crash resume, cancellation, and follow-up steering. The runtime ships with 20 built-in course-design and editing skills, plus owner-scoped skills that users can create and revise.
-- **End-to-end course tools** — The agent can plan multi-lesson curricula; create folders and courses; read and atomically patch the stage DSL; generate, duplicate, reorder, and preview pages; edit decks and narration; import `.pptx` slides while preserving their layout; generate images and videos; and manage classroom rosters and voices. Voice registration is exposed only when a configured adapter supports cloning.
-- **Session materials with explicit trust boundaries** — The material upload API validates and persists supported files before documents, audio, and video move through a durable extraction lifecycle. Audio/video extraction can use a configured cloud provider or the optional local ffmpeg/ffprobe provider with server-side ASR. `fetch_url` accepts only URLs already introduced by the user or web search, then applies strict SSRF checks and stores extracted content as a session material.
-- **Provider-neutral server execution** — Server routes resolve image, video, ASR, TTS, search, and LLM configuration without sending provider credentials to the browser. Uniform `<CAP>_<PREFIX>_ENABLED=false` switches can force off served media and search capabilities, startup validation warns about bad model configuration, and unresolved model routes fail loudly instead of guessing a vendor.
-- **Fresh, capability-aware editing** — PostgreSQL triggers maintain monotonic per-stage and per-scene revision counters; freshness events and manifests let the workbench batch-refetch only changed scenes. Stage reads use the stage ID as a sharing capability, while writes remain owner-only. Folder routes and per-viewer stage metadata cover organization, publishing, and generation-complete state; sessions, materials, folders, and user skills remain scoped to a stable owner identity.
-- **Pluggable persistence** — `@openmaic/storage` supplies document, learner-runtime, KV, asset, agent-session, material, and user-skill stores. The default remains a no-database browser deployment; HTTP and PostgreSQL backends add server persistence, with PostgreSQL or S3-backed asset bytes.
+- 🤖 **Agent workbench** — a chat-first workspace that plans, builds, and revises whole courses
+- 💾 **Durable sessions** — server-backed runs survive restarts; cancel, resume, and steer anytime
+- 📎 **Session materials** — upload documents, audio, and video, or pull from web search; the agent builds from them
+- 🧰 **Course tools + 20 built-in skills** — slides, quizzes, interactives, PBL, images, video, voices, `.pptx` import
+- 🔌 **Neutral by design** — bring your own models, media, search providers, and storage backend
 
-> [!IMPORTANT]
-> **Pro mode is opt-in.** Build with `NEXT_PUBLIC_PRO_WORKBENCH_ENABLED=true`, enable the agent runtime with `OPENMAIC_AGENT_RUNTIME_ENABLED=true` and a non-empty `DATABASE_URL`, and explicitly route `maic-agent-driver` in `MODEL_ROUTES`. Set `NEXT_PUBLIC_PERSISTENCE=1` when the classic browser surface should also use server-backed persistence. Leave the Pro/runtime settings unset and OpenMAIC keeps the existing browser-only experience.
+Take the full tour in [Features](#-features), then flip it on with [Agent workbench and runtime](#optional-agent-workbench-and-runtime) — Pro mode is opt-in, and without it OpenMAIC keeps the classic browser-only experience.
 
 
 ## 🗞️ News
 
-- **2026-08-26** — **OpenMAIC 1.0.0:** an opt-in agent workbench, durable course-building sessions, reusable skills, session materials, provider-neutral server capabilities, and a pluggable persistence stack.
+- **2026-08-27** — **OpenMAIC 1.0.0:** an opt-in agent workbench, durable course-building sessions, reusable skills, session materials, provider-neutral server capabilities, and a pluggable persistence stack.
 - **2026-08-14** — [v0.3.2 released!](https://github.com/THU-MAIC/OpenMAIC/releases/tag/v0.3.2) Video export hardening (deterministic Quiz/PBL covers, fidelity polish, interactive HTML capture, CPU resource profiles); server-backed persistence completed (full document cutover, one-command Postgres stack, incremental saves) plus the asset registry; the `@openmaic/generation` package; four new locales; Amazon Bedrock, Atlas Cloud, and Claude search providers; FunASR ASR. See [changelog](CHANGELOG.md).
 - **2026-07-21** — [v0.3.1 released!](https://github.com/THU-MAIC/OpenMAIC/releases/tag/v0.3.1) One-click MP4 video export; server-backed runtime storage with a Postgres reference server; direct slide manipulation in the editor (drag, resize, rotate, multi-select); smarter "Edit with AI" (validated JSON Patch edits, multi-session history); expanded Document Parsing (multi-format upload, audio/video extraction, AliDocMind, MinerU); new providers (Azure OpenAI, SearXNG, ComfyUI) and the GPT-5.6 model family; action-level playback navigation; SSRF hardening. See [changelog](CHANGELOG.md).
 - **2026-06-28** — [v0.3.0 released!](https://github.com/THU-MAIC/OpenMAIC/releases/tag/v0.3.0) Project-Based Learning (PBL) v2 with classroom UI; "Edit with AI" Pro-mode editor agent; the `@openmaic/*` SDK family (DSL/renderer/importer) published to npm; optional per-stage model routing; new models (GLM-5.2, Kimi K2.7 Code, Qwen3.7 Plus/Max); a vocational-learning task engine; Korean (ko-KR) locale; and relicensing from AGPL-3.0 to MIT. See [changelog](CHANGELOG.md).
@@ -553,6 +555,16 @@ non-deleted course, but stage mutations remain restricted to its owner. The
 material upload contract stores supported source bytes before lease-fenced
 document or media extraction records derived text and images; media extraction
 can select AliDocMind or the optional local ffmpeg/ffprobe provider.
+
+Under the hood, agent sessions are database-backed with leases, heartbeats,
+crash resume, cancellation, and follow-up steering, and database-maintained
+revision counters keep per-stage and per-scene freshness monotonic so the
+workbench refetches only the scenes that changed. Server routes resolve LLM,
+media, ASR/TTS, and search configuration provider-neutrally: credentials never
+reach the browser, uniform `<CAP>_<PREFIX>_ENABLED=false` switches can force
+off any served capability, startup validation warns about bad model
+configuration, and unresolved model routes fail loudly instead of guessing a
+vendor.
 
 ### Pluggable Storage
 
