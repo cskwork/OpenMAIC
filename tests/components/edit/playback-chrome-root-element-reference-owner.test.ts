@@ -9,11 +9,13 @@ const mocks = vi.hoisted(() => ({
   roundtableProps: undefined as Record<string, unknown> | undefined,
   canvasProps: undefined as Record<string, unknown> | undefined,
   piEnabled: true,
+  topicActive: false,
   engineMode: 'idle' as 'idle' | 'playing' | 'paused',
   engineOptions: undefined as
     | {
         onModeChange?: (mode: 'idle' | 'playing' | 'paused') => void;
         onUserInterrupt?: (text: string) => void;
+        onComplete?: () => void;
       }
     | undefined,
   handleUserInterrupt: vi.fn(),
@@ -56,14 +58,23 @@ const scene = {
     canvas: { elements: [textElement, shapeElement] },
   },
 };
+const secondScene = {
+  ...scene,
+  id: 'scene-2',
+  title: 'Second slide',
+  order: 1,
+};
 
 const stageState = {
   mode: 'playback',
   stage: { id: 'stage-1', whiteboard: [] },
-  getCurrentScene: () => scene,
-  scenes: [scene],
+  getCurrentScene: () =>
+    stageState.scenes.find((candidate) => candidate.id === stageState.currentSceneId),
+  scenes: [scene, secondScene],
   currentSceneId: scene.id,
-  setCurrentSceneId: vi.fn(),
+  setCurrentSceneId: vi.fn((sceneId: string) => {
+    stageState.currentSceneId = sceneId;
+  }),
   generatingOutlines: [],
   outlines: [],
 };
@@ -239,6 +250,7 @@ vi.mock('@/lib/playback', () => ({
       options: {
         onModeChange?: (mode: 'idle' | 'playing' | 'paused') => void;
         onUserInterrupt?: (text: string) => void;
+        onComplete?: () => void;
       },
     ) {
       mocks.engineOptions = options;
@@ -267,7 +279,7 @@ vi.mock('@/lib/playback', () => ({
     confirmDiscussion() {}
     skipDiscussion() {}
   },
-  computePlaybackView: () => ({ kind: 'idle' }),
+  computePlaybackView: () => ({ kind: 'idle', isTopicActive: mocks.topicActive }),
   shouldAutoResumeLecture: () => false,
 }));
 vi.mock('@/lib/playback/action-navigation', () => ({
@@ -329,9 +341,13 @@ describe('PlaybackChromeRoot element-reference ownership', () => {
     mocks.roundtableProps = undefined;
     mocks.canvasProps = undefined;
     mocks.piEnabled = true;
+    mocks.topicActive = false;
     mocks.engineMode = 'idle';
     mocks.engineOptions = undefined;
     mocks.handleUserInterrupt.mockReset();
+    stageState.currentSceneId = scene.id;
+    stageState.setCurrentSceneId.mockClear();
+    settingsState.autoPlayLecture = false;
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -352,6 +368,14 @@ describe('PlaybackChromeRoot element-reference ownership', () => {
   }
 
   async function renderOwner() {
+    await act(async () => {
+      root.render(createElement(PlaybackChromeRoot));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  async function rerenderOwner() {
     await act(async () => {
       root.render(createElement(PlaybackChromeRoot));
       await Promise.resolve();
@@ -455,5 +479,66 @@ describe('PlaybackChromeRoot element-reference ownership', () => {
     expect(mocks.handleUserInterrupt).not.toHaveBeenCalled();
     expect(mocks.sendMessage).toHaveBeenCalledOnce();
     expect(mocks.sendMessage).toHaveBeenCalledWith('Explain this', undefined);
+  });
+
+  it('clears the owner draft after manual scene navigation settles', async () => {
+    await renderOwner();
+    click('toggle-pick');
+    click('pick-text');
+    expect(container.querySelector('[data-testid="owner-pill"]')).not.toBeNull();
+
+    act(() => {
+      (mocks.roundtableProps?.onNextSlide as (() => void) | undefined)?.();
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(stageState.setCurrentSceneId).toHaveBeenCalledWith(secondScene.id);
+
+    await rerenderOwner();
+    expect(container.querySelector('[data-testid="owner-pill"]')).toBeNull();
+
+    click('send');
+    expect(mocks.sendMessage).toHaveBeenCalledWith('Explain this', undefined);
+  });
+
+  it('keeps the owner draft while a gated scene navigation has not settled', async () => {
+    mocks.topicActive = true;
+    await renderOwner();
+    click('toggle-pick');
+    click('pick-text');
+
+    act(() => {
+      (mocks.roundtableProps?.onNextSlide as (() => void) | undefined)?.();
+    });
+
+    expect(stageState.setCurrentSceneId).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="owner-pill"]')).not.toBeNull();
+  });
+
+  it('clears the owner draft after automatic playback advances the scene', async () => {
+    vi.useFakeTimers();
+    settingsState.autoPlayLecture = true;
+    try {
+      await renderOwner();
+      click('toggle-pick');
+      click('pick-text');
+      expect(container.querySelector('[data-testid="owner-pill"]')).not.toBeNull();
+
+      act(() => mocks.engineOptions?.onComplete?.());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1500);
+      });
+      expect(stageState.setCurrentSceneId).toHaveBeenCalledWith(secondScene.id);
+
+      await rerenderOwner();
+      expect(container.querySelector('[data-testid="owner-pill"]')).toBeNull();
+
+      click('send');
+      expect(mocks.sendMessage).toHaveBeenCalledWith('Explain this', undefined);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

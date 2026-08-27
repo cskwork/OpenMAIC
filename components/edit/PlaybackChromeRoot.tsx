@@ -145,6 +145,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     const [draftElementReference, setDraftElementReferenceState] =
       useState<DraftSlideElementReference | null>(null);
     const draftElementReferenceRef = useRef<DraftSlideElementReference | null>(null);
+    const elementReferenceSceneIdRef = useRef(currentSceneId);
     const selectionVersionRef = useRef(0);
     const pendingInterruptElementReferenceRef = useRef<ElementReferenceSendSnapshot | undefined>(
       undefined,
@@ -1245,6 +1246,13 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     useEffect(() => {
       if (whiteboardOpen || !canPickSlideElement) setElementPickActive(false);
     }, [canPickSlideElement, whiteboardOpen]);
+
+    useEffect(() => {
+      const previousSceneId = elementReferenceSceneIdRef.current;
+      elementReferenceSceneIdRef.current = currentSceneId;
+      if (previousSceneId === currentSceneId) return;
+      setDraftElementReference(null);
+    }, [currentSceneId, setDraftElementReference]);
 
     // get action information
     const totalActions = currentScene?.actions?.length || 0;
