@@ -21,7 +21,7 @@ const log = createLogger('AgentPendingMedia');
 export type PendingMediaStatus = 'generating' | 'done' | 'failed';
 
 /** Coarse progress marker inside the provider/persist cycle. */
-export type PendingMediaStage = 'submit' | 'persist' | 'patch' | 'emit';
+export type PendingMediaStage = 'submit' | 'persist' | 'patch';
 
 export interface PendingMediaTask {
   /** The `gen_vid_<id>` placeholder the tool returned. */

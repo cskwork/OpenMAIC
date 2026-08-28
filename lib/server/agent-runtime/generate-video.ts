@@ -97,11 +97,15 @@ type PersistGeneratedVideo = (input: PersistVideoInput) => Promise<PersistedVide
 
 export interface GenerateVideoToolDeps extends Pick<CourseToolDeps, 'sessionId' | 'abortSignal'> {
   /**
-   * The owner-bound document store, used by the detached background job to
-   * patch the placeholder onto the persisted page once the video is ready.
-   * Without it the job still generates and emits, but skips the patch.
+   * The document store for the detached background job's completion patch.
+   * It must be owner-bound but NOT fenced by the run lease: the job
+   * legitimately writes minutes after its run ended, when the lease is
+   * already released, so the runner wires a dedicated lease-free store here.
+   * Passing the shared run-fenced `store` would throw
+   * AgentSessionLeaseLostError on every post-run patch. Without it the job
+   * still generates and emits, but skips the patch.
    */
-  store?: CourseStore;
+  backgroundStore?: CourseStore;
   getConfiguredVideoProviders?: () => Record<string, { models?: string[]; disabled?: boolean }>;
   resolveVideoProviderConfig?: (providerId: VideoProviderId) => VideoGenerationConfig;
   generateConfiguredVideo?: GenerateConfiguredVideo;
@@ -254,21 +258,54 @@ async function defaultEmitMediaReady(
   data: MediaReadyLifecycleData,
 ): Promise<void> {
   const store = await getAgentSessionStore();
-  await store.appendControlEvent(sessionId, {
+  const appended = await store.appendControlEvent(sessionId, {
     ts: Date.now(),
     type: LIFECYCLE.mediaReady,
     data,
   });
+  // appendControlEvent resolves null when the session row is gone: the frame
+  // is dropped silently by the store, so say so here.
+  if (appended === null) {
+    log.warn(`media_ready dropped for ${data.ref}: session ${sessionId} no longer exists`);
+  }
+}
+
+/**
+ * Emit one `media_ready` frame through the injected or default channel. A
+ * failed emit must never take the detached job down as an unhandled
+ * rejection; the registry entry and the document patch still stand.
+ */
+async function emitMediaReadyFrame(
+  deps: GenerateVideoToolDeps,
+  toolCallId: string,
+  data: MediaReadyLifecycleData,
+): Promise<void> {
+  const sessionId = deps.sessionId;
+  if (!sessionId) {
+    log.warn(`[${toolCallId}] media_ready skipped: the tool has no session id`);
+    return;
+  }
+  try {
+    await (deps.emitMediaReady ?? defaultEmitMediaReady)(sessionId, data);
+  } catch (error) {
+    log.error(`[${toolCallId}] media_ready emit failed for ${data.ref}`, error);
+  }
 }
 
 /**
  * Swap a video placeholder for the concrete persisted src on the stored
  * document: every slide video element whose `mediaRef` or `src` still equals
  * the placeholder gets the server-hosted src. Same mutation discipline as the
- * generation tools (load → change in memory → `runStageMutation` + putScene).
- * When no element references the placeholder anymore — the agent or the user
- * changed or removed it meanwhile — the patch is skipped silently; the
- * completion event still carries the src.
+ * generation tools (`runStageMutation` + putScene). When no element
+ * references the placeholder anymore — the agent or the user changed or
+ * removed it meanwhile — the patch is skipped silently; the completion event
+ * still carries the src.
+ *
+ * Each candidate scene is re-read immediately before its write: the job runs
+ * minutes after the tool call, exactly when the user or a resumed run may be
+ * editing the same page, so the swap is always applied to the freshest scene
+ * rather than the candidate-list snapshot. The residual read→write window
+ * matches the stage edit API's own read-modify-write discipline.
  */
 export async function patchStageVideoPlaceholder(
   store: CourseStore,
@@ -280,8 +317,10 @@ export async function patchStageVideoPlaceholder(
   const doc = await store.loadDocument(stageId);
   if (!doc) return 0;
   let patched = 0;
-  for (const scene of doc.scenes) {
-    if (scene.type !== 'slide' || scene.content.type !== 'slide') continue;
+  for (const candidate of doc.scenes) {
+    if (candidate.type !== 'slide') continue;
+    const scene = await store.getScene(stageId, candidate.id);
+    if (!scene || scene.type !== 'slide' || scene.content.type !== 'slide') continue;
     const canvas = scene.content.canvas;
     let touched = false;
     const elements = canvas.elements.map((element) => {
@@ -328,20 +367,8 @@ interface VideoJobInput {
 async function runVideoGenerationJob(input: VideoJobInput): Promise<void> {
   const { deps, ref, stageId, toolCallId } = input;
   const signal = AbortSignal.timeout(input.timeoutMs);
-  const sessionId = deps.sessionId;
-  const emit = async (data: MediaReadyLifecycleData): Promise<void> => {
-    if (!sessionId) {
-      log.warn(`[${toolCallId}] media_ready skipped: the tool has no session id`);
-      return;
-    }
-    try {
-      await (deps.emitMediaReady ?? defaultEmitMediaReady)(sessionId, data);
-    } catch (error) {
-      // A failed emit must never take the detached job down as an unhandled
-      // rejection; the registry entry and the document patch still stand.
-      log.error(`[${toolCallId}] media_ready emit failed for ${ref}`, error);
-    }
-  };
+  const emit = (data: MediaReadyLifecycleData): Promise<void> =>
+    emitMediaReadyFrame(deps, toolCallId, data);
 
   try {
     setPendingMediaStage(ref, 'submit');
@@ -365,10 +392,10 @@ async function runVideoGenerationJob(input: VideoJobInput): Promise<void> {
       `[${toolCallId}] Video generated: provider=${input.providerId}, model=${input.model ?? 'default'}, ${result.width}x${result.height}, ${result.duration}s`,
     );
 
-    if (deps.store) {
+    if (deps.backgroundStore) {
       setPendingMediaStage(ref, 'patch');
       const patched = await patchStageVideoPlaceholder(
-        deps.store,
+        deps.backgroundStore,
         stageId,
         ref,
         stored.src,
@@ -380,7 +407,6 @@ async function runVideoGenerationJob(input: VideoJobInput): Promise<void> {
     }
 
     settlePendingMedia(ref, { status: 'done', src: stored.src, mime: stored.mime });
-    setPendingMediaStage(ref, 'emit');
     await emit({
       ref,
       stageId,
@@ -510,11 +536,19 @@ export function buildGenerateVideoTool(
         deps,
         callProvider,
         persist,
-      }).catch((error) => {
+      }).catch(async (error) => {
         // runVideoGenerationJob handles every expected failure itself; this is
         // the last-resort guard against an unhandled rejection from a bug.
         log.error(`[${toolCallId}] Video generation job crashed for ${ref}`, error);
         settlePendingMedia(ref, {
+          status: 'failed',
+          errorCode: MEDIA_TOOL_ERROR_REASONS.generationFailed,
+        });
+        // A crashed job never lands in the document, so without this frame
+        // the client would keep rendering the placeholder skeleton forever.
+        await emitMediaReadyFrame(deps, toolCallId, {
+          ref,
+          stageId,
           status: 'failed',
           errorCode: MEDIA_TOOL_ERROR_REASONS.generationFailed,
         });

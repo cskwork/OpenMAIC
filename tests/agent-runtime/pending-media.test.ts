@@ -64,7 +64,7 @@ describe('pending media registry', () => {
     settlePendingMedia('gen_vid_once', { status: 'failed', errorCode: 'timeout' });
     // A second settle (e.g. a racing timeout after success) must not flip it.
     settlePendingMedia('gen_vid_once', { status: 'done', src: '/late.mp4' });
-    setPendingMediaStage('gen_vid_once', 'emit');
+    setPendingMediaStage('gen_vid_once', 'patch');
     expect(getPendingMediaTask('gen_vid_once')).toMatchObject({
       status: 'failed',
       errorCode: 'timeout',

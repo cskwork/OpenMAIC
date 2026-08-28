@@ -271,7 +271,7 @@ describe('generate_video tool', () => {
     const emitMediaReady = vi.fn();
     const tool = buildGenerateVideoTool({
       sessionId: 'session-owner',
-      store: fake.store,
+      backgroundStore: fake.store,
       getConfiguredVideoProviders: configured,
       resolveVideoProviderConfig: () => providerConfig,
       generateConfiguredVideo: vi.fn().mockReturnValue(providerCall.promise),
@@ -334,7 +334,7 @@ describe('generate_video tool', () => {
     const emitMediaReady = vi.fn();
     const tool = buildGenerateVideoTool({
       sessionId: 'session-owner',
-      store: fake.store,
+      backgroundStore: fake.store,
       getConfiguredVideoProviders: configured,
       resolveVideoProviderConfig: () => providerConfig,
       generateConfiguredVideo: vi.fn().mockReturnValue(providerCall.promise),
@@ -672,6 +672,49 @@ describe('patchStageVideoPlaceholder', () => {
     expect(elements[2]?.src).toBe('https://cdn.example.com/x.mp4');
     // Image placeholders belong to the (still synchronous) image flow.
     expect(elements[3]?.src).toBe('gen_img_abc');
+  });
+
+  it('applies the swap to the freshest scene so a concurrent edit survives', async () => {
+    const fake = createFakeDocumentStore();
+    const scene = makeSlideScene('scene-1', 'stage-owner', 1) as AppScene;
+    (scene.content as { canvas: { elements: unknown[] } }).canvas.elements.push({
+      id: 'v',
+      type: 'video',
+      mediaRef: 'gen_vid_abc',
+    });
+    fake.docs.set('stage-owner', makeDocument('stage-owner', 'Course', [scene]));
+
+    // An unrelated edit lands after the candidate scan but before the write;
+    // the patch must not resurrect the stale snapshot it was computed from.
+    const originalLoad = fake.store.loadDocument.bind(fake.store);
+    vi.spyOn(fake.store, 'loadDocument').mockImplementation(async (stageId: string) => {
+      const doc = await originalLoad(stageId);
+      const current = fake.docs.get('stage-owner');
+      const edited = current?.scenes[0];
+      if (current && edited) {
+        fake.docs.set(
+          'stage-owner',
+          makeDocument('stage-owner', 'Course', [
+            { ...edited, title: 'Edited meanwhile' } as AppScene,
+          ]),
+        );
+      }
+      return doc;
+    });
+
+    const patched = await patchStageVideoPlaceholder(
+      fake.store,
+      'stage-owner',
+      'gen_vid_abc',
+      '/api/classroom-media/stage-owner/media/v.mp4',
+    );
+
+    expect(patched).toBe(1);
+    const persisted = await fake.store.getScene('stage-owner', 'scene-1');
+    expect(persisted?.title).toBe('Edited meanwhile');
+    const elements = (persisted!.content as { canvas: { elements: unknown[] } }).canvas
+      .elements as { id: string; src?: string }[];
+    expect(elements[0]?.src).toBe('/api/classroom-media/stage-owner/media/v.mp4');
   });
 
   it('returns 0 for a missing document or an unreferenced placeholder', async () => {
