@@ -732,6 +732,20 @@ describe('patchStageVideoPlaceholder', () => {
         mediaRef: 'gen_vid_abc',
         src: '/api/classroom-media/stage-owner/media/old.mp4',
       },
+      // The classic pipeline persists the absolute form of the same URL.
+      {
+        id: 'regenerated-abs',
+        type: 'video',
+        mediaRef: 'gen_vid_abc',
+        src: 'https://app.example.com/api/classroom-media/stage-owner/media/old.mp4',
+      },
+      // A user's pick copied from ANOTHER stage's generated media is theirs.
+      {
+        id: 'other-stage-pick',
+        type: 'video',
+        mediaRef: 'gen_vid_abc',
+        src: '/api/classroom-media/other-stage/media/pick.mp4',
+      },
       { id: 'empty-src', type: 'video', mediaRef: 'gen_vid_abc', src: '' },
       { id: 'img', type: 'image', src: 'gen_img_abc' },
     );
@@ -754,8 +768,10 @@ describe('patchStageVideoPlaceholder', () => {
     expect(elements[3]?.src).toBe('https://cdn.example.com/user.mp4');
     expect(elements[4]?.src).toBe('/api/classroom-media/stage-owner/media/v.mp4');
     expect(elements[5]?.src).toBe('/api/classroom-media/stage-owner/media/v.mp4');
+    expect(elements[6]?.src).toBe('/api/classroom-media/other-stage/media/pick.mp4');
+    expect(elements[7]?.src).toBe('/api/classroom-media/stage-owner/media/v.mp4');
     // Image placeholders belong to the (still synchronous) image flow.
-    expect(elements[6]?.src).toBe('gen_img_abc');
+    expect(elements[8]?.src).toBe('gen_img_abc');
   });
 
   it('applies the swap to the freshest scene so a concurrent edit survives', async () => {

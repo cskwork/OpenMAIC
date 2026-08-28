@@ -318,6 +318,23 @@ export async function patchStageVideoPlaceholder(
 ): Promise<number> {
   const doc = await store.loadDocument(stageId);
   if (!doc) return 0;
+  // A previously generated src of THIS stage (regeneration: the agent
+  // re-pointed mediaRef at a new job while the element still carries the
+  // last generated video, which would otherwise keep rendering it). Both
+  // the relative form this flow writes and the absolute form the classic
+  // pipeline persists are recognized; scoped to the stage's own media root
+  // so a user's pick copied from another stage is preserved.
+  const generatedPrefix = `/api/classroom-media/${stageId}/`;
+  const isReplaceableSrc = (value: unknown): boolean => {
+    if (value === undefined || value === '' || value === ref) return true;
+    if (typeof value !== 'string') return false;
+    if (value.startsWith(generatedPrefix)) return true;
+    try {
+      return new URL(value).pathname.startsWith(generatedPrefix);
+    } catch {
+      return false;
+    }
+  };
   let patched = 0;
   for (const candidate of doc.scenes) {
     if (candidate.type !== 'slide') continue;
@@ -330,14 +347,8 @@ export async function patchStageVideoPlaceholder(
         element.type === 'video' &&
         (element.mediaRef === ref || element.src === ref) &&
         // A user edit that already replaced the placeholder with their own
-        // concrete src wins: only write while src is absent, empty, still
-        // the placeholder, or a previously generated classroom-media URL
-        // (the regeneration case, where the agent re-points mediaRef and the
-        // stale generated src must not keep rendering).
-        (element.src === undefined ||
-          element.src === '' ||
-          element.src === ref ||
-          element.src.startsWith('/api/classroom-media/'))
+        // concrete src wins.
+        isReplaceableSrc(element.src)
       ) {
         touched = true;
         return { ...element, src };
