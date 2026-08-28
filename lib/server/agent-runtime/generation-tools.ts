@@ -48,17 +48,18 @@ const SceneParams = Type.Object({
         Type.Literal('code'),
         Type.Literal('game'),
         Type.Literal('visualization3d'),
+        Type.Literal('procedural-skill'),
       ],
       {
         description:
-          'Interactive pages only: which widget to build. simulation = parameter explorer, diagram = flowchart/mindmap/hierarchy/system graph, code = programming challenge, game = quiz/puzzle/strategy/card/action, visualization3d = 3D scene. Defaults to simulation when omitted.',
+          'Interactive pages only: which widget to build. simulation = parameter explorer, diagram = flowchart/mindmap/hierarchy/system graph, code = programming challenge, game = quiz/puzzle/strategy/card/action, visualization3d = 3D scene, procedural-skill = step-by-step procedure training. Defaults to simulation when omitted.',
       },
     ),
   ),
   widgetOutline: Type.Optional(
     Type.Unknown({
       description:
-        'Interactive pages only: widget configuration object matching widgetType (e.g. { concept, keyVariables } for simulation, { diagramType, nodes } for diagram, { language } for code, { gameType, challenge } for game, { visualizationType, objects } for visualization3d). Defaults to { concept: title } when widgetType is set.',
+        'Interactive pages only: widget configuration object matching widgetType (e.g. { concept, keyVariables } for simulation, { diagramType, nodes } for diagram, { language } for code, { gameType, challenge } for game, { visualizationType, objects } for visualization3d, { task, tools, steps, successCriteria } for procedural-skill). Must be a plain object. Defaults to { concept: title } when widgetType is set; when only widgetOutline is set, widgetType defaults to simulation.',
     }),
   ),
   brief: Type.String({ minLength: 1 }),
@@ -225,7 +226,7 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
     name: 'generate_scene',
     label: 'Generate page',
     description:
-      'Generate and durably persist one page from an explicit title, type, and brief. Reusing an order replaces that page. Interactive pages accept widgetType (simulation/diagram/code/game/visualization3d) plus a matching widgetOutline; both are rejected for other page types.',
+      'Generate and durably persist one page from an explicit title, type, and brief. Reusing an order replaces that page. Interactive pages accept widgetType (simulation/diagram/code/game/visualization3d/procedural-skill) plus a matching widgetOutline object; both are rejected for other page types.',
     parameters: SceneParams,
     async execute(_callId, params, signal) {
       if (!Number.isInteger(params.order) || params.order < 1) {
@@ -272,10 +273,25 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
           true,
         );
       }
-      if (params.type !== 'interactive' && (params.widgetType || params.widgetOutline)) {
+      if (
+        params.type !== 'interactive' &&
+        (params.widgetType !== undefined || params.widgetOutline !== undefined)
+      ) {
         return result(
           'generate_scene only accepts widgetType/widgetOutline for interactive pages.',
           { error: 'widget-requires-interactive', type: params.type },
+          true,
+        );
+      }
+      if (
+        params.widgetOutline !== undefined &&
+        (typeof params.widgetOutline !== 'object' ||
+          params.widgetOutline === null ||
+          Array.isArray(params.widgetOutline))
+      ) {
+        return result(
+          'generate_scene needs widgetOutline to be an object matching widgetType.',
+          { error: 'invalid-widget-outline' },
           true,
         );
       }
@@ -294,7 +310,8 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
         type: params.type,
         description: brief,
         keyPoints: params.materialFacts ?? [],
-        ...(params.type === 'interactive' && (params.widgetType || params.widgetOutline)
+        ...(params.type === 'interactive' &&
+        (params.widgetType !== undefined || params.widgetOutline !== undefined)
           ? {
               widgetType: params.widgetType ?? 'simulation',
               // Mirror the generator fallback so a bare widgetType still generates.
