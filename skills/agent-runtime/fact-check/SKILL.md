@@ -84,11 +84,17 @@ inconclusive, say so rather than inventing a verdict or correction.
 ## Give a short, readable review report
 
 In review mode, return roughly 3–8 useful findings in the first pass, or fewer
-when fewer exist. Order them by how much they could mislead the learner. Do not
-split the report into severity sections. Number the findings consecutively as
-`1`, `2`, `3`, and put the page/location plus one of these labels in each
-heading: **明确事实错误**, **表述不严谨**, or **需要核实**. Use the last label only
-when the claim matters.
+when fewer exist. Group them under these top-level headings, in this order, and
+omit an empty group:
+
+1. **一、明确事实错误**
+2. **二、表述不严谨**
+3. **三、需要核实** — include only when the claim matters
+
+Within the groups, number findings consecutively across the whole report with
+Arabic numerals. Give every finding a short subheading containing its number,
+page/location, and specific issue, for example:
+`### 1. 第 5 页｜测验解析｜知识混淆`.
 
 Under each heading, use exactly three bullets:
 
