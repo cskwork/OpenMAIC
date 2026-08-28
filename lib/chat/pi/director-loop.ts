@@ -56,8 +56,12 @@ export async function runPiDirectorLoop(opts: {
   let endReason: string | undefined;
   let directorToolCalls = 0;
   const pendingSceneEvidence = new Map<string, DirectorSceneEvidencePacket>();
-  let pendingElementReferenceEvidence = opts.elementReference;
-  let groundedElementReferenceFailed = false;
+  const elementReferenceEvidence = opts.elementReference
+    ? Object.freeze({
+        content: opts.elementReference.childEvidence,
+        metadata: opts.elementReference.evidence,
+      })
+    : undefined;
   const directorToolTrace: DirectorToolTraceEntry[] = [];
   const maxDirectorToolCalls = Math.max(opts.maxAgentTurns * 3, opts.maxAgentTurns + 3);
   const piAgentResponses: AgentTurnSummary[] = [];
@@ -187,11 +191,7 @@ export async function runPiDirectorLoop(opts: {
           ),
         };
       },
-      takeElementReferenceEvidence: () => {
-        const packet = pendingElementReferenceEvidence;
-        pendingElementReferenceEvidence = undefined;
-        return packet ? { content: packet.childEvidence, metadata: packet.evidence } : undefined;
-      },
+      elementReferenceEvidence,
     }),
     buildCloseSessionTool({
       closeSession,
@@ -222,14 +222,7 @@ export async function runPiDirectorLoop(opts: {
           ? (context.result.details as { status?: string } | undefined)?.status
           : undefined;
       const evidenceError = evidenceStatus !== undefined && evidenceStatus !== 'ok';
-      const groundedChildSucceeded =
-        context.toolCall.name === 'call_agent'
-          ? (context.result.details as { groundedChildSucceeded?: boolean } | undefined)
-              ?.groundedChildSucceeded
-          : undefined;
-      const groundedFailure = groundedChildSucceeded === false;
-      if (groundedFailure) groundedElementReferenceFailed = true;
-      const isError = context.isError || evidenceError || groundedFailure;
+      const isError = context.isError || evidenceError;
       const resultPreview = context.result.content
         .map((content) => (content.type === 'text' ? content.text : '[image]'))
         .join('\n')
@@ -242,12 +235,11 @@ export async function runPiDirectorLoop(opts: {
         resultPreview,
         details: context.result.details,
       });
-      const terminate =
-        sessionClosed || userCued || groundedFailure || directorToolCalls >= maxDirectorToolCalls;
-      if (!terminate && !evidenceError && !groundedFailure) return undefined;
+      const terminate = sessionClosed || userCued || directorToolCalls >= maxDirectorToolCalls;
+      if (!terminate && !evidenceError) return undefined;
       return {
         ...(terminate ? { terminate: true } : {}),
-        ...(evidenceError || groundedFailure ? { isError: true } : {}),
+        ...(evidenceError ? { isError: true } : {}),
       };
     },
   });
@@ -255,9 +247,6 @@ export async function runPiDirectorLoop(opts: {
   try {
     await director.prompt(buildUserPrompt(opts.body, opts.elementReference?.directorSummary));
     await director.waitForIdle();
-    if (groundedElementReferenceFailed) {
-      throw new Error('The grounded classroom agent did not complete with visible text');
-    }
   } finally {
     compactionRuntime.dispose();
   }

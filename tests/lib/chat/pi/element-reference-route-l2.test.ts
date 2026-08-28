@@ -98,7 +98,12 @@ function makeBody() {
   };
 }
 
-function installAgentShell(legacyAnswer: string, nativeAnswer = 'Native grounded answer.') {
+function installAgentShell(
+  legacyAnswer: string,
+  nativeAnswer = 'Native grounded answer.',
+  shellOptions: { delegations?: number; failFirstLegacy?: boolean } = {},
+) {
+  let legacyChildRuns = 0;
   mocks.buildAgent.mockImplementation((options: Record<string, unknown>) => {
     const tools = (options.tools ?? []) as Array<{
       name: string;
@@ -118,17 +123,25 @@ function installAgentShell(legacyAnswer: string, nativeAnswer = 'Native grounded
           mocks.directorPrompts.push(prompt);
         },
         waitForIdle: async () => {
-          mocks.callAgentExecutions += 1;
-          const args = { agentId: 'teacher-1', instruction: 'Answer from the selected element.' };
-          const result = await callAgent.execute('delegate-grounded-1', args);
-          await (
-            options.afterToolCall as ((context: Record<string, unknown>) => unknown) | undefined
-          )?.({
-            toolCall: { name: 'call_agent' },
-            args,
-            result,
-            isError: result.isError === true,
-          });
+          for (let index = 0; index < (shellOptions.delegations ?? 1); index += 1) {
+            mocks.callAgentExecutions += 1;
+            const args = {
+              agentId: 'teacher-1',
+              instruction:
+                index === 0
+                  ? 'Answer from the selected element.'
+                  : 'Retry from the same selected element.',
+            };
+            const result = await callAgent.execute(`delegate-grounded-${index + 1}`, args);
+            await (
+              options.afterToolCall as ((context: Record<string, unknown>) => unknown) | undefined
+            )?.({
+              toolCall: { name: 'call_agent' },
+              args,
+              result,
+              isError: result.isError === true,
+            });
+          }
         },
         state: { messages: [] },
       };
@@ -166,6 +179,8 @@ function installAgentShell(legacyAnswer: string, nativeAnswer = 'Native grounded
       };
     }
 
+    const childRun = legacyChildRuns;
+    legacyChildRuns += 1;
     let subscriber: ((event: unknown) => unknown) | undefined;
     return {
       subscribe: (handler: (event: unknown) => unknown) => {
@@ -176,6 +191,9 @@ function installAgentShell(legacyAnswer: string, nativeAnswer = 'Native grounded
         mocks.legacyChildPrompts.push(prompt);
       },
       waitForIdle: async () => {
+        if (shellOptions.failFirstLegacy && childRun === 0) {
+          throw new Error('first Legacy Child failed');
+        }
         await subscriber?.({
           type: 'message_update',
           assistantMessageEvent: {
@@ -267,6 +285,46 @@ describe('PPT element reference Route → Director → real call_agent L2', () =
     expect(response.headers.get('X-OpenMAIC-Element-Reference-Accepted')).toBe('1');
     expect(mocks.callAgentExecutions).toBe(1);
     expect(mocks.nativeChildPrompts.join('\n')).toContain('Evaporation removes heat.');
+    expect(stream).toContain('Native grounded answer.');
+    expect(stream).toContain('"type":"done"');
+    expect(stream).not.toContain('"type":"error"');
+  }, 15_000);
+
+  it('keeps request-scoped evidence across a failed Legacy Child and retry', async () => {
+    installAgentShell('Legacy grounded retry answer.', 'unused native answer', {
+      delegations: 2,
+      failFirstLegacy: true,
+    });
+    const { POST } = await import('@/app/api/chat/pi/route');
+
+    const response = await POST(makeRequest(makeBody()));
+    const stream = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('X-OpenMAIC-Element-Reference-Accepted')).toBe('1');
+    expect(mocks.callAgentExecutions).toBe(2);
+    expect(mocks.legacyChildPrompts).toHaveLength(2);
+    expect(mocks.legacyChildPrompts[0]).toContain('Evaporation removes heat.');
+    expect(mocks.legacyChildPrompts[1]).toContain('Evaporation removes heat.');
+    expect(stream).toContain('Legacy grounded retry answer.');
+    expect(stream).toContain('"type":"done"');
+    expect(stream).not.toContain('"type":"error"');
+  }, 15_000);
+
+  it('shares request-scoped evidence with every Native Child delegation', async () => {
+    process.env[nativeFlag] = 'true';
+    installAgentShell('unused legacy answer', 'Native grounded answer.', { delegations: 2 });
+    const { POST } = await import('@/app/api/chat/pi/route');
+
+    const response = await POST(makeRequest(makeBody()));
+    const stream = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('X-OpenMAIC-Element-Reference-Accepted')).toBe('1');
+    expect(mocks.callAgentExecutions).toBe(2);
+    expect(mocks.nativeChildPrompts).toHaveLength(2);
+    expect(mocks.nativeChildPrompts[0]).toContain('Evaporation removes heat.');
+    expect(mocks.nativeChildPrompts[1]).toContain('Evaporation removes heat.');
     expect(stream).toContain('Native grounded answer.');
     expect(stream).toContain('"type":"done"');
     expect(stream).not.toContain('"type":"error"');

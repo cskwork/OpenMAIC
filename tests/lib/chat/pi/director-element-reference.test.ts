@@ -5,12 +5,13 @@ import type { ResolvedSlideElementReference } from '@/lib/chat/pi/element-refere
 
 const mocks = vi.hoisted(() => ({
   streamLLM: vi.fn(),
-  takenElementEvidence: [] as unknown[],
+  sharedElementEvidence: [] as unknown[],
+  callAgentExecutions: 0,
 }));
 
 vi.mock('@/lib/ai/llm', () => ({ streamLLM: mocks.streamLLM }));
 vi.mock('@/lib/chat/pi/tools/call-agent', () => ({
-  buildCallAgentTool: (options: { takeElementReferenceEvidence?: () => unknown }) => ({
+  buildCallAgentTool: (options: { elementReferenceEvidence?: unknown }) => ({
     name: 'call_agent',
     label: 'Call agent',
     description: 'Call agent',
@@ -21,10 +22,17 @@ vi.mock('@/lib/chat/pi/tools/call-agent', () => ({
       additionalProperties: false,
     },
     execute: async () => {
-      mocks.takenElementEvidence.push(options.takeElementReferenceEvidence?.());
+      mocks.sharedElementEvidence.push(options.elementReferenceEvidence);
+      mocks.callAgentExecutions += 1;
+      if (mocks.callAgentExecutions > 1) {
+        return {
+          content: [{ type: 'text' as const, text: 'Grounded retry succeeded.' }],
+          details: {},
+        };
+      }
       return {
         content: [{ type: 'text' as const, text: 'No grounded visible response.' }],
-        details: { groundedChildSucceeded: false },
+        details: {},
         isError: true,
       };
     },
@@ -92,52 +100,72 @@ const elementReference: ResolvedSlideElementReference = {
   childEvidence: 'Selected element packet: Grounded fact.',
 };
 
-describe('Pi Director selected-element failure ownership', () => {
+describe('Pi Director request-scoped selected-element evidence', () => {
   beforeEach(() => {
     mocks.streamLLM.mockReset();
-    mocks.takenElementEvidence.length = 0;
+    mocks.sharedElementEvidence.length = 0;
+    mocks.callAgentExecutions = 0;
   });
 
-  it('exposes the Director summary, takes evidence once, and terminates on grounded failure', async () => {
-    mocks.streamLLM.mockReturnValueOnce(
-      resultFrom([
-        {
-          type: 'tool-call',
-          toolCallId: 'call-grounded-child',
-          toolName: 'call_agent',
-          input: { agentId: teacher.id, instruction: 'Explain it.' },
-        },
-        { type: 'finish', finishReason: 'tool-calls', totalUsage: ZERO_USAGE },
-      ]),
-    );
+  it('shares evidence with a retry after an ordinary grounded Child failure', async () => {
+    mocks.streamLLM
+      .mockReturnValueOnce(
+        resultFrom([
+          {
+            type: 'tool-call',
+            toolCallId: 'call-grounded-child-1',
+            toolName: 'call_agent',
+            input: { agentId: teacher.id, instruction: 'Explain it.' },
+          },
+          { type: 'finish', finishReason: 'tool-calls', totalUsage: ZERO_USAGE },
+        ]),
+      )
+      .mockReturnValueOnce(
+        resultFrom([
+          {
+            type: 'tool-call',
+            toolCallId: 'call-grounded-child-2',
+            toolName: 'call_agent',
+            input: { agentId: teacher.id, instruction: 'Retry from the same evidence.' },
+          },
+          { type: 'finish', finishReason: 'tool-calls', totalUsage: ZERO_USAGE },
+        ]),
+      )
+      .mockReturnValueOnce(
+        resultFrom([
+          { type: 'text-delta', text: 'The grounded retry completed.' },
+          { type: 'finish', finishReason: 'stop', totalUsage: ZERO_USAGE },
+        ]),
+      );
     const events: StatelessEvent[] = [];
     const controller = new AbortController();
 
-    await expect(
-      runPiDirectorLoop({
-        body,
-        elementReference,
-        agentConfigs: [teacher],
-        send: async (event) => {
-          events.push(event);
-        },
-        languageModel: { provider: 'test', modelId: 'director' } as never,
-        thinkingConfig: { mode: 'disabled', enabled: false },
-        abortSignal: controller.signal,
-        signal: controller.signal,
-        maxAgentTurns: 2,
-        maxActionsPerAgent: 1,
-        enableWhiteboardTools: false,
-      }),
-    ).rejects.toThrow('grounded classroom agent');
+    await runPiDirectorLoop({
+      body,
+      elementReference,
+      agentConfigs: [teacher],
+      send: async (event) => {
+        events.push(event);
+      },
+      languageModel: { provider: 'test', modelId: 'director' } as never,
+      thinkingConfig: { mode: 'disabled', enabled: false },
+      abortSignal: controller.signal,
+      signal: controller.signal,
+      maxAgentTurns: 2,
+      maxActionsPerAgent: 1,
+      enableWhiteboardTools: false,
+    });
 
     expect(JSON.stringify(mocks.streamLLM.mock.calls[0]?.[0])).toContain(
       'Selected slide reference: Grounded fact.',
     );
-    expect(mocks.takenElementEvidence).toEqual([
+    expect(mocks.sharedElementEvidence).toHaveLength(2);
+    expect(mocks.sharedElementEvidence[0]).toBe(mocks.sharedElementEvidence[1]);
+    expect(mocks.sharedElementEvidence[0]).toEqual(
       expect.objectContaining({ content: 'Selected element packet: Grounded fact.' }),
-    ]);
-    expect(events.some((event) => event.type === 'done')).toBe(false);
-    expect(mocks.streamLLM).toHaveBeenCalledTimes(1);
+    );
+    expect(events.some((event) => event.type === 'done')).toBe(true);
+    expect(mocks.callAgentExecutions).toBe(2);
+    expect(mocks.streamLLM).toHaveBeenCalledTimes(3);
   });
 });

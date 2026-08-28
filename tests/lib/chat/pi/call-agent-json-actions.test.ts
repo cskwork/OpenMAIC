@@ -4,6 +4,7 @@ import type { StatelessChatRequest, StatelessEvent } from '@/lib/types/chat';
 
 const mocks = vi.hoisted(() => ({
   buildAgent: vi.fn(),
+  childPrompts: [] as string[],
 }));
 
 vi.mock('@/lib/agent/runtime/build-agent', () => ({
@@ -26,6 +27,13 @@ const teacher: AgentConfig = {
   createdAt: new Date('2026-01-01T00:00:00Z'),
   updatedAt: new Date('2026-01-01T00:00:00Z'),
   isDefault: true,
+};
+const assistant: AgentConfig = {
+  ...teacher,
+  id: 'assistant-1',
+  name: 'AI assistant',
+  role: 'assistant',
+  isDefault: false,
 };
 const fullWhiteboardActions = [
   'spotlight',
@@ -110,7 +118,9 @@ function makeMockChildWithJsonOutput(jsonOutput: string) {
       }, 0);
       return () => {};
     },
-    prompt: async () => {},
+    prompt: async (prompt: string) => {
+      mocks.childPrompts.push(prompt);
+    },
     waitForIdle: async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     },
@@ -186,9 +196,10 @@ describe('Pi call_agent JSON action output', () => {
   beforeEach(() => {
     vi.resetModules();
     mocks.buildAgent.mockReset();
+    mocks.childPrompts.length = 0;
   });
 
-  it('attaches selected-element evidence take-once and reports Legacy grounded success', async () => {
+  it('attaches the same request-scoped selected-element evidence to every Legacy delegation', async () => {
     mockChildWithJsonOutput(JSON.stringify([{ type: 'text', content: '基于所选元素回答。' }]));
     const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
     const events: StatelessEvent[] = [];
@@ -206,13 +217,10 @@ describe('Pi call_agent JSON action output', () => {
         content: { text: 'Evidence' },
       },
     };
-    const takeElementReferenceEvidence = vi
-      .fn()
-      .mockReturnValueOnce(packet)
-      .mockReturnValueOnce(undefined);
     const tool = buildCallAgentTool({
       ...baseToolOpts(events),
-      takeElementReferenceEvidence,
+      agentConfigs: [teacher, assistant],
+      elementReferenceEvidence: packet,
     });
 
     const first = await tool.execute('call-grounded-1', {
@@ -220,16 +228,20 @@ describe('Pi call_agent JSON action output', () => {
       instruction: 'Explain the selected element.',
     });
     const second = await tool.execute('call-grounded-2', {
-      agentId: teacher.id,
-      instruction: 'Continue.',
+      agentId: assistant.id,
+      instruction: 'Continue through a grounded handoff.',
     });
 
-    expect(first.details).toMatchObject({ groundedChildSucceeded: true });
+    expect(first.details).toMatchObject({ elementReferenceEvidence: packet.metadata });
+    expect(second.details).toMatchObject({ elementReferenceEvidence: packet.metadata });
+    expect(first.details).not.toHaveProperty('groundedChildSucceeded');
     expect(second.details).not.toHaveProperty('groundedChildSucceeded');
-    expect(takeElementReferenceEvidence).toHaveBeenCalledTimes(2);
+    expect(mocks.childPrompts).toHaveLength(2);
+    expect(mocks.childPrompts[0]).toContain('Selected element packet');
+    expect(mocks.childPrompts[1]).toContain('Selected element packet');
   }, 15_000);
 
-  it('marks partial-text-then-error Legacy turns as grounded failure', async () => {
+  it('keeps a failed grounded Legacy turn in the ordinary result lifecycle', async () => {
     let handler: ((event: unknown) => unknown) | null = null;
     mocks.buildAgent.mockReturnValue({
       subscribe: (next: (event: unknown) => unknown) => {
@@ -249,7 +261,7 @@ describe('Pi call_agent JSON action output', () => {
     const { buildCallAgentTool } = await import('@/lib/chat/pi/tools/call-agent');
     const tool = buildCallAgentTool({
       ...baseToolOpts([]),
-      takeElementReferenceEvidence: () => ({
+      elementReferenceEvidence: {
         content: 'Selected element packet',
         metadata: {
           kind: 'slide_element',
@@ -262,7 +274,7 @@ describe('Pi call_agent JSON action output', () => {
           omittedItems: {},
           content: { text: 'Evidence' },
         },
-      }),
+      },
     });
 
     const result = await tool.execute('call-grounded-failure', {
@@ -270,10 +282,12 @@ describe('Pi call_agent JSON action output', () => {
       instruction: 'Explain the selected element.',
     });
 
-    expect(result).toMatchObject({
-      isError: true,
-      details: { text: 'partial answer', groundedChildSucceeded: false },
+    expect(result).not.toHaveProperty('isError');
+    expect(result.details).toMatchObject({
+      text: 'partial answer',
+      elementReferenceEvidence: expect.objectContaining({ elementId: 'element-1' }),
     });
+    expect(result.details).not.toHaveProperty('groundedChildSucceeded');
   });
 
   it('parses child JSON actions, executes all action events, and does not leak raw JSON speech', async () => {

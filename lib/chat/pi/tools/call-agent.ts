@@ -51,10 +51,10 @@ const CallAgentParams = Type.Object({
 
 type CallAgentParams = Static<typeof CallAgentParams>;
 
-type RuntimeEvidenceAttachment<TMetadata> = {
+type RuntimeEvidenceAttachment<TMetadata> = Readonly<{
   content: string;
-  metadata: TMetadata;
-};
+  metadata: Readonly<TMetadata>;
+}>;
 
 export type RequestStartCurrentScene = Readonly<{
   sceneId: string;
@@ -555,7 +555,7 @@ export function buildCallAgentTool(opts: {
   isUserCued?: () => boolean;
   isSessionClosed?: () => boolean;
   takeSceneEvidence?: () => RuntimeEvidenceAttachment<DirectorSceneEvidenceMetadata[]> | undefined;
-  takeElementReferenceEvidence?: () => RuntimeEvidenceAttachment<SlideElementEvidence> | undefined;
+  elementReferenceEvidence?: RuntimeEvidenceAttachment<SlideElementEvidence>;
 }): AgentTool<typeof CallAgentParams> {
   // Loop-guard (model-agnostic): an empty/errored child turn used to bypass onAgentDone,
   // so the completed-turn count never advanced and the maxAgentTurns guard was defeated — a model
@@ -661,11 +661,11 @@ export function buildCallAgentTool(opts: {
         };
       }
 
-      // Evidence is request-scoped and belongs to exactly one valid child delegation.
-      // Take it before starting/building the child so any downstream failure cannot
-      // leak the packet to a later agent.
+      // read_scene evidence remains pending/take-once. Selected-element evidence is
+      // immutable request context and is attached to every valid child delegation,
+      // including retries and handoffs after an earlier child failure.
       const sceneEvidence = opts.takeSceneEvidence?.();
-      const elementReferenceEvidence = opts.takeElementReferenceEvidence?.();
+      const elementReferenceEvidence = opts.elementReferenceEvidence;
       const capturedScene = opts.requestStartCurrentScene;
       const hasMatchingCurrentSceneEvidence = Boolean(
         capturedScene &&
@@ -816,7 +816,6 @@ export function buildCallAgentTool(opts: {
 
         const finalText = nativeResult.visibleOutput.trim();
         const isCompleted = nativeResult.status === 'completed';
-        const groundedChildSucceeded = isCompleted && finalText.length > 0;
         consecutiveEmptyTurns = isCompleted ? 0 : consecutiveEmptyTurns + 1;
         await opts.send({ type: 'agent_end', data: { messageId, agentId: agent.id } });
         opts.onAgentDone({
@@ -846,7 +845,6 @@ export function buildCallAgentTool(opts: {
             ...(elementReferenceEvidence
               ? {
                   elementReferenceEvidence: elementReferenceEvidence.metadata,
-                  groundedChildSucceeded,
                 }
               : {}),
           },
@@ -966,7 +964,6 @@ export function buildCallAgentTool(opts: {
         fallbackText && !isLikelyRawStructuredFallback(fallbackText) ? fallbackText : '';
       const finalText = emittedText || safeFallback;
       const hasVisibleText = finalText.length > 0;
-      const groundedChildSucceeded = !childErrored && hasVisibleText;
       if (finalText && !emittedText) {
         await opts.send({ type: 'text_delta', data: { content: finalText, messageId } });
       }
@@ -998,11 +995,9 @@ export function buildCallAgentTool(opts: {
           ...(elementReferenceEvidence
             ? {
                 elementReferenceEvidence: elementReferenceEvidence.metadata,
-                groundedChildSucceeded,
               }
             : {}),
         },
-        ...(elementReferenceEvidence && !groundedChildSucceeded ? { isError: true } : {}),
       };
     },
   };
