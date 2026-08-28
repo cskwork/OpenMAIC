@@ -350,34 +350,6 @@ describe('generation and deck tools', () => {
     expect(prompts[2]).toContain('Entropy of mixing');
   });
 
-  it('passes procedural-skill widgets through to interactive generation', async () => {
-    const current = state(document([]));
-    const prompts: string[] = [];
-    let calls = 0;
-    const aiCall = vi.fn(async (_system: string, user: string) => {
-      calls += 1;
-      prompts.push(user);
-      return calls === 1
-        ? '<!DOCTYPE html><html><body><div id="pump-inspection"></div></body></html>'
-        : '[]';
-    });
-    const generate = find(buildGenerationTools(deps(current.store, { aiCall })), 'generate_scene');
-    const response = await generate.execute('call', {
-      stageId: 'stage-test',
-      order: 1,
-      title: 'Pump Inspection',
-      type: 'interactive',
-      brief: 'Train the pump inspection procedure',
-      widgetType: 'procedural-skill',
-      widgetOutline: { task: 'Inspect the coolant pump', steps: ['Isolate the pump'] },
-    } as never);
-    expect(response).not.toMatchObject({ isError: true });
-    expect(current.get()?.scenes[0]?.content).toMatchObject({
-      widgetType: 'procedural-skill',
-    });
-    expect(prompts[0]).toContain('Inspect the coolant pump');
-  });
-
   it('validates widget params through the tool schema', () => {
     const generate = find(buildGenerationTools(deps(state(document([])).store)), 'generate_scene');
     const base = {
@@ -388,8 +360,10 @@ describe('generation and deck tools', () => {
       brief: 'Brief',
     };
     expect(Value.Check(generate.parameters, { ...base, widgetType: 'diagram' })).toBe(true);
+    // procedural-skill stays gated behind task-engine mode: the tool schema
+    // must keep rejecting it until a vocational signal reaches this layer.
     expect(Value.Check(generate.parameters, { ...base, widgetType: 'procedural-skill' })).toBe(
-      true,
+      false,
     );
     expect(Value.Check(generate.parameters, { ...base, widgetType: 'hologram' })).toBe(false);
   });
