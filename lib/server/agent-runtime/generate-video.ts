@@ -536,9 +536,12 @@ export function buildGenerateVideoTool(
         deps,
         callProvider,
         persist,
-      }).catch(async (error) => {
+      }).catch((error) => {
         // runVideoGenerationJob handles every expected failure itself; this is
         // the last-resort guard against an unhandled rejection from a bug.
+        // Keep the handler synchronous and only call never-rejecting helpers
+        // (emitMediaReadyFrame catches internally): a throw here would become
+        // the very unhandled rejection this guard exists to contain.
         log.error(`[${toolCallId}] Video generation job crashed for ${ref}`, error);
         settlePendingMedia(ref, {
           status: 'failed',
@@ -546,7 +549,7 @@ export function buildGenerateVideoTool(
         });
         // A crashed job never lands in the document, so without this frame
         // the client would keep rendering the placeholder skeleton forever.
-        await emitMediaReadyFrame(deps, toolCallId, {
+        void emitMediaReadyFrame(deps, toolCallId, {
           ref,
           stageId,
           status: 'failed',

@@ -717,6 +717,52 @@ describe('patchStageVideoPlaceholder', () => {
     expect(elements[0]?.src).toBe('/api/classroom-media/stage-owner/media/v.mp4');
   });
 
+  it('does not resurrect a placeholder element removed by a concurrent edit', async () => {
+    const fake = createFakeDocumentStore();
+    const scene = makeSlideScene('scene-1', 'stage-owner', 1) as AppScene;
+    (scene.content as { canvas: { elements: unknown[] } }).canvas.elements.push({
+      id: 'v',
+      type: 'video',
+      mediaRef: 'gen_vid_abc',
+    });
+    fake.docs.set('stage-owner', makeDocument('stage-owner', 'Course', [scene]));
+
+    // The element carrying the placeholder is deleted after the candidate
+    // scan but before the write; the patch must skip, not resurrect it.
+    const originalLoad = fake.store.loadDocument.bind(fake.store);
+    vi.spyOn(fake.store, 'loadDocument').mockImplementation(async (stageId: string) => {
+      const doc = await originalLoad(stageId);
+      const current = fake.docs.get('stage-owner');
+      const edited = current?.scenes[0];
+      if (current && edited) {
+        const content = edited.content as { canvas: { elements: unknown[] } };
+        fake.docs.set(
+          'stage-owner',
+          makeDocument('stage-owner', 'Course', [
+            {
+              ...edited,
+              content: { ...edited.content, canvas: { ...content.canvas, elements: [] } },
+            } as unknown as AppScene,
+          ]),
+        );
+      }
+      return doc;
+    });
+
+    const patched = await patchStageVideoPlaceholder(
+      fake.store,
+      'stage-owner',
+      'gen_vid_abc',
+      '/api/classroom-media/stage-owner/media/v.mp4',
+    );
+
+    expect(patched).toBe(0);
+    const persisted = await fake.store.getScene('stage-owner', 'scene-1');
+    expect(
+      (persisted!.content as { canvas: { elements: unknown[] } }).canvas.elements,
+    ).toHaveLength(0);
+  });
+
   it('returns 0 for a missing document or an unreferenced placeholder', async () => {
     const fake = createFakeDocumentStore();
     await expect(
