@@ -27,9 +27,10 @@ not the teaching method, page style, or build sequence.
 After all pages exist, use `list_scenes` and read their text for a quick final
 sanity check of exact facts and cross-page contradictions. Correct obvious
 errors before delivery because creating the course already authorizes making
-its content accurate. Do not interrupt creation with a separate audit report or
-an approval gate; briefly mention only material corrections or remaining
-uncertainty when handing off the finished course.
+its content accurate, subject to the source-of-truth boundary below. Do not
+interrupt creation with a separate audit report or approval gate unless that
+boundary requires a user decision; briefly mention only material corrections
+or remaining uncertainty when handing off the finished course.
 
 ## When reviewing existing content
 
@@ -74,6 +75,23 @@ check the relevant date, version, and jurisdiction.
 
 “No reliable evidence found” does not mean false. If verification remains
 inconclusive, say so rather than inventing a verdict or correction.
+
+## Preserve approved inputs
+
+Do not make a correction that would materially conflict with the settled
+course plan, user-uploaded materials, or facts already supplied to generation
+through `materialFacts`. Treat these as approved inputs, not ordinary generated
+copy.
+
+If the evidence indicates that an approved input itself may contain a factual
+error, do not edit the affected course content or silently override the input.
+Use `ask_user` to flag the input conflict, state the affected page or claim and
+the contrary evidence concisely, and offer options to keep the approved input,
+authorize the factual correction, or review the conflict without editing. Put
+the warning in the `ask_user` prompt so it appears in the choice card, not only
+in the preceding report. This protection applies even when edits were otherwise
+authorized. It does not block corrections to errors introduced independently
+by generated page content.
 
 ## Give a short, readable review report
 
@@ -123,6 +141,9 @@ in the user's language, equivalent to:
 
 Use stable option ids such as `fix_all`, `fix_confirmed`, and `keep`. The form's
 free-text choice lets the user enter selected finding numbers such as `1, 3`.
+
+An approved-input conflict always requires the separate `ask_user` choice
+described above, even if the user previously authorized general corrections.
 
 Do not patch before the answer. After approval, load `pro-editing`, read each
 selected page with `read_stage` using `detail:"source"`, and change only the

@@ -375,7 +375,11 @@ describe('shipped skill constraints', () => {
     expect(factCheck?.content).toContain('After all pages exist');
     expect(factCheck?.content).not.toContain('create_stage');
     expect(factCheck?.content).not.toContain('page `brief`');
-    expect(factCheck?.content).not.toContain('materialFacts');
+    expect(factCheck?.content).toContain('user-uploaded materials');
+    expect(factCheck?.content).toContain('through `materialFacts`');
+    expect(factCheck?.content).toContain('do not edit the affected course content');
+    expect(factCheck?.content).toContain('appears in the choice card');
+    expect(factCheck?.content).toContain('even if the user previously authorized');
     expect(factCheck?.content).toContain('Correct obvious');
     expect(factCheck?.content).toContain('exact numbers, dates, counts');
     expect(factCheck?.content).toContain('6–8 searches');
