@@ -24,18 +24,23 @@ to choose a mode:
 Use the normal `stage-design` workflow; this skill changes factual handling,
 not the teaching method, page style, or build sequence.
 
-Before `create_stage`, scan the proposed page plan for the high-signal risks
-below. Verify only claims the course will actually rely on. Put the verified
-wording, relevant date or scope, and source attribution into the page `brief`
-or pass it to `generate_scene` as `materialFacts` so the page generator receives
-the fact — it cannot use research left only in chat memory.
+Do not fact-check the outline. Once the plan is settled, identify only pages
+that will rely on exact, current, disputed, or specialist facts. Before
+generating those pages, use the available materials or a small batched search
+to prepare a short list and pass it to `generate_scene` as `materialFacts`.
+Each item should be an atomic fact the page may state: the correct fact, any
+necessary date, version, jurisdiction, or scope, and a concise source
+attribution or URL. Do not pass raw research notes, search-result snippets,
+prose instructions, or unrelated facts. Skip this step for pages without these
+risks.
 
-After all pages exist, use `list_scenes` and read their text for a quick final
-sanity check of exact facts and cross-page contradictions. Correct obvious
-errors before delivery because creating the course already authorizes making
-its content accurate. Do not interrupt creation with a separate audit report or
-an approval gate; briefly mention only material corrections or remaining
-uncertainty when handing off the finished course.
+After all pages exist and before final TTS and completion, use `list_scenes` and
+read their text for one concentrated sanity check of exact facts and cross-page
+contradictions. Correct obvious errors before delivery because creating the
+course already authorizes making its content accurate. Do not interrupt
+creation with a separate audit report or approval gate; briefly mention only
+material corrections or remaining uncertainty when handing off the finished
+course.
 
 ## When reviewing existing content
 
