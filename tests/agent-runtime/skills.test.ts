@@ -401,6 +401,15 @@ describe('shipped skill constraints', () => {
     expect(flat(factCheck?.content ?? '')).toContain('non-empty `options` array');
     expect(factCheck?.content).toContain('fix_all');
     expect(factCheck?.content).toContain('Do not patch before the answer');
+
+    const creationSection = factCheck?.content
+      .split('## While creating a course')[1]
+      ?.split('## When reviewing existing content')[0];
+    const flatCreationSection = flat(creationSection ?? '');
+    expect(flatCreationSection).toContain('`list_scenes`');
+    expect(flatCreationSection).toContain('`read_stage` using `detail:"text"`');
+    expect(flatCreationSection).toContain('`nextOffset`');
+    expect(flatCreationSection).toContain('visible text and narration');
   });
 
   it('exposes the title only through frontmatter the loader actually reads', async () => {

@@ -24,13 +24,15 @@ to choose a mode:
 Use the normal `stage-design` workflow; this skill changes factual handling,
 not the teaching method, page style, or build sequence.
 
-After all pages exist, use `list_scenes` and read their text for a quick final
-sanity check of exact facts and cross-page contradictions. Correct obvious
-errors before delivery because creating the course already authorizes making
-its content accurate, subject to the source-of-truth boundary below. Do not
-interrupt creation with a separate audit report or approval gate unless that
-boundary requires a user decision; briefly mention only material corrections
-or remaining uncertainty when handing off the finished course.
+After all pages exist, call `list_scenes`, then read every completed page with
+`read_stage` using `detail:"text"`; follow `nextOffset` until all visible text
+and narration have been read. Run a quick final sanity check of exact facts and
+cross-page contradictions. Correct obvious errors before delivery because
+creating the course already authorizes making its content accurate, subject to
+the source-of-truth boundary below. Do not interrupt creation with a separate
+audit report or approval gate unless that boundary requires a user decision;
+briefly mention only material corrections or remaining uncertainty when
+handing off the finished course.
 
 ## When reviewing existing content
 
