@@ -379,10 +379,11 @@ describe('shipped skill constraints', () => {
     expect(factCheck?.content).toContain('exact numbers, dates, counts');
     expect(factCheck?.content).toContain('6–8 searches');
     expect(factCheck?.content).toContain('3–8 useful findings');
-    expect(factCheck?.content).toContain('一、明确事实错误');
-    expect(factCheck?.content).toContain('二、表述不严谨');
-    expect(factCheck?.content).toContain('三、需要核实');
-    expect(factCheck?.content).toContain('### 1. 第 5 页｜测验解析｜知识混淆');
+    expect(factCheck?.content).toContain('A. 明确事实错误');
+    expect(factCheck?.content).toContain('B. 表述不严谨');
+    expect(factCheck?.content).toContain('C. 需要核实');
+    expect(factCheck?.content).toContain('**1. 第 5 页｜测验解析｜知识混淆**');
+    expect(factCheck?.content).toContain('normal body-text size');
     expect(factCheck?.content).toContain('exactly three bullets');
     expect(factCheck?.content).toContain('原始表述');
     expect(factCheck?.content).toContain('存在问题');

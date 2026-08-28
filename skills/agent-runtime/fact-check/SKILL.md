@@ -84,17 +84,19 @@ inconclusive, say so rather than inventing a verdict or correction.
 ## Give a short, readable review report
 
 In review mode, return roughly 3–8 useful findings in the first pass, or fewer
-when fewer exist. Group them under these top-level headings, in this order, and
-omit an empty group:
+when fewer exist. Group them under these bold plain-text labels, in this order,
+and omit an empty group. Keep them at normal body-text size: do not prefix them
+with Markdown heading markers such as `#` or `##`.
 
-1. **一、明确事实错误**
-2. **二、表述不严谨**
-3. **三、需要核实** — include only when the claim matters
+- **A. 明确事实错误**
+- **B. 表述不严谨**
+- **C. 需要核实** — include only when the claim matters
 
 Within the groups, number findings consecutively across the whole report with
-Arabic numerals. Give every finding a short subheading containing its number,
+Arabic numerals. Give every finding a short bold line containing its number,
 page/location, and specific issue, for example:
-`### 1. 第 5 页｜测验解析｜知识混淆`.
+`**1. 第 5 页｜测验解析｜知识混淆**`. Do not use Markdown heading markers for
+finding titles either.
 
 Under each heading, use exactly three bullets:
 
