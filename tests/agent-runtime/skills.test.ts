@@ -341,6 +341,61 @@ describe('shipped skill constraints', () => {
     expect(spiral?.content).toContain('/curriculum-planner');
   });
 
+  it('ships fact-check as an evidence-backed creation and review skill', async () => {
+    const all = await listSkills();
+    const factCheck = all.find((skill) => skill.id === 'fact-check');
+
+    expect(factCheck).toMatchObject({
+      name: 'fact-check',
+      title: '事实核查',
+      source: 'builtin',
+      constraints: null,
+    });
+    expect(factCheck?.description).toContain('事实性错误');
+    expect(factCheck?.description).toContain('deep-research');
+    expect(factCheck?.description).toContain('while creating or reviewing');
+    expect(availableSkillsPromptBlock(all)).toContain('<name>fact-check</name>');
+
+    for (const tool of [
+      'list_scenes',
+      'read_stage',
+      'list_materials',
+      'read_material',
+      'web_search',
+      'fetch_url',
+      'ask_user',
+      'pro-editing',
+      'stage-design',
+      'create_stage',
+      'generate_scene',
+    ]) {
+      expect(factCheck?.content, tool).toContain(`\`${tool}\``);
+    }
+    expect(factCheck?.content).toContain('Do not verify every claim');
+    expect(factCheck?.content).toContain('Creating:');
+    expect(factCheck?.content).toContain('Reviewing:');
+    expect(factCheck?.content).toContain('as `materialFacts`');
+    expect(factCheck?.content).toContain('Correct obvious');
+    expect(factCheck?.content).toContain('exact numbers, dates, counts');
+    expect(factCheck?.content).toContain('6–8 searches');
+    expect(factCheck?.content).toContain('3–8 useful findings');
+    expect(flat(factCheck?.content ?? '')).toContain(
+      'Do not split the report into severity sections',
+    );
+    expect(factCheck?.content).toContain('exactly three bullets');
+    expect(factCheck?.content).toContain('原始表述');
+    expect(factCheck?.content).toContain('存在问题');
+    expect(factCheck?.content).toContain('修改建议');
+    expect(flat(factCheck?.content ?? '')).toContain('Do not repeat the same fact or quotation');
+    expect(factCheck?.content).toContain('finding numbers such as `1, 3`');
+    expect(factCheck?.content).not.toContain('F01');
+    expect(factCheck?.content).toContain('Do not pause the run');
+    expect(factCheck?.content).toContain('last action of the turn must be an `ask_user`');
+    expect(flat(factCheck?.content ?? '')).toContain('non-empty `options` array');
+    expect(factCheck?.content).toContain('fix_all');
+    expect(factCheck?.content).toContain('Do not patch before the answer');
+  });
+
   it('exposes the title only through frontmatter the loader actually reads', async () => {
     // The title comes from the file, not from a table in the loader: renaming a
     // skill's display name is an edit to its SKILL.md and nothing else.
