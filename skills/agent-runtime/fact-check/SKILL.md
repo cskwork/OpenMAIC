@@ -1,7 +1,7 @@
 ---
 name: fact-check
 title: "事实核查"
-description: "Improve factual reliability while creating or reviewing a course or supplied content. Use when the user asks to fact-check, verify accuracy, reduce hallucinations, make a reliable course, or mentions 事实性错误、知识性错误、专业知识准确性、可靠性. During creation, verifies high-risk claims before they are taught and runs a final sanity check; on existing content, returns a short evidence-backed report and lets the user choose what to fix. Not for grammar, style, or layout. Combine with deep-research when current evidence is the course's main subject."
+description: "Improve factual reliability while creating or reviewing a course or supplied content. Use when the user asks to fact-check, verify accuracy, reduce hallucinations, make a reliable course, or mentions 事实性错误、知识性错误、专业知识准确性、可靠性. During creation, checks the completed pages before delivery; on existing content, returns a short evidence-backed report and lets the user choose what to fix. Not for grammar, style, or layout. Combine with deep-research when current evidence is the course's main subject."
 ---
 
 # Fact check
@@ -14,7 +14,7 @@ Choose the mode from the request and current course state; do not ask the user
 to choose a mode:
 
 - **Creating:** when there is no course yet or the user asks to build/rebuild
-  one, load `stage-design` and apply the checks while planning and generating.
+  one, load `stage-design` and run the check only after all pages exist.
 - **Reviewing:** when content already exists and the user asks to inspect it,
   report findings first. Do not edit unless fixes were already requested or the
   user approves findings after the report.
@@ -23,11 +23,6 @@ to choose a mode:
 
 Use the normal `stage-design` workflow; this skill changes factual handling,
 not the teaching method, page style, or build sequence.
-
-Before `create_stage`, scan the proposed page plan for the high-signal risks
-below. Verify only claims the course will actually rely on. Put the verified
-wording, relevant date or scope, and source attribution into the page `brief`
-so the page generator receives the fact.
 
 After all pages exist, use `list_scenes` and read their text for a quick final
 sanity check of exact facts and cross-page contradictions. Correct obvious
