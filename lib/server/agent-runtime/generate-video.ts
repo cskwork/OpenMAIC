@@ -43,6 +43,8 @@ const log = createLogger('AgentGenerateVideo');
 export const GENERATE_VIDEO_TOOL_NAME = 'generate_video';
 // The longest provider poll budget is 15 minutes.
 export const GENERATE_VIDEO_TIMEOUT_MS = 15 * 60_000;
+/** The completion patch is a handful of document writes; a minute is ample. */
+export const GENERATE_VIDEO_PATCH_TIMEOUT_MS = 60_000;
 export const MAX_GENERATED_VIDEO_BYTES = 200 * 1024 * 1024;
 
 export const GenerateVideoParams = Type.Object({
@@ -324,7 +326,13 @@ export async function patchStageVideoPlaceholder(
     const canvas = scene.content.canvas;
     let touched = false;
     const elements = canvas.elements.map((element) => {
-      if (element.type === 'video' && (element.mediaRef === ref || element.src === ref)) {
+      if (
+        element.type === 'video' &&
+        (element.mediaRef === ref || element.src === ref) &&
+        // A user edit that already replaced the placeholder with a concrete
+        // src wins: only write while src is absent or still the placeholder.
+        (element.src === undefined || element.src === ref)
+      ) {
         touched = true;
         return { ...element, src };
       }
@@ -394,15 +402,23 @@ async function runVideoGenerationJob(input: VideoJobInput): Promise<void> {
 
     if (deps.backgroundStore) {
       setPendingMediaStage(ref, 'patch');
-      const patched = await patchStageVideoPlaceholder(
-        deps.backgroundStore,
-        stageId,
-        ref,
-        stored.src,
-        signal,
-      );
-      if (patched > 0) {
-        log.info(`[${toolCallId}] Patched ${ref} onto ${patched} page(s) of stage ${stageId}`);
+      try {
+        // The patch runs on its own short budget: the shared job signal may
+        // be nearly exhausted by the provider cycle, and a patch failure must
+        // not rebrand a persisted, downloadable asset as failed — the done
+        // frame's src still lets connected clients render it.
+        const patched = await patchStageVideoPlaceholder(
+          deps.backgroundStore,
+          stageId,
+          ref,
+          stored.src,
+          AbortSignal.timeout(GENERATE_VIDEO_PATCH_TIMEOUT_MS),
+        );
+        if (patched > 0) {
+          log.info(`[${toolCallId}] Patched ${ref} onto ${patched} page(s) of stage ${stageId}`);
+        }
+      } catch (error) {
+        log.error(`[${toolCallId}] Document patch failed for ${ref}`, error);
       }
     }
 

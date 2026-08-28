@@ -320,6 +320,53 @@ describe('generate_video tool', () => {
     );
   });
 
+  it('still reports done when the document patch fails after persist', async () => {
+    const fake = createFakeDocumentStore();
+    const scene = makeSlideScene('scene-1', 'stage-owner', 1) as AppScene;
+    fake.docs.set('stage-owner', makeDocument('stage-owner', 'Course', [scene]));
+    vi.spyOn(fake.store, 'putScene').mockRejectedValue(new Error('write failed'));
+
+    const providerCall = deferred<{
+      url: string;
+      duration: number;
+      width: number;
+      height: number;
+    }>();
+    const emitMediaReady = vi.fn();
+    const tool = buildGenerateVideoTool({
+      sessionId: 'session-owner',
+      backgroundStore: fake.store,
+      getConfiguredVideoProviders: configured,
+      resolveVideoProviderConfig: () => providerConfig,
+      generateConfiguredVideo: vi.fn().mockReturnValue(providerCall.promise),
+      persistGeneratedVideo: vi.fn().mockResolvedValue({
+        src: '/api/classroom-media/stage-owner/media/generated-abc.mp4',
+        mime: 'video/mp4',
+      }),
+      emitMediaReady,
+    });
+
+    const result = (await tool.execute('call-1', {
+      stageId: 'stage-owner',
+      prompt: 'motion',
+    })) as ToolResult;
+    const ref = result.details.ref as string;
+    providerCall.resolve({
+      url: 'https://cdn.example.com/generated/lesson.mp4',
+      duration: 4,
+      width: 1280,
+      height: 720,
+    });
+    // The asset is persisted and downloadable: a patch failure is logged, not
+    // rebranded as a generation failure.
+    await vi.waitFor(() => expect(emitMediaReady).toHaveBeenCalledTimes(1));
+    expect(emitMediaReady).toHaveBeenCalledWith(
+      'session-owner',
+      expect.objectContaining({ ref, status: 'done' }),
+    );
+    expect(getPendingMediaTask(ref)).toMatchObject({ status: 'done' });
+  });
+
   it('skips the document patch silently when nothing references the placeholder anymore', async () => {
     const fake = createFakeDocumentStore();
     const scene = makeSlideScene('scene-1', 'stage-owner', 1) as AppScene;
@@ -652,6 +699,14 @@ describe('patchStageVideoPlaceholder', () => {
       { id: 'by-ref', type: 'video', mediaRef: 'gen_vid_abc' },
       { id: 'by-src', type: 'video', src: 'gen_vid_abc' },
       { id: 'other', type: 'video', src: 'https://cdn.example.com/x.mp4' },
+      // The user swapped in their own concrete src while the job ran: the
+      // stale mediaRef must not pull the generated video back over it.
+      {
+        id: 'user-swap',
+        type: 'video',
+        mediaRef: 'gen_vid_abc',
+        src: 'https://cdn.example.com/user.mp4',
+      },
       { id: 'img', type: 'image', src: 'gen_img_abc' },
     );
     fake.docs.set('stage-owner', makeDocument('stage-owner', 'Course', [scene]));
@@ -670,8 +725,9 @@ describe('patchStageVideoPlaceholder', () => {
     expect(elements[0]?.src).toBe('/api/classroom-media/stage-owner/media/v.mp4');
     expect(elements[1]?.src).toBe('/api/classroom-media/stage-owner/media/v.mp4');
     expect(elements[2]?.src).toBe('https://cdn.example.com/x.mp4');
+    expect(elements[3]?.src).toBe('https://cdn.example.com/user.mp4');
     // Image placeholders belong to the (still synchronous) image flow.
-    expect(elements[3]?.src).toBe('gen_img_abc');
+    expect(elements[4]?.src).toBe('gen_img_abc');
   });
 
   it('applies the swap to the freshest scene so a concurrent edit survives', async () => {
