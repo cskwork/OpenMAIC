@@ -323,6 +323,11 @@ describe('generate_video tool', () => {
   it('still reports done when the document patch fails after persist', async () => {
     const fake = createFakeDocumentStore();
     const scene = makeSlideScene('scene-1', 'stage-owner', 1) as AppScene;
+    (scene.content as { canvas: { elements: unknown[] } }).canvas.elements.push({
+      id: 'el-video',
+      type: 'video',
+      mediaRef: 'gen_vid_pending',
+    });
     fake.docs.set('stage-owner', makeDocument('stage-owner', 'Course', [scene]));
     vi.spyOn(fake.store, 'putScene').mockRejectedValue(new Error('write failed'));
 
@@ -351,6 +356,13 @@ describe('generate_video tool', () => {
       prompt: 'motion',
     })) as ToolResult;
     const ref = result.details.ref as string;
+    // The agent's follow-up patch_stage: the element now carries the ref, so
+    // the completion patch really attempts the (failing) write.
+    const seeded = fake.docs.get('stage-owner')!.scenes[0]!;
+    (
+      seeded.content as { canvas: { elements: { mediaRef?: string }[] } }
+    ).canvas.elements[0]!.mediaRef = ref;
+
     providerCall.resolve({
       url: 'https://cdn.example.com/generated/lesson.mp4',
       duration: 4,
@@ -365,6 +377,10 @@ describe('generate_video tool', () => {
       expect.objectContaining({ ref, status: 'done' }),
     );
     expect(getPendingMediaTask(ref)).toMatchObject({ status: 'done' });
+    expect(mocks.log.error).toHaveBeenCalledWith(
+      expect.stringContaining('Document patch failed'),
+      expect.any(Error),
+    );
   });
 
   it('skips the document patch silently when nothing references the placeholder anymore', async () => {
@@ -707,6 +723,16 @@ describe('patchStageVideoPlaceholder', () => {
         mediaRef: 'gen_vid_abc',
         src: 'https://cdn.example.com/user.mp4',
       },
+      // Regeneration: the agent re-pointed mediaRef at a new job while the
+      // element still carries the previous generated src — that one is
+      // replaced (it would otherwise keep rendering the old video).
+      {
+        id: 'regenerated',
+        type: 'video',
+        mediaRef: 'gen_vid_abc',
+        src: '/api/classroom-media/stage-owner/media/old.mp4',
+      },
+      { id: 'empty-src', type: 'video', mediaRef: 'gen_vid_abc', src: '' },
       { id: 'img', type: 'image', src: 'gen_img_abc' },
     );
     fake.docs.set('stage-owner', makeDocument('stage-owner', 'Course', [scene]));
@@ -726,8 +752,10 @@ describe('patchStageVideoPlaceholder', () => {
     expect(elements[1]?.src).toBe('/api/classroom-media/stage-owner/media/v.mp4');
     expect(elements[2]?.src).toBe('https://cdn.example.com/x.mp4');
     expect(elements[3]?.src).toBe('https://cdn.example.com/user.mp4');
+    expect(elements[4]?.src).toBe('/api/classroom-media/stage-owner/media/v.mp4');
+    expect(elements[5]?.src).toBe('/api/classroom-media/stage-owner/media/v.mp4');
     // Image placeholders belong to the (still synchronous) image flow.
-    expect(elements[4]?.src).toBe('gen_img_abc');
+    expect(elements[6]?.src).toBe('gen_img_abc');
   });
 
   it('applies the swap to the freshest scene so a concurrent edit survives', async () => {

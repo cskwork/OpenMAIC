@@ -329,9 +329,15 @@ export async function patchStageVideoPlaceholder(
       if (
         element.type === 'video' &&
         (element.mediaRef === ref || element.src === ref) &&
-        // A user edit that already replaced the placeholder with a concrete
-        // src wins: only write while src is absent or still the placeholder.
-        (element.src === undefined || element.src === ref)
+        // A user edit that already replaced the placeholder with their own
+        // concrete src wins: only write while src is absent, empty, still
+        // the placeholder, or a previously generated classroom-media URL
+        // (the regeneration case, where the agent re-points mediaRef and the
+        // stale generated src must not keep rendering).
+        (element.src === undefined ||
+          element.src === '' ||
+          element.src === ref ||
+          element.src.startsWith('/api/classroom-media/'))
       ) {
         touched = true;
         return { ...element, src };
