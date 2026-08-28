@@ -366,18 +366,17 @@ describe('shipped skill constraints', () => {
       'ask_user',
       'pro-editing',
       'stage-design',
-      'generate_scene',
+      'create_stage',
     ]) {
       expect(factCheck?.content, tool).toContain(`\`${tool}\``);
     }
     expect(factCheck?.content).toContain('Do not verify every claim');
     expect(factCheck?.content).toContain('Creating:');
     expect(factCheck?.content).toContain('Reviewing:');
-    expect(factCheck?.content).toContain('as `materialFacts`');
-    expect(factCheck?.content).toContain('Do not fact-check the outline');
-    expect(factCheck?.content).toContain('an atomic fact');
-    expect(factCheck?.content).toContain('before final TTS and completion');
-    expect(factCheck?.content).not.toContain('scan the proposed page plan');
+    expect(factCheck?.content).toContain('scan the proposed page plan');
+    expect(factCheck?.content).toContain('page `brief`');
+    expect(factCheck?.content).toContain('After all pages exist');
+    expect(factCheck?.content).not.toContain('materialFacts');
     expect(factCheck?.content).toContain('Correct obvious');
     expect(factCheck?.content).toContain('exact numbers, dates, counts');
     expect(factCheck?.content).toContain('6–8 searches');
