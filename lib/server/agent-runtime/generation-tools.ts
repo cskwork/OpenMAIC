@@ -13,6 +13,8 @@ import {
   type SceneGenerationContext,
 } from '@openmaic/generation';
 
+import { putSceneBringingCurrent } from './document-writes';
+
 import type { AppDocumentOutline } from '@/lib/document-store/persistence-types';
 import type { SceneOutline } from '@/lib/types/generation';
 import type { Action } from '@/lib/types/action';
@@ -416,7 +418,9 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
       });
       if (!built) return result('Page assembly failed; nothing was written.', {}, true);
       const scene = built as Scene;
-      await runStageMutation(signal, () => deps.store.putScene(params.stageId, scene));
+      await runStageMutation(signal, () =>
+        putSceneBringingCurrent(deps.store, params.stageId, scene),
+      );
       const skill = deps.getActiveSkill?.() ?? null;
       const afterWrite = await deps.store.loadDocument(params.stageId);
       const skillViolations =
@@ -500,7 +504,9 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
       if (!actions.length)
         return result('No known actions were generated; the page was unchanged.', {}, true);
       const next = { ...scene, actions } as Scene;
-      await runStageMutation(signal, () => deps.store.putScene(params.stageId, next));
+      await runStageMutation(signal, () =>
+        putSceneBringingCurrent(deps.store, params.stageId, next),
+      );
       deps.onCheckpoint({
         tool: 'generate_actions',
         stageId: params.stageId,
@@ -517,7 +523,9 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
           signal,
         });
         if (audio.changed) {
-          await runStageMutation(signal, () => deps.store.putScene(params.stageId, next));
+          await runStageMutation(signal, () =>
+            putSceneBringingCurrent(deps.store, params.stageId, next),
+          );
           deps.onCheckpoint({
             tool: 'generate_actions',
             stageId: params.stageId,
