@@ -49,7 +49,7 @@ describe('resolveWorkbenchMaterialMime', () => {
   it("accepts the document path's curated aliases this gate previously missed", () => {
     // Deriving from the shared registry normalization (#1589) also fixes
     // real browser MIMEs the hand-rolled alias map didn't know: image/jpg,
-    // text/x-markdown and audio/x-wav used to 415 here.
+    // text/x-markdown, audio/x-wav and audio/mp3 used to 415 here.
     expect(resolveWorkbenchMaterialMime({ mimeType: 'image/jpg', fileName: 'photo.jpg' })).toBe(
       'image/jpeg',
     );
@@ -62,6 +62,10 @@ describe('resolveWorkbenchMaterialMime', () => {
       'audio/wav',
     );
     expect(isWorkbenchMaterialMime('audio/x-wav')).toBe(true);
+    expect(resolveWorkbenchMaterialMime({ mimeType: 'audio/mp3', fileName: 'song.mp3' })).toBe(
+      'audio/mpeg',
+    );
+    expect(isWorkbenchMaterialMime('audio/mp3')).toBe(true);
   });
 
   it('resolves a missing or generic MIME from the filename extension', () => {
