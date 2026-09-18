@@ -88,10 +88,17 @@ atomic file replacement retains the previous inode, and Chrome profiles are
 explicitly task-owned. Supervised frame copies use separate inodes, so retained
 internal cache links are not mistaken for unknown links. After W and descendants drain, the existing guardian
 checks references and removes private objects. Unknown links or deletion failure
-keep the reservation and close admission before publication. Retained temporary
+detected at this pre-publication stage block publication, retain the reservation
+and close admission. Retained temporary
 data remains charged to the task until that cleanup; no extra memory or deadline
 is granted. This does not prove absence of external open FDs, mappings or service
 references; the documented exclusive ownership boundary still applies.
+
+Publication and reservation return are separate outcomes. If the final transaction
+directory cannot be removed after the artifact has been committed, the published
+artifact remains available, the reservation stays quarantined and admission
+closes. Platform cleanup is required; this is not a guarantee that every cleanup
+failure prevents publication.
 
 | Component | Responsibility and reason for separation | Verification |
 | --- | --- | --- |
