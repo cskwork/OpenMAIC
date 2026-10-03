@@ -1,6 +1,6 @@
 {
   "name": "openmaic",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "private": true,
   "license": "MIT",
   "engines": {
@@ -33,7 +33,10 @@
     "eval:outline-language": "tsx eval/outline-language/runner.ts",
     "eval:orchestration": "tsx eval/orchestration/runner.ts",
     "eval:orchestration:answering": "tsx eval/orchestration/answering-runner.ts",
-    "eval:orchestration:answer-content": "tsx eval/orchestration/answer-content-runner.ts"
+    "eval:orchestration:answer-content": "tsx eval/orchestration/answer-content-runner.ts",
+    "local:start": "node --env-file=.env.local scripts/start-local.mjs",
+    "local:bridge": "node --env-file=.env.local scripts/codex-oauth-bridge.mjs",
+    "local:test": "node --test tests/local/codex-oauth-bridge.test.mjs && .venv-tts/bin/python -m unittest discover -s tests/local -p test_qwen_tts.py"
   },
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "^4.0.103",

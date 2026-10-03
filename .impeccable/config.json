@@ -1,0 +1,15 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "gray-on-color",
+        "value": "*",
+        "files": ["components/roundtable/index.tsx"],
+        "createdAt": "2026-10-03T04:30:56.932Z",
+        "reason": "Agent review: inactive buttons use gray on neutral backgrounds; purple hover backgrounds simultaneously apply purple hover text; active purple buttons use white text."
+      }
+    ]
+  }
+}

@@ -49,6 +49,10 @@ const eslintConfig = defineConfig([
     '.superpowers/**',
     '.worktrees/**',
     '.scratch/**',
+    // Local speech dependencies, saved media and operator verification artifacts:
+    '.venv-tts/**',
+    'data/**',
+    'logs/**',
     // Playwright e2e tests (not React code):
     'e2e/**',
     // Isolated MP4 render service: its own package, tsconfig, and Node-only

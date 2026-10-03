@@ -1,0 +1,33 @@
+providers:
+  codex:
+    preset: openai-compatible
+    baseUrl: http://127.0.0.1:57440/v1
+    apiKey: ${CODEX_BRIDGE_TOKEN}
+    models: [gpt-6.1-sol, gpt-6-astra, gpt-6-luna]
+  qwen-local:
+    preset: local-qwen-tts
+    baseUrl: http://127.0.0.1:57441/v1
+    apiKey: ${QWEN_TTS_TOKEN}
+    models: [Qwen3-TTS-12Hz-1.7B-Base]
+
+slots:
+  llm: codex:gpt-6.1-sol
+  course.outline: codex:gpt-6-astra
+  course.content: codex:gpt-6.1-sol
+  course.agents: codex:gpt-6-luna
+  course.actions: codex:gpt-6.1-sol
+  classroom: codex:gpt-6-luna
+  agent:
+    model: codex:gpt-6-astra
+    api: openai-completions
+    contextWindow: 128000
+  agent.title: codex:gpt-6-luna
+  image: null
+  video: null
+  tts: qwen-local:Qwen3-TTS-12Hz-1.7B-Base
+  asr: null
+  webSearch: null
+  document: null
+
+policy:
+  allowWorkspaceProviders: false

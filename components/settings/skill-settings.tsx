@@ -45,6 +45,7 @@ import { useI18n } from '@/lib/hooks/use-i18n';
 import {
   agentSkillsErrorText,
   skillTitle,
+  skillDescription,
   useAgentSkills,
   type AgentSkillInfo,
 } from '@/lib/workbench/agent-skills';
@@ -125,7 +126,7 @@ function SkillRow({
           <SkillBadges skill={skill} />
         </div>
         <p className="line-clamp-2 text-[11.5px] leading-snug text-muted-foreground">
-          {skill.description}
+          {skillDescription(skill, t)}
         </p>
       </div>
       <div className="flex shrink-0 items-center gap-0.5 pt-0.5">
@@ -264,7 +265,9 @@ function SkillDetailDialog({
                 <span className="min-w-0 truncate">{skillTitle(skill, t) ?? skill.name}</span>
                 <span className="shrink-0 text-[11px] text-muted-foreground">/{skill.name}</span>
               </DialogTitle>
-              <DialogDescription className="text-xs">{skill.description}</DialogDescription>
+              <DialogDescription className="text-xs">
+                {skillDescription(skill, t)}
+              </DialogDescription>
             </DialogHeader>
 
             <div className="flex items-center gap-1.5">

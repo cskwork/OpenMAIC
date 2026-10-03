@@ -66,6 +66,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Server persistence: runtime data of a deleted course reads as absent and takes no new writes, however the request path is spelled.
 - `@openmaic/storage` 0.32.0: `PgDocumentStore` takes `assetReferencePrincipals` (and `AssetCollector` a matching per-owner function) so a document write can no longer commit or pin another principal's asset entry; a store can refuse `createSession` with `RuntimeStageNotFoundError` (`404 STAGE_NOT_FOUND`); and a session create over a taken id answers `409 SESSION_ALREADY_EXISTS` whoever holds it, instead of `403` for another learner's session.
 
+## [1.2.0] - 2026-10-03
+
+Personal fork release based on upstream OpenMAIC snapshot `5312c2b`.
+
+### Added
+
+- Codex OAuth adapter using the signed-in Codex CLI, with account-verified text models and task-specific model assignments.
+- Offline Qwen3-TTS speech with an original Korean announcer voice, a separate Python runtime, authenticated local transport and audio caching.
+- One-command local startup with a separate PostgreSQL database, portable configuration examples and a setup guide.
+- Translated summaries for all 24 built-in skills across the 12 UI locales, while preserving agent instructions and user-authored descriptions.
+
+### Fixed
+
+- Copied English and Chinese labels in workspace, Pro, learning and settings screens across supported locales.
+- Untranslated playback, theme, homepage footer and local voice labels; voice search now matches localized names.
+- Locale validation now checks raw Pro overlays and interpolation tokens before fallback merging.
+- Pro switch hydration now preserves keyboard focus attributes when reduced motion is enabled.
+- Voice fallback ordering and keyboard input callbacks preserve the existing behavior after settings change.
+- Lint excludes the local Python runtime’s bundled third-party JavaScript and generated artifacts.
+
+### Validation
+
+- All 12 locales pass key and placeholder checks; English and Korean screens and voice search were checked in the browser.
+- The full app suite passes: 9,921 tests, with 157 existing skips. Six OAuth adapter tests and four local speech-server tests also pass.
+- Production build and TypeScript checks pass. Local Korean narration playback and English speech generation were verified.
+- Local secrets, models, voice recordings, saved courses and test evidence are excluded from this source release.
+
 ## [1.1.2] - 2026-09-28
 
 A security release. Server-side requests to provider URLs that a caller can choose now connect only to the addresses that passed validation and refuse redirects, and error responses no longer carry provider response bodies or connection details. Read **Behavior Changes** before upgrading.

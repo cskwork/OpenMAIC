@@ -11,7 +11,8 @@
  * generation toolbar cannot drift apart on what a provider is called.
  */
 
-import type { ASRProviderId, TTSProviderId } from './types';
+import type { ASRProviderId, TTSProviderId, TTSVoiceInfo } from './types';
+import { VOXCPM_AUTO_VOICE_ID } from './voxcpm';
 
 const ASR_PROVIDER_NAME_KEYS: Record<string, string> = {
   'openai-whisper': 'settings.providerOpenAIWhisper',
@@ -23,6 +24,7 @@ const ASR_PROVIDER_NAME_KEYS: Record<string, string> = {
 };
 
 const TTS_PROVIDER_NAME_KEYS: Record<string, string> = {
+  'local-qwen-tts': 'settings.providerLocalQwenTTS',
   'openai-tts': 'settings.providerOpenAITTS',
   'azure-tts': 'settings.providerAzureTTS',
   'glm-tts': 'settings.providerGLMTTS',
@@ -58,4 +60,19 @@ export function resolveTTSProviderName(
 ): string {
   const key = TTS_PROVIDER_NAME_KEYS[providerId];
   return key ? t(key) : fallback || providerId;
+}
+
+/** Registry voice identifiers stay stable while descriptive UI labels translate. */
+export function resolveTTSVoiceName(
+  providerId: TTSProviderId | string,
+  voice: Pick<TTSVoiceInfo, 'id' | 'name'>,
+  t: (key: string) => string,
+): string {
+  if (providerId === 'local-qwen-tts' && voice.id === 'announcer-female-calm-ko') {
+    return t('settings.localQwenVoice');
+  }
+  if (providerId === 'voxcpm-tts' && voice.id === VOXCPM_AUTO_VOICE_ID) {
+    return t('settings.voxcpmAutoVoice');
+  }
+  return voice.name;
 }

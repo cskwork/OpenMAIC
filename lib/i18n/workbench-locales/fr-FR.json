@@ -95,7 +95,40 @@
       "style-clone": "Clonage de style",
       "teacher-style-clone": "Style de l'enseignant",
       "vocational": "Formation professionnelle",
-      "workshop-style": "Atelier interactif"
+      "workshop-style": "Atelier interactif",
+      "fact-check": "Vérification des faits",
+      "feynman-learning": "Méthode Feynman",
+      "learning-to-learn": "Apprendre à apprendre",
+      "social-emotional-learning": "Apprentissage socioémotionnel (SEL)",
+      "spiral-curriculum": "Conception de programmes en spirale",
+      "understanding-by-design": "Conception à rebours (UbD)"
+    },
+    "contentLoadFailed": "Impossible de charger le contenu complet de la compétence",
+    "description": {
+      "build-personal-skill": "Créez une compétence pédagogique réutilisable à partir de vos cours et de votre historique de conversations.",
+      "curriculum-planner": "Planifiez une série de leçons cohérente et créez-les une par une.",
+      "zone-of-proximal-development": "Évaluez la compréhension et accompagnez les élèves de la pratique guidée au travail autonome.",
+      "stage-dsl": "Comprenez et modifiez la structure, les pages et les activités d’une classe.",
+      "deep-interactive": "Enseignez à l’aide de simulations, de schémas, de jeux et d’explorations pratiques.",
+      "deep-research": "Créez des leçons à partir de faits récents vérifiés auprès de sources externes.",
+      "fact-check": "Vérifiez l’exactitude du contenu des cours et repérez les corrections nécessaires.",
+      "feynman-learning": "Aidez les élèves à expliquer simplement les concepts, à repérer leurs lacunes et à mieux comprendre.",
+      "k12-core-literacy-planning": "Concevez des leçons pour le primaire et le secondaire en Chine autour de compétences clés et de tâches d’apprentissage authentiques.",
+      "learning-to-learn": "Intégrez des stratégies d’étude, de l’autoévaluation et des exercices efficaces à une leçon disciplinaire.",
+      "lecture-style": "Créez un cours magistral détaillé avec des explications approfondies et des exemples concrets.",
+      "page-clone": "Créez une nouvelle page en reprenant la mise en forme d’une page de cours existante.",
+      "pptx-import": "Importez des diapositives PowerPoint en conservant leur mise en page, puis ajoutez une narration si nécessaire.",
+      "pro-editing": "Révisez et améliorez le contenu, la mise en page et la narration d’un cours existant.",
+      "slide-craft": "Améliorez la typographie, l’espacement, le contraste et la structure visuelle d’une page.",
+      "slide-dsl": "Comprenez les champs et les éléments qui composent une diapositive.",
+      "social-emotional-learning": "Intégrez la conscience des émotions, l’empathie, la collaboration et la prise de décision responsable aux leçons.",
+      "spiral-curriculum": "Planifiez une série de leçons qui reprend les concepts clés en les approfondissant progressivement.",
+      "stage-design": "Planifiez et créez une classe complète avec des pages, des activités et une narration.",
+      "style-clone": "Créez un nouveau cours qui reprend le style visuel d’une présentation existante.",
+      "teacher-style-clone": "Inspirez-vous des enregistrements ou des supports d’un enseignant pour définir le style pédagogique d’un cours.",
+      "understanding-by-design": "Planifiez les leçons à rebours, à partir d’une compréhension approfondie visée et de preuves d’apprentissage.",
+      "vocational": "Créez une formation professionnelle pratique avec des tâches réalistes, des outils et des consignes de sécurité.",
+      "workshop-style": "Créez des leçons pratiques avec des exercices fréquents et un petit projet final."
     }
   },
   "thinking": {
@@ -121,7 +154,7 @@
     "listSeparator": ", ",
     "group": {
       "tools": "{{count}} appels de tool",
-      "skills": "{{count}} skills",
+      "skills": "{{count}} compétences",
       "running": "En cours",
       "error": "Avec erreurs",
       "done": "Terminé"

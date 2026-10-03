@@ -165,6 +165,19 @@ export function skillTitle(
   return skill.title?.trim() || undefined;
 }
 
+/** UI summaries translate independently of the model's selection instructions. */
+export function skillDescription(
+  skill: Pick<AgentSkillInfo, 'name' | 'description' | 'source'>,
+  t: WorkbenchTranslator = defaultWorkbenchTranslator,
+): string {
+  if (skill.source === 'builtin') {
+    const key: WorkbenchCopyKey = `workbench.skill.description.${skill.name}`;
+    const localized = t(key);
+    if (localized !== key) return localized;
+  }
+  return skill.description;
+}
+
 /**
  * One line naming a skill: `<title> /<id>`.
  *

@@ -302,6 +302,7 @@ export async function generateTTS(
   try {
     switch (config.providerId) {
       case 'openai-tts':
+      case 'local-qwen-tts':
         return await generateOpenAITTS(config, text, signal);
 
       case 'azure-tts':
@@ -362,7 +363,10 @@ async function generateOpenAITTS(
   text: string,
   signal: AbortSignal,
 ): Promise<TTSGenerationResult> {
-  const baseUrl = config.baseUrl || TTS_PROVIDERS['openai-tts'].defaultBaseUrl;
+  const provider = TTS_PROVIDERS[config.providerId as keyof typeof TTS_PROVIDERS];
+  const providerName = config.providerId === 'local-qwen-tts' ? 'Local Qwen3-TTS' : 'OpenAI';
+  const baseUrl =
+    config.baseUrl || provider?.defaultBaseUrl || TTS_PROVIDERS['openai-tts'].defaultBaseUrl;
 
   // Use gpt-4o-mini-tts for best quality and intelligent realtime applications
   const response = await ttsFetch(config, `${baseUrl}/audio/speech`, {
@@ -372,7 +376,7 @@ async function generateOpenAITTS(
       'Content-Type': 'application/json; charset=utf-8',
     },
     body: JSON.stringify({
-      model: config.modelId || 'gpt-4o-mini-tts',
+      model: config.modelId || provider?.defaultModelId || 'gpt-4o-mini-tts',
       input: text,
       voice: config.voice,
       speed: config.speed || 1.0,
@@ -388,12 +392,14 @@ async function generateOpenAITTS(
   });
 
   if (!response.ok) {
-    throwIfTtsRateLimited('OpenAI', response.status, response.headers?.get('retry-after'));
+    throwIfTtsRateLimited(providerName, response.status, response.headers?.get('retry-after'));
     const error = await response.json().catch(() => ({ error: response.statusText }));
-    throw new Error(`OpenAI TTS API error: ${error.error?.message || response.statusText}`);
+    throw new Error(
+      `${providerName} TTS API error: ${error.error?.message || response.statusText}`,
+    );
   }
 
-  return await validateTTSAudioResponse(response, 'OpenAI');
+  return await validateTTSAudioResponse(response, providerName);
 }
 
 /**
