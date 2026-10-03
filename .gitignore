@@ -6,6 +6,11 @@ CLAUDE.local.md
 
 # dependencies
 /node_modules
+/.venv-tts
+/.impeccable/hook.cache.json
+/.impeccable/config.local.json
+__pycache__/
+*.pyc
 /openclaw/node_modules
 /openclaw/package-lock.json
 /.pnp

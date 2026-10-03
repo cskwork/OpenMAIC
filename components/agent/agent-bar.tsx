@@ -10,6 +10,7 @@ import { useSettingsStore } from '@/lib/store/settings';
 import { useSlotTTSProvidersConfig, useTTSSelection } from '@/lib/audio/use-tts-selection';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
 import { resolveAgentVoice, getSelectableProvidersWithVoices } from '@/lib/audio/voice-resolver';
+import { resolveTTSProviderName, resolveTTSVoiceName } from '@/lib/audio/provider-display';
 import { playBrowserTTSPreview } from '@/lib/audio/browser-tts-preview';
 import { useAllVoiceProfiles } from '@/lib/audio/voxcpm-voices';
 import { resolveAgentVoiceOptions } from '@/lib/audio/agent-voice';
@@ -36,7 +37,7 @@ function matchesVoiceQuery(value: string | undefined, query: string): boolean {
 function getFilteredModelGroups(
   provider: ProviderWithVoices,
   query: string,
-  autoVoiceLabel?: string,
+  t: (key: string) => string,
 ) {
   const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) return provider.modelGroups;
@@ -44,6 +45,10 @@ function getFilteredModelGroups(
   return provider.modelGroups
     .map((group) => {
       const groupMatches =
+        matchesVoiceQuery(
+          resolveTTSProviderName(provider.providerId, t, provider.providerName),
+          normalizedQuery,
+        ) ||
         matchesVoiceQuery(provider.providerName, normalizedQuery) ||
         matchesVoiceQuery(provider.providerId, normalizedQuery) ||
         matchesVoiceQuery(group.modelName, normalizedQuery) ||
@@ -51,11 +56,10 @@ function getFilteredModelGroups(
       const voices = group.voices.filter(
         (voice) =>
           groupMatches ||
+          matchesVoiceQuery(resolveTTSVoiceName(provider.providerId, voice, t), normalizedQuery) ||
           matchesVoiceQuery(voice.name, normalizedQuery) ||
           matchesVoiceQuery(voice.id, normalizedQuery) ||
-          matchesVoiceQuery(voice.language, normalizedQuery) ||
-          // Auto Voice is shown by its localized label, not voice.name — match it too.
-          (voice.id === VOXCPM_AUTO_VOICE_ID && matchesVoiceQuery(autoVoiceLabel, normalizedQuery)),
+          matchesVoiceQuery(voice.language, normalizedQuery),
       );
       return { ...group, voices };
     })
@@ -91,7 +95,7 @@ function AgentVoicePill({
   const visibleProviderGroups = availableProviders
     .map((provider) => ({
       provider,
-      groups: getFilteredModelGroups(provider, voiceQuery, t('settings.voxcpmAutoVoice')),
+      groups: getFilteredModelGroups(provider, voiceQuery, t),
     }))
     .filter(({ groups }) => groups.length > 0);
 
@@ -100,7 +104,7 @@ function AgentVoicePill({
     for (const p of availableProviders) {
       if (p.providerId === resolved.providerId) {
         const v = p.voices.find((voice) => voice.id === resolved.voiceId);
-        if (v) return v.id === VOXCPM_AUTO_VOICE_ID ? t('settings.voxcpmAutoVoice') : v.name;
+        if (v) return resolveTTSVoiceName(p.providerId, v, t);
       }
     }
     return resolved.voiceId;
@@ -180,16 +184,7 @@ function AgentVoicePill({
         setPreviewingId(null);
       }
     },
-    [
-      agent.name,
-      agent.persona,
-      agent.role,
-      locale,
-      previewingId,
-      stopPreview,
-      t,
-      ttsProvidersConfig,
-    ],
+    [agent, locale, previewingId, stopPreview, t, ttsProvidersConfig],
   );
 
   // Cleanup on unmount
@@ -265,8 +260,8 @@ function AgentVoicePill({
               <div key={`${provider.providerId}::${group.modelId}`}>
                 <div className="sticky top-0 bg-popover px-2 py-1 text-[11px] font-medium text-muted-foreground/60">
                   {group.modelId
-                    ? `${provider.providerName} · ${group.modelName}`
-                    : provider.providerName}
+                    ? `${resolveTTSProviderName(provider.providerId, t, provider.providerName)} · ${group.modelName}`
+                    : resolveTTSProviderName(provider.providerId, t, provider.providerName)}
                 </div>
                 {group.voices.map((voice) => {
                   const isActive =
@@ -301,10 +296,13 @@ function AgentVoicePill({
                           'flex-1 text-left text-[13px] px-2 py-1.5 min-w-0 truncate',
                           isActive ? 'text-primary font-medium' : 'text-foreground',
                         )}
+                        title={
+                          provider.providerId === 'local-qwen-tts'
+                            ? t('settings.localQwenVoiceDescription')
+                            : undefined
+                        }
                       >
-                        {voice.id === VOXCPM_AUTO_VOICE_ID
-                          ? t('settings.voxcpmAutoVoice')
-                          : voice.name}
+                        {resolveTTSVoiceName(provider.providerId, voice, t)}
                       </button>
                       {canPreview && (
                         <button
@@ -366,7 +364,7 @@ function TeacherVoicePill({
   const visibleProviderGroups = availableProviders
     .map((provider) => ({
       provider,
-      groups: getFilteredModelGroups(provider, voiceQuery, t('settings.voxcpmAutoVoice')),
+      groups: getFilteredModelGroups(provider, voiceQuery, t),
     }))
     .filter(({ groups }) => groups.length > 0);
 
@@ -377,7 +375,7 @@ function TeacherVoicePill({
     for (const p of availableProviders) {
       if (p.providerId === ttsProviderId) {
         const v = p.voices.find((voice) => voice.id === ttsVoice);
-        if (v) return v.id === VOXCPM_AUTO_VOICE_ID ? t('settings.voxcpmAutoVoice') : v.name;
+        if (v) return resolveTTSVoiceName(p.providerId, v, t);
       }
     }
     return ttsVoice || 'default';
@@ -530,8 +528,8 @@ function TeacherVoicePill({
               <div key={`${provider.providerId}::${group.modelId}`}>
                 <div className="sticky top-0 bg-popover px-2 py-1 text-[11px] font-medium text-muted-foreground/60">
                   {group.modelId
-                    ? `${provider.providerName} · ${group.modelName}`
-                    : provider.providerName}
+                    ? `${resolveTTSProviderName(provider.providerId, t, provider.providerName)} · ${group.modelName}`
+                    : resolveTTSProviderName(provider.providerId, t, provider.providerName)}
                 </div>
                 {group.voices.map((voice) => {
                   const isActive = ttsProviderId === provider.providerId && ttsVoice === voice.id;
@@ -556,10 +554,13 @@ function TeacherVoicePill({
                           'flex-1 text-left text-[13px] px-2 py-1.5 min-w-0 truncate',
                           isActive ? 'text-primary font-medium' : 'text-foreground',
                         )}
+                        title={
+                          provider.providerId === 'local-qwen-tts'
+                            ? t('settings.localQwenVoiceDescription')
+                            : undefined
+                        }
                       >
-                        {voice.id === VOXCPM_AUTO_VOICE_ID
-                          ? t('settings.voxcpmAutoVoice')
-                          : voice.name}
+                        {resolveTTSVoiceName(provider.providerId, voice, t)}
                       </button>
                       {canPreview && (
                         <button

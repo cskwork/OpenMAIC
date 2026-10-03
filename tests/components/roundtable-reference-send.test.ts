@@ -78,4 +78,15 @@ describe('reference rejection preserves the question composer', () => {
     expect(onMessageSend).not.toHaveBeenCalled();
     expect(container.querySelector('textarea')?.value).toBe('Explain the selected equation.');
   });
+
+  it('keyboard text input calls the latest activation callback after a rerender', async () => {
+    const original = vi.fn();
+    const current = vi.fn();
+    await act(async () => root.render(createElement(Roundtable, { onInputActivate: original })));
+    await act(async () => root.render(createElement(Roundtable, { onInputActivate: current })));
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 't', bubbles: true })));
+    expect(current).toHaveBeenCalledOnce();
+    expect(original).not.toHaveBeenCalled();
+    expect(container.querySelector('textarea')).not.toBeNull();
+  });
 });

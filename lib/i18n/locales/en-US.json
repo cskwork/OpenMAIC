@@ -11,7 +11,8 @@
   },
   "home": {
     "slogan": "Generative Learning in Multi-Agent Interactive Classroom",
-    "greetingWithName": "Hi, {{name}}"
+    "greetingWithName": "Hi, {{name}}",
+    "openSourceProject": "OpenMAIC Open Source Project"
   },
   "toolbar": {
     "pdfParser": "Parser",
@@ -253,7 +254,16 @@
     "exitFullscreen": "Exit Fullscreen",
     "editCourse": "Edit course",
     "doneEditing": "Done editing",
-    "proModeDisabledHint": "Editing isn't available on this page — open a course slide to edit with Pro mode."
+    "proModeDisabledHint": "Editing isn't available on this page — open a course slide to edit with Pro mode.",
+    "toggleSidebar": "Toggle sidebar",
+    "toggleChat": "Toggle chat",
+    "mute": "Mute",
+    "unmute": "Unmute",
+    "play": "Play",
+    "pause": "Pause",
+    "previousScene": "Previous scene",
+    "nextScene": "Next scene",
+    "volume": "Volume"
   },
   "edit": {
     "proMode": "Pro",
@@ -2093,7 +2103,10 @@
         "unsupported": "This kind of custom provider cannot be moved: add it again as an OpenAI-compatible endpoint.",
         "unconfirmed": "The server did not confirm that it was imported."
       }
-    }
+    },
+    "providerLocalQwenTTS": "Local Qwen3-TTS",
+    "localQwenVoice": "Original Korean announcer",
+    "localQwenVoiceDescription": "Original calm female Korean voice, generated locally."
   },
   "workspace": {
     "untitledCourse": "Untitled course",

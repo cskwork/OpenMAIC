@@ -1274,6 +1274,26 @@ export const TTS_PROVIDERS: Record<BuiltInTTSProviderId, TTSProviderConfig> = {
     supportedFormats: ['wav'],
     speedRange: { min: 0.25, max: 4.0, default: 1.0 },
   },
+  'local-qwen-tts': {
+    id: 'local-qwen-tts',
+    name: 'Local Qwen3-TTS',
+    requiresApiKey: true,
+    defaultBaseUrl: 'http://127.0.0.1:57441/v1',
+    icon: '/logos/qwen.svg',
+    models: [{ id: 'Qwen3-TTS-12Hz-1.7B-Base', name: 'Qwen3-TTS 1.7B Base' }],
+    defaultModelId: 'Qwen3-TTS-12Hz-1.7B-Base',
+    voices: [
+      {
+        id: 'announcer-female-calm-ko',
+        name: 'Original Korean announcer',
+        language: 'ko-KR',
+        gender: 'female',
+        description: 'Original calm female Korean voice, generated locally.',
+      },
+    ],
+    supportedFormats: ['mp3', 'wav'],
+    speedRange: { min: 0.25, max: 4, default: 1 },
+  },
 };
 
 /**
@@ -1541,6 +1561,7 @@ export const ASR_PROVIDERS: Record<BuiltInASRProviderId, ASRProviderConfig> = {
  * Used when switching providers or testing a non-active provider.
  */
 export const DEFAULT_TTS_VOICES: Record<BuiltInTTSProviderId, string> = {
+  'local-qwen-tts': 'announcer-female-calm-ko',
   'openai-tts': 'alloy',
   'azure-tts': 'zh-CN-XiaoxiaoNeural',
   'glm-tts': 'tongtong',
@@ -1555,6 +1576,7 @@ export const DEFAULT_TTS_VOICES: Record<BuiltInTTSProviderId, string> = {
 };
 
 export const DEFAULT_TTS_MODELS: Record<BuiltInTTSProviderId, string> = {
+  'local-qwen-tts': 'Qwen3-TTS-12Hz-1.7B-Base',
   'openai-tts': 'gpt-4o-mini-tts',
   'azure-tts': '',
   'glm-tts': 'glm-tts',

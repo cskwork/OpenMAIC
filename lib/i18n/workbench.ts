@@ -97,10 +97,46 @@ export const workbenchEn = {
    * against this map, so a new built-in skill without a title here fails that
    * test rather than shipping one Chinese row in an English menu.
    *
-   * `description` is NOT here on purpose: it is the model's selection contract
-   * (the agent reads it to choose a skill), not product copy.
+   * The registry's description remains the model's selection contract. The
+   * descriptions here are separate, concise UI summaries; they never replace
+   * the instructions the agent reads.
    */
   skill: {
+    description: {
+      'build-personal-skill':
+        'Create a reusable teaching skill from your own course and chat history.',
+      'curriculum-planner': 'Plan a connected series of lessons and build them one at a time.',
+      'zone-of-proximal-development':
+        'Assess understanding and guide learners from supported practice to independent work.',
+      'stage-dsl': 'Understand and edit a classroom’s structure, pages and activities.',
+      'deep-interactive': 'Teach through simulations, diagrams, games and hands-on exploration.',
+      'deep-research': 'Build lessons using current facts checked against external sources.',
+      'fact-check': 'Check course content for factual errors and identify what needs correction.',
+      'feynman-learning':
+        'Help learners explain concepts simply, discover gaps and improve their understanding.',
+      'k12-core-literacy-planning':
+        'Design Chinese K–12 lessons around core competencies and authentic learning tasks.',
+      'learning-to-learn':
+        'Add study strategies, self-reflection and effective practice to a subject lesson.',
+      'lecture-style': 'Build a detailed lecture with sustained explanations and real examples.',
+      'page-clone': 'Create a new page using the design of an existing course page.',
+      'pptx-import':
+        'Import PowerPoint slides while preserving their layout, then add narration as needed.',
+      'pro-editing': 'Revise and improve an existing course’s content, layout and narration.',
+      'slide-craft': 'Improve a page’s typography, spacing, contrast and visual structure.',
+      'slide-dsl': 'Understand the fields and elements that make up a slide.',
+      'social-emotional-learning':
+        'Add emotional awareness, empathy, collaboration and responsible decision-making to lessons.',
+      'spiral-curriculum': 'Plan a lesson series that revisits key concepts with increasing depth.',
+      'stage-design': 'Plan and build a complete classroom with pages, activities and narration.',
+      'style-clone': 'Create a new course that follows the visual style of an existing deck.',
+      'teacher-style-clone':
+        'Use a teacher’s recordings or materials to guide a course’s teaching style.',
+      'understanding-by-design':
+        'Plan lessons backward from meaningful understanding and evidence of learning.',
+      vocational: 'Build practical job training with realistic tasks, tools and safety boundaries.',
+      'workshop-style': 'Create hands-on lessons with frequent practice and a final small project.',
+    },
     listFailed: 'Could not load the skill list',
     contentLoadFailed: 'Could not load the full Skill content',
     settings: {
@@ -408,6 +444,32 @@ export const workbenchZh = {
     quotaExceeded: '已达到材料上传限额。',
   },
   skill: {
+    description: {
+      'build-personal-skill': '根据你的课程和聊天记录，创建可复用的教学技能。',
+      'curriculum-planner': '规划相互衔接的系列课程，并逐节构建。',
+      'zone-of-proximal-development': '评估理解程度，引导学习者从辅助练习过渡到独立完成任务。',
+      'stage-dsl': '了解并编辑课堂的结构、页面和活动。',
+      'deep-interactive': '通过模拟、图解、游戏和动手探索开展教学。',
+      'deep-research': '使用经外部来源核实的最新事实构建课程。',
+      'fact-check': '检查课程内容中的事实错误，找出需要修正之处。',
+      'feynman-learning': '帮助学习者用简单的语言解释概念，发现知识盲点并加深理解。',
+      'k12-core-literacy-planning': '围绕核心素养和真实学习任务，设计中国 K–12 课程。',
+      'learning-to-learn': '在学科课程中融入学习策略、自我反思和有效练习。',
+      'lecture-style': '通过深入讲解和真实案例，构建内容详尽的讲授式课程。',
+      'page-clone': '沿用现有课程页面的设计，创建新页面。',
+      'pptx-import': '导入 PowerPoint 幻灯片并保留原有布局，再按需添加旁白。',
+      'pro-editing': '修改并优化现有课程的内容、布局和旁白。',
+      'slide-craft': '优化页面的文字排版、间距、对比度和视觉结构。',
+      'slide-dsl': '了解构成幻灯片的字段和元素。',
+      'social-emotional-learning': '在课程中融入情绪觉察、同理心、协作和负责任的决策。',
+      'spiral-curriculum': '规划系列课程，反复回顾关键概念并逐步深化理解。',
+      'stage-design': '规划并构建包含页面、活动和旁白的完整课堂。',
+      'style-clone': '沿用现有幻灯片的视觉风格，创建新课程。',
+      'teacher-style-clone': '参考教师的录音或教学材料，塑造课程的教学风格。',
+      'understanding-by-design': '以深入理解和学习成效证据为起点，逆向设计课程。',
+      vocational: '结合真实工作任务、工具和安全规范，构建实用的职业培训课程。',
+      'workshop-style': '创建以动手实践为主的课程，安排频繁练习，并以小项目收尾。',
+    },
     listFailed: 'Skill 列表加载失败',
     contentLoadFailed: 'Skill 正文加载失败',
     settings: {

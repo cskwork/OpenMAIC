@@ -91,6 +91,7 @@ export type BuiltInTTSProviderId =
   | 'minimax-tts'
   | 'google-tts'
   | 'lemonade-tts'
+  | 'local-qwen-tts'
   | 'browser-native-tts';
 
 export type TTSProviderId = BuiltInTTSProviderId | `custom-tts-${string}`;

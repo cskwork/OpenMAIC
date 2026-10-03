@@ -39,7 +39,8 @@ vi.mock('@/lib/hooks/use-i18n', () => ({
   useI18n: () => ({ t: mocks.t, locale: 'en-US', setLocale: () => {} }),
 }));
 
-vi.mock('@/lib/workbench/agent-skills', () => ({
+vi.mock('@/lib/workbench/agent-skills', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/workbench/agent-skills')>()),
   useAgentSkills: () => ({
     skills: mocks.registry.skills,
     loading: mocks.registry.loading,
@@ -106,6 +107,26 @@ async function flush() {
 }
 
 describe('the skills list renders from the API shape', () => {
+  it('shows translated built-in summaries and preserves the owner’s description', () => {
+    mocks.registry.skills = [userSkill(), builtinSkill()];
+    mocks.t.withImplementation(
+      (key) =>
+        key === 'workbench.skill.description.stage-design' ? '수업을 설계하고 만드세요.' : key,
+      () => {
+        const host = mount();
+        expect(
+          host.querySelector('[data-testid="skill-settings-row-stage-design"]')!.textContent,
+        ).toContain('수업을 설계하고 만드세요.');
+        expect(
+          host.querySelector('[data-testid="skill-settings-row-stage-design"]')!.textContent,
+        ).not.toContain(builtinSkill().description);
+        expect(
+          host.querySelector('[data-testid="skill-settings-row-my-demo"]')!.textContent,
+        ).toContain(userSkill().description);
+      },
+    );
+  });
+
   it('renders a row per skill with the display name, the English id, and the description', () => {
     mocks.registry.skills = [userSkill(), builtinSkill()];
     const host = mount();

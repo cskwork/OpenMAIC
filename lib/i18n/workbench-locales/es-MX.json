@@ -95,7 +95,40 @@
       "style-clone": "Clonar estilo del deck",
       "teacher-style-clone": "Estilo del docente",
       "vocational": "Formación profesional",
-      "workshop-style": "Taller interactivo"
+      "workshop-style": "Taller interactivo",
+      "fact-check": "Verificación de hechos",
+      "feynman-learning": "Aprendizaje con el método Feynman",
+      "learning-to-learn": "Aprender a aprender",
+      "social-emotional-learning": "Aprendizaje socioemocional (SEL)",
+      "spiral-curriculum": "Diseño curricular en espiral",
+      "understanding-by-design": "Comprensión mediante el diseño (UbD)"
+    },
+    "contentLoadFailed": "No se pudo cargar el contenido completo de la habilidad",
+    "description": {
+      "build-personal-skill": "Crea una habilidad didáctica reutilizable a partir de tu curso e historial de chat.",
+      "curriculum-planner": "Planifica una serie de lecciones conectadas y créalas una por una.",
+      "zone-of-proximal-development": "Evalúa la comprensión y guía a los estudiantes de la práctica con apoyo al trabajo independiente.",
+      "stage-dsl": "Comprende y edita la estructura, las páginas y las actividades de un aula.",
+      "deep-interactive": "Enseña mediante simulaciones, diagramas, juegos y exploración práctica.",
+      "deep-research": "Crea lecciones con información actual verificada con fuentes externas.",
+      "fact-check": "Revisa el contenido del curso para detectar errores de información e identificar qué debe corregirse.",
+      "feynman-learning": "Ayuda a los estudiantes a explicar conceptos de forma sencilla, detectar lagunas y mejorar su comprensión.",
+      "k12-core-literacy-planning": "Diseña lecciones para la educación básica y media en China centradas en competencias clave y tareas de aprendizaje auténticas.",
+      "learning-to-learn": "Incorpora estrategias de estudio, autorreflexión y práctica efectiva a una lección de la materia.",
+      "lecture-style": "Crea una clase expositiva detallada con explicaciones amplias y ejemplos reales.",
+      "page-clone": "Crea una página nueva con el diseño de una página de curso existente.",
+      "pptx-import": "Importa diapositivas de PowerPoint conservando su diseño y agrega narración según sea necesario.",
+      "pro-editing": "Revisa y mejora el contenido, el diseño y la narración de un curso existente.",
+      "slide-craft": "Mejora la tipografía, el espaciado, el contraste y la estructura visual de una página.",
+      "slide-dsl": "Comprende los campos y elementos que componen una diapositiva.",
+      "social-emotional-learning": "Incorpora conciencia emocional, empatía, colaboración y toma de decisiones responsable a las lecciones.",
+      "spiral-curriculum": "Planifica una serie de lecciones que retome conceptos clave con mayor profundidad cada vez.",
+      "stage-design": "Planifica y crea un aula completa con páginas, actividades y narración.",
+      "style-clone": "Crea un curso nuevo con el estilo visual de una presentación existente.",
+      "teacher-style-clone": "Usa grabaciones o materiales de un docente para orientar el estilo de enseñanza de un curso.",
+      "understanding-by-design": "Planifica lecciones a partir de la comprensión significativa y las evidencias de aprendizaje esperadas.",
+      "vocational": "Crea capacitación laboral práctica con tareas realistas, herramientas y límites de seguridad.",
+      "workshop-style": "Crea lecciones prácticas con ejercicios frecuentes y un pequeño proyecto final."
     }
   },
   "thinking": {
@@ -121,7 +154,7 @@
     "listSeparator": ", ",
     "group": {
       "tools": "{{count}} llamadas a tools",
-      "skills": "{{count}} skills",
+      "skills": "{{count}} habilidades",
       "running": "En curso",
       "error": "Con errores",
       "done": "Completado"

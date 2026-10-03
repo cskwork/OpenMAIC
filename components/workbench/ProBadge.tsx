@@ -36,6 +36,9 @@ export function ProBadge({ active, onToggle, className, testId }: ProBadgeProps)
   const badge = (
     <motion.button
       type="button"
+      // Motion infers tabIndex from whileTap, which changes when the client
+      // discovers reduced motion. Keep server/client focus semantics identical.
+      tabIndex={interactive ? 0 : -1}
       role={interactive ? 'switch' : undefined}
       aria-checked={interactive ? active : undefined}
       aria-label={t('proMode.badgeAria')}

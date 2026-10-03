@@ -16,7 +16,12 @@ import {
   WorkbenchMaterialUploadError,
   type WorkbenchMaterial,
 } from '@/lib/workbench/session-store';
-import { skillTitle, useAgentSkills, type AgentSkillInfo } from '@/lib/workbench/agent-skills';
+import {
+  skillTitle,
+  skillDescription,
+  useAgentSkills,
+  type AgentSkillInfo,
+} from '@/lib/workbench/agent-skills';
 import {
   createMaterialUploadIdentityGate,
   MaterialSlotLedger,
@@ -231,7 +236,7 @@ export function SkillSlashMenu({
                             </span>
                           </span>
                           <span className="line-clamp-2 text-[11px] leading-snug text-muted-foreground">
-                            {skill.description}
+                            {skillDescription(skill, t)}
                           </span>
                         </button>
                       </li>

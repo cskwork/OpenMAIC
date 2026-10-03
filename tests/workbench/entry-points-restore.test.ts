@@ -175,10 +175,10 @@ describe('entry point 2 — the composer attach control', () => {
     expect(extras).not.toContain('materialsEnabled?: unknown');
   });
 
-  it('carries the reference’s own copy in every locale', () => {
+  it('carries the localized attachment label in every locale', () => {
     const expected: Record<string, string> = {
       'ar-SA': 'إرفاق مواد',
-      'de-DE': 'Attach material',
+      'de-DE': 'Material anhängen',
       'en-US': 'Attach material',
       'es-MX': 'Adjuntar material',
       'fr-FR': 'Joindre un support',
@@ -188,7 +188,7 @@ describe('entry point 2 — the composer attach control', () => {
       'ru-RU': 'Прикрепить материал',
       'vi-VN': 'Đính kèm tài liệu',
       'zh-CN': '添加材料',
-      'zh-TW': '添加材料',
+      'zh-TW': '附加教材',
     };
     for (const [locale, copy] of Object.entries(expected)) {
       const parsed = JSON.parse(read(`lib/i18n/locales/${locale}.json`)) as {

@@ -2,6 +2,9 @@
   <img src="assets/logo-horizontal.png" alt="OpenMAIC" width="420"/>
 </p> -->
 
+This personal fork adds Codex OAuth sign-in, local Qwen3-TTS speech, and multilingual
+UI fixes. See [the local setup guide](LOCAL_SETUP.md) for configuration and startup.
+
 <p align="center">
   <img src="assets/banner.png" alt="OpenMAIC Banner" width="680"/>
 </p>

@@ -95,7 +95,40 @@
       "style-clone": "Clonar estilo do deck",
       "teacher-style-clone": "Estilo do professor",
       "vocational": "Formação profissional",
-      "workshop-style": "Oficina interativa"
+      "workshop-style": "Oficina interativa",
+      "fact-check": "Verificação de fatos",
+      "feynman-learning": "Aprendizagem pelo método Feynman",
+      "learning-to-learn": "Aprender a aprender",
+      "social-emotional-learning": "Aprendizagem socioemocional (SEL)",
+      "spiral-curriculum": "Planejamento de currículo em espiral",
+      "understanding-by-design": "Compreensão por Design (UbD)"
+    },
+    "contentLoadFailed": "Não foi possível carregar o conteúdo completo da habilidade",
+    "description": {
+      "build-personal-skill": "Crie uma habilidade de ensino reutilizável a partir do seu curso e histórico de conversas.",
+      "curriculum-planner": "Planeje uma sequência de aulas conectadas e crie uma por vez.",
+      "zone-of-proximal-development": "Avalie a compreensão e guie os alunos da prática com apoio ao trabalho independente.",
+      "stage-dsl": "Entenda e edite a estrutura, as páginas e as atividades de uma sala de aula.",
+      "deep-interactive": "Ensine com simulações, diagramas, jogos e exploração prática.",
+      "deep-research": "Crie aulas com informações atuais verificadas em fontes externas.",
+      "fact-check": "Verifique se o conteúdo do curso contém erros factuais e identifique o que precisa de correção.",
+      "feynman-learning": "Ajude os alunos a explicar conceitos de forma simples, identificar lacunas e melhorar a compreensão.",
+      "k12-core-literacy-planning": "Planeje aulas para a educação básica chinesa com foco em competências essenciais e tarefas autênticas de aprendizagem.",
+      "learning-to-learn": "Inclua estratégias de estudo, autorreflexão e prática eficaz em uma aula da disciplina.",
+      "lecture-style": "Crie uma aula expositiva detalhada com explicações aprofundadas e exemplos reais.",
+      "page-clone": "Crie uma nova página usando o design de uma página de curso existente.",
+      "pptx-import": "Importe slides do PowerPoint preservando o layout e adicione narração conforme necessário.",
+      "pro-editing": "Revise e melhore o conteúdo, o layout e a narração de um curso existente.",
+      "slide-craft": "Melhore a tipografia, o espaçamento, o contraste e a estrutura visual de uma página.",
+      "slide-dsl": "Entenda os campos e elementos que compõem um slide.",
+      "social-emotional-learning": "Inclua consciência emocional, empatia, colaboração e tomada de decisões responsável nas aulas.",
+      "spiral-curriculum": "Planeje uma sequência de aulas que retoma conceitos essenciais com profundidade crescente.",
+      "stage-design": "Planeje e crie uma sala de aula completa com páginas, atividades e narração.",
+      "style-clone": "Crie um novo curso seguindo o estilo visual de uma apresentação existente.",
+      "teacher-style-clone": "Use gravações ou materiais de um professor para orientar o estilo de ensino de um curso.",
+      "understanding-by-design": "Planeje aulas a partir da compreensão significativa desejada e das evidências de aprendizagem.",
+      "vocational": "Crie uma formação profissional prática com tarefas realistas, ferramentas e limites de segurança.",
+      "workshop-style": "Crie aulas práticas com exercícios frequentes e um pequeno projeto final."
     }
   },
   "thinking": {
@@ -121,7 +154,7 @@
     "listSeparator": ", ",
     "group": {
       "tools": "{{count}} chamadas de tool",
-      "skills": "{{count}} skills",
+      "skills": "{{count}} habilidades",
       "running": "Em execução",
       "error": "Com erros",
       "done": "Concluído"
@@ -135,7 +168,7 @@
       "truncated": "Resultado longo demais; foi cortado"
     },
     "pageType": {
-      "quiz": "Quiz",
+      "quiz": "Questionário",
       "practice": "Prática",
       "interactive": "Interativa",
       "slide": "Slide"
